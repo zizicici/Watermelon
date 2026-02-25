@@ -2,6 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_smb._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>PhotoBackup uses your local network to connect to SMB servers and back up your photos.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>PhotoBackup needs write access to restore selected backups into your photo library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>PhotoBackup needs read access to back up original photo and video resources.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -11,7 +11,23 @@
 		144234A42F4EAFC200293274 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A32F4EAFC200293274 /* Kingfisher */; };
 		144234A72F4EAFE800293274 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A62F4EAFE800293274 /* GRDB */; };
 		144234AA2F4EAFF500293274 /* SnapKit in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A92F4EAFF500293274 /* SnapKit */; };
+		14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; };
+		14B0C0A42F4F000100111111 /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		14B0C0A52F4F000100111111 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				14B0C0A42F4F000100111111 /* AMSMB2 in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		148EF9522F4EABFE0025F409 /* PhotoBackup.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhotoBackup.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -47,6 +63,7 @@
 				144234AA2F4EAFF500293274 /* SnapKit in Frameworks */,
 				144234A42F4EAFC200293274 /* Kingfisher in Frameworks */,
 				144234A12F4EAFB600293274 /* JXPhotoBrowser in Frameworks */,
+				14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -78,6 +95,7 @@
 			buildPhases = (
 				148EF94E2F4EABFE0025F409 /* Sources */,
 				148EF94F2F4EABFE0025F409 /* Frameworks */,
+				14B0C0A52F4F000100111111 /* Embed Frameworks */,
 				148EF9502F4EABFE0025F409 /* Resources */,
 			);
 			buildRules = (
@@ -93,6 +111,7 @@
 				144234A32F4EAFC200293274 /* Kingfisher */,
 				144234A62F4EAFE800293274 /* GRDB */,
 				144234A92F4EAFF500293274 /* SnapKit */,
+				14B0C0A32F4F000100111111 /* AMSMB2 */,
 			);
 			productName = PhotoBackup;
 			productReference = 148EF9522F4EABFE0025F409 /* PhotoBackup.app */;
@@ -128,6 +147,7 @@
 				144234A22F4EAFC200293274 /* XCRemoteSwiftPackageReference "Kingfisher" */,
 				144234A52F4EAFE800293274 /* XCRemoteSwiftPackageReference "GRDB" */,
 				144234A82F4EAFF500293274 /* XCRemoteSwiftPackageReference "SnapKit" */,
+				14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 148EF9532F4EABFE0025F409 /* Products */;
@@ -170,6 +190,8 @@
 				DEVELOPMENT_TEAM = KKQQQNKMM6;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = PhotoBackup/Resource/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MelonBackup;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -205,6 +227,8 @@
 				DEVELOPMENT_TEAM = KKQQQNKMM6;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = PhotoBackup/Resource/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MelonBackup;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -411,6 +435,14 @@
 				minimumVersion = 5.7.1;
 			};
 		};
+		14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/amosavian/AMSMB2";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.0.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -433,6 +465,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 144234A82F4EAFF500293274 /* XCRemoteSwiftPackageReference "SnapKit" */;
 			productName = SnapKit;
+		};
+		14B0C0A32F4F000100111111 /* AMSMB2 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */;
+			productName = AMSMB2;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -1,6 +1,15 @@
 {
-  "originHash" : "d37d771c6aa57ba42b7d551d916168fe6c12b9a984fd5e1ad0411fb7ebc7fa43",
+  "originHash" : "036953805176314f2d6050f0a75de4279c619a28f3551cda6eeadc6c78c9b140",
   "pins" : [
+    {
+      "identity" : "amsmb2",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/amosavian/AMSMB2",
+      "state" : {
+        "revision" : "1726aaaf7adf63d7d1d2a0c5d1b0e635028215c0",
+        "version" : "4.0.3"
+      }
+    },
     {
       "identity" : "grdb.swift",
       "kind" : "remoteSourceControl",
