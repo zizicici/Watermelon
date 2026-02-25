@@ -244,6 +244,6 @@ final class DatabaseManager {
 
     static func defaultDatabaseURL() -> URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("PhotoBackup/database.sqlite")
+        return support.appendingPathComponent("Watermelon/database.sqlite")
     }
 }

@@ -30,26 +30,26 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		148EF9522F4EABFE0025F409 /* PhotoBackup.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhotoBackup.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		148EF9522F4EABFE0025F409 /* Watermelon.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Watermelon.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		148EF9642F4EABFF0025F409 /* Exceptions for "PhotoBackup" folder in "PhotoBackup" target */ = {
+		148EF9642F4EABFF0025F409 /* Exceptions for "Watermelon" folder in "Watermelon" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Resource/Info.plist,
 			);
-			target = 148EF9512F4EABFE0025F409 /* PhotoBackup */;
+			target = 148EF9512F4EABFE0025F409 /* Watermelon */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		148EF9542F4EABFE0025F409 /* PhotoBackup */ = {
+		148EF9542F4EABFE0025F409 /* Watermelon */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				148EF9642F4EABFF0025F409 /* Exceptions for "PhotoBackup" folder in "PhotoBackup" target */,
+				148EF9642F4EABFF0025F409 /* Exceptions for "Watermelon" folder in "Watermelon" target */,
 			);
-			path = PhotoBackup;
+			path = Watermelon;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -73,7 +73,7 @@
 		148EF9492F4EABFE0025F409 = {
 			isa = PBXGroup;
 			children = (
-				148EF9542F4EABFE0025F409 /* PhotoBackup */,
+				148EF9542F4EABFE0025F409 /* Watermelon */,
 				148EF9532F4EABFE0025F409 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -81,7 +81,7 @@
 		148EF9532F4EABFE0025F409 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				148EF9522F4EABFE0025F409 /* PhotoBackup.app */,
+				148EF9522F4EABFE0025F409 /* Watermelon.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -89,9 +89,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		148EF9512F4EABFE0025F409 /* PhotoBackup */ = {
+		148EF9512F4EABFE0025F409 /* Watermelon */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 148EF9652F4EABFF0025F409 /* Build configuration list for PBXNativeTarget "PhotoBackup" */;
+			buildConfigurationList = 148EF9652F4EABFF0025F409 /* Build configuration list for PBXNativeTarget "Watermelon" */;
 			buildPhases = (
 				148EF94E2F4EABFE0025F409 /* Sources */,
 				148EF94F2F4EABFE0025F409 /* Frameworks */,
@@ -103,9 +103,9 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				148EF9542F4EABFE0025F409 /* PhotoBackup */,
+				148EF9542F4EABFE0025F409 /* Watermelon */,
 			);
-			name = PhotoBackup;
+			name = Watermelon;
 			packageProductDependencies = (
 				144234A02F4EAFB600293274 /* JXPhotoBrowser */,
 				144234A32F4EAFC200293274 /* Kingfisher */,
@@ -114,7 +114,7 @@
 				14B0C0A32F4F000100111111 /* AMSMB2 */,
 			);
 			productName = PhotoBackup;
-			productReference = 148EF9522F4EABFE0025F409 /* PhotoBackup.app */;
+			productReference = 148EF9522F4EABFE0025F409 /* Watermelon.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -132,7 +132,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 148EF94D2F4EABFE0025F409 /* Build configuration list for PBXProject "PhotoBackup" */;
+			buildConfigurationList = 148EF94D2F4EABFE0025F409 /* Build configuration list for PBXProject "Watermelon" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -154,7 +154,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				148EF9512F4EABFE0025F409 /* PhotoBackup */,
+				148EF9512F4EABFE0025F409 /* Watermelon */,
 			);
 		};
 /* End PBXProject section */
@@ -189,8 +189,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = KKQQQNKMM6;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = PhotoBackup/Resource/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = MelonBackup;
+				INFOPLIST_FILE = Watermelon/Resource/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Watermelon;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
@@ -201,7 +201,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.zizicici.photo-backup";
+				PRODUCT_BUNDLE_IDENTIFIER = com.zizicici.watermelon;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -226,8 +226,8 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = KKQQQNKMM6;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = PhotoBackup/Resource/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = MelonBackup;
+				INFOPLIST_FILE = Watermelon/Resource/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Watermelon;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
@@ -238,7 +238,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.zizicici.photo-backup";
+				PRODUCT_BUNDLE_IDENTIFIER = com.zizicici.watermelon;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -382,7 +382,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		148EF94D2F4EABFE0025F409 /* Build configuration list for PBXProject "PhotoBackup" */ = {
+		148EF94D2F4EABFE0025F409 /* Build configuration list for PBXProject "Watermelon" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				148EF9682F4EABFF0025F409 /* Debug */,
@@ -391,7 +391,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		148EF9652F4EABFF0025F409 /* Build configuration list for PBXNativeTarget "PhotoBackup" */ = {
+		148EF9652F4EABFF0025F409 /* Build configuration list for PBXNativeTarget "Watermelon" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				148EF9662F4EABFF0025F409 /* Debug */,

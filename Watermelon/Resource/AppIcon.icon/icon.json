@@ -17,7 +17,7 @@
       "layers" : [
         {
           "glass" : false,
-          "image-name" : "watermelon-2.png",
+          "image-name" : "watermelon.png",
           "name" : "watermelon",
           "position" : {
             "scale" : 0.75,

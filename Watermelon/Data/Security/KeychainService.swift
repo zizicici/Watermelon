@@ -7,7 +7,7 @@ enum KeychainError: Error {
 }
 
 final class KeychainService {
-    static let service = "com.zizicici.photobackup.credentials"
+    static let service = "com.zizicici.watermelon.credentials"
 
     func save(password: String, account: String) throws {
         let data = Data(password.utf8)

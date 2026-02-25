@@ -8,7 +8,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "MelonBackup"
+            "value" : "Watermelon"
           }
         },
         "zh-Hans" : {
@@ -26,12 +26,12 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "PhotoBackup"
+            "value" : "Watermelon"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "translated",
+            "state" : "needs_review",
             "value" : "Keephoto"
           }
         }
@@ -44,7 +44,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "PhotoBackup uses your local network to connect to SMB servers and back up your photos."
+            "value" : "Watermelon uses your local network to connect to SMB servers and back up your photos."
           }
         }
       }
@@ -56,7 +56,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "PhotoBackup needs write access to restore selected backups into your photo library."
+            "value" : "Watermelon needs write access to restore selected backups into your photo library."
           }
         }
       }
@@ -68,7 +68,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "PhotoBackup needs read access to back up original photo and video resources."
+            "value" : "Watermelon needs read access to back up original photo and video resources."
           }
         }
       }

@@ -55,7 +55,7 @@ private struct ManifestItemRecord {
 }
 
 final class ManifestSyncService {
-    static let manifestFileName = ".photobackup_manifest.sqlite"
+    static let manifestFileName = ".watermelon_manifest.sqlite"
     private static let manifestItemsTableName = "manifest_items"
 
     private let databaseManager: DatabaseManager

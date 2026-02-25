@@ -7,11 +7,11 @@
 		<string>_smb._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>PhotoBackup uses your local network to connect to SMB servers and back up your photos.</string>
+	<string>Watermelon uses your local network to connect to SMB servers and back up your photos.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>PhotoBackup needs write access to restore selected backups into your photo library.</string>
+	<string>Watermelon needs write access to restore selected backups into your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>PhotoBackup needs read access to back up original photo and video resources.</string>
+	<string>Watermelon needs read access to back up original photo and video resources.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
