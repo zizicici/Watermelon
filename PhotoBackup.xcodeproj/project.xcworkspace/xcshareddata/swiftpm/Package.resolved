@@ -1,0 +1,42 @@
+{
+  "originHash" : "d37d771c6aa57ba42b7d551d916168fe6c12b9a984fd5e1ad0411fb7ebc7fa43",
+  "pins" : [
+    {
+      "identity" : "grdb.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/groue/GRDB.swift",
+      "state" : {
+        "revision" : "36e30a6f1ef10e4194f6af0cff90888526f0c115",
+        "version" : "7.10.0"
+      }
+    },
+    {
+      "identity" : "kingfisher",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/onevcat/Kingfisher",
+      "state" : {
+        "revision" : "e227df15448d2ad1a5d4e4c49722a71c68f9058a",
+        "version" : "8.7.0"
+      }
+    },
+    {
+      "identity" : "photobrowser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/JiongXing/PhotoBrowser",
+      "state" : {
+        "revision" : "2298b1fc66037f3fa294d6e27add27ea05300a06",
+        "version" : "4.0.2"
+      }
+    },
+    {
+      "identity" : "snapkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/SnapKit/SnapKit",
+      "state" : {
+        "revision" : "2842e6e84e82eb9a8dac0100ca90d9444b0307f4",
+        "version" : "5.7.1"
+      }
+    }
+  ],
+  "version" : 3
+}

@@ -6,6 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		144234A12F4EAFB600293274 /* JXPhotoBrowser in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A02F4EAFB600293274 /* JXPhotoBrowser */; };
+		144234A42F4EAFC200293274 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A32F4EAFC200293274 /* Kingfisher */; };
+		144234A72F4EAFE800293274 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A62F4EAFE800293274 /* GRDB */; };
+		144234AA2F4EAFF500293274 /* SnapKit in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A92F4EAFF500293274 /* SnapKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		148EF9522F4EABFE0025F409 /* PhotoBackup.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhotoBackup.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -36,6 +43,10 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				144234A72F4EAFE800293274 /* GRDB in Frameworks */,
+				144234AA2F4EAFF500293274 /* SnapKit in Frameworks */,
+				144234A42F4EAFC200293274 /* Kingfisher in Frameworks */,
+				144234A12F4EAFB600293274 /* JXPhotoBrowser in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -78,6 +89,10 @@
 			);
 			name = PhotoBackup;
 			packageProductDependencies = (
+				144234A02F4EAFB600293274 /* JXPhotoBrowser */,
+				144234A32F4EAFC200293274 /* Kingfisher */,
+				144234A62F4EAFE800293274 /* GRDB */,
+				144234A92F4EAFF500293274 /* SnapKit */,
 			);
 			productName = PhotoBackup;
 			productReference = 148EF9522F4EABFE0025F409 /* PhotoBackup.app */;
@@ -108,6 +123,12 @@
 			);
 			mainGroup = 148EF9492F4EABFE0025F409;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				1442349F2F4EAFB600293274 /* XCRemoteSwiftPackageReference "PhotoBrowser" */,
+				144234A22F4EAFC200293274 /* XCRemoteSwiftPackageReference "Kingfisher" */,
+				144234A52F4EAFE800293274 /* XCRemoteSwiftPackageReference "GRDB" */,
+				144234A82F4EAFF500293274 /* XCRemoteSwiftPackageReference "SnapKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 148EF9532F4EABFE0025F409 /* Products */;
 			projectDirPath = "";
@@ -356,6 +377,64 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		1442349F2F4EAFB600293274 /* XCRemoteSwiftPackageReference "PhotoBrowser" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/JiongXing/PhotoBrowser";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.0.2;
+			};
+		};
+		144234A22F4EAFC200293274 /* XCRemoteSwiftPackageReference "Kingfisher" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/onevcat/Kingfisher";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 8.7.0;
+			};
+		};
+		144234A52F4EAFE800293274 /* XCRemoteSwiftPackageReference "GRDB" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 7.0.0;
+			};
+		};
+		144234A82F4EAFF500293274 /* XCRemoteSwiftPackageReference "SnapKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/SnapKit/SnapKit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.7.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		144234A02F4EAFB600293274 /* JXPhotoBrowser */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1442349F2F4EAFB600293274 /* XCRemoteSwiftPackageReference "PhotoBrowser" */;
+			productName = JXPhotoBrowser;
+		};
+		144234A32F4EAFC200293274 /* Kingfisher */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 144234A22F4EAFC200293274 /* XCRemoteSwiftPackageReference "Kingfisher" */;
+			productName = Kingfisher;
+		};
+		144234A62F4EAFE800293274 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 144234A52F4EAFE800293274 /* XCRemoteSwiftPackageReference "GRDB" */;
+			productName = GRDB;
+		};
+		144234A92F4EAFF500293274 /* SnapKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 144234A82F4EAFF500293274 /* XCRemoteSwiftPackageReference "SnapKit" */;
+			productName = SnapKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 148EF94A2F4EABFE0025F409 /* Project object */;
 }
