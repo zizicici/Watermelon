@@ -140,4 +140,58 @@ final class PhotoLibraryService {
             return "other_\(type.rawValue)"
         }
     }
+
+    static func resourceTypeCode(_ type: PHAssetResourceType) -> Int {
+        switch type {
+        case .photo:
+            return ResourceTypeCode.photo
+        case .video:
+            return ResourceTypeCode.video
+        case .audio:
+            return ResourceTypeCode.audio
+        case .alternatePhoto:
+            return ResourceTypeCode.alternatePhoto
+        case .fullSizePhoto:
+            return ResourceTypeCode.fullSizePhoto
+        case .fullSizeVideo:
+            return ResourceTypeCode.fullSizeVideo
+        case .pairedVideo:
+            return ResourceTypeCode.pairedVideo
+        case .adjustmentData:
+            return ResourceTypeCode.adjustmentData
+        case .adjustmentBasePhoto:
+            return ResourceTypeCode.adjustmentBasePhoto
+        case .photoProxy:
+            return ResourceTypeCode.photoProxy
+        default:
+            return ResourceTypeCode.unknown
+        }
+    }
+
+    static func resourceTypeName(from code: Int) -> String {
+        switch code {
+        case ResourceTypeCode.photo:
+            return "photo"
+        case ResourceTypeCode.video:
+            return "video"
+        case ResourceTypeCode.audio:
+            return "audio"
+        case ResourceTypeCode.alternatePhoto:
+            return "alternatePhoto"
+        case ResourceTypeCode.fullSizePhoto:
+            return "fullSizePhoto"
+        case ResourceTypeCode.fullSizeVideo:
+            return "fullSizeVideo"
+        case ResourceTypeCode.pairedVideo:
+            return "pairedVideo"
+        case ResourceTypeCode.adjustmentData:
+            return "adjustmentData"
+        case ResourceTypeCode.adjustmentBasePhoto:
+            return "adjustmentBasePhoto"
+        case ResourceTypeCode.photoProxy:
+            return "photoProxy"
+        default:
+            return "unknown"
+        }
+    }
 }

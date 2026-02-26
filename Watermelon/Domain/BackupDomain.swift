@@ -1,12 +1,28 @@
 import Foundation
 import Photos
 
+enum BackupItemStatus: String, Codable {
+    case success
+    case failed
+    case skipped
+}
+
+struct BackupItemEvent {
+    let assetLocalIdentifier: String
+    let resourceLocalIdentifier: String
+    let originalFilename: String
+    let status: BackupItemStatus
+    let reason: String?
+    let updatedAt: Date
+}
+
 struct LocalPhotoResource {
     let asset: PHAsset
     let resource: PHAssetResource
     let assetLocalIdentifier: String
     let resourceLocalIdentifier: String
     let resourceType: String
+    let resourceTypeCode: Int
     let uti: String?
     let originalFilename: String
     let fileSize: Int64
@@ -20,13 +36,20 @@ struct PlannedBackupItem {
 }
 
 struct BackupProgress {
-    let completed: Int
+    let succeeded: Int
+    let failed: Int
+    let skipped: Int
     let total: Int
     let message: String
+    let itemEvent: BackupItemEvent?
+
+    var processed: Int {
+        succeeded + failed + skipped
+    }
 
     var fraction: Float {
         guard total > 0 else { return 0 }
-        return Float(completed) / Float(total)
+        return Float(processed) / Float(total)
     }
 }
 

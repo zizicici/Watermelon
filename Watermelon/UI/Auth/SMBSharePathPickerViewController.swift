@@ -11,6 +11,8 @@ final class SMBSharePathPickerViewController: UIViewController {
     private var selectedShare: SMBShareInfo?
     private var currentPath: String = "/"
     private var directories: [SMBRemoteEntry] = []
+    private var loadTask: Task<Void, Never>?
+    private var loadRequestID: UInt64 = 0
 
     private let pathLabel = UILabel()
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
@@ -44,7 +46,11 @@ final class SMBSharePathPickerViewController: UIViewController {
         configureUI()
         refreshPathLabel()
 
-        Task { await loadDirectories() }
+        startLoadDirectories()
+    }
+
+    deinit {
+        loadTask?.cancel()
     }
 
     private func configureUI() {
@@ -105,31 +111,45 @@ final class SMBSharePathPickerViewController: UIViewController {
         pathLabel.text = "当前路径: \(currentPath)"
     }
 
-    private func loadDirectories() async {
+    private func startLoadDirectories() {
+        loadTask?.cancel()
+        loadRequestID &+= 1
+        let requestID = loadRequestID
+
         guard let selectedShare else {
-            await MainActor.run {
-                self.directories = []
-                self.tableView.reloadData()
-            }
+            directories = []
+            tableView.reloadSections(IndexSet(integer: TableSection.paths.rawValue), with: .none)
             return
         }
 
-        await MainActor.run {
-            self.setLoading(true)
-        }
+        let shareName = selectedShare.name
+        let targetPath = currentPath
+        setLoading(true)
 
-        do {
-            let dirs = try await setupService.listDirectories(auth: auth, shareName: selectedShare.name, path: currentPath)
-            await MainActor.run {
-                self.directories = dirs
-                self.setLoading(false)
-                self.tableView.reloadData()
-                self.refreshPathLabel()
-            }
-        } catch {
-            await MainActor.run {
-                self.setLoading(false)
-                self.presentAlert(title: "读取目录失败", message: error.localizedDescription)
+        loadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let dirs = try await self.setupService.listDirectories(auth: self.auth, shareName: shareName, path: targetPath)
+                try Task.checkCancellation()
+                await MainActor.run {
+                    guard requestID == self.loadRequestID else { return }
+                    guard self.selectedShare?.name == shareName, self.currentPath == targetPath else { return }
+                    self.directories = dirs
+                    self.setLoading(false)
+                    self.tableView.reloadSections(IndexSet(integer: TableSection.paths.rawValue), with: .none)
+                    self.refreshPathLabel()
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard requestID == self.loadRequestID else { return }
+                    self.setLoading(false)
+                }
+            } catch {
+                await MainActor.run {
+                    guard requestID == self.loadRequestID else { return }
+                    self.setLoading(false)
+                    self.presentAlert(title: "读取目录失败", message: error.localizedDescription)
+                }
             }
         }
     }
@@ -209,6 +229,14 @@ extension SMBSharePathPickerViewController: UITableViewDataSource, UITableViewDe
                 cell.selectionStyle = .none
                 cell.accessoryType = .none
             } else {
+                guard indexPath.row < shares.count else {
+                    content.text = "Share 数据已变更"
+                    content.secondaryText = "请稍后重试"
+                    cell.selectionStyle = .none
+                    cell.accessoryType = .none
+                    cell.contentConfiguration = content
+                    return cell
+                }
                 let share = shares[indexPath.row]
                 content.text = share.name
                 content.secondaryText = share.comment.isEmpty ? "(no comment)" : share.comment
@@ -227,6 +255,14 @@ extension SMBSharePathPickerViewController: UITableViewDataSource, UITableViewDe
             }
 
             let index = hasParent ? indexPath.row - 1 : indexPath.row
+            guard index >= 0, index < directories.count else {
+                content.text = "目录已变更"
+                content.secondaryText = "请稍后重试"
+                cell.selectionStyle = .none
+                cell.accessoryType = .none
+                cell.contentConfiguration = content
+                return cell
+            }
             let entry = directories[index]
             content.text = entry.name
             content.secondaryText = entry.path
@@ -245,25 +281,28 @@ extension SMBSharePathPickerViewController: UITableViewDataSource, UITableViewDe
         switch section {
         case .shares:
             guard !shares.isEmpty else { return }
+            guard indexPath.row < shares.count else { return }
             selectedShare = shares[indexPath.row]
             currentPath = "/"
-            tableView.reloadSections(IndexSet(integer: TableSection.shares.rawValue), with: .none)
+            directories = []
+            tableView.reloadSections(IndexSet([TableSection.shares.rawValue, TableSection.paths.rawValue]), with: .none)
             refreshPathLabel()
-            Task { await loadDirectories() }
+            startLoadDirectories()
             return
         case .paths:
             let hasParent = currentPath != "/"
 
             if hasParent && indexPath.row == 0 {
                 currentPath = parentPath(of: currentPath)
-                Task { await loadDirectories() }
+                startLoadDirectories()
                 return
             }
 
             let index = hasParent ? indexPath.row - 1 : indexPath.row
+            guard index >= 0, index < directories.count else { return }
             let entry = directories[index]
             currentPath = entry.path
-            Task { await loadDirectories() }
+            startLoadDirectories()
         }
     }
 }

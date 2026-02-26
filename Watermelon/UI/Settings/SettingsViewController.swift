@@ -94,14 +94,12 @@ final class SettingsViewController: UIViewController {
 
         do {
             let profiles = try dependencies.databaseManager.fetchServerProfiles()
-            let stats = try dependencies.databaseManager.read { db -> (Int, Int, Int) in
-                let assets = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM assets") ?? 0
-                let resources = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
-                let jobs = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM backup_jobs") ?? 0
-                return (assets, resources, jobs)
+            let stats = try dependencies.databaseManager.read { db -> Int in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM content_hash_index") ?? 0
             }
 
-            statsLabel.text = "已保存服务器: \(profiles.count)\n资产索引: \(stats.0)\n资源索引: \(stats.1)\n任务数: \(stats.2)"
+            let remoteCount = dependencies.backupExecutor.currentRemoteSnapshot().totalCount
+            statsLabel.text = "已保存服务器: \(profiles.count)\n本地 Hash 索引: \(stats)\n远端索引项: \(remoteCount)"
         } catch {
             statsLabel.text = "状态读取失败"
         }
@@ -133,35 +131,14 @@ final class SettingsViewController: UIViewController {
                       let password = self.dependencies.appSession.activePassword else {
                     throw BackupError.missingServerProfile
                 }
-
-                let client = try AMSMB2Client(config: SMBServerConfig(
-                    host: profile.host,
-                    port: profile.port,
-                    shareName: profile.shareName,
-                    basePath: profile.basePath,
-                    username: profile.username,
-                    password: password,
-                    domain: profile.domain
-                ))
-                try await client.connect()
-                defer { Task { await client.disconnect() } }
-
-                let result = try await self.dependencies.manifestSyncService.refreshFromRemote(
-                    client: client,
-                    basePath: profile.basePath,
-                    clearLocalWhenMissing: true
+                let snapshot = try await self.dependencies.backupExecutor.reloadRemoteIndex(
+                    profile: profile,
+                    password: password
                 )
 
                 await MainActor.run {
                     self.refreshStatus()
-                    switch result {
-                    case .pulled:
-                        self.presentSimpleAlert(title: "完成", message: "远端索引同步完成")
-                    case .remoteMissingClearedLocal:
-                        self.presentSimpleAlert(title: "远端索引缺失", message: "未找到 manifest（可能尚未初始化或已被删除），已清空本地缓存索引")
-                    case .remoteMissingKeptLocal:
-                        self.presentSimpleAlert(title: "远端索引缺失", message: "未找到 manifest，已保留本地缓存索引。若要重建可先执行一次备份。")
-                    }
+                    self.presentSimpleAlert(title: "完成", message: "远端索引同步完成，共 \(snapshot.totalCount) 项")
                 }
             } catch {
                 await MainActor.run {
@@ -175,10 +152,7 @@ final class SettingsViewController: UIViewController {
     private func clearLocalIndex() {
         do {
             try dependencies.databaseManager.write { db in
-                try db.execute(sql: "DELETE FROM resources")
-                try db.execute(sql: "DELETE FROM assets")
-                try db.execute(sql: "DELETE FROM job_items")
-                try db.execute(sql: "DELETE FROM backup_jobs")
+                try db.execute(sql: "DELETE FROM content_hash_index")
             }
             refreshStatus()
             presentSimpleAlert(title: "已清理", message: "本地索引已清空")

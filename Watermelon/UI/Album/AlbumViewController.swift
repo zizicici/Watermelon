@@ -56,8 +56,8 @@ final class AlbumViewController: UIViewController {
     private struct RemoteAlbumItem {
         let id: String
         let creationDate: Date
-        let resources: [BackupResourceRecord]
-        let representative: BackupResourceRecord
+        let resources: [RemoteManifestResource]
+        let representative: RemoteManifestResource
         let mediaKind: AlbumMediaKind
         let pixelWidth: Int?
         let pixelHeight: Int?
@@ -305,22 +305,9 @@ final class AlbumViewController: UIViewController {
             guard let self else { return }
 
             do {
-                let client = try AMSMB2Client(config: SMBServerConfig(
-                    host: profile.host,
-                    port: profile.port,
-                    shareName: profile.shareName,
-                    basePath: profile.basePath,
-                    username: profile.username,
-                    password: password,
-                    domain: profile.domain
-                ))
-                try await client.connect()
-                defer { Task { await client.disconnect() } }
-
-                let refreshResult = try await self.dependencies.manifestSyncService.refreshFromRemote(
-                    client: client,
-                    basePath: profile.basePath,
-                    clearLocalWhenMissing: true
+                let snapshot = try await self.dependencies.backupExecutor.reloadRemoteIndex(
+                    profile: profile,
+                    password: password
                 )
                 await self.reloadAllData()
 
@@ -333,13 +320,10 @@ final class AlbumViewController: UIViewController {
                     self.restoreBarButtonItem.isEnabled = true
                     self.applySections()
 
-                    switch refreshResult {
-                    case .pulled:
-                        self.presentAlert(title: "已刷新", message: "已从远端重新同步索引")
-                    case .remoteMissingClearedLocal:
-                        self.presentAlert(title: "远端索引缺失", message: "未找到 manifest（可能尚未初始化或已被删除），已清空本地缓存索引")
-                    case .remoteMissingKeptLocal:
-                        self.presentAlert(title: "远端索引缺失", message: "未找到 manifest，已保留本地缓存索引。若要重建可先执行一次备份。")
+                    if snapshot.totalCount == 0 {
+                        self.presentAlert(title: "已刷新", message: "远端索引为空")
+                    } else {
+                        self.presentAlert(title: "已刷新", message: "远端索引共 \(snapshot.totalCount) 项")
                     }
                 }
             } catch {
@@ -417,11 +401,20 @@ final class AlbumViewController: UIViewController {
         }
 
         let assets = dependencies.photoLibraryService.fetchAssets()
-        var backedUpSet = Set<String>()
-        if let set = try? dependencies.databaseManager.read({ db in
-            Set(try String.fetchAll(db, sql: "SELECT DISTINCT assetLocalIdentifier FROM resources"))
+        let remoteHashSet = dependencies.backupExecutor.currentRemoteSnapshot().hashSet
+        var localHashMapByAsset: [String: [Data]] = [:]
+        if let map = try? dependencies.databaseManager.read({ db -> [String: [Data]] in
+            let rows = try Row.fetchAll(db, sql: "SELECT assetLocalIdentifier, contentHash FROM content_hash_index")
+            var result: [String: [Data]] = [:]
+            result.reserveCapacity(rows.count)
+            for row in rows {
+                let assetID: String = row["assetLocalIdentifier"]
+                let hash: Data = row["contentHash"]
+                result[assetID, default: []].append(hash)
+            }
+            return result
         }) {
-            backedUpSet = set
+            localHashMapByAsset = map
         }
 
         let builtItems: [LocalAlbumItem] = assets.map { asset in
@@ -438,7 +431,12 @@ final class AlbumViewController: UIViewController {
                 id: asset.localIdentifier,
                 asset: asset,
                 creationDate: asset.creationDate ?? Date(timeIntervalSince1970: 0),
-                isBackedUp: backedUpSet.contains(asset.localIdentifier),
+                isBackedUp: {
+                    let hashes = localHashMapByAsset[asset.localIdentifier] ?? []
+                    guard !hashes.isEmpty else { return false }
+                    guard !remoteHashSet.isEmpty else { return false }
+                    return hashes.allSatisfy { remoteHashSet.contains($0) }
+                }(),
                 mediaKind: mediaKind
             )
         }
@@ -451,30 +449,54 @@ final class AlbumViewController: UIViewController {
     }
 
     private func loadRemoteItems() {
-        guard let result = try? dependencies.databaseManager.read({ db -> [RemoteAlbumItem] in
-            let assets = try BackupAssetRecord.fetchAll(db)
-            let resources = try BackupResourceRecord.fetchAll(db)
-
-            let assetMap = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
-            let grouped = Dictionary(grouping: resources, by: { $0.assetLocalIdentifier })
-
-            return grouped.compactMap { key, values in
-                guard let representative = Self.chooseRepresentativeResource(values) else { return nil }
-                let creationDate = assetMap[key]?.creationDate ?? representative.backedUpAt
-                let mediaKind = Self.detectMediaKind(from: values, asset: assetMap[key])
-                return RemoteAlbumItem(
-                    id: key,
-                    creationDate: creationDate,
-                    resources: values,
-                    representative: representative,
-                    mediaKind: mediaKind,
-                    pixelWidth: assetMap[key]?.pixelWidth,
-                    pixelHeight: assetMap[key]?.pixelHeight
-                )
-            }
-        }) else {
+        let resources = dependencies.backupExecutor.currentRemoteSnapshot().resources
+        guard !resources.isEmpty else {
             remoteItems = []
             return
+        }
+
+        let liveCandidateGroups = Dictionary(grouping: resources) { resource -> String in
+            let stem = (resource.fileName as NSString).deletingPathExtension.lowercased()
+            return "\(resource.monthKey)|\(resource.creationDateNs ?? -1)|\(stem)"
+        }
+
+        var groupedIDs = Set<String>()
+        var result: [RemoteAlbumItem] = []
+
+        for (groupKey, groupResources) in liveCandidateGroups {
+            let hasPhoto = groupResources.contains { ResourceTypeCode.isPhotoLike($0.resourceType) }
+            let hasPairedVideo = groupResources.contains { $0.resourceType == ResourceTypeCode.pairedVideo }
+            guard hasPhoto, hasPairedVideo,
+                  let representative = Self.chooseRepresentativeResource(groupResources) else {
+                continue
+            }
+
+            groupedIDs.formUnion(groupResources.map(\.id))
+            result.append(
+                RemoteAlbumItem(
+                    id: "live:\(groupKey)",
+                    creationDate: groupResources.map(\.creationDate).min() ?? representative.creationDate,
+                    resources: groupResources,
+                    representative: representative,
+                    mediaKind: .livePhoto,
+                    pixelWidth: nil,
+                    pixelHeight: nil
+                )
+            )
+        }
+
+        for resource in resources where !groupedIDs.contains(resource.id) {
+            result.append(
+                RemoteAlbumItem(
+                    id: resource.id,
+                    creationDate: resource.creationDate,
+                    resources: [resource],
+                    representative: resource,
+                    mediaKind: Self.detectMediaKind(from: [resource]),
+                    pixelWidth: nil,
+                    pixelHeight: nil
+                )
+            )
         }
 
         remoteItems = result.sorted { $0.creationDate > $1.creationDate }
@@ -549,7 +571,7 @@ final class AlbumViewController: UIViewController {
 
     private func updateBackupButton(snapshot: BackupSessionController.Snapshot) {
         var config = backupButton.configuration ?? .filled()
-        config.title = snapshot.state.buttonTitle
+        config.title = snapshot.primaryActionTitle
         config.subtitle = nil
         config.baseBackgroundColor = snapshot.state.buttonColor
         config.baseForegroundColor = .white
@@ -711,7 +733,7 @@ final class AlbumViewController: UIViewController {
                 try await client.connect()
                 defer { Task { await client.disconnect() } }
 
-                let temp = FileManager.default.temporaryDirectory.appendingPathComponent("remote_preview_\(UUID().uuidString)_\(item.representative.originalFilename)")
+                let temp = FileManager.default.temporaryDirectory.appendingPathComponent("remote_preview_\(UUID().uuidString)_\(item.representative.fileName)")
                 let remotePath = RemotePathBuilder.absolutePath(
                     basePath: profile.basePath,
                     remoteRelativePath: item.representative.remoteRelativePath
@@ -737,27 +759,21 @@ final class AlbumViewController: UIViewController {
         }
     }
 
-    private static func chooseRepresentativeResource(_ resources: [BackupResourceRecord]) -> BackupResourceRecord? {
+    private static func chooseRepresentativeResource(_ resources: [RemoteManifestResource]) -> RemoteManifestResource? {
         let preferred = resources.first {
-            $0.resourceType == "photo" || $0.resourceType == "fullSizePhoto"
+            ResourceTypeCode.isPhotoLike($0.resourceType)
         }
         return preferred ?? resources.first
     }
 
-    private static func detectMediaKind(from resources: [BackupResourceRecord], asset: BackupAssetRecord?) -> AlbumMediaKind {
-        if asset?.isLivePhoto == true {
+    private static func detectMediaKind(from resources: [RemoteManifestResource]) -> AlbumMediaKind {
+        let hasPairedVideo = resources.contains { $0.resourceType == ResourceTypeCode.pairedVideo }
+        let hasPhotoLike = resources.contains { ResourceTypeCode.isPhotoLike($0.resourceType) }
+        if hasPairedVideo, hasPhotoLike {
             return .livePhoto
         }
 
-        let hasPairedVideo = resources.contains { $0.resourceType == "pairedVideo" }
-        let hasPhoto = resources.contains { $0.resourceType.contains("photo") }
-        if hasPairedVideo && hasPhoto {
-            return .livePhoto
-        }
-
-        let hasVideo = resources.contains {
-            $0.resourceType.contains("video") || $0.originalFilename.lowercased().hasSuffix(".mov") || $0.originalFilename.lowercased().hasSuffix(".mp4")
-        }
+        let hasVideo = resources.contains { ResourceTypeCode.isVideoLike($0.resourceType) }
         return hasVideo ? .video : .photo
     }
 

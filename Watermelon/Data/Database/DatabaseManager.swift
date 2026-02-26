@@ -13,8 +13,21 @@ final class DatabaseManager {
 
     private var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
+        migrator.registerMigration("v3_dev_reset_schema") { db in
+            let candidateTables = [
+                "manifest_meta",
+                "job_items",
+                "backup_jobs",
+                "resources",
+                "assets",
+                "sync_state",
+                "content_hash_index",
+                "server_profiles"
+            ]
+            for tableName in candidateTables where try db.tableExists(tableName) {
+                try db.drop(table: tableName)
+            }
 
-        migrator.registerMigration("v1_schema") { db in
             try db.create(table: ServerProfileRecord.databaseTableName) { table in
                 table.autoIncrementedPrimaryKey("id")
                 table.column("name", .text).notNull()
@@ -30,132 +43,19 @@ final class DatabaseManager {
                 table.uniqueKey(["host", "shareName", "basePath", "username"])
             }
 
-            try db.create(table: BackupAssetRecord.databaseTableName) { table in
-                table.autoIncrementedPrimaryKey("id")
-                table.column("localIdentifier", .text).notNull().unique()
-                table.column("mediaType", .text).notNull()
-                table.column("creationDate", .datetime)
-                table.column("modificationDate", .datetime)
-                table.column("locationJSON", .text)
-                table.column("pixelWidth", .integer).notNull()
-                table.column("pixelHeight", .integer).notNull()
-                table.column("duration", .double).notNull()
-                table.column("isLivePhoto", .boolean).notNull()
-                table.column("lastSeenAt", .datetime).notNull()
-            }
-
-            try db.create(table: BackupResourceRecord.databaseTableName) { table in
-                table.autoIncrementedPrimaryKey("id")
-                table.column("assetLocalIdentifier", .text).notNull().indexed()
-                table.column("resourceLocalIdentifier", .text).notNull()
-                table.column("resourceType", .text).notNull()
-                table.column("uti", .text)
-                table.column("originalFilename", .text).notNull()
-                table.column("fileSize", .integer).notNull()
-                table.column("fingerprint", .text).notNull().indexed()
-                table.column("sourceSignature", .text)
-                table.column("remoteRelativePath", .text).notNull().indexed()
-                table.column("backedUpAt", .datetime).notNull()
-                table.column("checksum", .text)
-                table.uniqueKey(["assetLocalIdentifier", "resourceLocalIdentifier"])
-            }
-
-            try db.create(table: BackupJobRecord.databaseTableName) { table in
-                table.autoIncrementedPrimaryKey("id")
-                table.column("serverProfileID", .integer).notNull().indexed().references(ServerProfileRecord.databaseTableName, onDelete: .cascade)
-                table.column("status", .text).notNull()
-                table.column("totalCount", .integer).notNull()
-                table.column("completedCount", .integer).notNull()
-                table.column("startedAt", .datetime).notNull()
-                table.column("finishedAt", .datetime)
-                table.column("lastError", .text)
-            }
-
-            try db.create(table: BackupJobItemRecord.databaseTableName) { table in
-                table.autoIncrementedPrimaryKey("id")
-                table.column("jobID", .integer).notNull().indexed().references(BackupJobRecord.databaseTableName, onDelete: .cascade)
-                table.column("assetLocalIdentifier", .text).notNull()
-                table.column("resourceLocalIdentifier", .text).notNull()
-                table.column("fingerprint", .text).notNull().indexed()
-                table.column("status", .text).notNull()
-                table.column("retryCount", .integer).notNull()
-                table.column("errorMessage", .text)
-                table.column("updatedAt", .datetime).notNull()
-                table.uniqueKey(["jobID", "resourceLocalIdentifier"])
-            }
-
             try db.create(table: SyncStateRecord.databaseTableName) { table in
                 table.column("stateKey", .text).notNull().primaryKey()
                 table.column("stateValue", .text).notNull()
                 table.column("updatedAt", .datetime).notNull()
             }
 
-            try db.create(table: RemoteManifestMeta.databaseTableName) { table in
-                table.column("version", .integer).notNull().primaryKey()
-                table.column("generatedAt", .datetime).notNull()
-                table.column("appVersion", .text).notNull()
-            }
-        }
-
-        migrator.registerMigration("v2_content_hash_dedupe") { db in
-            try db.drop(table: BackupJobItemRecord.databaseTableName)
-            try db.drop(table: BackupJobRecord.databaseTableName)
-            try db.drop(table: BackupResourceRecord.databaseTableName)
-            try db.drop(table: BackupAssetRecord.databaseTableName)
-
-            try db.create(table: BackupAssetRecord.databaseTableName) { table in
-                table.autoIncrementedPrimaryKey("id")
-                table.column("localIdentifier", .text).notNull().unique()
-                table.column("mediaType", .text).notNull()
-                table.column("creationDate", .datetime)
-                table.column("modificationDate", .datetime)
-                table.column("locationJSON", .text)
-                table.column("pixelWidth", .integer).notNull()
-                table.column("pixelHeight", .integer).notNull()
-                table.column("duration", .double).notNull()
-                table.column("isLivePhoto", .boolean).notNull()
-                table.column("lastSeenAt", .datetime).notNull()
-            }
-
-            try db.create(table: BackupResourceRecord.databaseTableName) { table in
-                table.autoIncrementedPrimaryKey("id")
-                table.column("assetLocalIdentifier", .text).notNull().indexed()
-                table.column("resourceLocalIdentifier", .text).notNull()
-                table.column("resourceType", .text).notNull()
-                table.column("uti", .text)
-                table.column("originalFilename", .text).notNull()
-                table.column("fileSize", .integer).notNull()
-                table.column("fingerprint", .text).notNull().indexed()
-                table.column("sourceSignature", .text)
-                table.column("remoteRelativePath", .text).notNull().indexed()
-                table.column("backedUpAt", .datetime).notNull()
-                table.column("checksum", .text)
-                table.uniqueKey(["assetLocalIdentifier", "resourceLocalIdentifier"])
-            }
-
-            try db.create(table: BackupJobRecord.databaseTableName) { table in
-                table.autoIncrementedPrimaryKey("id")
-                table.column("serverProfileID", .integer).notNull().indexed().references(ServerProfileRecord.databaseTableName, onDelete: .cascade)
-                table.column("status", .text).notNull()
-                table.column("totalCount", .integer).notNull()
-                table.column("completedCount", .integer).notNull()
-                table.column("startedAt", .datetime).notNull()
-                table.column("finishedAt", .datetime)
-                table.column("lastError", .text)
-            }
-
-            try db.create(table: BackupJobItemRecord.databaseTableName) { table in
-                table.autoIncrementedPrimaryKey("id")
-                table.column("jobID", .integer).notNull().indexed().references(BackupJobRecord.databaseTableName, onDelete: .cascade)
+            try db.create(table: ContentHashIndexRecord.databaseTableName) { table in
                 table.column("assetLocalIdentifier", .text).notNull()
                 table.column("resourceLocalIdentifier", .text).notNull()
-                table.column("fingerprint", .text).notNull().indexed()
-                table.column("status", .text).notNull()
-                table.column("retryCount", .integer).notNull()
-                table.column("errorMessage", .text)
-                table.column("updatedAt", .datetime).notNull()
-                table.uniqueKey(["jobID", "resourceLocalIdentifier"])
+                table.column("contentHash", .blob).notNull()
+                table.primaryKey(["assetLocalIdentifier", "resourceLocalIdentifier"])
             }
+            try db.create(index: "idx_content_hash_index_hash", on: ContentHashIndexRecord.databaseTableName, columns: ["contentHash"])
         }
 
         return migrator

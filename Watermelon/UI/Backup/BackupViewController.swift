@@ -97,7 +97,7 @@ final class BackupViewController: UIViewController {
 
         progressLabel.font = .systemFont(ofSize: 13)
         progressLabel.textColor = .secondaryLabel
-        progressLabel.text = "0 / 0"
+        progressLabel.text = "成功 0 · 失败 0 · 跳过 0"
 
         logTextView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         logTextView.isEditable = false
@@ -223,7 +223,7 @@ final class BackupViewController: UIViewController {
 
                 await MainActor.run {
                     self.progressView.progress = 0
-                    self.progressLabel.text = "0 / 0"
+                    self.progressLabel.text = "成功 0 · 失败 0 · 跳过 0"
                     self.statusLabel.text = "Backup running"
                     self.appendLog("Starting backup...")
                 }
@@ -234,7 +234,11 @@ final class BackupViewController: UIViewController {
                     appVersion: self.dependencies.appVersion,
                     onProgress: { [weak self] progress in
                         self?.progressView.progress = progress.fraction
-                        self?.progressLabel.text = "\(progress.completed) / \(progress.total)"
+                        if progress.total > 0 {
+                            self?.progressLabel.text = "成功 \(progress.succeeded) · 失败 \(progress.failed) · 跳过 \(progress.skipped) · 总计 \(progress.total)"
+                        } else {
+                            self?.progressLabel.text = "成功 \(progress.succeeded) · 失败 \(progress.failed) · 跳过 \(progress.skipped)"
+                        }
                         self?.statusLabel.text = progress.message
                     },
                     onLog: { [weak self] line in
@@ -244,7 +248,8 @@ final class BackupViewController: UIViewController {
 
                 await MainActor.run {
                     self.statusLabel.text = result.failed == 0 ? "Backup completed" : "Backup completed with errors"
-                    self.appendLog("Completed: \(result.completed), Failed: \(result.failed), Skipped: \(result.skipped)")
+                    let succeeded = max(result.completed - result.skipped, 0)
+                    self.appendLog("Completed: Succeeded \(succeeded), Failed \(result.failed), Skipped \(result.skipped)")
                 }
             } catch {
                 await MainActor.run {

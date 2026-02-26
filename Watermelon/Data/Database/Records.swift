@@ -121,6 +121,14 @@ struct SyncStateRecord: Codable, FetchableRecord, MutablePersistableRecord {
     var updatedAt: Date
 }
 
+struct ContentHashIndexRecord: Codable, FetchableRecord, MutablePersistableRecord {
+    static let databaseTableName = "content_hash_index"
+
+    var assetLocalIdentifier: String
+    var resourceLocalIdentifier: String
+    var contentHash: Data
+}
+
 struct RemoteManifestMeta: Codable, FetchableRecord, MutablePersistableRecord {
     static let databaseTableName = "manifest_meta"
 

@@ -182,23 +182,9 @@ final class ServerSelectionViewController: UIViewController {
             guard let self else { return }
 
             do {
-                let client = try AMSMB2Client(config: SMBServerConfig(
-                    host: profile.host,
-                    port: profile.port,
-                    shareName: profile.shareName,
-                    basePath: profile.basePath,
-                    username: profile.username,
-                    password: password,
-                    domain: profile.domain
-                ))
-
-                try await client.connect()
-                defer { Task { await client.disconnect() } }
-                try await client.createDirectory(path: profile.basePath)
-                _ = try? await self.dependencies.manifestSyncService.refreshFromRemote(
-                    client: client,
-                    basePath: profile.basePath,
-                    clearLocalWhenMissing: true
+                _ = try await self.dependencies.backupExecutor.reloadRemoteIndex(
+                    profile: profile,
+                    password: password
                 )
 
                 try self.dependencies.databaseManager.setActiveServerProfileID(profile.id)

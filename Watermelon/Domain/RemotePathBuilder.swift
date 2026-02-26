@@ -67,7 +67,7 @@ enum RemotePathBuilder {
         return "\(stem)_\(index).\(ext)"
     }
 
-    private static func sanitizeFilename(_ filename: String) -> String {
+    static func sanitizeFilename(_ filename: String) -> String {
         let invalid = CharacterSet(charactersIn: "\\/:*?\"<>|")
         return filename.components(separatedBy: invalid).joined(separator: "_")
     }
