@@ -14,38 +14,13 @@ final class AppCoordinator {
         window.rootViewController = rootNavigationController
         window.makeKeyAndVisible()
 
-        showLogin(allowAutoLogin: true)
+        showHome()
     }
 
-    private func showLogin(allowAutoLogin: Bool) {
+    private func showHome() {
         rootNavigationController.setNavigationBarHidden(false, animated: false)
-        rootNavigationController.setToolbarHidden(true, animated: false)
-        dependencies.appSession.clear()
-
-        let loginVC = ServerSelectionViewController(
-            dependencies: dependencies,
-            autoLoginOnAppear: allowAutoLogin
-        ) { [weak self] _, _ in
-            self?.showMainAlbum()
-        }
-        rootNavigationController.setViewControllers([loginVC], animated: false)
-    }
-
-    private func showMainAlbum() {
-        rootNavigationController.setNavigationBarHidden(false, animated: false)
-
-        let albumVC = AlbumViewController(dependencies: dependencies, onOpenSettings: { [weak self] in
-            self?.showSettings()
-        })
-        albumVC.title = "Album"
-        rootNavigationController.setViewControllers([albumVC], animated: true)
-    }
-
-    private func showSettings() {
-        let settingsVC = SettingsViewController(dependencies: dependencies, onSwitchServer: { [weak self] in
-            self?.showLogin(allowAutoLogin: false)
-        })
-        settingsVC.title = "Settings"
-        rootNavigationController.pushViewController(settingsVC, animated: true)
+        rootNavigationController.setToolbarHidden(false, animated: false)
+        let homeVC = HomeViewController(dependencies: dependencies)
+        rootNavigationController.setViewControllers([homeVC], animated: false)
     }
 }

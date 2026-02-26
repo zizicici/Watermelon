@@ -975,7 +975,7 @@ extension AlbumViewController: UICollectionViewDataSource, UICollectionViewDeleg
         }
 
         view.setHorizontalInset(GridLayout.sectionHeaderInset)
-        view.titleLabel.text = sections[indexPath.section].title
+        view.setTitle(sections[indexPath.section].title)
         return view
     }
 

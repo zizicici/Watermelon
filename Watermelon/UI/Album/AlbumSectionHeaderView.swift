@@ -4,27 +4,84 @@ import UIKit
 final class AlbumSectionHeaderView: UICollectionReusableView {
     static let reuseID = "AlbumSectionHeaderView"
 
-    let titleLabel = UILabel()
+    private let titleButton = UIButton(type: .system)
     private var leadingConstraint: Constraint?
     private var trailingConstraint: Constraint?
+    private var heightConstraint: Constraint?
+    private var isRoundedStyleEnabled = false
+    private var currentTitle: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
 
-        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
-        titleLabel.textColor = .label
+        titleButton.isUserInteractionEnabled = false
+        titleButton.contentHorizontalAlignment = .leading
+        titleButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        titleButton.setContentHuggingPriority(.required, for: .horizontal)
 
-        addSubview(titleLabel)
-        titleLabel.snp.makeConstraints { make in
+        addSubview(titleButton)
+        titleButton.snp.makeConstraints { make in
             leadingConstraint = make.leading.equalToSuperview().inset(4).constraint
-            trailingConstraint = make.trailing.equalToSuperview().inset(4).constraint
+            trailingConstraint = make.trailing.lessThanOrEqualToSuperview().inset(4).constraint
             make.centerY.equalToSuperview()
+            heightConstraint = make.height.equalTo(24).constraint
         }
+
+        applyStyle()
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        currentTitle = nil
+        setTitle(nil)
+        setRoundedRectStyle(false)
     }
 
     func setHorizontalInset(_ inset: CGFloat) {
         leadingConstraint?.update(inset: inset)
         trailingConstraint?.update(inset: inset)
+    }
+
+    func setTitle(_ title: String?) {
+        currentTitle = title
+        var config = titleButton.configuration ?? .plain()
+        config.title = title
+        titleButton.configuration = config
+    }
+
+    func setRoundedRectStyle(_ enabled: Bool) {
+        isRoundedStyleEnabled = enabled
+        applyStyle()
+    }
+
+    private func applyStyle() {
+        var config: UIButton.Configuration = isRoundedStyleEnabled ? .filled() : .plain()
+        config.title = currentTitle
+        config.titleAlignment = .leading
+
+        if isRoundedStyleEnabled {
+            config.baseBackgroundColor = .secondarySystemBackground
+            config.baseForegroundColor = .label
+            config.cornerStyle = .large
+            config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)
+            config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+                var attrs = incoming
+                attrs.font = .systemFont(ofSize: 18, weight: .semibold)
+                return attrs
+            }
+            heightConstraint?.update(offset: 40)
+        } else {
+            config.baseForegroundColor = .label
+            config.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 2)
+            config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+                var attrs = incoming
+                attrs.font = .systemFont(ofSize: 16, weight: .semibold)
+                return attrs
+            }
+            heightConstraint?.update(offset: 24)
+        }
+
+        titleButton.configuration = config
     }
 
     @available(*, unavailable)
