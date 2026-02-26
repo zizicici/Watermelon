@@ -214,7 +214,13 @@ final class BackupSessionController {
         currentRunMode = mode
         hasStartedAtLeastOnce = true
 
-        if state == .idle || state == .completed || state == .failed {
+        let shouldResetSessionItems =
+            state == .idle ||
+            state == .completed ||
+            state == .failed ||
+            (state == .stopped && !mode.isRetry)
+
+        if shouldResetSessionItems {
             processedItemsByResourceID.removeAll()
             retryCountByResourceID.removeAll()
             failedItems.removeAll()
