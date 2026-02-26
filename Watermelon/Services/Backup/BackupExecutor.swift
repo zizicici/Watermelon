@@ -284,6 +284,28 @@ final class BackupExecutor {
         snapshotLock.unlock()
     }
 
+    private func upsertCachedRemoteSnapshotItem(_ item: RemoteManifestResource) {
+        snapshotLock.lock()
+        defer { snapshotLock.unlock() }
+
+        var resources = cachedRemoteSnapshot.resources
+        if let index = resources.firstIndex(where: { $0.id == item.id }) {
+            resources[index] = item
+        } else {
+            resources.append(item)
+        }
+
+        resources.sort { lhs, rhs in
+            if lhs.year != rhs.year { return lhs.year < rhs.year }
+            if lhs.month != rhs.month { return lhs.month < rhs.month }
+            let lhsTime = lhs.creationDateNs ?? lhs.backedUpAtNs
+            let rhsTime = rhs.creationDateNs ?? rhs.backedUpAtNs
+            if lhsTime != rhsTime { return lhsTime < rhsTime }
+            return lhs.fileName < rhs.fileName
+        }
+        cachedRemoteSnapshot = RemoteLibrarySnapshot(resources: resources)
+    }
+
     private func processResource(
         local: LocalPhotoResource,
         monthStore: MonthManifestStore,
@@ -357,6 +379,7 @@ final class BackupExecutor {
                 backedUpAtNs: Self.nanosecondsSinceEpoch(Date()) ?? 0
             )
             try monthStore.upsertItem(manifestItem)
+            upsertCachedRemoteSnapshotItem(manifestItem)
 
             try contentHashIndexRepository.upsert(
                 assetLocalIdentifier: local.assetLocalIdentifier,
@@ -395,6 +418,7 @@ final class BackupExecutor {
                 )
                 try monthStore.upsertItem(manifestItem)
                 monthStore.markRemoteFile(name: targetFileName, size: localFileSize, creationDate: local.asset.creationDate)
+                upsertCachedRemoteSnapshotItem(manifestItem)
 
                 try contentHashIndexRepository.upsert(
                     assetLocalIdentifier: local.assetLocalIdentifier,

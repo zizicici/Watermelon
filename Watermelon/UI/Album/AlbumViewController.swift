@@ -1,4 +1,5 @@
 import GRDB
+import Kingfisher
 import Photos
 import SnapKit
 import UIKit
@@ -61,6 +62,7 @@ final class AlbumViewController: UIViewController {
         let mediaKind: AlbumMediaKind
         let pixelWidth: Int?
         let pixelHeight: Int?
+        let localMirrorAssetLocalIdentifier: String?
     }
 
     private enum AlbumItem {
@@ -130,6 +132,7 @@ final class AlbumViewController: UIViewController {
     private var remoteItems: [RemoteAlbumItem] = []
     private var sections: [AlbumSection] = []
     private var localAssetsByID: [String: PHAsset] = [:]
+    private var localAssetIdentifierByHash: [Data: String] = [:]
 
     private var localFilterMode: LocalFilterMode = .all
     private var sortMode: SortMode = .descending
@@ -139,7 +142,10 @@ final class AlbumViewController: UIViewController {
     private var backupSessionObserverID: UUID?
     private var lastObservedBackupState: BackupSessionController.State = .idle
 
-    private let remoteImageCache = NSCache<NSString, UIImage>()
+    private let remoteImageCache = ImageCache(name: "remote_album_cache")
+    private let remoteThumbnailService = RemoteThumbnailService()
+    private var prefetchTasks: [IndexPath: DownloadTask] = [:]
+    private var pendingRemoteSectionRefresh = false
 
     init(dependencies: DependencyContainer, onOpenSettings: @escaping () -> Void) {
         self.dependencies = dependencies
@@ -159,10 +165,26 @@ final class AlbumViewController: UIViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        for task in prefetchTasks.values {
+            task.cancel()
+        }
+        let thumbnailService = remoteThumbnailService
+        Task {
+            await thumbnailService.invalidate()
+        }
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
         navigationItem.largeTitleDisplayMode = .never
+
+        remoteImageCache.memoryStorage.config.countLimit = 350
+        remoteImageCache.memoryStorage.config.totalCostLimit = 80 * 1024 * 1024
+        remoteImageCache.memoryStorage.config.expiration = .seconds(600)
+        remoteImageCache.diskStorage.config.sizeLimit = 400 * 1024 * 1024
+        remoteImageCache.diskStorage.config.expiration = .days(7)
 
         configureUI()
         configureNavigationItems()
@@ -210,6 +232,7 @@ final class AlbumViewController: UIViewController {
         collectionView.backgroundColor = .clear
         collectionView.dataSource = self
         collectionView.delegate = self
+        collectionView.prefetchDataSource = self
         collectionView.allowsMultipleSelection = true
         collectionView.register(AlbumGridCell.self, forCellWithReuseIdentifier: AlbumGridCell.reuseID)
         collectionView.register(AlbumSectionHeaderView.self, forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader, withReuseIdentifier: AlbumSectionHeaderView.reuseID)
@@ -269,11 +292,28 @@ final class AlbumViewController: UIViewController {
         sourceMode = SourceMode(rawValue: sourceControl.selectedSegmentIndex) ?? .local
         selectedRemoteAssetIDs.removeAll()
         if sourceMode == .local {
+            for task in prefetchTasks.values {
+                task.cancel()
+            }
+            prefetchTasks.removeAll()
             collectionView.indexPathsForSelectedItems?.forEach { collectionView.deselectItem(at: $0, animated: false) }
+            Task { await remoteThumbnailService.invalidate() }
+            collectionView.reloadData()
+            applySections()
+            updateNavigationItems()
+            return
         }
-        collectionView.reloadData()
-        applySections()
-        updateNavigationItems()
+
+        Task { [weak self] in
+            guard let self else { return }
+            await self.refreshLocalHashMirrorIndex()
+            await MainActor.run {
+                self.loadRemoteItems()
+                self.collectionView.reloadData()
+                self.applySections()
+                self.updateNavigationItems()
+            }
+        }
     }
 
     @objc
@@ -292,6 +332,10 @@ final class AlbumViewController: UIViewController {
     @objc
     private func reloadRemoteIndexTapped() {
         guard sourceMode == .remote else { return }
+        guard backupSessionController.state != .running else {
+            presentAlert(title: "备份进行中", message: "请先暂停或停止备份后再刷新远端索引")
+            return
+        }
         guard let profile = dependencies.appSession.activeProfile,
               let password = dependencies.appSession.activePassword else {
             presentAlert(title: "未登录", message: "请先登录 SMB")
@@ -395,6 +439,7 @@ final class AlbumViewController: UIViewController {
             await MainActor.run {
                 self.localItems = []
                 self.localAssetsByID = [:]
+                self.localAssetIdentifierByHash = [:]
                 self.applySections()
             }
             return
@@ -415,6 +460,13 @@ final class AlbumViewController: UIViewController {
             return result
         }) {
             localHashMapByAsset = map
+        }
+
+        var localAssetByHash: [Data: String] = [:]
+        for (assetID, hashes) in localHashMapByAsset {
+            for hash in hashes where localAssetByHash[hash] == nil {
+                localAssetByHash[hash] = assetID
+            }
         }
 
         let builtItems: [LocalAlbumItem] = assets.map { asset in
@@ -445,6 +497,7 @@ final class AlbumViewController: UIViewController {
         await MainActor.run {
             self.localItems = builtItems
             self.localAssetsByID = mapping
+            self.localAssetIdentifierByHash = localAssetByHash
         }
     }
 
@@ -480,7 +533,8 @@ final class AlbumViewController: UIViewController {
                     representative: representative,
                     mediaKind: .livePhoto,
                     pixelWidth: nil,
-                    pixelHeight: nil
+                    pixelHeight: nil,
+                    localMirrorAssetLocalIdentifier: resolveLocalMirrorAssetID(from: groupResources)
                 )
             )
         }
@@ -494,7 +548,8 @@ final class AlbumViewController: UIViewController {
                     representative: resource,
                     mediaKind: Self.detectMediaKind(from: [resource]),
                     pixelWidth: nil,
-                    pixelHeight: nil
+                    pixelHeight: nil,
+                    localMirrorAssetLocalIdentifier: resolveLocalMirrorAssetID(from: [resource])
                 )
             )
         }
@@ -561,6 +616,10 @@ final class AlbumViewController: UIViewController {
             guard let self else { return }
             self.updateBackupButton(snapshot: snapshot)
 
+            if snapshot.state == .running, self.sourceMode == .remote {
+                self.scheduleRemoteSectionRefresh()
+            }
+
             let previous = self.lastObservedBackupState
             self.lastObservedBackupState = snapshot.state
             if previous == .running && snapshot.state != .running {
@@ -576,6 +635,32 @@ final class AlbumViewController: UIViewController {
         config.baseBackgroundColor = snapshot.state.buttonColor
         config.baseForegroundColor = .white
         backupButton.configuration = config
+
+        let canOperateRemote = snapshot.state != .running
+        reloadRemoteBarButtonItem.isEnabled = canOperateRemote
+        restoreBarButtonItem.isEnabled = canOperateRemote
+    }
+
+    private func scheduleRemoteSectionRefresh() {
+        guard sourceMode == .remote else { return }
+        guard !pendingRemoteSectionRefresh else { return }
+        pendingRemoteSectionRefresh = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self else { return }
+            Task { [weak self] in
+                guard let self else { return }
+                await MainActor.run {
+                    self.pendingRemoteSectionRefresh = false
+                }
+                guard self.sourceMode == .remote else { return }
+                await self.refreshLocalHashMirrorIndex()
+                await MainActor.run {
+                    self.loadRemoteItems()
+                    self.applySections()
+                }
+            }
+        }
     }
 
     private func updateCollectionContentInsetForFloatingButton() {
@@ -696,9 +781,13 @@ final class AlbumViewController: UIViewController {
         if selectedRemoteAssetIDs.contains(item.id) {
             cell.layer.borderWidth = 2
             cell.layer.borderColor = UIColor.systemBlue.cgColor
+        } else {
+            cell.layer.borderWidth = 0
+            cell.layer.borderColor = UIColor.clear.cgColor
         }
 
-        if let local = localAssetsByID[item.id] {
+        if let localAssetID = item.localMirrorAssetLocalIdentifier,
+           let local = localAssetsByID[localAssetID] {
             dependencies.photoLibraryService.requestThumbnail(for: local, targetSize: CGSize(width: 400, height: 400)) { image in
                 if cell.representedID == item.id {
                     cell.imageView.image = image
@@ -707,55 +796,101 @@ final class AlbumViewController: UIViewController {
             return
         }
 
-        let cacheKey = item.representative.remoteRelativePath as NSString
-        if let cached = remoteImageCache.object(forKey: cacheKey) {
-            cell.imageView.image = cached
+        if item.mediaKind == .video {
+            cell.imageView.image = UIImage(systemName: "video")
             return
         }
 
-        cell.imageView.image = UIImage(systemName: "photo")
+        guard let source = makeRemoteKingfisherSource(for: item, traitCollection: cell.traitCollection) else {
+            cell.imageView.image = UIImage(systemName: "photo")
+            return
+        }
+
+        cell.imageView.kf.indicatorType = .activity
+        cell.imageView.kf.setImage(
+            with: source,
+            placeholder: UIImage(systemName: "photo"),
+            options: remoteKingfisherOptions(displayScale: max(cell.traitCollection.displayScale, 1))
+        ) { [weak cell] result in
+            if case .failure = result, cell?.representedID == item.id {
+                cell?.imageView.image = UIImage(systemName: "exclamationmark.triangle")
+            }
+        }
+    }
+
+    private func makeRemoteKingfisherSource(
+        for item: RemoteAlbumItem,
+        traitCollection: UITraitCollection
+    ) -> Source? {
         guard let profile = dependencies.appSession.activeProfile,
               let password = dependencies.appSession.activePassword else {
-            return
+            return nil
         }
 
-        Task {
-            do {
-                let client = try AMSMB2Client(config: SMBServerConfig(
-                    host: profile.host,
-                    port: profile.port,
-                    shareName: profile.shareName,
-                    basePath: profile.basePath,
-                    username: profile.username,
-                    password: password,
-                    domain: profile.domain
-                ))
-                try await client.connect()
-                defer { Task { await client.disconnect() } }
+        let scale = max(traitCollection.displayScale, 1)
+        let maxPixelSize = max(gridItemWidth() * scale * 1.6, 220)
+        let remoteAbsolutePath = RemotePathBuilder.absolutePath(
+            basePath: profile.basePath,
+            remoteRelativePath: item.representative.remoteRelativePath
+        )
 
-                let temp = FileManager.default.temporaryDirectory.appendingPathComponent("remote_preview_\(UUID().uuidString)_\(item.representative.fileName)")
-                let remotePath = RemotePathBuilder.absolutePath(
-                    basePath: profile.basePath,
-                    remoteRelativePath: item.representative.remoteRelativePath
-                )
-                try await client.download(remotePath: remotePath, localURL: temp)
-                let image = UIImage(contentsOfFile: temp.path)
-                try? FileManager.default.removeItem(at: temp)
+        let provider = SMBRemoteImageDataProvider(
+            profile: profile,
+            password: password,
+            remoteAbsolutePath: remoteAbsolutePath,
+            maxPixelSize: maxPixelSize,
+            thumbnailService: remoteThumbnailService
+        )
+        return .provider(provider)
+    }
 
-                guard let image else { return }
-                remoteImageCache.setObject(image, forKey: cacheKey)
-                await MainActor.run {
-                    if cell.representedID == item.id {
-                        cell.imageView.image = image
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    if cell.representedID == item.id {
-                        cell.imageView.image = UIImage(systemName: "exclamationmark.triangle")
-                    }
-                }
+    private func remoteKingfisherOptions(displayScale: CGFloat) -> KingfisherOptionsInfo {
+        return [
+            .targetCache(remoteImageCache),
+            .memoryCacheExpiration(.seconds(600)),
+            .diskCacheExpiration(.days(7)),
+            .backgroundDecode,
+            .scaleFactor(max(displayScale, 1)),
+            .transition(.fade(0.12))
+        ]
+    }
+
+    private func resolveLocalMirrorAssetID(from resources: [RemoteManifestResource]) -> String? {
+        for resource in resources where ResourceTypeCode.isPhotoLike(resource.resourceType) {
+            if let assetID = localAssetIdentifierByHash[resource.contentHash] {
+                return assetID
             }
+        }
+        for resource in resources {
+            if let assetID = localAssetIdentifierByHash[resource.contentHash] {
+                return assetID
+            }
+        }
+        return nil
+    }
+
+    private func refreshLocalHashMirrorIndex() async {
+        let mirrorMap: [Data: String]
+        do {
+            mirrorMap = try dependencies.databaseManager.read { db in
+                let rows = try Row.fetchAll(db, sql: "SELECT assetLocalIdentifier, contentHash FROM content_hash_index")
+                var result: [Data: String] = [:]
+                result.reserveCapacity(rows.count)
+                for row in rows {
+                    let assetID: String = row["assetLocalIdentifier"]
+                    let hash: Data = row["contentHash"]
+                    if result[hash] == nil {
+                        result[hash] = assetID
+                    }
+                }
+                return result
+            }
+        } catch {
+            mirrorMap = [:]
+        }
+
+        await MainActor.run {
+            self.localAssetIdentifierByHash = mirrorMap
         }
     }
 
@@ -790,7 +925,7 @@ final class AlbumViewController: UIViewController {
     }()
 }
 
-extension AlbumViewController: UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout {
+extension AlbumViewController: UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout, UICollectionViewDataSourcePrefetching {
     func numberOfSections(in collectionView: UICollectionView) -> Int {
         sections.count
     }
@@ -864,5 +999,44 @@ extension AlbumViewController: UICollectionViewDataSource, UICollectionViewDeleg
         guard case .remote(let remote) = item else { return }
         selectedRemoteAssetIDs.remove(remote.id)
         collectionView.reloadItems(at: [indexPath])
+    }
+
+    func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
+        guard sourceMode == .remote else { return }
+
+        for indexPath in indexPaths {
+            guard prefetchTasks[indexPath] == nil else { continue }
+            guard indexPath.section < sections.count,
+                  indexPath.item < sections[indexPath.section].items.count else {
+                continue
+            }
+            guard case .remote(let item) = sections[indexPath.section].items[indexPath.item] else {
+                continue
+            }
+            if item.mediaKind == .video { continue }
+            guard localAssetsByID[item.id] == nil else { continue }
+            guard let source = makeRemoteKingfisherSource(for: item, traitCollection: collectionView.traitCollection) else {
+                continue
+            }
+
+            let task = KingfisherManager.shared.retrieveImage(
+                with: source,
+                options: remoteKingfisherOptions(displayScale: max(collectionView.traitCollection.displayScale, 1)),
+                completionHandler: { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.prefetchTasks[indexPath] = nil
+                    }
+                }
+            )
+            prefetchTasks[indexPath] = task
+        }
+    }
+
+    func collectionView(_ collectionView: UICollectionView, cancelPrefetchingForItemsAt indexPaths: [IndexPath]) {
+        guard sourceMode == .remote else { return }
+        for indexPath in indexPaths {
+            prefetchTasks[indexPath]?.cancel()
+            prefetchTasks[indexPath] = nil
+        }
     }
 }

@@ -1,5 +1,6 @@
 import SnapKit
 import UIKit
+import Kingfisher
 
 final class AlbumGridCell: UICollectionViewCell {
     static let reuseID = "AlbumGridCell"
@@ -73,6 +74,7 @@ final class AlbumGridCell: UICollectionViewCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        imageView.kf.cancelDownloadTask()
         representedID = nil
         imageView.image = nil
         titleLabel.text = nil
