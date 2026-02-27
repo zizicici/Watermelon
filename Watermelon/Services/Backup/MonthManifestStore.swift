@@ -30,7 +30,6 @@ final class MonthManifestStore {
 
     private(set) var itemsByFileName: [String: RemoteManifestResource] = [:]
     private(set) var itemsByHash: [Data: RemoteManifestResource] = [:]
-    private(set) var hashes = Set<Data>()
 
     private(set) var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
     private(set) var assetLinksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
@@ -130,8 +129,77 @@ final class MonthManifestStore {
         return store
     }
 
-    func containsHash(_ hash: Data) -> Bool {
-        hashes.contains(hash)
+    static func loadIfExists(
+        client: SMBClientProtocol,
+        basePath: String,
+        year: Int,
+        month: Int
+    ) async throws -> MonthManifestStore? {
+        let monthRelativePath = String(format: "%04d/%02d", year, month)
+        let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
+
+        let entries: [SMBRemoteEntry]
+        do {
+            entries = try await client.list(path: monthAbsolutePath)
+        } catch {
+            return nil
+        }
+
+        guard entries.contains(where: { $0.name == Self.manifestFileName && !$0.isDirectory }) else {
+            return nil
+        }
+
+        let remoteFilesByName = Dictionary(
+            uniqueKeysWithValues: entries
+                .filter { !$0.isDirectory && $0.name != Self.manifestFileName }
+                .map { ($0.name, $0) }
+        )
+
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("month_manifest_\(year)_\(month)_\(UUID().uuidString).sqlite")
+        try? FileManager.default.removeItem(at: localURL)
+
+        let manifestAbsolutePath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: monthRelativePath + "/" + Self.manifestFileName
+        )
+
+        do {
+            try await client.download(remotePath: manifestAbsolutePath, localURL: localURL)
+        } catch {
+            try? FileManager.default.removeItem(at: localURL)
+            return nil
+        }
+
+        let dbQueue: DatabaseQueue
+        do {
+            dbQueue = try DatabaseQueue(path: localURL.path)
+            try Self.migrate(dbQueue)
+            _ = try await dbQueue.read { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: localURL)
+            return nil
+        }
+
+        let store = MonthManifestStore(
+            client: client,
+            basePath: basePath,
+            year: year,
+            month: month,
+            localManifestURL: localURL,
+            dbQueue: dbQueue,
+            remoteFilesByName: remoteFilesByName,
+            dirty: false
+        )
+
+        do {
+            try store.reloadCache()
+            return store
+        } catch {
+            return nil
+        }
     }
 
     func containsAssetFingerprint(_ fingerprint: Data) -> Bool {
@@ -212,13 +280,11 @@ final class MonthManifestStore {
         }
 
         if let old = itemsByFileName[item.fileName], old.contentHash != item.contentHash {
-            hashes.remove(old.contentHash)
             itemsByHash[old.contentHash] = nil
         }
 
         itemsByFileName[item.fileName] = item
         itemsByHash[item.contentHash] = item
-        hashes.insert(item.contentHash)
         dirty = true
 
         return item
@@ -398,8 +464,6 @@ final class MonthManifestStore {
         resourcesByName.reserveCapacity(resourceRows.count)
         var resourcesByHash: [Data: RemoteManifestResource] = [:]
         resourcesByHash.reserveCapacity(resourceRows.count)
-        var hashSet = Set<Data>()
-        hashSet.reserveCapacity(resourceRows.count)
 
         for row in resourceRows {
             let item = RemoteManifestResource(
@@ -414,7 +478,6 @@ final class MonthManifestStore {
             )
             resourcesByName[item.fileName] = item
             resourcesByHash[item.contentHash] = item
-            hashSet.insert(item.contentHash)
         }
 
         let assetRows = try dbQueue.read { db in
@@ -471,7 +534,6 @@ final class MonthManifestStore {
 
         itemsByFileName = resourcesByName
         itemsByHash = resourcesByHash
-        hashes = hashSet
         self.assetsByFingerprint = assetsByFingerprint
         assetLinksByFingerprint = linksByFingerprint
     }

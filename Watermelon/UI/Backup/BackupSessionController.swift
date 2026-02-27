@@ -503,30 +503,12 @@ final class BackupSessionController {
         for index in 0 ..< assets.count {
             try Task.checkCancellation()
             let asset = assets.object(at: index)
-            let resources = Self.selectedBackupResources(for: asset)
-            if resources.isEmpty { continue }
             if !completed.contains(asset.localIdentifier) {
                 pending.insert(asset.localIdentifier)
             }
         }
 
         return pending
-    }
-
-    private static func selectedBackupResources(for asset: PHAsset) -> [PHAssetResource] {
-        let indexed = Array(PHAssetResource.assetResources(for: asset).enumerated())
-        return indexed
-            .sorted { lhs, rhs in
-                let lhsRole = PhotoLibraryService.resourceTypeCode(lhs.1.type)
-                let rhsRole = PhotoLibraryService.resourceTypeCode(rhs.1.type)
-                if lhsRole != rhsRole { return lhsRole < rhsRole }
-
-                let lhsName = lhs.1.originalFilename.lowercased()
-                let rhsName = rhs.1.originalFilename.lowercased()
-                if lhsName != rhsName { return lhsName < rhsName }
-                return lhs.0 < rhs.0
-            }
-            .map(\.element)
     }
 
     private func primaryActionTitle(for state: State) -> String {

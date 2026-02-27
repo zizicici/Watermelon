@@ -90,6 +90,7 @@ final class HomeViewController: UIViewController {
     }
 
     private let dependencies: DependencyContainer
+    private let contentHashIndexRepository: ContentHashIndexRepository
     private let calendar = Calendar(identifier: .gregorian)
     private let discoveryService = SMBDiscoveryService()
 
@@ -148,6 +149,7 @@ final class HomeViewController: UIViewController {
 
     init(dependencies: DependencyContainer) {
         self.dependencies = dependencies
+        self.contentHashIndexRepository = ContentHashIndexRepository(databaseManager: dependencies.databaseManager)
 
         let layout = UICollectionViewFlowLayout()
         layout.minimumInteritemSpacing = GridLayout.itemSpacing
@@ -656,35 +658,8 @@ final class HomeViewController: UIViewController {
         let snapshot = dependencies.backupExecutor.currentRemoteSnapshot()
         let remoteAssetFingerprintSet = snapshot.assetFingerprintSet
 
-        var localHashMapByAsset: [String: [Data]] = [:]
-        if let map = try? dependencies.databaseManager.read({ db -> [String: [Data]] in
-            let rows = try Row.fetchAll(db, sql: "SELECT assetLocalIdentifier, contentHash FROM local_asset_resources")
-            var result: [String: [Data]] = [:]
-            result.reserveCapacity(rows.count)
-            for row in rows {
-                let assetID: String = row["assetLocalIdentifier"]
-                let hash: Data = row["contentHash"]
-                result[assetID, default: []].append(hash)
-            }
-            return result
-        }) {
-            localHashMapByAsset = map
-        }
-
-        var localFingerprintByAsset: [String: Data] = [:]
-        if let map = try? dependencies.databaseManager.read({ db -> [String: Data] in
-            let rows = try Row.fetchAll(db, sql: "SELECT assetLocalIdentifier, assetFingerprint FROM local_assets")
-            var result: [String: Data] = [:]
-            result.reserveCapacity(rows.count)
-            for row in rows {
-                let assetID: String = row["assetLocalIdentifier"]
-                let fingerprint: Data = row["assetFingerprint"]
-                result[assetID] = fingerprint
-            }
-            return result
-        }) {
-            localFingerprintByAsset = map
-        }
+        let localHashMapByAsset = (try? contentHashIndexRepository.fetchHashMapByAsset()) ?? [:]
+        let localFingerprintByAsset = (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset()) ?? [:]
 
         let finalizedLocalAssetByHash = HomeAlbumMatching.makeHashToAssetIndex(localHashMapByAsset)
 
@@ -1075,17 +1050,8 @@ final class HomeViewController: UIViewController {
     private func refreshLocalHashMirrorIndex() async {
         let mirrorMap: [Data: [String]]
         do {
-            mirrorMap = try dependencies.databaseManager.read { db in
-                let rows = try Row.fetchAll(db, sql: "SELECT assetLocalIdentifier, contentHash FROM local_asset_resources")
-                var hashMapByAsset: [String: [Data]] = [:]
-                hashMapByAsset.reserveCapacity(rows.count)
-                for row in rows {
-                    let assetID: String = row["assetLocalIdentifier"]
-                    let hash: Data = row["contentHash"]
-                    hashMapByAsset[assetID, default: []].append(hash)
-                }
-                return HomeAlbumMatching.makeHashToAssetIndex(hashMapByAsset)
-            }
+            let hashMapByAsset = try contentHashIndexRepository.fetchHashMapByAsset()
+            mirrorMap = HomeAlbumMatching.makeHashToAssetIndex(hashMapByAsset)
         } catch {
             mirrorMap = [:]
         }

@@ -6,7 +6,6 @@ final class DependencyContainer {
     let appSession: AppSession
     let photoLibraryService: PhotoLibraryService
     let metadataService: MetadataService
-    let manifestSyncService: ManifestSyncService
     let backupExecutor: BackupExecutor
     let restoreService: RestoreService
 
@@ -21,11 +20,9 @@ final class DependencyContainer {
         appSession = AppSession()
         photoLibraryService = PhotoLibraryService()
         metadataService = MetadataService()
-        manifestSyncService = ManifestSyncService(databaseManager: databaseManager)
         backupExecutor = BackupExecutor(
             databaseManager: databaseManager,
-            photoLibraryService: photoLibraryService,
-            manifestSyncService: manifestSyncService
+            photoLibraryService: photoLibraryService
         )
         restoreService = RestoreService(databaseManager: databaseManager)
     }

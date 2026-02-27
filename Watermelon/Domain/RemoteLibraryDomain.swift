@@ -102,16 +102,8 @@ struct RemoteLibrarySnapshot {
         resources.count
     }
 
-    var hashSet: Set<Data> {
-        Set(resources.map(\.contentHash))
-    }
-
     var assetFingerprintSet: Set<Data> {
         Set(assets.map(\.assetFingerprint))
-    }
-
-    var countsByMonth: [String: Int] {
-        Dictionary(grouping: assets, by: \.monthKey).mapValues(\.count)
     }
 }
 

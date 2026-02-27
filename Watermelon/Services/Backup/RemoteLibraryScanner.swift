@@ -1,18 +1,11 @@
 import Foundation
 
-struct RemoteLibraryAggregate {
-    let totalCount: Int
-    let countsByMonth: [String: Int]
-}
-
 final class RemoteLibraryScanner {
     func scanYearMonthTree(
         client: SMBClientProtocol,
         basePath: String
     ) async throws -> RemoteLibrarySnapshot {
         let normalizedBasePath = RemotePathBuilder.normalizePath(basePath)
-        try await client.createDirectory(path: normalizedBasePath)
-
         let yearEntries = try await client.list(path: normalizedBasePath)
             .filter { $0.isDirectory }
             .filter { Self.parseYear($0.name) != nil }
@@ -31,12 +24,12 @@ final class RemoteLibraryScanner {
 
             for monthEntry in monthEntries {
                 guard let month = Self.parseMonth(monthEntry.name) else { continue }
-                let store = try await MonthManifestStore.loadOrCreate(
+                guard let store = try await MonthManifestStore.loadIfExists(
                     client: client,
                     basePath: normalizedBasePath,
                     year: year,
                     month: month
-                )
+                ) else { continue }
                 let monthItems = store.allItems()
                 let monthAssets = store.allAssets()
                 allItems.append(contentsOf: monthItems)
@@ -77,10 +70,6 @@ final class RemoteLibraryScanner {
         }
 
         return RemoteLibrarySnapshot(resources: allItems, assets: allAssets, assetResourceLinks: allLinks)
-    }
-
-    func aggregateRemoteCounts(snapshot: RemoteLibrarySnapshot) -> RemoteLibraryAggregate {
-        RemoteLibraryAggregate(totalCount: snapshot.totalCount, countsByMonth: snapshot.countsByMonth)
     }
 
     private static func parseYear(_ value: String) -> Int? {

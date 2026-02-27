@@ -80,29 +80,6 @@ final class ContentHashIndexRepository {
         }
     }
 
-    func fetchHashToAssetMap() throws -> [Data: String] {
-        try databaseManager.read { db in
-            let rows = try Row.fetchAll(
-                db,
-                sql: """
-                SELECT assetLocalIdentifier, contentHash
-                FROM local_asset_resources
-                ORDER BY assetLocalIdentifier
-                """
-            )
-            var result: [Data: String] = [:]
-            result.reserveCapacity(rows.count)
-            for row in rows {
-                let assetID: String = row["assetLocalIdentifier"]
-                let hash: Data = row["contentHash"]
-                if result[hash] == nil {
-                    result[hash] = assetID
-                }
-            }
-            return result
-        }
-    }
-
     func fetchAssetFingerprintsByAsset() throws -> [String: Data] {
         try databaseManager.read { db in
             let rows = try Row.fetchAll(
@@ -120,25 +97,6 @@ final class ContentHashIndexRepository {
                 result[assetID] = fingerprint
             }
             return result
-        }
-    }
-
-    func fetchAllHashes() throws -> Set<Data> {
-        try databaseManager.read { db in
-            Set(try Data.fetchAll(db, sql: "SELECT contentHash FROM local_asset_resources"))
-        }
-    }
-
-    func fetchAllAssetFingerprints() throws -> Set<Data> {
-        try databaseManager.read { db in
-            Set(try Data.fetchAll(db, sql: "SELECT assetFingerprint FROM local_assets"))
-        }
-    }
-
-    func clearAll() throws {
-        try databaseManager.write { db in
-            try db.execute(sql: "DELETE FROM local_asset_resources")
-            try db.execute(sql: "DELETE FROM local_assets")
         }
     }
 }

@@ -39,13 +39,6 @@ final class BackupExecutor {
         }
     }
 
-    private struct SelectedResource {
-        let resourceIndex: Int
-        let resource: PHAssetResource
-        let role: Int
-        let slot: Int
-    }
-
     private struct PreparedResource {
         let local: LocalPhotoResource
         let tempFileURL: URL
@@ -57,8 +50,6 @@ final class BackupExecutor {
     private struct ResourceUploadResult {
         let status: BackupItemStatus
         let reason: String?
-        let displayFileName: String
-        let resource: RemoteManifestResource?
     }
 
     private struct AssetProcessingResult {
@@ -75,14 +66,11 @@ final class BackupExecutor {
     private let photoLibraryService: PhotoLibraryService
     private let contentHashIndexRepository: ContentHashIndexRepository
     private let remoteLibraryScanner: RemoteLibraryScanner
-
-    private let snapshotLock = NSLock()
-    private var cachedRemoteSnapshot = RemoteLibrarySnapshot(resources: [], assets: [], assetResourceLinks: [])
+    private let remoteSnapshotCache = RemoteLibrarySnapshotCache()
 
     init(
         databaseManager: DatabaseManager,
-        photoLibraryService: PhotoLibraryService,
-        manifestSyncService _: ManifestSyncService
+        photoLibraryService: PhotoLibraryService
     ) {
         self.photoLibraryService = photoLibraryService
         contentHashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
@@ -166,7 +154,7 @@ final class BackupExecutor {
             }
 
             let asset = retryMode ? retryAssets[loopIndex] : assetsResult.object(at: loopIndex)
-            let selectedResources = Self.orderedAssetResourcesWithRoleSlot(
+            let selectedResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from:
                 PHAssetResource.assetResources(for: asset)
             )
             if selectedResources.isEmpty {
@@ -243,7 +231,7 @@ final class BackupExecutor {
 
                 state.failed += 1
 
-                let displayName = Self.assetDisplayName(asset: asset, selectedResources: selectedResources)
+                let displayName = BackupAssetResourcePlanner.assetDisplayName(asset: asset, selectedResources: selectedResources)
                 await onLog("Failed asset: \(displayName) - \(error.localizedDescription)")
                 await onProgress(
                     progressSnapshot(
@@ -265,16 +253,6 @@ final class BackupExecutor {
         if let activeStore {
             _ = try? await activeStore.flushToRemote()
             await onLog("Month \(activeMonth?.text ?? "unknown") manifest flushed.")
-        }
-
-        do {
-            let snapshot = try await remoteLibraryScanner.scanYearMonthTree(
-                client: smbClient,
-                basePath: profile.basePath
-            )
-            updateCachedRemoteSnapshot(snapshot)
-        } catch {
-            await onLog("Remote rescan warning: \(error.localizedDescription)")
         }
 
         let finalMessage = state.paused
@@ -312,94 +290,24 @@ final class BackupExecutor {
     }
 
     func currentRemoteSnapshot() -> RemoteLibrarySnapshot {
-        snapshotLock.lock()
-        defer { snapshotLock.unlock() }
-        return cachedRemoteSnapshot
+        remoteSnapshotCache.current()
     }
 
     private func updateCachedRemoteSnapshot(_ snapshot: RemoteLibrarySnapshot) {
-        snapshotLock.lock()
-        cachedRemoteSnapshot = snapshot
-        snapshotLock.unlock()
+        remoteSnapshotCache.replace(with: snapshot)
     }
 
     private func upsertCachedRemoteSnapshotResource(_ item: RemoteManifestResource) {
-        snapshotLock.lock()
-        defer { snapshotLock.unlock() }
-
-        var resources = cachedRemoteSnapshot.resources
-        if let index = resources.firstIndex(where: { $0.id == item.id }) {
-            resources[index] = item
-        } else {
-            resources.append(item)
-        }
-
-        resources.sort { lhs, rhs in
-            if lhs.year != rhs.year { return lhs.year < rhs.year }
-            if lhs.month != rhs.month { return lhs.month < rhs.month }
-            let lhsTime = lhs.creationDateNs ?? lhs.backedUpAtNs
-            let rhsTime = rhs.creationDateNs ?? rhs.backedUpAtNs
-            if lhsTime != rhsTime { return lhsTime < rhsTime }
-            return lhs.fileName < rhs.fileName
-        }
-
-        cachedRemoteSnapshot = RemoteLibrarySnapshot(
-            resources: resources,
-            assets: cachedRemoteSnapshot.assets,
-            assetResourceLinks: cachedRemoteSnapshot.assetResourceLinks
-        )
+        remoteSnapshotCache.upsertResource(item)
     }
 
     private func upsertCachedRemoteSnapshotAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]? = nil) {
-        snapshotLock.lock()
-        defer { snapshotLock.unlock() }
-
-        var assets = cachedRemoteSnapshot.assets
-        if let index = assets.firstIndex(where: { $0.id == asset.id }) {
-            assets[index] = asset
-        } else {
-            assets.append(asset)
-        }
-
-        assets.sort { lhs, rhs in
-            if lhs.year != rhs.year { return lhs.year < rhs.year }
-            if lhs.month != rhs.month { return lhs.month < rhs.month }
-            let lhsTime = lhs.creationDateNs ?? lhs.backedUpAtNs
-            let rhsTime = rhs.creationDateNs ?? rhs.backedUpAtNs
-            if lhsTime != rhsTime { return lhsTime < rhsTime }
-            return lhs.assetFingerprintHex < rhs.assetFingerprintHex
-        }
-
-        var assetResourceLinks = cachedRemoteSnapshot.assetResourceLinks
-        if let links {
-            assetResourceLinks.removeAll {
-                $0.year == asset.year
-                    && $0.month == asset.month
-                    && $0.assetFingerprint == asset.assetFingerprint
-            }
-            assetResourceLinks.append(contentsOf: links)
-            assetResourceLinks.sort { lhs, rhs in
-                if lhs.year != rhs.year { return lhs.year < rhs.year }
-                if lhs.month != rhs.month { return lhs.month < rhs.month }
-                if lhs.assetFingerprint != rhs.assetFingerprint {
-                    return lhs.assetFingerprint.lexicographicallyPrecedes(rhs.assetFingerprint)
-                }
-                if lhs.role != rhs.role { return lhs.role < rhs.role }
-                if lhs.slot != rhs.slot { return lhs.slot < rhs.slot }
-                return lhs.resourceHash.lexicographicallyPrecedes(rhs.resourceHash)
-            }
-        }
-
-        cachedRemoteSnapshot = RemoteLibrarySnapshot(
-            resources: cachedRemoteSnapshot.resources,
-            assets: assets,
-            assetResourceLinks: assetResourceLinks
-        )
+        remoteSnapshotCache.upsertAsset(asset, links: links)
     }
 
     private func processAsset(
         asset: PHAsset,
-        selectedResources: [SelectedResource],
+        selectedResources: [BackupSelectedResource],
         monthStore: MonthManifestStore,
         profile: ServerProfileRecord,
         smbClient: SMBClientProtocol,
@@ -417,7 +325,7 @@ final class BackupExecutor {
             }
         }
 
-        let displayName = Self.assetDisplayName(asset: asset, selectedResources: selectedResources)
+        let displayName = BackupAssetResourcePlanner.assetDisplayName(asset: asset, selectedResources: selectedResources)
 
         for (resourcePosition, selected) in selectedResources.enumerated() {
             try Task.checkCancellation()
@@ -455,7 +363,11 @@ final class BackupExecutor {
             )
         }
 
-        let assetFingerprint = Self.assetFingerprint(from: preparedResources)
+        let assetFingerprint = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: preparedResources.map {
+                (role: $0.local.resourceRole, slot: $0.local.resourceSlot, contentHash: $0.contentHash)
+            }
+        )
 
         if monthStore.containsAssetFingerprint(assetFingerprint) {
             try contentHashIndexRepository.upsertAssetFingerprint(
@@ -565,12 +477,10 @@ final class BackupExecutor {
         let localHash = prepared.contentHash
         let localFileSize = prepared.fileSize
 
-        if let existing = monthStore.findResourceByHash(localHash) {
+        if monthStore.findResourceByHash(localHash) != nil {
             return ResourceUploadResult(
                 status: .skipped,
-                reason: "hash_exists",
-                displayFileName: existing.fileName,
-                resource: existing
+                reason: "hash_exists"
             )
         }
 
@@ -628,9 +538,7 @@ final class BackupExecutor {
 
             return ResourceUploadResult(
                 status: .skipped,
-                reason: skipReason,
-                displayFileName: targetFileName,
-                resource: monthStore.findResourceByHash(localHash)
+                reason: skipReason
             )
         }
 
@@ -669,9 +577,7 @@ final class BackupExecutor {
 
                 return ResourceUploadResult(
                     status: .success,
-                    reason: nil,
-                    displayFileName: targetFileName,
-                    resource: inserted
+                    reason: nil
                 )
             } catch {
                 if error is CancellationError {
@@ -700,9 +606,7 @@ final class BackupExecutor {
 
         return ResourceUploadResult(
             status: .failed,
-            reason: lastError?.localizedDescription ?? "Unknown upload failure",
-            displayFileName: targetFileName,
-            resource: nil
+            reason: lastError?.localizedDescription ?? "Unknown upload failure"
         )
     }
 
@@ -749,7 +653,7 @@ final class BackupExecutor {
         ))
     }
 
-    private func makeLocalResource(asset: PHAsset, selected: SelectedResource) -> LocalPhotoResource {
+    private func makeLocalResource(asset: PHAsset, selected: BackupSelectedResource) -> LocalPhotoResource {
         LocalPhotoResource(
             asset: asset,
             resource: selected.resource,
@@ -827,62 +731,6 @@ final class BackupExecutor {
     private static func nanosecondsSinceEpoch(_ date: Date?) -> Int64? {
         guard let date else { return nil }
         return Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded())
-    }
-
-    private static func orderedAssetResourcesWithRoleSlot(_ resources: [PHAssetResource]) -> [SelectedResource] {
-        let sorted = Array(resources.enumerated()).sorted { lhs, rhs in
-            let lhsRole = PhotoLibraryService.resourceTypeCode(lhs.1.type)
-            let rhsRole = PhotoLibraryService.resourceTypeCode(rhs.1.type)
-            if lhsRole != rhsRole { return lhsRole < rhsRole }
-
-            let lhsName = lhs.1.originalFilename.lowercased()
-            let rhsName = rhs.1.originalFilename.lowercased()
-            if lhsName != rhsName { return lhsName < rhsName }
-            return lhs.0 < rhs.0
-        }
-
-        var roleCounters: [Int: Int] = [:]
-        var result: [SelectedResource] = []
-        result.reserveCapacity(sorted.count)
-
-        for (resourceIndex, resource) in sorted {
-            let role = PhotoLibraryService.resourceTypeCode(resource.type)
-            let slot = roleCounters[role, default: 0]
-            roleCounters[role] = slot + 1
-
-            result.append(
-                SelectedResource(
-                    resourceIndex: resourceIndex,
-                    resource: resource,
-                    role: role,
-                    slot: slot
-                )
-            )
-        }
-
-        return result
-    }
-
-    private static func assetFingerprint(from preparedResources: [PreparedResource]) -> Data {
-        let tokens = preparedResources
-            .map { prepared in
-                let hashHex = prepared.contentHash.map { String(format: "%02x", $0) }.joined()
-                return "\(prepared.local.resourceRole)|\(prepared.local.resourceSlot)|\(hashHex)"
-            }
-            .sorted()
-            .joined(separator: "\n")
-
-        let digest = SHA256.hash(data: Data(tokens.utf8))
-        return Data(digest)
-    }
-
-    private static func assetDisplayName(asset: PHAsset, selectedResources: [SelectedResource]) -> String {
-        if let first = selectedResources.first {
-            return first.resource.originalFilename
-        }
-
-        let timestamp = nanosecondsSinceEpoch(asset.creationDate) ?? 0
-        return "asset_\(timestamp)"
     }
 
     private static func contentHash(of fileURL: URL) throws -> Data {
