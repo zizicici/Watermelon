@@ -1,82 +1,69 @@
-# UI 流程与状态
+# UI 流程与状态（当前主链路）
 
-## 1. 登录前流程
+## 1. 启动与主页面
 
-## `ServerSelectionViewController`
+App 启动后直接进入 `HomeViewController`。
 
-1. 两个 section：`局域网发现`、`已保存`。
-2. 支持 Bonjour 自动发现 SMB（`_smb._tcp`）。
-3. 进入页面后可自动登录最近/当前活跃服务器。
-4. 右上角 `+` 进入添加流程。
+### 顶部导航
 
-## 添加 SMB 三步
+1. 右上角连接按钮显示当前状态：`加载中……` / `用户@share/basePath` / `单机模式`。
+2. 连接按钮菜单包含：
+3. 当前模式切换（单机模式/已保存服务器）。
+4. 局域网 SMB 发现列表。
+5. 手动添加 SMB 服务器入口。
 
-1. `AddSMBServerLoginViewController`
-2. 输入 Host/Port/Username/Password/Domain，登录后拉 Share 列表。
-3. 页面是 `UIScrollView`，键盘弹起会调整 inset，可点击空白收键盘。
-4. `SMBSharePathPickerViewController`
-5. 选 Share，再浏览目录路径。
-6. 更换 Share 会重置路径到 `/` 并重新加载目录。
-7. `AddSMBServerViewController`
-8. 确认信息，保存 Profile + Keychain 密码，然后回根页面并触发登录。
+### 底部工具栏
 
-## 2. 登录后主页面（Album）
-
-`AlbumViewController` 是唯一主业务页。
-
-### 顶部
-
-1. `UISegmentedControl`：`本地 - x项` / `远端 - x项`。
-2. 左上角：Settings。
-3. 右上角：
-4. 本地模式：Filter 图标（筛选/排序/显示样式 menu）。
-5. 远端模式：`刷新` + `导回`。
+1. 左侧：`筛选` 菜单。
+2. 右侧：`备份`（备份运行时显示 `备份中`）。
 
 ### 内容区
 
-1. `UICollectionView` 按“年月 section”展示。
-2. cell 样式：默认 4 列正方形；可切换原始比例网格。
-3. 角标：
-4. 左上：`LIVE` / `VIDEO` / `PHOTO`
-5. 右上：`未备份`（仅本地）
-6. 左下：日期（MM-dd）
-7. 远端支持多选（用于导回）。
+1. `UICollectionView` 按年月 section 展示合并后的条目。
+2. 条目来源：`localOnly` / `remoteOnly` / `both`。
+3. 远端项严格按 manifest 的 `assets + asset_resources + resources` 关系组装。
 
-### 底部
+## 2. Home 的数据刷新行为
 
-1. 单个蓝色浮动按钮（动态文案和颜色）。
-2. 点按后 present `BackupStatusViewController`。
-3. collectionView 底部 inset 会为该按钮留出空间。
+1. 首次进入与会话变化后会 `reloadAllData`。
+2. 连接 SMB 成功会先 `backupExecutor.reloadRemoteIndex` 再刷新 UI。
+3. 备份运行中会节流刷新远端 section（不是每次 progress 都全量重建）。
+4. 备份从 running 变为非 running 时，会自动重载一次远端索引。
 
-## 3. 备份状态页（BackupStatusViewController）
+## 3. 筛选菜单
 
-1. 导航栏右侧 3 个 symbol 按钮：
-2. 开始（play）
-3. 暂停（pause）
-4. 停止（stop）
-5. 顶部两行 segment：`全部/成功/失败/跳过/日志` + 数量副标题。
-6. 列表展示处理结果（含缩略图、文件名、状态、原因）。
-7. 日志页显示追加日志。
+`筛选` 菜单包含：
 
-数据源来自 `BackupSessionController` 快照：
+1. 来源筛选：全部 / 仅本地 / 仅远端 / 远端+本地。
+2. 排序：正序 / 倒序。
+3. 显示选项：正方形网格 / 原始比例网格。
+4. 已连接远端时额外显示：重建远端索引（备份运行中禁用）。
 
-1. `state/statusText/succeeded/failed/skipped/total`
-2. `processedItems`
-3. `failedItems`
-4. `logs`
+## 4. 备份状态页（`BackupStatusViewController`）
 
-## 4. Settings 页面
+1. 通过 Home 工具栏“备份”按钮以 sheet 打开。
+2. 顶部导航按钮：开始（play）、暂停（pause）、停止（stop）。
+3. 过滤项：全部 / 成功 / 失败 / 跳过 / 日志。
+4. 列表项显示：缩略图、Asset 显示名、状态、资源摘要与原因。
+5. 日志视图增量追加，不重复整段刷新。
 
-`SettingsViewController` 当前功能：
+## 5. 失败重试
 
-1. 显示当前服务器、权限状态、索引统计。
-2. 切换 SMB 服务器（回登录页）。
-3. 请求照片权限。
-4. 手动重同步远端索引（调用 `backupExecutor.reloadRemoteIndex`）。
-5. 清空本地 `content_hash_index`。
+1. `BackupSessionController` 聚合失败 Asset 列表。
+2. 支持重试全部失败项或单项重试。
+3. retry 是按 Asset ID 集合执行。
 
-## 5. Live Photo 展示策略
+## 6. 添加 SMB 流程（由 Home 触发）
 
-1. 备份层按资源拆分（photo + pairedVideo）。
-2. Album 远端展示层按规则聚合成一个 Live 项（同月、同时间戳、同名 stem）。
-3. 导回时按组写回（有 photo+pairedVideo 时会作为同组资源导入）。
+1. `AddSMBServerLoginViewController`
+2. `SMBSharePathPickerViewController`
+3. `AddSMBServerViewController`
+
+保存成功后回到 Home，并尝试连接新服务器。
+
+## 7. 当前未接入主入口的页面
+
+1. `ServerSelectionViewController`
+2. `SettingsViewController`
+
+这两个页面目前不在 App 启动路径中。

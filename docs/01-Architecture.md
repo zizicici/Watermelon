@@ -1,82 +1,84 @@
 # 架构与关键组件
 
-## 1. 应用入口与导航
+## 1. 应用入口
 
-入口：`SceneDelegate -> AppCoordinator.start()`
+入口：`SceneDelegate -> AppCoordinator.start()`。
 
-`AppCoordinator` 的路由：
+当前只有一个主入口路由：
 
-1. `showLogin(allowAutoLogin: true)` -> `ServerSelectionViewController`
-2. 登录完成 -> `showMainAlbum()` -> `AlbumViewController`
-3. Album 左上角设置 -> `showSettings()` -> `SettingsViewController`
+1. `showHome()` -> `HomeViewController`
 
-根控制器是单个 `UINavigationController`，不再使用 TabBar。
+不使用 TabBar。
 
 ## 2. 依赖注入（DependencyContainer）
 
-`DependencyContainer` 统一持有：
+`DependencyContainer` 当前持有：
 
 1. `DatabaseManager`
 2. `KeychainService`
 3. `AppSession`
 4. `PhotoLibraryService`
 5. `MetadataService`
-6. `ManifestSyncService`（当前主链路几乎不依赖）
-7. `BackupExecutor`
-8. `RestoreService`
+6. `BackupExecutor`
+7. `RestoreService`
 
-`AppSession` 仅保存当前活跃 `ServerProfileRecord` 和 `password`（内存态）。
+`AppSession` 保存当前活跃 `ServerProfileRecord` 和内存态密码。
 
 ## 3. Services 分工
 
 ### SMB
 
-1. `AMSMB2Client`：`SMBClientProtocol` 实现（connect/list/upload/download/move/delete 等）。
-2. `SMBSetupService`：添加服务器流程里列 Share、列目录。
+1. `AMSMB2Client`：`SMBClientProtocol` 实现（connect/list/upload/download/move/delete）。
+2. `SMBSetupService`：添加服务器时枚举 share 与路径。
 3. `SMBDiscoveryService`：Bonjour 发现 `_smb._tcp`。
-4. `SMBRemoteImageDataProvider`：Kingfisher 数据源。
-5. `RemoteThumbnailService`：远端图片下载+下采样（actor + 限流 3）。
+4. `SMBRemoteImageDataProvider`：Kingfisher 远端图片 provider。
+5. `RemoteThumbnailService`：远端文件下载 + 本地下采样（actor 限流）。
 
 ### Backup
 
-1. `BackupExecutor`：主备份循环、去重、冲突处理、上传、progress/log 回调。
-2. `MonthManifestStore`：月级 manifest 本地 sqlite 读写 + 上传到 SMB。
-3. `RemoteLibraryScanner`：扫描远端 `YYYY/MM`，汇总快照。
-4. `ContentHashIndexRepository`：本地 hash 索引 UPSERT/查询。
-5. `RemoteNameCollisionResolver`：文件名 `_n` 递增。
+1. `BackupExecutor`：备份编排器（按 Asset 主循环）。
+2. `BackupAssetResourcePlanner`：资源排序、role/slot 分配、assetFingerprint 计算。
+3. `MonthManifestStore`：月 manifest sqlite 读写 + flush。
+4. `RemoteLibraryScanner`：只读扫描 `YYYY/MM` 下 manifest，生成快照。
+5. `RemoteLibrarySnapshotCache`：内存快照缓存 + 线程安全 upsert。
+6. `ContentHashIndexRepository`：本地 `local_assets` / `local_asset_resources` 读写。
+7. `RemoteNameCollisionResolver`：文件名冲突 `_n` 递增。
 
 ### Photo / Restore / Metadata
 
-1. `PhotoLibraryService`：权限、PHAsset 查询、PHAssetResource 原始导出。
-2. `RestoreService`：从远端下载并写回系统相册（支持资源组导回）。
-3. `MetadataService`：文件大小/像素/UTI。
+1. `PhotoLibraryService`：照片权限、`PHAsset` 查询、`PHAssetResource` 导出。
+2. `RestoreService`：远端文件下载后写回系统相册。
+3. `MetadataService`：文件元信息辅助。
 
-## 4. UI 层结构
+## 4. UI 结构
 
-### Auth
+### 主页面
 
-1. `ServerSelectionViewController`：发现+已保存服务器列表，自动登录。
-2. `AddSMBServerLoginViewController`：输入 host/user/pass/domain。
-3. `SMBSharePathPickerViewController`：选择 Share 和路径。
-4. `AddSMBServerViewController`：确认并保存 Profile + Keychain。
+1. `HomeViewController`：统一展示本地与远端匹配结果。
+2. 远端匹配算法在 `HomeAlbumMatching`（与视图解耦）。
+3. `AlbumGridCell`、`AlbumSectionHeaderView` 为 Home 网格子组件。
 
-### Album & Backup
+### 备份状态
 
-1. `AlbumViewController`：本地/远端分段、网格、筛选、导回、刷新。
-2. `BackupSessionController`：UI 侧状态机（idle/running/paused/stopped/failed/completed）。
-3. `BackupStatusViewController`：开始/暂停/停止 + 处理列表 + 日志。
+1. `BackupSessionController`：备份状态机与日志/进度聚合。
+2. `BackupStatusViewController`：开始/暂停/停止、结果筛选、日志展示。
+3. `BackupFailedItemsViewController` 与 `BackupFailedItemDetailViewController`：失败项重试入口。
 
-### Settings
+### 添加 SMB
 
-1. `SettingsViewController`：权限状态、切服、远端索引重载、本地 hash 清理。
+1. `AddSMBServerLoginViewController`
+2. `SMBSharePathPickerViewController`
+3. `AddSMBServerViewController`
 
-## 5. 当前“主链路文件”建议
+这条链路由 Home 连接菜单触发。
 
-后续变更优先集中在这批文件：
+## 5. 当前主链路文件建议
 
-1. `Watermelon/Services/Backup/BackupExecutor.swift`
-2. `Watermelon/Services/Backup/MonthManifestStore.swift`
-3. `Watermelon/Services/Backup/RemoteLibraryScanner.swift`
-4. `Watermelon/UI/Album/AlbumViewController.swift`
-5. `Watermelon/UI/Backup/BackupSessionController.swift`
-6. `Watermelon/UI/Backup/BackupStatusViewController.swift`
+后续改动优先集中：
+
+1. `Watermelon/Home/HomeViewController.swift`
+2. `Watermelon/Home/HomeAlbumMatching.swift`
+3. `Watermelon/UI/Backup/BackupSessionController.swift`
+4. `Watermelon/Services/Backup/BackupExecutor.swift`
+5. `Watermelon/Services/Backup/MonthManifestStore.swift`
+6. `Watermelon/Services/Backup/RemoteLibraryScanner.swift`

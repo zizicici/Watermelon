@@ -1,48 +1,63 @@
 # PhotoBackup / Watermelon 接手总览
 
-本仓库的 App 名称和模块名目前是 `Watermelon`，仓库名是 `PhotoBackup`。  
-当前主线已经切到“登录 SMB 后进入单一 Album 页 + 备份状态页”的结构。
+## 1. 当前状态（一句话）
 
-## 1. 先读这几处
+当前主线是“单个 Home 页面 + 备份状态页”，备份按 Asset 计数，远端月 manifest 已升级为三表关系模型（resources/assets/asset_resources）。
+
+## 2. 优先阅读文件
 
 1. `Watermelon/App/AppCoordinator.swift`
-2. `Watermelon/UI/Album/AlbumViewController.swift`
-3. `Watermelon/UI/Backup/BackupSessionController.swift`
-4. `Watermelon/Services/Backup/BackupExecutor.swift`
-5. `Watermelon/Services/Backup/MonthManifestStore.swift`
-6. `Watermelon/Services/Backup/RemoteLibraryScanner.swift`
+2. `Watermelon/Home/HomeViewController.swift`
+3. `Watermelon/Home/HomeAlbumMatching.swift`
+4. `Watermelon/UI/Backup/BackupSessionController.swift`
+5. `Watermelon/Services/Backup/BackupExecutor.swift`
+6. `Watermelon/Services/Backup/MonthManifestStore.swift`
+7. `Watermelon/Services/Backup/RemoteLibraryScanner.swift`
 
-构建入口请优先使用 `Watermelon.xcodeproj`（仓库里还存在一个空壳 `PhotoBackup.xcodeproj` workspace）。
+构建入口优先用 `Watermelon.xcodeproj`。
 
-## 2. 当前产品流（真实代码）
+## 3. 运行时主流程
 
-1. 启动进入 `ServerSelectionViewController`。
-2. 自动尝试用已保存服务器+Keychain 密码登录（可关闭自动登录）。
-3. 登录成功后进入 `AlbumViewController`（无 TabBar）。
-4. Album 左上角 `Settings`，右上角根据模式显示：
-5. 本地模式：Filter 菜单。
-6. 远端模式：`刷新` + `导回`。
-7. 底部浮动按钮打开 `BackupStatusViewController`，在该页执行开始/暂停/停止。
+1. `AppCoordinator.start()` 直接 `showHome()`。
+2. Home 右上角是连接按钮（当前服务器/发现服务器/手动添加）。
+3. 连接成功后会先 `reloadRemoteIndex`，拿到远端快照并缓存。
+4. 底部工具栏右侧“备份”打开 `BackupStatusViewController`。
+5. 备份状态由 `BackupSessionController` 统一驱动（start/pause/stop/retry）。
+6. Home 页面根据本地索引 + 远端快照进行本地/远端匹配显示。
 
-## 3. 备份核心机制（当前实现）
+## 4. 备份链路要点
 
-1. 远端目录：`/{YYYY}/{MM}/`。
-2. 每个月目录有 `.watermelon_manifest.sqlite`。
-3. 去重主依据：`contentHash`（SHA-256 32-byte BLOB）。
-4. 本地持久化只保留 `content_hash_index` 表（asset+resource -> hash）。
-5. 备份顺序：`PHAsset` 按 `creationDate ASC`，逐月处理；切月时 flush manifest。
-6. 同名冲突：小文件下载远端同名比 hash，大文件比 size，不同则 `_n` 重命名。
+1. `BackupExecutor.runBackup` 按 Asset 遍历，不再按单资源计总进度。
+2. 资源排序/role+slot 分配/assetFingerprint 由 `BackupAssetResourcePlanner` 负责。
+3. 月切换时 flush 上月 manifest，结束时 flush 当前月。
+4. 若 Asset 有任意资源失败，则该 Asset 记失败，不写入 `assets`/`asset_resources`。
+5. 资源重名时继续走历史 `_n` 冲突规避策略。
+6. 远端扫描是只读，不再在扫描时创建目录或写 manifest。
 
-## 4. 代码分层
+## 5. 数据存储（当前真实）
 
-1. App 入口/组装：`Watermelon/App/*`
-2. Data（GRDB/Keychain）：`Watermelon/Data/*`
-3. Domain 类型：`Watermelon/Domain/*`
-4. Services（Backup/SMB/Photo/Restore）：`Watermelon/Services/*`
-5. UI：`Watermelon/UI/*`
+本地数据库（`DatabaseManager`）核心表：
 
-## 5. 接手注意点
+1. `server_profiles`
+2. `sync_state`
+3. `local_assets`
+4. `local_asset_resources`
 
-1. `Records.swift` 里有不少旧结构体（`BackupResourceRecord` 等），但当前迁移只创建了三张表，详见 `03-DataModel.md`。
-2. `BackupPlanner`、`ManifestSyncService`、`UI/Browser/*`、`BackupViewController` 多为旧链路遗留，主流程不再使用。
-3. 远端缩略图已切 Kingfisher `ImageDataProvider` + `RemoteThumbnailService`，但仍是“先下载远端文件到临时目录再下采样”。
+远端每月 manifest（`.watermelon_manifest.sqlite`）核心表：
+
+1. `resources`
+2. `assets`
+3. `asset_resources`
+
+## 6. 已清理/已下线链路
+
+1. `ManifestSyncService` 已删除。
+2. `BackupViewController` 已删除。
+3. `BackupExecutor` 里快照缓存锁逻辑已抽离到 `RemoteLibrarySnapshotCache`。
+
+## 7. 仍在仓库但不在主入口的页面
+
+1. `ServerSelectionViewController`
+2. `SettingsViewController`
+
+目前 App 启动不会进入它们。
