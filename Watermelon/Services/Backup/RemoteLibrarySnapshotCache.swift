@@ -22,8 +22,7 @@ final class RemoteLibrarySnapshotCache {
     private var fullSnapshotDirty = false
 
     private var revision: UInt64 = 0
-    private var revisionMonthHistory: [(revision: UInt64, months: Set<LibraryMonthKey>)] = []
-    private let maxRevisionHistoryCount = 256
+    private var monthLastChangedRevision: [LibraryMonthKey: UInt64] = [:]
 
     func current() -> RemoteLibrarySnapshot {
         lock.lock()
@@ -37,22 +36,30 @@ final class RemoteLibrarySnapshotCache {
 
     func state(since baseRevision: UInt64?) -> RemoteLibrarySnapshotState {
         lock.lock()
-        defer { lock.unlock() }
-
         let (isFullSnapshot, changedMonths) = changedMonthsLocked(since: baseRevision)
         let sortedMonths = changedMonths.sorted()
-
-        let monthDeltas = sortedMonths.map { month -> RemoteLibraryMonthDelta in
-            RemoteLibraryMonthDelta(
+        let responseRevision = revision
+        let monthEntries = sortedMonths.map { month in
+            (
                 month: month,
-                resources: sortedResourcesLocked(for: month),
-                assets: sortedAssetsLocked(for: month),
-                assetResourceLinks: sortedLinksLocked(for: month)
+                resources: Array((resourcesByMonth[month] ?? [:]).values),
+                assets: Array((assetsByMonth[month] ?? [:]).values),
+                links: Array((linksByMonth[month] ?? [:]).values)
+            )
+        }
+        lock.unlock()
+
+        let monthDeltas = monthEntries.map { entry in
+            RemoteLibraryMonthDelta(
+                month: entry.month,
+                resources: Self.sortedResources(entry.resources),
+                assets: Self.sortedAssets(entry.assets),
+                assetResourceLinks: Self.sortedLinks(entry.links)
             )
         }
 
         return RemoteLibrarySnapshotState(
-            revision: revision,
+            revision: responseRevision,
             isFullSnapshot: isFullSnapshot,
             monthDeltas: monthDeltas
         )
@@ -202,15 +209,11 @@ final class RemoteLibrarySnapshotCache {
             return (true, allKnownMonthsLocked())
         }
 
-        guard let firstHistoryRevision = revisionMonthHistory.first?.revision,
-              baseRevision >= firstHistoryRevision - 1 else {
-            return (true, allKnownMonthsLocked())
-        }
-
-        var changedMonths = Set<LibraryMonthKey>()
-        for entry in revisionMonthHistory where entry.revision > baseRevision {
-            changedMonths.formUnion(entry.months)
-        }
+        let changedMonths = Set(
+            monthLastChangedRevision.compactMap { month, lastChangedRevision in
+                lastChangedRevision > baseRevision ? month : nil
+            }
+        )
         return (false, changedMonths)
     }
 
@@ -248,9 +251,8 @@ final class RemoteLibrarySnapshotCache {
         guard !changedMonths.isEmpty else { return }
 
         revision &+= 1
-        revisionMonthHistory.append((revision: revision, months: changedMonths))
-        if revisionMonthHistory.count > maxRevisionHistoryCount {
-            revisionMonthHistory.removeFirst(revisionMonthHistory.count - maxRevisionHistoryCount)
+        for month in changedMonths {
+            monthLastChangedRevision[month] = revision
         }
     }
 
@@ -275,8 +277,19 @@ final class RemoteLibrarySnapshotCache {
     }
 
     private func sortedResourcesLocked(for month: LibraryMonthKey) -> [RemoteManifestResource] {
-        let monthResources = resourcesByMonth[month] ?? [:]
-        return monthResources.values.sorted { lhs, rhs in
+        Self.sortedResources(Array((resourcesByMonth[month] ?? [:]).values))
+    }
+
+    private func sortedAssetsLocked(for month: LibraryMonthKey) -> [RemoteManifestAsset] {
+        Self.sortedAssets(Array((assetsByMonth[month] ?? [:]).values))
+    }
+
+    private func sortedLinksLocked(for month: LibraryMonthKey) -> [RemoteAssetResourceLink] {
+        Self.sortedLinks(Array((linksByMonth[month] ?? [:]).values))
+    }
+
+    private static func sortedResources(_ resources: [RemoteManifestResource]) -> [RemoteManifestResource] {
+        resources.sorted { lhs, rhs in
             if lhs.creationDateNs != rhs.creationDateNs {
                 return (lhs.creationDateNs ?? lhs.backedUpAtNs) < (rhs.creationDateNs ?? rhs.backedUpAtNs)
             }
@@ -284,9 +297,8 @@ final class RemoteLibrarySnapshotCache {
         }
     }
 
-    private func sortedAssetsLocked(for month: LibraryMonthKey) -> [RemoteManifestAsset] {
-        let monthAssets = assetsByMonth[month] ?? [:]
-        return monthAssets.values.sorted { lhs, rhs in
+    private static func sortedAssets(_ assets: [RemoteManifestAsset]) -> [RemoteManifestAsset] {
+        assets.sorted { lhs, rhs in
             if lhs.creationDateNs != rhs.creationDateNs {
                 return (lhs.creationDateNs ?? lhs.backedUpAtNs) < (rhs.creationDateNs ?? rhs.backedUpAtNs)
             }
@@ -294,9 +306,8 @@ final class RemoteLibrarySnapshotCache {
         }
     }
 
-    private func sortedLinksLocked(for month: LibraryMonthKey) -> [RemoteAssetResourceLink] {
-        let monthLinks = linksByMonth[month] ?? [:]
-        return monthLinks.values.sorted { lhs, rhs in
+    private static func sortedLinks(_ links: [RemoteAssetResourceLink]) -> [RemoteAssetResourceLink] {
+        links.sorted { lhs, rhs in
             if lhs.assetFingerprint != rhs.assetFingerprint {
                 return lhs.assetFingerprint.lexicographicallyPrecedes(rhs.assetFingerprint)
             }

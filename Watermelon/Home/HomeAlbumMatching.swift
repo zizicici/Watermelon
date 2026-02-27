@@ -482,6 +482,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
             let previousAssetMap = remoteAssetsByMonth[month] ?? [:]
             let previousResourceMap = remoteResourcesByMonth[month] ?? [:]
             let previousLinkMap = remoteLinksByMonth[month] ?? [:]
+            let previousItems = remoteItemsByMonth[month] ?? []
 
             let nextAssetMap = Dictionary(uniqueKeysWithValues: monthDelta.assets.map { ($0.id, $0) })
             let nextResourceMap = Dictionary(uniqueKeysWithValues: monthDelta.resources.map { ($0.id, $0) })
@@ -497,8 +498,6 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
                previousLinkMap == nextLinkMap {
                 continue
             }
-
-            changedMonths.insert(month)
 
             let previousFingerprints = Set(previousAssetMap.values.map(\.assetFingerprint))
             let nextFingerprints = Set(nextAssetMap.values.map(\.assetFingerprint))
@@ -533,6 +532,10 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
                 links: monthDelta.assetResourceLinks
             )
             remoteItemsByMonth[month] = items.isEmpty ? nil : items
+
+            if !Self.sameRemoteItems(lhs: previousItems, rhs: items) {
+                changedMonths.insert(month)
+            }
         }
 
         remoteAssetFingerprintSet = Set(remoteFingerprintRefCount.keys)
@@ -941,6 +944,20 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
             }
         }
 
+    }
+
+    private static func sameRemoteItems(lhs: [RemoteAlbumItem], rhs: [RemoteAlbumItem]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        for (left, right) in zip(lhs, rhs) {
+            if left.id != right.id ||
+                left.creationDate != right.creationDate ||
+                left.mediaKind != right.mediaKind ||
+                left.representative.id != right.representative.id ||
+                left.contentHashes != right.contentHashes {
+                return false
+            }
+        }
+        return true
     }
 
     private func localItems(for month: LibraryMonthKey) -> [LocalAlbumItem] {
