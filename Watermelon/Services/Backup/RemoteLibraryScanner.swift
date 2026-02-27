@@ -19,6 +19,8 @@ final class RemoteLibraryScanner {
             .sorted { $0.name < $1.name }
 
         var allItems: [RemoteManifestResource] = []
+        var allAssets: [RemoteManifestAsset] = []
+        var allLinks: [RemoteAssetResourceLink] = []
 
         for yearEntry in yearEntries {
             guard let year = Self.parseYear(yearEntry.name) else { continue }
@@ -35,7 +37,13 @@ final class RemoteLibraryScanner {
                     year: year,
                     month: month
                 )
-                allItems.append(contentsOf: store.allItems())
+                let monthItems = store.allItems()
+                let monthAssets = store.allAssets()
+                allItems.append(contentsOf: monthItems)
+                allAssets.append(contentsOf: monthAssets)
+                for asset in monthAssets {
+                    allLinks.append(contentsOf: store.links(forAssetFingerprint: asset.assetFingerprint))
+                }
             }
         }
 
@@ -48,7 +56,27 @@ final class RemoteLibraryScanner {
             return lhs.fileName < rhs.fileName
         }
 
-        return RemoteLibrarySnapshot(resources: allItems)
+        allAssets.sort { lhs, rhs in
+            if lhs.year != rhs.year { return lhs.year < rhs.year }
+            if lhs.month != rhs.month { return lhs.month < rhs.month }
+            if lhs.creationDateNs != rhs.creationDateNs {
+                return (lhs.creationDateNs ?? lhs.backedUpAtNs) < (rhs.creationDateNs ?? rhs.backedUpAtNs)
+            }
+            return lhs.assetFingerprintHex < rhs.assetFingerprintHex
+        }
+
+        allLinks.sort { lhs, rhs in
+            if lhs.year != rhs.year { return lhs.year < rhs.year }
+            if lhs.month != rhs.month { return lhs.month < rhs.month }
+            if lhs.assetFingerprint != rhs.assetFingerprint {
+                return lhs.assetFingerprint.lexicographicallyPrecedes(rhs.assetFingerprint)
+            }
+            if lhs.role != rhs.role { return lhs.role < rhs.role }
+            if lhs.slot != rhs.slot { return lhs.slot < rhs.slot }
+            return lhs.resourceHash.lexicographicallyPrecedes(rhs.resourceHash)
+        }
+
+        return RemoteLibrarySnapshot(resources: allItems, assets: allAssets, assetResourceLinks: allLinks)
     }
 
     func aggregateRemoteCounts(snapshot: RemoteLibrarySnapshot) -> RemoteLibraryAggregate {

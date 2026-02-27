@@ -1,5 +1,4 @@
 import SnapKit
-import GRDB
 import UIKit
 
 final class RemoteBrowserViewController: UIViewController {
@@ -8,8 +7,8 @@ final class RemoteBrowserViewController: UIViewController {
     private let collectionView: UICollectionView
     private let statusLabel = UILabel()
 
-    private var resources: [BackupResourceRecord] = []
-    private var selectedFingerprints = Set<String>()
+    private var resources: [RemoteManifestResource] = []
+    private var selectedResourceIDs = Set<String>()
 
     private var activeProfile: ServerProfileRecord?
     private var activePassword: String?
@@ -95,17 +94,26 @@ final class RemoteBrowserViewController: UIViewController {
 
     private func reloadData() {
         do {
-            activeProfile = try dependencies.databaseManager.latestServerProfile()
-            if let profile = activeProfile {
-                activePassword = try? dependencies.keychainService.readPassword(account: profile.credentialRef)
+            if let sessionProfile = dependencies.appSession.activeProfile {
+                activeProfile = sessionProfile
             } else {
-                activePassword = nil
+                activeProfile = try dependencies.databaseManager.latestServerProfile()
+            }
+            if let activePassword = dependencies.appSession.activePassword, !activePassword.isEmpty {
+                self.activePassword = activePassword
+            } else if let profile = activeProfile {
+                self.activePassword = try? dependencies.keychainService.readPassword(account: profile.credentialRef)
+            } else {
+                self.activePassword = nil
             }
 
-            resources = try dependencies.databaseManager.read { db in
-                try BackupResourceRecord.order(Column("backedUpAt").desc).fetchAll(db)
+            resources = dependencies.backupExecutor.currentRemoteSnapshot().resources.sorted { lhs, rhs in
+                if lhs.creationDate != rhs.creationDate {
+                    return lhs.creationDate > rhs.creationDate
+                }
+                return lhs.fileName < rhs.fileName
             }
-            selectedFingerprints.removeAll()
+            selectedResourceIDs.removeAll()
 
             statusLabel.text = "\(resources.count) remote resource(s)"
             collectionView.reloadData()
@@ -117,12 +125,13 @@ final class RemoteBrowserViewController: UIViewController {
     @objc
     private func restoreSelected() {
         guard let profile = activeProfile,
-              let password = activePassword else {
+              let password = activePassword,
+              !password.isEmpty else {
             presentSimpleAlert(title: "Missing Profile", message: "Configure server profile and password first.")
             return
         }
 
-        let selected = resources.filter { selectedFingerprints.contains($0.fingerprint) }
+        let selected = resources.filter { selectedResourceIDs.contains($0.id) }
         if selected.isEmpty {
             presentSimpleAlert(title: "No Selection", message: "Select at least one item to restore.")
             return
@@ -150,17 +159,19 @@ final class RemoteBrowserViewController: UIViewController {
         }
     }
 
-    private func loadPreview(for resource: BackupResourceRecord, into cell: PhotoGridCell) {
+    private func loadPreview(for resource: RemoteManifestResource, into cell: PhotoGridCell) {
         if let cached = imageCache.object(forKey: resource.remoteRelativePath as NSString) {
             cell.imageView.image = cached
             return
         }
 
-        let imageLike = dependencies.metadataService.isImage(uti: resource.uti) || ["jpg", "jpeg", "png", "heic", "gif", "webp"].contains((resource.originalFilename as NSString).pathExtension.lowercased())
+        let imageLike = ResourceTypeCode.isPhotoLike(resource.resourceType)
+            || ["jpg", "jpeg", "png", "heic", "gif", "webp"].contains((resource.fileName as NSString).pathExtension.lowercased())
         guard imageLike,
               let profile = activeProfile,
-              let password = activePassword else {
-            cell.imageView.image = UIImage(systemName: "doc")
+              let password = activePassword,
+              !password.isEmpty else {
+            cell.imageView.image = UIImage(systemName: ResourceTypeCode.isVideoLike(resource.resourceType) ? "video" : "doc")
             return
         }
 
@@ -180,7 +191,7 @@ final class RemoteBrowserViewController: UIViewController {
                 try await client.connect()
                 defer { Task { await client.disconnect() } }
 
-                let temp = FileManager.default.temporaryDirectory.appendingPathComponent("thumb_\(UUID().uuidString)_\(resource.originalFilename)")
+                let temp = FileManager.default.temporaryDirectory.appendingPathComponent("thumb_\(UUID().uuidString)_\(resource.fileName)")
                 let remotePath = RemotePathBuilder.absolutePath(
                     basePath: profile.basePath,
                     remoteRelativePath: resource.remoteRelativePath
@@ -193,13 +204,13 @@ final class RemoteBrowserViewController: UIViewController {
                 imageCache.setObject(image, forKey: resource.remoteRelativePath as NSString)
 
                 await MainActor.run {
-                    if cell.representedID == resource.fingerprint {
+                    if cell.representedID == resource.id {
                         cell.imageView.image = image
                     }
                 }
             } catch {
                 await MainActor.run {
-                    if cell.representedID == resource.fingerprint {
+                    if cell.representedID == resource.id {
                         cell.imageView.image = UIImage(systemName: "exclamationmark.triangle")
                     }
                 }
@@ -225,10 +236,10 @@ extension RemoteBrowserViewController: UICollectionViewDataSource, UICollectionV
         }
 
         let resource = resources[indexPath.item]
-        cell.representedID = resource.fingerprint
-        cell.titleLabel.text = resource.originalFilename
+        cell.representedID = resource.id
+        cell.titleLabel.text = resource.fileName
 
-        if selectedFingerprints.contains(resource.fingerprint) {
+        if selectedResourceIDs.contains(resource.id) {
             cell.layer.borderWidth = 2
             cell.layer.borderColor = UIColor.systemBlue.cgColor
         } else {
@@ -244,15 +255,16 @@ extension RemoteBrowserViewController: UICollectionViewDataSource, UICollectionV
         let resource = resources[indexPath.item]
 
         if collectionView.indexPathsForSelectedItems?.count ?? 0 > 1 {
-            selectedFingerprints.insert(resource.fingerprint)
+            selectedResourceIDs.insert(resource.id)
             collectionView.reloadItems(at: [indexPath])
             return
         }
 
-        selectedFingerprints.insert(resource.fingerprint)
+        selectedResourceIDs.insert(resource.id)
 
         guard let profile = activeProfile,
-              let password = activePassword else {
+              let password = activePassword,
+              !password.isEmpty else {
             collectionView.reloadItems(at: [indexPath])
             return
         }
@@ -269,7 +281,7 @@ extension RemoteBrowserViewController: UICollectionViewDataSource, UICollectionV
 
     func collectionView(_ collectionView: UICollectionView, didDeselectItemAt indexPath: IndexPath) {
         let resource = resources[indexPath.item]
-        selectedFingerprints.remove(resource.fingerprint)
+        selectedResourceIDs.remove(resource.id)
         collectionView.reloadItems(at: [indexPath])
     }
 }

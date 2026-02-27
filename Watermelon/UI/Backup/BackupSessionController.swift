@@ -33,24 +33,23 @@ final class BackupSessionController {
     struct FailedItem: Hashable, Identifiable {
         let jobID: Int64
         let assetLocalIdentifier: String
-        let resourceLocalIdentifier: String
-        let originalFilename: String
+        let displayName: String
         let errorMessage: String
         let retryCount: Int
         let updatedAt: Date
 
-        var id: String { resourceLocalIdentifier }
+        var id: String { assetLocalIdentifier }
     }
 
     struct ProcessedItem: Hashable, Identifiable {
         let assetLocalIdentifier: String
-        let resourceLocalIdentifier: String
-        let originalFilename: String
+        let displayName: String
         let status: BackupItemStatus
         let reason: String?
+        let resourceSummary: String?
         let updatedAt: Date
 
-        var id: String { resourceLocalIdentifier }
+        var id: String { assetLocalIdentifier }
     }
 
     struct Snapshot {
@@ -74,7 +73,7 @@ final class BackupSessionController {
 
     private enum RunMode {
         case full
-        case retry(resourceIDs: Set<String>)
+        case retry(assetIDs: Set<String>)
 
         var isRetry: Bool {
             if case .retry = self {
@@ -87,8 +86,8 @@ final class BackupSessionController {
             switch self {
             case .full:
                 return 0
-            case .retry(let resourceIDs):
-                return resourceIDs.count
+            case .retry(let assetIDs):
+                return assetIDs.count
             }
         }
     }
@@ -99,7 +98,6 @@ final class BackupSessionController {
     private var terminationIntent: TerminationIntent = .none
     private var currentRunMode: RunMode = .full
     private var lastPausedRunMode: RunMode?
-    private var hasStartedAtLeastOnce = false
 
     private(set) var state: State = .idle
     private(set) var statusText: String = "未开始"
@@ -108,8 +106,8 @@ final class BackupSessionController {
     private(set) var skipped: Int = 0
     private(set) var total: Int = 0
     private(set) var logs: [String] = []
-    private var processedItemsByResourceID: [String: ProcessedItem] = [:]
-    private var retryCountByResourceID: [String: Int] = [:]
+    private var processedItemsByAssetID: [String: ProcessedItem] = [:]
+    private var retryCountByAssetID: [String: Int] = [:]
     private(set) var failedItems: [FailedItem] = []
 
     init(dependencies: DependencyContainer) {
@@ -126,7 +124,7 @@ final class BackupSessionController {
             skipped: skipped,
             total: total,
             logs: logs,
-            processedItems: processedItemsByResourceID.values.sorted { $0.updatedAt > $1.updatedAt },
+            processedItems: processedItemsByAssetID.values.sorted { $0.updatedAt > $1.updatedAt },
             failedItems: failedItems
         )
     }
@@ -152,15 +150,15 @@ final class BackupSessionController {
     }
 
     @discardableResult
-    func retryFailedItems(resourceIDs: Set<String>? = nil) -> Bool {
-        let targetResourceIDs = resourceIDs ?? Set(failedItems.map(\.resourceLocalIdentifier))
-        guard !targetResourceIDs.isEmpty else {
+    func retryFailedItems(assetIDs: Set<String>? = nil) -> Bool {
+        let targetAssetIDs = assetIDs ?? Set(failedItems.map(\.assetLocalIdentifier))
+        guard !targetAssetIDs.isEmpty else {
             statusText = "没有可重试项"
             appendLog("没有可重试的失败项")
             notifyObservers()
             return false
         }
-        return startBackup(mode: .retry(resourceIDs: targetResourceIDs))
+        return startBackup(mode: .retry(assetIDs: targetAssetIDs))
     }
 
     func refreshFailedItems() {
@@ -217,7 +215,6 @@ final class BackupSessionController {
         terminationIntent = .none
         currentRunMode = mode
         lastPausedRunMode = nil
-        hasStartedAtLeastOnce = true
 
         let shouldResetSessionItems =
             state == .idle ||
@@ -226,8 +223,8 @@ final class BackupSessionController {
             (state == .stopped && !mode.isRetry)
 
         if shouldResetSessionItems {
-            processedItemsByResourceID.removeAll()
-            retryCountByResourceID.removeAll()
+            processedItemsByAssetID.removeAll()
+            retryCountByAssetID.removeAll()
             failedItems.removeAll()
             logs.removeAll()
         }
@@ -238,25 +235,25 @@ final class BackupSessionController {
         failed = 0
         skipped = 0
         total = 0
-        appendLog(mode.isRetry ? "开始重试失败项（\(mode.retryCount)）" : "开始备份任务")
+        appendLog(mode.isRetry ? "开始重试失败 Asset（\(mode.retryCount)）" : "开始备份任务（按 Asset 计数）")
         notifyObservers()
 
         runTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let retryResourceIdentifiers: Set<String>?
+                let retryAssetIdentifiers: Set<String>?
                 switch mode {
                 case .full:
-                    retryResourceIdentifiers = nil
-                case .retry(let resourceIDs):
-                    retryResourceIdentifiers = resourceIDs
+                    retryAssetIdentifiers = nil
+                case .retry(let assetIDs):
+                    retryAssetIdentifiers = assetIDs
                 }
 
                 let result = try await self.dependencies.backupExecutor.runBackup(
                     profile: profile,
                     password: password,
                     appVersion: self.dependencies.appVersion,
-                    onlyResourceIdentifiers: retryResourceIdentifiers,
+                    onlyAssetLocalIdentifiers: retryAssetIdentifiers,
                     onProgress: { [weak self] progress in
                         guard let self else { return }
                         self.succeeded = progress.succeeded
@@ -320,7 +317,7 @@ final class BackupSessionController {
         terminationIntent = .none
         currentRunMode = .full
 
-        succeeded = max(result.completed - result.skipped, 0)
+        succeeded = result.succeeded
         failed = result.failed
         skipped = result.skipped
         total = result.total
@@ -355,7 +352,7 @@ final class BackupSessionController {
     }
 
     private func rebuildFailedItems() {
-        let all = processedItemsByResourceID.values
+        let all = processedItemsByAssetID.values
         let failed = all
             .filter { $0.status == .failed }
             .sorted { $0.updatedAt > $1.updatedAt }
@@ -364,10 +361,9 @@ final class BackupSessionController {
             FailedItem(
                 jobID: 0,
                 assetLocalIdentifier: item.assetLocalIdentifier,
-                resourceLocalIdentifier: item.resourceLocalIdentifier,
-                originalFilename: item.originalFilename,
+                displayName: item.displayName,
                 errorMessage: item.reason ?? "未知错误",
-                retryCount: retryCountByResourceID[item.resourceLocalIdentifier, default: 0],
+                retryCount: retryCountByAssetID[item.assetLocalIdentifier, default: 0],
                 updatedAt: item.updatedAt
             )
         }
@@ -389,17 +385,17 @@ final class BackupSessionController {
 
     private func applyProgressEvent(_ event: BackupItemEvent?) {
         guard let event else { return }
-        processedItemsByResourceID[event.resourceLocalIdentifier] = ProcessedItem(
+        processedItemsByAssetID[event.assetLocalIdentifier] = ProcessedItem(
             assetLocalIdentifier: event.assetLocalIdentifier,
-            resourceLocalIdentifier: event.resourceLocalIdentifier,
-            originalFilename: event.originalFilename,
+            displayName: event.displayName,
             status: event.status,
             reason: event.reason,
+            resourceSummary: event.resourceSummary,
             updatedAt: event.updatedAt
         )
 
         if event.status == .failed {
-            retryCountByResourceID[event.resourceLocalIdentifier, default: 0] += 1
+            retryCountByAssetID[event.assetLocalIdentifier, default: 0] += 1
         }
 
         rebuildFailedItems()
@@ -422,36 +418,36 @@ final class BackupSessionController {
 
         state = .running
         statusText = "正在准备继续..."
-        appendLog("计算剩余备份项...")
+        appendLog("计算剩余备份 Asset...")
         notifyObservers()
 
         let pausedMode = lastPausedRunMode ?? .full
         runTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let pendingResourceIDs: Set<String>
+                let pendingAssetIDs: Set<String>
                 switch pausedMode {
-                case .retry(let resourceIDs):
-                    pendingResourceIDs = resourceIDs.subtracting(self.completedResourceIDs())
+                case .retry(let assetIDs):
+                    pendingAssetIDs = assetIDs.subtracting(self.completedAssetIDs())
                 case .full:
-                    pendingResourceIDs = try await self.computePendingResourceIDsForFullRun()
+                    pendingAssetIDs = try await self.computePendingAssetIDsForFullRun()
                 }
 
                 self.runTask = nil
 
                 guard self.state == .running else { return }
-                guard !pendingResourceIDs.isEmpty else {
+                guard !pendingAssetIDs.isEmpty else {
                     self.lastPausedRunMode = nil
                     self.state = .completed
                     self.statusText = "备份完成"
-                    self.appendLog("无剩余项，已完成")
+                    self.appendLog("无剩余 Asset，已完成")
                     self.rebuildFailedItems()
                     self.notifyObservers()
                     return
                 }
 
-                self.appendLog("继续备份剩余 \(pendingResourceIDs.count) 项")
-                _ = self.startBackup(mode: .retry(resourceIDs: pendingResourceIDs))
+                self.appendLog("继续备份剩余 \(pendingAssetIDs.count) 个 Asset")
+                _ = self.startBackup(mode: .retry(assetIDs: pendingAssetIDs))
             } catch is CancellationError {
                 self.runTask = nil
                 let intent = self.terminationIntent
@@ -477,17 +473,17 @@ final class BackupSessionController {
         return true
     }
 
-    private func completedResourceIDs() -> Set<String> {
+    private func completedAssetIDs() -> Set<String> {
         Set(
-            processedItemsByResourceID.values
+            processedItemsByAssetID.values
                 .filter { item in
                     item.status == .success || item.status == .skipped
                 }
-                .map(\.resourceLocalIdentifier)
+                .map(\.assetLocalIdentifier)
         )
     }
 
-    private func computePendingResourceIDsForFullRun() async throws -> Set<String> {
+    private func computePendingAssetIDsForFullRun() async throws -> Set<String> {
         let status = dependencies.photoLibraryService.authorizationStatus()
         let authorized: Bool
         if status == .authorized || status == .limited {
@@ -500,7 +496,7 @@ final class BackupSessionController {
             throw BackupError.photoPermissionDenied
         }
 
-        let completed = completedResourceIDs()
+        let completed = completedAssetIDs()
         let assets = dependencies.photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
         var pending = Set<String>()
 
@@ -508,34 +504,29 @@ final class BackupSessionController {
             try Task.checkCancellation()
             let asset = assets.object(at: index)
             let resources = Self.selectedBackupResources(for: asset)
-            for (resourceIndex, resource) in resources {
-                let resourceID = "\(asset.localIdentifier)::\(resourceIndex)::\(resource.type.rawValue)"
-                if !completed.contains(resourceID) {
-                    pending.insert(resourceID)
-                }
+            if resources.isEmpty { continue }
+            if !completed.contains(asset.localIdentifier) {
+                pending.insert(asset.localIdentifier)
             }
         }
 
         return pending
     }
 
-    private static func selectedBackupResources(for asset: PHAsset) -> [(Int, PHAssetResource)] {
+    private static func selectedBackupResources(for asset: PHAsset) -> [PHAssetResource] {
         let indexed = Array(PHAssetResource.assetResources(for: asset).enumerated())
+        return indexed
+            .sorted { lhs, rhs in
+                let lhsRole = PhotoLibraryService.resourceTypeCode(lhs.1.type)
+                let rhsRole = PhotoLibraryService.resourceTypeCode(rhs.1.type)
+                if lhsRole != rhsRole { return lhsRole < rhsRole }
 
-        switch asset.mediaType {
-        case .image:
-            let fullSizePhotos = indexed.filter { $0.element.type == .fullSizePhoto }
-            let photos = indexed.filter { $0.element.type == .photo }
-            var selected = fullSizePhotos.isEmpty ? photos : fullSizePhotos
-            if PhotoLibraryService.isLivePhoto(asset) {
-                selected.append(contentsOf: indexed.filter { $0.element.type == .pairedVideo })
+                let lhsName = lhs.1.originalFilename.lowercased()
+                let rhsName = rhs.1.originalFilename.lowercased()
+                if lhsName != rhsName { return lhsName < rhsName }
+                return lhs.0 < rhs.0
             }
-            return selected
-        case .video:
-            return indexed.filter { $0.element.type == .video }
-        default:
-            return []
-        }
+            .map(\.element)
     }
 
     private func primaryActionTitle(for state: State) -> String {

@@ -9,10 +9,11 @@ enum BackupItemStatus: String, Codable {
 
 struct BackupItemEvent {
     let assetLocalIdentifier: String
-    let resourceLocalIdentifier: String
-    let originalFilename: String
+    let assetFingerprint: Data?
+    let displayName: String
     let status: BackupItemStatus
     let reason: String?
+    let resourceSummary: String?
     let updatedAt: Date
 }
 
@@ -21,6 +22,8 @@ struct LocalPhotoResource {
     let resource: PHAssetResource
     let assetLocalIdentifier: String
     let resourceLocalIdentifier: String
+    let resourceRole: Int
+    let resourceSlot: Int
     let resourceType: String
     let resourceTypeCode: Int
     let uti: String?

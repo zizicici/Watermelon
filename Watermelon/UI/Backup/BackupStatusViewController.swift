@@ -24,6 +24,7 @@ final class BackupStatusViewController: UIViewController {
 
     private let sessionController: BackupSessionController
 
+    private let statusLabel = UILabel()
     private let filterControl = TwoLineSegmentedControl(items: FilterMode.allCases.map { $0.baseTitle })
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let logTextView = UITextView()
@@ -93,6 +94,11 @@ final class BackupStatusViewController: UIViewController {
     }
 
     private func buildUI() {
+        statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        statusLabel.textColor = .secondaryLabel
+        statusLabel.numberOfLines = 2
+        statusLabel.text = "未开始"
+
         filterControl.selectedIndex = FilterMode.all.rawValue
         filterControl.addTarget(self, action: #selector(filterChanged), for: .valueChanged)
 
@@ -108,12 +114,18 @@ final class BackupStatusViewController: UIViewController {
         logTextView.textContainerInset = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         logTextView.isHidden = true
 
+        view.addSubview(statusLabel)
         view.addSubview(filterControl)
         view.addSubview(tableView)
         view.addSubview(logTextView)
 
-        filterControl.snp.makeConstraints { make in
+        statusLabel.snp.makeConstraints { make in
             make.top.equalTo(view.safeAreaLayoutGuide).offset(8)
+            make.leading.trailing.equalToSuperview().inset(12)
+        }
+
+        filterControl.snp.makeConstraints { make in
+            make.top.equalTo(statusLabel.snp.bottom).offset(8)
             make.leading.trailing.equalToSuperview().inset(12)
             make.height.greaterThanOrEqualTo(58)
         }
@@ -133,6 +145,7 @@ final class BackupStatusViewController: UIViewController {
 
     private func render(snapshot: BackupSessionController.Snapshot) {
         latestSnapshot = snapshot
+        statusLabel.text = snapshot.statusText
         updateFilterTitles(using: snapshot)
         updateLogContent(snapshot.logs)
         applyFilter()
@@ -281,10 +294,19 @@ final class BackupStatusViewController: UIViewController {
 
     private func configure(_ cell: UITableViewCell, with item: BackupSessionController.ProcessedItem) {
         guard let cell = cell as? BackupStatusItemCell else { return }
+        let summary = item.resourceSummary?.trimmingCharacters(in: .whitespacesAndNewlines)
         let reason = item.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detailText: String?
+        if let summary, !summary.isEmpty, let reason, !reason.isEmpty {
+            detailText = summary + " | " + reason
+        } else if let summary, !summary.isEmpty {
+            detailText = summary
+        } else {
+            detailText = reason
+        }
         cell.apply(
-            title: item.originalFilename,
-            detail: reason,
+            title: item.displayName,
+            detail: detailText,
             statusText: statusText(for: item.status),
             status: item.status,
             thumbnail: thumbnail(for: item)

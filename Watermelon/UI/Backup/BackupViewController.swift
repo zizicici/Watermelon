@@ -248,8 +248,7 @@ final class BackupViewController: UIViewController {
 
                 await MainActor.run {
                     self.statusLabel.text = result.failed == 0 ? "Backup completed" : "Backup completed with errors"
-                    let succeeded = max(result.completed - result.skipped, 0)
-                    self.appendLog("Completed: Succeeded \(succeeded), Failed \(result.failed), Skipped \(result.skipped)")
+                    self.appendLog("Completed: Succeeded \(result.succeeded), Failed \(result.failed), Skipped \(result.skipped)")
                 }
             } catch {
                 await MainActor.run {

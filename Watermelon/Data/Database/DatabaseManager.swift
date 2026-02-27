@@ -15,14 +15,10 @@ final class DatabaseManager {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v3_dev_reset_schema") { db in
             let candidateTables = [
-                "manifest_meta",
-                "job_items",
-                "backup_jobs",
-                "resources",
-                "assets",
-                "sync_state",
-                "content_hash_index",
-                "server_profiles"
+                ServerProfileRecord.databaseTableName,
+                SyncStateRecord.databaseTableName,
+                LocalAssetRecord.databaseTableName,
+                LocalAssetResourceRecord.databaseTableName
             ]
             for tableName in candidateTables where try db.tableExists(tableName) {
                 try db.drop(table: tableName)
@@ -49,13 +45,23 @@ final class DatabaseManager {
                 table.column("updatedAt", .datetime).notNull()
             }
 
-            try db.create(table: ContentHashIndexRecord.databaseTableName) { table in
+            try db.create(table: LocalAssetRecord.databaseTableName) { table in
                 table.column("assetLocalIdentifier", .text).notNull()
-                table.column("resourceLocalIdentifier", .text).notNull()
-                table.column("contentHash", .blob).notNull()
-                table.primaryKey(["assetLocalIdentifier", "resourceLocalIdentifier"])
+                table.column("assetFingerprint", .blob).notNull()
+                table.column("resourceCount", .integer).notNull()
+                table.column("updatedAt", .datetime).notNull()
+                table.primaryKey(["assetLocalIdentifier"])
             }
-            try db.create(index: "idx_content_hash_index_hash", on: ContentHashIndexRecord.databaseTableName, columns: ["contentHash"])
+            try db.create(index: "idx_local_assets_fingerprint", on: LocalAssetRecord.databaseTableName, columns: ["assetFingerprint"])
+
+            try db.create(table: LocalAssetResourceRecord.databaseTableName) { table in
+                table.column("assetLocalIdentifier", .text).notNull()
+                table.column("role", .integer).notNull()
+                table.column("slot", .integer).notNull()
+                table.column("contentHash", .blob).notNull()
+                table.primaryKey(["assetLocalIdentifier", "role", "slot"])
+            }
+            try db.create(index: "idx_local_asset_resources_hash", on: LocalAssetResourceRecord.databaseTableName, columns: ["contentHash"])
         }
 
         return migrator

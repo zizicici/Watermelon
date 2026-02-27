@@ -68,47 +68,6 @@ final class HomeViewController: UIViewController {
         }
     }
 
-    private enum AlbumMediaKind {
-        case photo
-        case video
-        case livePhoto
-    }
-
-    private enum ItemSourceTag {
-        case localOnly
-        case remoteOnly
-        case both
-    }
-
-    private struct LocalAlbumItem {
-        let id: String
-        let asset: PHAsset
-        let creationDate: Date
-        let isBackedUp: Bool
-        let mediaKind: AlbumMediaKind
-        let contentHashes: [Data]
-    }
-
-    private struct RemoteAlbumItem {
-        let id: String
-        let creationDate: Date
-        let resources: [RemoteManifestResource]
-        let representative: RemoteManifestResource
-        let mediaKind: AlbumMediaKind
-        let pixelWidth: Int?
-        let pixelHeight: Int?
-        let contentHashes: [Data]
-    }
-
-    private struct HomeAlbumItem {
-        let id: String
-        let creationDate: Date
-        let sourceTag: ItemSourceTag
-        let mediaKind: AlbumMediaKind
-        let localItem: LocalAlbumItem?
-        let remoteItem: RemoteAlbumItem?
-    }
-
     private struct AlbumSection {
         let key: YearMonth
         let items: [HomeAlbumItem]
@@ -170,7 +129,7 @@ final class HomeViewController: UIViewController {
     private var mergedItems: [HomeAlbumItem] = []
     private var sections: [AlbumSection] = []
     private var localAssetsByID: [String: PHAsset] = [:]
-    private var localAssetIdentifierByHash: [Data: String] = [:]
+    private var localAssetIdentifierByHash: [Data: [String]] = [:]
 
     private let remoteImageCache = ImageCache(name: "home_remote_album_cache")
     private let remoteThumbnailService = RemoteThumbnailService()
@@ -694,11 +653,12 @@ final class HomeViewController: UIViewController {
         }
 
         let assets = dependencies.photoLibraryService.fetchAssets()
-        let remoteHashSet = dependencies.backupExecutor.currentRemoteSnapshot().hashSet
+        let snapshot = dependencies.backupExecutor.currentRemoteSnapshot()
+        let remoteAssetFingerprintSet = snapshot.assetFingerprintSet
 
         var localHashMapByAsset: [String: [Data]] = [:]
         if let map = try? dependencies.databaseManager.read({ db -> [String: [Data]] in
-            let rows = try Row.fetchAll(db, sql: "SELECT assetLocalIdentifier, contentHash FROM content_hash_index")
+            let rows = try Row.fetchAll(db, sql: "SELECT assetLocalIdentifier, contentHash FROM local_asset_resources")
             var result: [String: [Data]] = [:]
             result.reserveCapacity(rows.count)
             for row in rows {
@@ -711,12 +671,22 @@ final class HomeViewController: UIViewController {
             localHashMapByAsset = map
         }
 
-        var localAssetByHash: [Data: String] = [:]
-        for (assetID, hashes) in localHashMapByAsset {
-            for hash in hashes where localAssetByHash[hash] == nil {
-                localAssetByHash[hash] = assetID
+        var localFingerprintByAsset: [String: Data] = [:]
+        if let map = try? dependencies.databaseManager.read({ db -> [String: Data] in
+            let rows = try Row.fetchAll(db, sql: "SELECT assetLocalIdentifier, assetFingerprint FROM local_assets")
+            var result: [String: Data] = [:]
+            result.reserveCapacity(rows.count)
+            for row in rows {
+                let assetID: String = row["assetLocalIdentifier"]
+                let fingerprint: Data = row["assetFingerprint"]
+                result[assetID] = fingerprint
             }
+            return result
+        }) {
+            localFingerprintByAsset = map
         }
+
+        let finalizedLocalAssetByHash = HomeAlbumMatching.makeHashToAssetIndex(localHashMapByAsset)
 
         let builtItems: [LocalAlbumItem] = assets.map { asset in
             let mediaKind: AlbumMediaKind
@@ -729,7 +699,12 @@ final class HomeViewController: UIViewController {
             }
 
             let hashes = localHashMapByAsset[asset.localIdentifier] ?? []
-            let isBackedUp = !hashes.isEmpty && !remoteHashSet.isEmpty && hashes.allSatisfy { remoteHashSet.contains($0) }
+            let isBackedUp: Bool
+            if let fingerprint = localFingerprintByAsset[asset.localIdentifier] {
+                isBackedUp = remoteAssetFingerprintSet.contains(fingerprint)
+            } else {
+                isBackedUp = false
+            }
 
             return LocalAlbumItem(
                 id: asset.localIdentifier,
@@ -745,7 +720,7 @@ final class HomeViewController: UIViewController {
         await MainActor.run {
             self.localItems = builtItems
             self.localAssetsByID = mapping
-            self.localAssetIdentifierByHash = localAssetByHash
+            self.localAssetIdentifierByHash = finalizedLocalAssetByHash
         }
     }
 
@@ -755,125 +730,17 @@ final class HomeViewController: UIViewController {
             return
         }
 
-        let resources = dependencies.backupExecutor.currentRemoteSnapshot().resources
-        guard !resources.isEmpty else {
-            remoteItems = []
-            return
-        }
-
-        let liveCandidateGroups = Dictionary(grouping: resources) { resource -> String in
-            let stem = (resource.fileName as NSString).deletingPathExtension.lowercased()
-            return "\(resource.monthKey)|\(resource.creationDateNs ?? -1)|\(stem)"
-        }
-
-        var groupedIDs = Set<String>()
-        var result: [RemoteAlbumItem] = []
-
-        for (groupKey, groupResources) in liveCandidateGroups {
-            let hasPhoto = groupResources.contains { ResourceTypeCode.isPhotoLike($0.resourceType) }
-            let hasPairedVideo = groupResources.contains { $0.resourceType == ResourceTypeCode.pairedVideo }
-            guard hasPhoto, hasPairedVideo,
-                  let representative = Self.chooseRepresentativeResource(groupResources) else {
-                continue
-            }
-
-            groupedIDs.formUnion(groupResources.map(\.id))
-            let hashes = Array(Set(groupResources.map(\.contentHash)))
-            result.append(
-                RemoteAlbumItem(
-                    id: "live:\(groupKey)",
-                    creationDate: groupResources.map(\.creationDate).min() ?? representative.creationDate,
-                    resources: groupResources,
-                    representative: representative,
-                    mediaKind: .livePhoto,
-                    pixelWidth: nil,
-                    pixelHeight: nil,
-                    contentHashes: hashes
-                )
-            )
-        }
-
-        for resource in resources where !groupedIDs.contains(resource.id) {
-            result.append(
-                RemoteAlbumItem(
-                    id: resource.id,
-                    creationDate: resource.creationDate,
-                    resources: [resource],
-                    representative: resource,
-                    mediaKind: Self.detectMediaKind(from: [resource]),
-                    pixelWidth: nil,
-                    pixelHeight: nil,
-                    contentHashes: [resource.contentHash]
-                )
-            )
-        }
-
-        remoteItems = result.sorted { $0.creationDate > $1.creationDate }
+        let snapshot = dependencies.backupExecutor.currentRemoteSnapshot()
+        remoteItems = HomeAlbumMatching.buildRemoteItems(from: snapshot)
     }
 
     private func rebuildMergedItems() {
-        let localByID = Dictionary(uniqueKeysWithValues: localItems.map { ($0.id, $0) })
-        var consumedLocalIDs = Set<String>()
-        var seenRemoteContentKeys = Set<String>()
-        var result: [HomeAlbumItem] = []
-        result.reserveCapacity(localItems.count + remoteItems.count)
-
-        if hasActiveConnection {
-            for remote in remoteItems {
-                let dedupeKey = Self.contentKey(hashes: remote.contentHashes)
-                if !dedupeKey.isEmpty, seenRemoteContentKeys.contains(dedupeKey) {
-                    continue
-                }
-                if !dedupeKey.isEmpty {
-                    seenRemoteContentKeys.insert(dedupeKey)
-                }
-
-                let candidateLocalIDs = remote.contentHashes.compactMap { localAssetIdentifierByHash[$0] }
-                let localID = candidateLocalIDs.first {
-                    !consumedLocalIDs.contains($0) && localByID[$0] != nil
-                }
-
-                if let localID, let local = localByID[localID] {
-                    consumedLocalIDs.insert(localID)
-                    result.append(
-                        HomeAlbumItem(
-                            id: "both:\(local.id)",
-                            creationDate: local.creationDate,
-                            sourceTag: .both,
-                            mediaKind: Self.mergeMediaKind(local: local.mediaKind, remote: remote.mediaKind),
-                            localItem: local,
-                            remoteItem: remote
-                        )
-                    )
-                } else {
-                    result.append(
-                        HomeAlbumItem(
-                            id: "remote:\(remote.id)",
-                            creationDate: remote.creationDate,
-                            sourceTag: .remoteOnly,
-                            mediaKind: remote.mediaKind,
-                            localItem: nil,
-                            remoteItem: remote
-                        )
-                    )
-                }
-            }
-        }
-
-        for local in localItems where !consumedLocalIDs.contains(local.id) {
-            result.append(
-                HomeAlbumItem(
-                    id: "local:\(local.id)",
-                    creationDate: local.creationDate,
-                    sourceTag: .localOnly,
-                    mediaKind: local.mediaKind,
-                    localItem: local,
-                    remoteItem: nil
-                )
-            )
-        }
-
-        mergedItems = result
+        mergedItems = HomeAlbumMatching.mergeItems(
+            localItems: localItems,
+            remoteItems: remoteItems,
+            localAssetIdentifierByHash: localAssetIdentifierByHash,
+            hasActiveConnection: hasActiveConnection
+        )
     }
 
     private func applySections(reloadMode: SectionReloadMode = .full) {
@@ -1206,20 +1073,18 @@ final class HomeViewController: UIViewController {
     }
 
     private func refreshLocalHashMirrorIndex() async {
-        let mirrorMap: [Data: String]
+        let mirrorMap: [Data: [String]]
         do {
             mirrorMap = try dependencies.databaseManager.read { db in
-                let rows = try Row.fetchAll(db, sql: "SELECT assetLocalIdentifier, contentHash FROM content_hash_index")
-                var result: [Data: String] = [:]
-                result.reserveCapacity(rows.count)
+                let rows = try Row.fetchAll(db, sql: "SELECT assetLocalIdentifier, contentHash FROM local_asset_resources")
+                var hashMapByAsset: [String: [Data]] = [:]
+                hashMapByAsset.reserveCapacity(rows.count)
                 for row in rows {
                     let assetID: String = row["assetLocalIdentifier"]
                     let hash: Data = row["contentHash"]
-                    if result[hash] == nil {
-                        result[hash] = assetID
-                    }
+                    hashMapByAsset[assetID, default: []].append(hash)
                 }
-                return result
+                return HomeAlbumMatching.makeHashToAssetIndex(hashMapByAsset)
             }
         } catch {
             mirrorMap = [:]
@@ -1228,41 +1093,6 @@ final class HomeViewController: UIViewController {
         await MainActor.run {
             self.localAssetIdentifierByHash = mirrorMap
         }
-    }
-
-    private static func chooseRepresentativeResource(_ resources: [RemoteManifestResource]) -> RemoteManifestResource? {
-        let preferred = resources.first {
-            ResourceTypeCode.isPhotoLike($0.resourceType)
-        }
-        return preferred ?? resources.first
-    }
-
-    private static func detectMediaKind(from resources: [RemoteManifestResource]) -> AlbumMediaKind {
-        let hasPairedVideo = resources.contains { $0.resourceType == ResourceTypeCode.pairedVideo }
-        let hasPhotoLike = resources.contains { ResourceTypeCode.isPhotoLike($0.resourceType) }
-        if hasPairedVideo, hasPhotoLike {
-            return .livePhoto
-        }
-
-        let hasVideo = resources.contains { ResourceTypeCode.isVideoLike($0.resourceType) }
-        return hasVideo ? .video : .photo
-    }
-
-    private static func mergeMediaKind(local: AlbumMediaKind, remote: AlbumMediaKind) -> AlbumMediaKind {
-        if local == .livePhoto || remote == .livePhoto {
-            return .livePhoto
-        }
-        if local == .video || remote == .video {
-            return .video
-        }
-        return .photo
-    }
-
-    private static func contentKey(hashes: [Data]) -> String {
-        hashes
-            .map { $0.map { String(format: "%02x", $0) }.joined() }
-            .sorted()
-            .joined(separator: "|")
     }
 
     private func exportMonthDebugReport(for key: YearMonth, scope: MonthDebugExportScope = .all) {
@@ -1456,16 +1286,17 @@ final class HomeViewController: UIViewController {
             return try dependencies.databaseManager.read { db in
                 let placeholders = Array(repeating: "?", count: assetIDs.count).joined(separator: ",")
                 let sql = """
-                SELECT assetLocalIdentifier, resourceLocalIdentifier, hex(contentHash) AS contentHashHex
-                FROM content_hash_index
+                SELECT assetLocalIdentifier, role, slot, hex(contentHash) AS contentHashHex
+                FROM local_asset_resources
                 WHERE assetLocalIdentifier IN (\(placeholders))
-                ORDER BY assetLocalIdentifier, resourceLocalIdentifier
+                ORDER BY assetLocalIdentifier, role, slot
                 """
                 let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(assetIDs))
                 return rows.map { row in
                     [
                         "assetLocalIdentifier": row["assetLocalIdentifier"] as String,
-                        "resourceLocalIdentifier": row["resourceLocalIdentifier"] as String,
+                        "role": row["role"] as Int64,
+                        "slot": row["slot"] as Int64,
                         "contentHashHex": row["contentHashHex"] as String
                     ]
                 }

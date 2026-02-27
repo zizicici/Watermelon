@@ -94,12 +94,15 @@ final class SettingsViewController: UIViewController {
 
         do {
             let profiles = try dependencies.databaseManager.fetchServerProfiles()
-            let stats = try dependencies.databaseManager.read { db -> Int in
-                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM content_hash_index") ?? 0
+            let localResourceRows = try dependencies.databaseManager.read { db -> Int in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM local_asset_resources") ?? 0
+            }
+            let localAssetRows = try dependencies.databaseManager.read { db -> Int in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM local_assets") ?? 0
             }
 
             let remoteCount = dependencies.backupExecutor.currentRemoteSnapshot().totalCount
-            statsLabel.text = "已保存服务器: \(profiles.count)\n本地 Hash 索引: \(stats)\n远端索引项: \(remoteCount)"
+            statsLabel.text = "已保存服务器: \(profiles.count)\n本地 Asset 索引: \(localAssetRows)\n本地 Resource 索引: \(localResourceRows)\n远端索引 Asset: \(remoteCount)"
         } catch {
             statsLabel.text = "状态读取失败"
         }
@@ -152,7 +155,8 @@ final class SettingsViewController: UIViewController {
     private func clearLocalIndex() {
         do {
             try dependencies.databaseManager.write { db in
-                try db.execute(sql: "DELETE FROM content_hash_index")
+                try db.execute(sql: "DELETE FROM local_asset_resources")
+                try db.execute(sql: "DELETE FROM local_assets")
             }
             refreshStatus()
             presentSimpleAlert(title: "已清理", message: "本地索引已清空")

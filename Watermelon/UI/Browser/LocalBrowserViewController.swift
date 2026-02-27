@@ -102,9 +102,22 @@ final class LocalBrowserViewController: UIViewController {
         let backedUpIDs: Set<String>
 
         do {
+            let remoteFingerprintSet = dependencies.backupExecutor.currentRemoteSnapshot().assetFingerprintSet
             backedUpIDs = try dependencies.databaseManager.read { db in
-                let ids = try String.fetchAll(db, sql: "SELECT DISTINCT assetLocalIdentifier FROM resources")
-                return Set(ids)
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT assetLocalIdentifier, assetFingerprint
+                    FROM local_assets
+                    """
+                )
+                return Set(
+                    rows.compactMap { row in
+                        let assetID: String = row["assetLocalIdentifier"]
+                        let fingerprint: Data = row["assetFingerprint"]
+                        return remoteFingerprintSet.contains(fingerprint) ? assetID : nil
+                    }
+                )
             }
         } catch {
             backedUpIDs = []

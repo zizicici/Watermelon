@@ -29,7 +29,12 @@ final class MonthManifestStore {
     private let dbQueue: DatabaseQueue
 
     private(set) var itemsByFileName: [String: RemoteManifestResource] = [:]
+    private(set) var itemsByHash: [Data: RemoteManifestResource] = [:]
     private(set) var hashes = Set<Data>()
+
+    private(set) var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
+    private(set) var assetLinksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
+
     private(set) var remoteFilesByName: [String: SMBRemoteEntry] = [:]
     private(set) var dirty: Bool = false
 
@@ -97,7 +102,7 @@ final class MonthManifestStore {
             dbQueue = try DatabaseQueue(path: localURL.path)
             try Self.migrate(dbQueue)
             _ = try await dbQueue.read { db in
-                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM manifest_items") ?? 0
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
             }
         } catch {
             try? FileManager.default.removeItem(at: localURL)
@@ -129,8 +134,20 @@ final class MonthManifestStore {
         hashes.contains(hash)
     }
 
+    func containsAssetFingerprint(_ fingerprint: Data) -> Bool {
+        assetsByFingerprint[fingerprint] != nil
+    }
+
     func findByFileName(_ fileName: String) -> RemoteManifestResource? {
         itemsByFileName[fileName]
+    }
+
+    func findResourceByHash(_ hash: Data) -> RemoteManifestResource? {
+        itemsByHash[hash]
+    }
+
+    func links(forAssetFingerprint fingerprint: Data) -> [RemoteAssetResourceLink] {
+        assetLinksByFingerprint[fingerprint] ?? []
     }
 
     func remoteEntry(named fileName: String) -> SMBRemoteEntry? {
@@ -150,11 +167,25 @@ final class MonthManifestStore {
         }
     }
 
-    func upsertItem(_ item: RemoteManifestResource) throws {
+    func allAssets() -> [RemoteManifestAsset] {
+        assetsByFingerprint.values.sorted { lhs, rhs in
+            if lhs.backedUpAtNs == rhs.backedUpAtNs {
+                return lhs.assetFingerprintHex < rhs.assetFingerprintHex
+            }
+            return lhs.backedUpAtNs < rhs.backedUpAtNs
+        }
+    }
+
+    @discardableResult
+    func upsertResource(_ item: RemoteManifestResource) throws -> RemoteManifestResource {
+        if let existing = itemsByHash[item.contentHash] {
+            return existing
+        }
+
         try dbQueue.write { db in
             try db.execute(
                 sql: """
-                INSERT INTO manifest_items (
+                INSERT INTO resources (
                     fileName,
                     contentHash,
                     fileSize,
@@ -182,9 +213,84 @@ final class MonthManifestStore {
 
         if let old = itemsByFileName[item.fileName], old.contentHash != item.contentHash {
             hashes.remove(old.contentHash)
+            itemsByHash[old.contentHash] = nil
         }
+
         itemsByFileName[item.fileName] = item
+        itemsByHash[item.contentHash] = item
         hashes.insert(item.contentHash)
+        dirty = true
+
+        return item
+    }
+
+    func upsertAsset(
+        _ asset: RemoteManifestAsset,
+        links: [RemoteAssetResourceLink]
+    ) throws {
+        for link in links where itemsByHash[link.resourceHash] == nil {
+            throw NSError(
+                domain: "MonthManifestStore",
+                code: -11,
+                userInfo: [NSLocalizedDescriptionKey: "Missing referenced resource hash for asset link."]
+            )
+        }
+
+        let normalizedLinks = links.sorted { lhs, rhs in
+            if lhs.role != rhs.role { return lhs.role < rhs.role }
+            if lhs.slot != rhs.slot { return lhs.slot < rhs.slot }
+            return lhs.resourceHash.lexicographicallyPrecedes(rhs.resourceHash)
+        }
+
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO assets (
+                    assetFingerprint,
+                    creationDateNs,
+                    backedUpAtNs,
+                    resourceCount
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(assetFingerprint) DO UPDATE SET
+                    creationDateNs = excluded.creationDateNs,
+                    backedUpAtNs = excluded.backedUpAtNs,
+                    resourceCount = excluded.resourceCount
+                """,
+                arguments: [
+                    asset.assetFingerprint,
+                    asset.creationDateNs,
+                    asset.backedUpAtNs,
+                    asset.resourceCount
+                ]
+            )
+
+            try db.execute(
+                sql: "DELETE FROM asset_resources WHERE assetFingerprint = ?",
+                arguments: [asset.assetFingerprint]
+            )
+
+            for link in normalizedLinks {
+                try db.execute(
+                    sql: """
+                    INSERT INTO asset_resources (
+                        assetFingerprint,
+                        resourceHash,
+                        role,
+                        slot
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        link.assetFingerprint,
+                        link.resourceHash,
+                        link.role,
+                        link.slot
+                    ]
+                )
+            }
+        }
+
+        assetsByFingerprint[asset.assetFingerprint] = asset
+        assetLinksByFingerprint[asset.assetFingerprint] = normalizedLinks
         dirty = true
     }
 
@@ -239,37 +345,63 @@ final class MonthManifestStore {
 
     private static func migrate(_ queue: DatabaseQueue) throws {
         var migrator = DatabaseMigrator()
-        migrator.registerMigration("month_manifest_v1") { db in
-            try db.create(table: "manifest_items") { table in
+        migrator.registerMigration("month_manifest_v2_reset_schema") { db in
+            let candidateTables = ["manifest_items", "resources", "assets", "asset_resources"]
+            for tableName in candidateTables where try db.tableExists(tableName) {
+                try db.drop(table: tableName)
+            }
+
+            try db.create(table: "resources") { table in
                 table.column("fileName", .text).notNull().primaryKey()
                 table.column("contentHash", .blob).notNull()
                 table.column("fileSize", .integer).notNull()
                 table.column("resourceType", .integer).notNull()
                 table.column("creationDateNs", .integer)
                 table.column("backedUpAtNs", .integer).notNull()
+                table.uniqueKey(["contentHash"])
             }
-            try db.create(index: "idx_manifest_items_contentHash", on: "manifest_items", columns: ["contentHash"], unique: true)
+
+            try db.create(table: "assets") { table in
+                table.column("assetFingerprint", .blob).notNull().primaryKey()
+                table.column("creationDateNs", .integer)
+                table.column("backedUpAtNs", .integer).notNull()
+                table.column("resourceCount", .integer).notNull()
+            }
+
+            try db.create(table: "asset_resources") { table in
+                table.column("assetFingerprint", .blob).notNull()
+                table.column("resourceHash", .blob).notNull()
+                table.column("role", .integer).notNull()
+                table.column("slot", .integer).notNull()
+                table.primaryKey(["assetFingerprint", "role", "slot"])
+            }
+
+            try db.create(index: "idx_resources_contentHash", on: "resources", columns: ["contentHash"], unique: true)
+            try db.create(index: "idx_asset_resources_asset", on: "asset_resources", columns: ["assetFingerprint"])
+            try db.create(index: "idx_asset_resources_hash", on: "asset_resources", columns: ["resourceHash"])
         }
         try migrator.migrate(queue)
     }
 
     private func reloadCache() throws {
-        let rows = try dbQueue.read { db in
+        let resourceRows = try dbQueue.read { db in
             try Row.fetchAll(
                 db,
                 sql: """
                 SELECT fileName, contentHash, fileSize, resourceType, creationDateNs, backedUpAtNs
-                FROM manifest_items
+                FROM resources
                 """
             )
         }
 
-        var fileMap: [String: RemoteManifestResource] = [:]
-        fileMap.reserveCapacity(rows.count)
+        var resourcesByName: [String: RemoteManifestResource] = [:]
+        resourcesByName.reserveCapacity(resourceRows.count)
+        var resourcesByHash: [Data: RemoteManifestResource] = [:]
+        resourcesByHash.reserveCapacity(resourceRows.count)
         var hashSet = Set<Data>()
-        hashSet.reserveCapacity(rows.count)
+        hashSet.reserveCapacity(resourceRows.count)
 
-        for row in rows {
+        for row in resourceRows {
             let item = RemoteManifestResource(
                 year: year,
                 month: month,
@@ -280,11 +412,67 @@ final class MonthManifestStore {
                 creationDateNs: row["creationDateNs"],
                 backedUpAtNs: row["backedUpAtNs"]
             )
-            fileMap[item.fileName] = item
+            resourcesByName[item.fileName] = item
+            resourcesByHash[item.contentHash] = item
             hashSet.insert(item.contentHash)
         }
 
-        itemsByFileName = fileMap
+        let assetRows = try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                SELECT assetFingerprint, creationDateNs, backedUpAtNs, resourceCount
+                FROM assets
+                """
+            )
+        }
+
+        var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
+        assetsByFingerprint.reserveCapacity(assetRows.count)
+
+        for row in assetRows {
+            let fingerprint: Data = row["assetFingerprint"]
+            let asset = RemoteManifestAsset(
+                year: year,
+                month: month,
+                assetFingerprint: fingerprint,
+                creationDateNs: row["creationDateNs"],
+                backedUpAtNs: row["backedUpAtNs"],
+                resourceCount: Int(row["resourceCount"] as Int64)
+            )
+            assetsByFingerprint[fingerprint] = asset
+        }
+
+        let linkRows = try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                SELECT assetFingerprint, resourceHash, role, slot
+                FROM asset_resources
+                ORDER BY assetFingerprint, role, slot
+                """
+            )
+        }
+
+        var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
+        linksByFingerprint.reserveCapacity(assetsByFingerprint.count)
+
+        for row in linkRows {
+            let link = RemoteAssetResourceLink(
+                year: year,
+                month: month,
+                assetFingerprint: row["assetFingerprint"],
+                resourceHash: row["resourceHash"],
+                role: Int(row["role"] as Int64),
+                slot: Int(row["slot"] as Int64)
+            )
+            linksByFingerprint[link.assetFingerprint, default: []].append(link)
+        }
+
+        itemsByFileName = resourcesByName
+        itemsByHash = resourcesByHash
         hashes = hashSet
+        self.assetsByFingerprint = assetsByFingerprint
+        assetLinksByFingerprint = linksByFingerprint
     }
 }

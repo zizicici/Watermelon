@@ -1,5 +1,50 @@
 import Foundation
 
+struct RemoteManifestAsset: Hashable, Identifiable {
+    let year: Int
+    let month: Int
+    let assetFingerprint: Data
+    let creationDateNs: Int64?
+    let backedUpAtNs: Int64
+    let resourceCount: Int
+
+    var id: String {
+        monthKey + "/" + assetFingerprintHex
+    }
+
+    var monthKey: String {
+        String(format: "%04d-%02d", year, month)
+    }
+
+    var creationDate: Date {
+        if let creationDateNs {
+            return Date(timeIntervalSince1970: Double(creationDateNs) / 1_000_000_000)
+        }
+        return Date(timeIntervalSince1970: Double(backedUpAtNs) / 1_000_000_000)
+    }
+
+    var assetFingerprintHex: String {
+        assetFingerprint.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+struct RemoteAssetResourceLink: Hashable {
+    let year: Int
+    let month: Int
+    let assetFingerprint: Data
+    let resourceHash: Data
+    let role: Int
+    let slot: Int
+
+    var monthKey: String {
+        String(format: "%04d-%02d", year, month)
+    }
+
+    var assetID: String {
+        monthKey + "/" + assetFingerprint.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 struct RemoteManifestResource: Hashable, Identifiable {
     let year: Int
     let month: Int
@@ -36,8 +81,24 @@ struct RemoteManifestResource: Hashable, Identifiable {
 
 struct RemoteLibrarySnapshot {
     let resources: [RemoteManifestResource]
+    let assets: [RemoteManifestAsset]
+    let assetResourceLinks: [RemoteAssetResourceLink]
+
+    init(
+        resources: [RemoteManifestResource],
+        assets: [RemoteManifestAsset],
+        assetResourceLinks: [RemoteAssetResourceLink] = []
+    ) {
+        self.resources = resources
+        self.assets = assets
+        self.assetResourceLinks = assetResourceLinks
+    }
 
     var totalCount: Int {
+        assets.count
+    }
+
+    var totalResourceCount: Int {
         resources.count
     }
 
@@ -45,8 +106,12 @@ struct RemoteLibrarySnapshot {
         Set(resources.map(\.contentHash))
     }
 
+    var assetFingerprintSet: Set<Data> {
+        Set(assets.map(\.assetFingerprint))
+    }
+
     var countsByMonth: [String: Int] {
-        Dictionary(grouping: resources, by: \.monthKey).mapValues(\.count)
+        Dictionary(grouping: assets, by: \.monthKey).mapValues(\.count)
     }
 }
 

@@ -56,48 +56,6 @@ final class RestoreService {
         }
     }
 
-    // Legacy adapter for older screens that still provide BackupResourceRecord.
-    func restore(
-        resources: [BackupResourceRecord],
-        profile: ServerProfileRecord,
-        password: String,
-        onLog: @escaping @MainActor (String) -> Void
-    ) async throws {
-        guard !resources.isEmpty else {
-            throw BackupError.restoreNoSelection
-        }
-
-        let smbClient = try AMSMB2Client(config: SMBServerConfig(
-            host: profile.host,
-            port: profile.port,
-            shareName: profile.shareName,
-            basePath: profile.basePath,
-            username: profile.username,
-            password: password,
-            domain: profile.domain
-        ))
-
-        try await smbClient.connect()
-        defer {
-            Task { await smbClient.disconnect() }
-        }
-
-        for resource in resources {
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("restore_\(UUID().uuidString)_\(resource.originalFilename)")
-            try? FileManager.default.removeItem(at: tempURL)
-
-            let remotePath = RemotePathBuilder.absolutePath(
-                basePath: profile.basePath,
-                remoteRelativePath: resource.remoteRelativePath
-            )
-            try await smbClient.download(remotePath: remotePath, localURL: tempURL)
-
-            try await saveToPhotoLibrary(downloadedLegacy: [(resource, tempURL)], creationDate: resource.backedUpAt)
-            try? FileManager.default.removeItem(at: tempURL)
-            await onLog("Restored resource \(resource.originalFilename).")
-        }
-    }
-
     private struct RestoreGroup {
         let creationDate: Date?
         let resources: [RemoteManifestResource]
@@ -165,34 +123,6 @@ final class RestoreService {
         }
     }
 
-    private func saveToPhotoLibrary(downloadedLegacy: [(BackupResourceRecord, URL)], creationDate: Date?) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            PHPhotoLibrary.shared().performChanges {
-                let request = PHAssetCreationRequest.forAsset()
-                request.creationDate = creationDate
-
-                for (resource, url) in downloadedLegacy {
-                    let type = Self.mapResourceType(name: resource.resourceType)
-                    let options = PHAssetResourceCreationOptions()
-                    options.originalFilename = resource.originalFilename
-                    request.addResource(with: type, fileURL: url, options: options)
-                }
-            } completionHandler: { success, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else if success {
-                    continuation.resume(returning: ())
-                } else {
-                    continuation.resume(throwing: NSError(
-                        domain: "RestoreService",
-                        code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: "Unknown restore failure."]
-                    ))
-                }
-            }
-        }
-    }
-
     private static func mapResourceType(code: Int) -> PHAssetResourceType {
         switch code {
         case ResourceTypeCode.pairedVideo:
@@ -212,22 +142,4 @@ final class RestoreService {
         }
     }
 
-    private static func mapResourceType(name: String) -> PHAssetResourceType {
-        switch name {
-        case "pairedVideo":
-            return .pairedVideo
-        case "video", "fullSizeVideo":
-            return .video
-        case "audio":
-            return .audio
-        case "alternatePhoto":
-            return .alternatePhoto
-        case "adjustmentData":
-            return .adjustmentData
-        case "photoProxy":
-            return .photoProxy
-        default:
-            return .photo
-        }
-    }
 }

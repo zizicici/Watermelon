@@ -3,7 +3,7 @@ import UIKit
 
 final class RemoteResourceDetailViewController: UIViewController {
     private let dependencies: DependencyContainer
-    private let resource: BackupResourceRecord
+    private let resource: RemoteManifestResource
     private let profile: ServerProfileRecord
     private let password: String
 
@@ -11,7 +11,7 @@ final class RemoteResourceDetailViewController: UIViewController {
     private let infoLabel = UILabel()
     private let restoreButton = UIButton(type: .system)
 
-    init(dependencies: DependencyContainer, resource: BackupResourceRecord, profile: ServerProfileRecord, password: String) {
+    init(dependencies: DependencyContainer, resource: RemoteManifestResource, profile: ServerProfileRecord, password: String) {
         self.dependencies = dependencies
         self.resource = resource
         self.profile = profile
@@ -67,22 +67,27 @@ final class RemoteResourceDetailViewController: UIViewController {
 
     private func populateInfo() {
         infoLabel.text = [
-            "Asset: \(resource.assetLocalIdentifier)",
-            "Name: \(resource.originalFilename)",
-            "Type: \(resource.resourceType)",
-            "UTI: \(resource.uti ?? "N/A")",
+            "ID: \(resource.id)",
+            "Name: \(resource.fileName)",
+            "Type: \(PhotoLibraryService.resourceTypeName(from: resource.resourceType)) (\(resource.resourceType))",
             "Size: \(ByteCountFormatter.string(fromByteCount: resource.fileSize, countStyle: .file))",
+            "Month: \(resource.monthKey)",
             "Remote Path: \(resource.remoteRelativePath)",
-            "Backed Up: \(Self.dateFormatter.string(from: resource.backedUpAt))"
+            "Creation: \(Self.dateFormatter.string(from: resource.creationDate))",
+            "Hash: \(resource.contentHashHex)"
         ].joined(separator: "\n")
     }
 
     private func loadPreview() async {
-        let imageLike = dependencies.metadataService.isImage(uti: resource.uti) || resource.originalFilename.lowercased().hasSuffix(".jpg") || resource.originalFilename.lowercased().hasSuffix(".jpeg") || resource.originalFilename.lowercased().hasSuffix(".png") || resource.originalFilename.lowercased().hasSuffix(".heic")
+        let imageLike = ResourceTypeCode.isPhotoLike(resource.resourceType)
+            || resource.fileName.lowercased().hasSuffix(".jpg")
+            || resource.fileName.lowercased().hasSuffix(".jpeg")
+            || resource.fileName.lowercased().hasSuffix(".png")
+            || resource.fileName.lowercased().hasSuffix(".heic")
 
         guard imageLike else {
             await MainActor.run {
-                self.imageView.image = UIImage(systemName: "video")
+                self.imageView.image = UIImage(systemName: ResourceTypeCode.isVideoLike(self.resource.resourceType) ? "video" : "doc")
             }
             return
         }
@@ -104,7 +109,7 @@ final class RemoteResourceDetailViewController: UIViewController {
                 }
             }
 
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("preview_\(UUID().uuidString)_\(resource.originalFilename)")
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("preview_\(UUID().uuidString)_\(resource.fileName)")
             let remotePath = RemotePathBuilder.absolutePath(
                 basePath: profile.basePath,
                 remoteRelativePath: resource.remoteRelativePath

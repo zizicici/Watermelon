@@ -45,7 +45,7 @@ final class BackupFailedItemDetailViewController: UIViewController {
         filenameLabel.font = .systemFont(ofSize: 17, weight: .semibold)
         filenameLabel.textColor = .label
         filenameLabel.numberOfLines = 2
-        filenameLabel.text = item.originalFilename
+        filenameLabel.text = item.displayName
 
         metaLabel.font = .systemFont(ofSize: 13)
         metaLabel.textColor = .secondaryLabel
@@ -104,7 +104,7 @@ final class BackupFailedItemDetailViewController: UIViewController {
 
     @objc
     private func retryTapped() {
-        let started = sessionController.retryFailedItems(resourceIDs: [item.resourceLocalIdentifier])
+        let started = sessionController.retryFailedItems(assetIDs: [item.assetLocalIdentifier])
         if started {
             let alert = UIAlertController(title: "已开始", message: "该失败项已加入重试任务", preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "确定", style: .default))

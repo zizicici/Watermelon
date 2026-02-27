@@ -92,7 +92,7 @@ final class BackupFailedItemsViewController: UIViewController {
     }
 
     private func retry(item: BackupSessionController.FailedItem) {
-        let started = sessionController.retryFailedItems(resourceIDs: [item.resourceLocalIdentifier])
+        let started = sessionController.retryFailedItems(assetIDs: [item.assetLocalIdentifier])
         if !started {
             presentSimpleAlert(title: "无法重试", message: "当前已有任务运行，或该失败项已不存在")
         }
@@ -136,7 +136,7 @@ extension BackupFailedItemsViewController: UITableViewDataSource, UITableViewDel
         let item = items[indexPath.row]
 
         let alert = UIAlertController(
-            title: item.originalFilename,
+            title: item.displayName,
             message: "最后失败时间: \(Self.timeFormatter.string(from: item.updatedAt))\n重试次数: \(item.retryCount)\n\n错误信息:\n\(item.errorMessage)",
             preferredStyle: .actionSheet
         )
@@ -169,7 +169,7 @@ extension BackupFailedItemsViewController: UITableViewDataSource, UITableViewDel
 
     private func applyContent(on cell: UITableViewCell, item: BackupSessionController.FailedItem, thumbnail: UIImage?) {
         var content = cell.defaultContentConfiguration()
-        content.text = item.originalFilename
+        content.text = item.displayName
         content.secondaryText = "\(Self.timeFormatter.string(from: item.updatedAt))\n\(item.errorMessage)"
         content.secondaryTextProperties.numberOfLines = 2
         content.textProperties.numberOfLines = 1
