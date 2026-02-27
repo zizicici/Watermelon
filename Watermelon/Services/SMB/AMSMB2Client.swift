@@ -80,6 +80,34 @@ final class AMSMB2Client: SMBClientProtocol {
         #endif
     }
 
+    func metadata(path: String) async throws -> SMBRemoteEntry? {
+        #if canImport(AMSMB2)
+        let remotePath = RemotePathBuilder.normalizePath(path)
+        do {
+            let values = try await manager.attributesOfItem(atPath: remotePath)
+            let name = (values[.nameKey] as? String) ?? (remotePath as NSString).lastPathComponent
+            let isDirectory = (values[.isDirectoryKey] as? Bool)
+                ?? ((values[.fileResourceTypeKey] as? URLFileResourceType) == .directory)
+            let sizeValue = values[.fileSizeKey] as? NSNumber
+            let creationDate = values[.creationDateKey] as? Date
+            let modificationDate = values[.contentModificationDateKey] as? Date
+
+            return SMBRemoteEntry(
+                path: remotePath,
+                name: name,
+                isDirectory: isDirectory,
+                size: sizeValue?.int64Value ?? 0,
+                creationDate: creationDate,
+                modificationDate: modificationDate
+            )
+        } catch {
+            return nil
+        }
+        #else
+        throw SMBClientError.unavailable
+        #endif
+    }
+
     func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool) async throws {
         #if canImport(AMSMB2)
         try await manager.uploadItem(

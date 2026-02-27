@@ -204,6 +204,65 @@ final class MonthManifestStore {
         }
     }
 
+    static func loadManifestOnlyIfExists(
+        client: SMBClientProtocol,
+        basePath: String,
+        year: Int,
+        month: Int
+    ) async throws -> MonthManifestStore? {
+        let monthRelativePath = String(format: "%04d/%02d", year, month)
+        let manifestAbsolutePath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: monthRelativePath + "/" + Self.manifestFileName
+        )
+
+        guard let manifestEntry = try await client.metadata(path: manifestAbsolutePath),
+              manifestEntry.isDirectory == false else {
+            return nil
+        }
+
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("month_manifest_\(year)_\(month)_\(UUID().uuidString).sqlite")
+        try? FileManager.default.removeItem(at: localURL)
+
+        do {
+            try await client.download(remotePath: manifestAbsolutePath, localURL: localURL)
+        } catch {
+            try? FileManager.default.removeItem(at: localURL)
+            return nil
+        }
+
+        let dbQueue: DatabaseQueue
+        do {
+            dbQueue = try DatabaseQueue(path: localURL.path)
+            try Self.migrate(dbQueue)
+            _ = try await dbQueue.read { db in
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: localURL)
+            return nil
+        }
+
+        let store = MonthManifestStore(
+            client: client,
+            basePath: basePath,
+            year: year,
+            month: month,
+            localManifestURL: localURL,
+            dbQueue: dbQueue,
+            remoteFilesByName: [:],
+            dirty: false
+        )
+
+        do {
+            try store.reloadCache()
+            return store
+        } catch {
+            return nil
+        }
+    }
+
     func containsAssetFingerprint(_ fingerprint: Data) -> Bool {
         assetsByFingerprint[fingerprint] != nil
     }

@@ -65,8 +65,10 @@ final class BackupExecutor {
 
     private let photoLibraryService: PhotoLibraryService
     private let contentHashIndexRepository: ContentHashIndexRepository
-    private let remoteLibraryScanner: RemoteLibraryScanner
+    private let remoteManifestIndexScanner: RemoteManifestIndexScanner
     private let remoteSnapshotCache = RemoteLibrarySnapshotCache()
+    private var activeRemoteProfileKey: String?
+    private var remoteManifestDigests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
 
     init(
         databaseManager: DatabaseManager,
@@ -74,7 +76,7 @@ final class BackupExecutor {
     ) {
         self.photoLibraryService = photoLibraryService
         contentHashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
-        remoteLibraryScanner = RemoteLibraryScanner()
+        remoteManifestIndexScanner = RemoteManifestIndexScanner()
     }
 
     func runBackup(
@@ -96,11 +98,11 @@ final class BackupExecutor {
         try await smbClient.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
 
         do {
-            let snapshot = try await remoteLibraryScanner.scanYearMonthTree(
+            let snapshot = try await syncRemoteIndexIncrementally(
                 client: smbClient,
-                basePath: profile.basePath
+                profile: profile,
+                onLog: onLog
             )
-            updateCachedRemoteSnapshot(snapshot)
             await onLog("Remote index synced. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s).")
         } catch {
             await onLog("Remote index scan warning: \(error.localizedDescription)")
@@ -290,8 +292,11 @@ final class BackupExecutor {
         }
 
         try await smbClient.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-        let snapshot = try await remoteLibraryScanner.scanYearMonthTree(client: smbClient, basePath: profile.basePath)
-        updateCachedRemoteSnapshot(snapshot)
+        let snapshot = try await syncRemoteIndexIncrementally(
+            client: smbClient,
+            profile: profile,
+            onLog: onLog
+        )
         if let onLog {
             await onLog("Remote index reloaded. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s).")
         }
@@ -306,16 +311,114 @@ final class BackupExecutor {
         remoteSnapshotCache.state(since: revision)
     }
 
-    private func updateCachedRemoteSnapshot(_ snapshot: RemoteLibrarySnapshot) {
-        remoteSnapshotCache.replace(with: snapshot)
-    }
-
     private func upsertCachedRemoteSnapshotResource(_ item: RemoteManifestResource) {
         remoteSnapshotCache.upsertResource(item)
     }
 
     private func upsertCachedRemoteSnapshotAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]? = nil) {
         remoteSnapshotCache.upsertAsset(asset, links: links)
+    }
+
+    private func syncRemoteIndexIncrementally(
+        client: SMBClientProtocol,
+        profile: ServerProfileRecord,
+        onLog: (@MainActor (String) -> Void)? = nil
+    ) async throws -> RemoteLibrarySnapshot {
+        ensureRemoteContext(for: profile)
+
+        let remoteDigests = try await remoteManifestIndexScanner.scanManifestDigests(
+            client: client,
+            basePath: profile.basePath
+        )
+        let previousDigests = remoteManifestDigests
+
+        let previousMonths = Set(previousDigests.keys)
+        let remoteMonths = Set(remoteDigests.keys)
+
+        var changedMonths = Set<LibraryMonthKey>()
+        if previousDigests.isEmpty {
+            changedMonths = remoteMonths
+        } else {
+            for (month, digest) in remoteDigests where previousDigests[month] != digest {
+                changedMonths.insert(month)
+            }
+        }
+
+        let removedMonths = previousMonths.subtracting(remoteMonths)
+
+        if changedMonths.isEmpty, removedMonths.isEmpty {
+            if let onLog {
+                await onLog("Remote index unchanged. Month digests matched (\(remoteMonths.count) month(s)).")
+            }
+            return remoteSnapshotCache.current()
+        }
+
+        var monthDeltas: [LibraryMonthKey: RemoteLibraryMonthDelta] = [:]
+        monthDeltas.reserveCapacity(changedMonths.count)
+
+        for month in changedMonths.sorted() {
+            guard let store = try await MonthManifestStore.loadManifestOnlyIfExists(
+                client: client,
+                basePath: profile.basePath,
+                year: month.year,
+                month: month.month
+            ) else {
+                throw NSError(
+                    domain: "BackupExecutor",
+                    code: -21,
+                    userInfo: [NSLocalizedDescriptionKey: "Month manifest is missing for \(month.text)."]
+                )
+            }
+
+            let monthAssets = store.allAssets()
+            let monthLinks = monthAssets.flatMap { store.links(forAssetFingerprint: $0.assetFingerprint) }
+            monthDeltas[month] = RemoteLibraryMonthDelta(
+                month: month,
+                resources: store.allItems(),
+                assets: monthAssets,
+                assetResourceLinks: monthLinks
+            )
+        }
+
+        var appliedChangedMonths = 0
+        var appliedRemovedMonths = 0
+
+        for month in changedMonths.sorted() {
+            guard let monthDelta = monthDeltas[month] else { continue }
+            if remoteSnapshotCache.replaceMonth(
+                month,
+                resources: monthDelta.resources,
+                assets: monthDelta.assets,
+                assetResourceLinks: monthDelta.assetResourceLinks
+            ) {
+                appliedChangedMonths += 1
+            }
+        }
+
+        for month in removedMonths.sorted() {
+            if remoteSnapshotCache.removeMonth(month) {
+                appliedRemovedMonths += 1
+            }
+        }
+
+        remoteManifestDigests = remoteDigests
+
+        if let onLog {
+            await onLog(
+                "Remote incremental sync: scanned=\(remoteMonths.count) changed=\(appliedChangedMonths) removed=\(appliedRemovedMonths)."
+            )
+        }
+
+        return remoteSnapshotCache.current()
+    }
+
+    private func ensureRemoteContext(for profile: ServerProfileRecord) {
+        let profileKey = Self.remoteProfileKey(profile)
+        guard activeRemoteProfileKey != profileKey else { return }
+
+        activeRemoteProfileKey = profileKey
+        remoteManifestDigests.removeAll()
+        remoteSnapshotCache.reset()
     }
 
     private func processAsset(
@@ -850,6 +953,10 @@ final class BackupExecutor {
             year: comps.year ?? 1970,
             month: comps.month ?? 1
         )
+    }
+
+    private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {
+        "\(profile.host.lowercased())|\(profile.port)|\(profile.shareName.lowercased())|\(RemotePathBuilder.normalizePath(profile.basePath))|\(profile.username.lowercased())"
     }
 
     private static func nanosecondsSinceEpoch(_ date: Date?) -> Int64? {

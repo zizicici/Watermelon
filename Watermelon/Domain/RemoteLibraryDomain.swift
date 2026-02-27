@@ -130,6 +130,12 @@ struct RemoteLibraryMonthDelta {
     let assetResourceLinks: [RemoteAssetResourceLink]
 }
 
+struct RemoteMonthManifestDigest: Hashable {
+    let month: LibraryMonthKey
+    let manifestSize: Int64
+    let manifestModifiedAtNs: Int64?
+}
+
 struct RemoteLibrarySnapshotState {
     let revision: UInt64
     let isFullSnapshot: Bool

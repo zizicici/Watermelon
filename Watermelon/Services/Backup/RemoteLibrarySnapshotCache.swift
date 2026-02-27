@@ -94,6 +94,90 @@ final class RemoteLibrarySnapshotCache {
         lock.unlock()
     }
 
+    func reset() {
+        lock.lock()
+        resourcesByMonth.removeAll()
+        assetsByMonth.removeAll()
+        linksByMonth.removeAll()
+        linkKeysByAssetID.removeAll()
+        snapshot = RemoteLibrarySnapshot(resources: [], assets: [], assetResourceLinks: [])
+        fullSnapshotDirty = false
+        revision = 0
+        monthLastChangedRevision.removeAll()
+        lock.unlock()
+    }
+
+    @discardableResult
+    func replaceMonth(
+        _ month: LibraryMonthKey,
+        resources: [RemoteManifestResource],
+        assets: [RemoteManifestAsset],
+        assetResourceLinks: [RemoteAssetResourceLink]
+    ) -> Bool {
+        lock.lock()
+
+        let nextResources = Dictionary(uniqueKeysWithValues: resources.map { ($0.id, $0) })
+        let nextAssets = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
+        let nextLinks = Dictionary(uniqueKeysWithValues: assetResourceLinks.map { link in
+            (
+                LinkKey(
+                    month: LibraryMonthKey(year: link.year, month: link.month),
+                    assetFingerprint: link.assetFingerprint,
+                    role: link.role,
+                    slot: link.slot
+                ),
+                link
+            )
+        })
+
+        let previousResources = resourcesByMonth[month] ?? [:]
+        let previousAssets = assetsByMonth[month] ?? [:]
+        let previousLinks = linksByMonth[month] ?? [:]
+
+        if previousResources == nextResources,
+           previousAssets == nextAssets,
+           previousLinks == nextLinks {
+            lock.unlock()
+            return false
+        }
+
+        detachLinkKeysLocked(previousLinks)
+
+        resourcesByMonth[month] = nextResources.isEmpty ? nil : nextResources
+        assetsByMonth[month] = nextAssets.isEmpty ? nil : nextAssets
+        linksByMonth[month] = nextLinks.isEmpty ? nil : nextLinks
+
+        attachLinkKeysLocked(nextLinks)
+
+        fullSnapshotDirty = true
+        bumpRevisionLocked([month])
+        lock.unlock()
+        return true
+    }
+
+    @discardableResult
+    func removeMonth(_ month: LibraryMonthKey) -> Bool {
+        lock.lock()
+
+        let previousResources = resourcesByMonth.removeValue(forKey: month)
+        let previousAssets = assetsByMonth.removeValue(forKey: month)
+        let previousLinks = linksByMonth.removeValue(forKey: month)
+
+        guard previousResources != nil || previousAssets != nil || previousLinks != nil else {
+            lock.unlock()
+            return false
+        }
+
+        if let previousLinks {
+            detachLinkKeysLocked(previousLinks)
+        }
+
+        fullSnapshotDirty = true
+        bumpRevisionLocked([month])
+        lock.unlock()
+        return true
+    }
+
     func upsertResource(_ item: RemoteManifestResource) {
         lock.lock()
 
@@ -353,5 +437,23 @@ final class RemoteLibrarySnapshotCache {
         }
 
         return (resourcesByMonth, assetsByMonth, linksByMonth, linkKeysByAssetID)
+    }
+
+    private func detachLinkKeysLocked(_ links: LinkMap) {
+        for (key, link) in links {
+            guard var keys = linkKeysByAssetID[link.assetID] else { continue }
+            keys.remove(key)
+            if keys.isEmpty {
+                linkKeysByAssetID[link.assetID] = nil
+            } else {
+                linkKeysByAssetID[link.assetID] = keys
+            }
+        }
+    }
+
+    private func attachLinkKeysLocked(_ links: LinkMap) {
+        for (key, link) in links {
+            linkKeysByAssetID[link.assetID, default: []].insert(key)
+        }
     }
 }
