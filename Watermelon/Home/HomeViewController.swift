@@ -642,7 +642,7 @@ final class HomeViewController: UIViewController {
     @discardableResult
     private func syncRemoteDataIfNeeded() -> Bool {
         let snapshotState = dependencies.backupExecutor.currentRemoteSnapshotState(
-            since: homeDataManager.remoteSnapshotRevision
+            since: homeDataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: hasActiveConnection)
         )
         let changed = homeDataManager.syncRemoteSnapshot(
             state: snapshotState,
