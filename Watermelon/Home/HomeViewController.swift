@@ -31,6 +31,43 @@ final class HomeViewController: UIViewController {
         case originalRatio
     }
 
+    private enum SectionReloadMode {
+        case full
+        case nonAnimatedDiff
+    }
+
+    private enum MonthDebugExportScope {
+        case all
+        case unmatchedOnly
+
+        var scopeText: String {
+            switch self {
+            case .all:
+                return "all_local_and_remote"
+            case .unmatchedOnly:
+                return "only_local_and_only_remote"
+            }
+        }
+
+        var triggerText: String {
+            switch self {
+            case .all:
+                return "section_header_tap"
+            case .unmatchedOnly:
+                return "section_header_long_press"
+            }
+        }
+
+        var fileTag: String {
+            switch self {
+            case .all:
+                return "all"
+            case .unmatchedOnly:
+                return "unmatched"
+            }
+        }
+    }
+
     private enum AlbumMediaKind {
         case photo
         case video
@@ -140,6 +177,7 @@ final class HomeViewController: UIViewController {
     private var prefetchTasks: [IndexPath: DownloadTask] = [:]
     private var reloadTask: Task<Void, Never>?
     private var pendingRemoteSectionRefresh = false
+    private var lastRunningSectionRefreshAt: Date = .distantPast
 
     private lazy var backupSessionController = BackupSessionController(dependencies: dependencies)
     private var backupSessionObserverID: UUID?
@@ -304,6 +342,25 @@ final class HomeViewController: UIViewController {
             let previous = self.lastObservedBackupState
             self.lastObservedBackupState = snapshot.state
             if previous == .running && snapshot.state != .running {
+                self.reloadRemoteIndexAfterBackupEnded()
+            }
+        }
+    }
+
+    private func reloadRemoteIndexAfterBackupEnded() {
+        guard let profile = dependencies.appSession.activeProfile,
+              let password = dependencies.appSession.activePassword else {
+            scheduleReloadAllData()
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            _ = try? await self.dependencies.backupExecutor.reloadRemoteIndex(
+                profile: profile,
+                password: password
+            )
+            await MainActor.run {
                 self.scheduleReloadAllData()
             }
         }
@@ -311,8 +368,11 @@ final class HomeViewController: UIViewController {
 
     private func scheduleRemoteSectionRefresh() {
         guard hasActiveConnection else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastRunningSectionRefreshAt) >= 2.4 else { return }
         guard !pendingRemoteSectionRefresh else { return }
         pendingRemoteSectionRefresh = true
+        lastRunningSectionRefreshAt = now
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self else { return }
@@ -326,7 +386,7 @@ final class HomeViewController: UIViewController {
                 await MainActor.run {
                     self.loadRemoteItems()
                     self.rebuildMergedItems()
-                    self.applySections()
+                    self.applySections(reloadMode: .nonAnimatedDiff)
                 }
             }
         }
@@ -816,7 +876,7 @@ final class HomeViewController: UIViewController {
         mergedItems = result
     }
 
-    private func applySections() {
+    private func applySections(reloadMode: SectionReloadMode = .full) {
         let filteredItems: [HomeAlbumItem]
         switch sourceFilterMode {
         case .all:
@@ -843,7 +903,7 @@ final class HomeViewController: UIViewController {
             }
         }
 
-        sections = sortedKeys.map { key in
+        let newSections = sortedKeys.map { key in
             let values = (grouped[key] ?? []).sorted {
                 switch sortMode {
                 case .descending:
@@ -855,8 +915,63 @@ final class HomeViewController: UIViewController {
             return AlbumSection(key: key, items: values)
         }
 
+        let oldSections = sections
+        sections = newSections
         updateFilterMenu()
-        collectionView.reloadData()
+        applyCollectionUpdates(oldSections: oldSections, newSections: newSections, reloadMode: reloadMode)
+    }
+
+    private func applyCollectionUpdates(
+        oldSections: [AlbumSection],
+        newSections: [AlbumSection],
+        reloadMode: SectionReloadMode
+    ) {
+        switch reloadMode {
+        case .full:
+            collectionView.reloadData()
+
+        case .nonAnimatedDiff:
+            guard oldSections.count == newSections.count else {
+                UIView.performWithoutAnimation {
+                    collectionView.reloadData()
+                }
+                return
+            }
+
+            let keysUnchanged = zip(oldSections, newSections).allSatisfy { lhs, rhs in
+                lhs.key == rhs.key
+            }
+            guard keysUnchanged else {
+                UIView.performWithoutAnimation {
+                    collectionView.reloadData()
+                }
+                return
+            }
+
+            var changedSections = IndexSet()
+            for index in newSections.indices {
+                if !Self.sameSectionItems(lhs: oldSections[index].items, rhs: newSections[index].items) {
+                    changedSections.insert(index)
+                }
+            }
+
+            guard !changedSections.isEmpty else { return }
+            UIView.performWithoutAnimation {
+                collectionView.performBatchUpdates {
+                    collectionView.reloadSections(changedSections)
+                }
+            }
+        }
+    }
+
+    private static func sameSectionItems(lhs: [HomeAlbumItem], rhs: [HomeAlbumItem]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        for (left, right) in zip(lhs, rhs) {
+            if left.id != right.id || left.sourceTag != right.sourceTag || left.mediaKind != right.mediaKind {
+                return false
+            }
+        }
+        return true
     }
 
     private func updateFilterMenu() {
@@ -1150,6 +1265,299 @@ final class HomeViewController: UIViewController {
             .joined(separator: "|")
     }
 
+    private func exportMonthDebugReport(for key: YearMonth, scope: MonthDebugExportScope = .all) {
+        let monthText = String(format: "%04d-%02d", key.year, key.month)
+
+        let localMonthItems = localItems
+            .filter { Self.yearMonth(for: $0.creationDate) == key }
+            .sorted { $0.creationDate > $1.creationDate }
+
+        let remoteSnapshotResources = dependencies.backupExecutor.currentRemoteSnapshot().resources
+            .filter { $0.year == key.year && $0.month == key.month }
+            .sorted { lhs, rhs in
+                if lhs.creationDate != rhs.creationDate {
+                    return lhs.creationDate > rhs.creationDate
+                }
+                return lhs.fileName < rhs.fileName
+            }
+
+        let remoteMonthItems = remoteItems
+            .filter { item in
+                item.resources.contains { $0.year == key.year && $0.month == key.month }
+            }
+            .sorted { $0.creationDate > $1.creationDate }
+
+        let mergedMonthItems = mergedItems
+            .filter { Self.yearMonth(for: $0.creationDate) == key }
+            .sorted { $0.creationDate > $1.creationDate }
+
+        let localOnlyItems = mergedMonthItems
+            .filter { $0.sourceTag == .localOnly }
+            .compactMap(\.localItem)
+            .sorted { $0.creationDate > $1.creationDate }
+
+        let remoteOnlyItems = mergedMonthItems
+            .filter { $0.sourceTag == .remoteOnly }
+            .compactMap(\.remoteItem)
+            .sorted { $0.creationDate > $1.creationDate }
+
+        let localAssetIDs: [String] = {
+            switch scope {
+            case .all:
+                return localMonthItems.map(\.id)
+            case .unmatchedOnly:
+                return localOnlyItems.map(\.id)
+            }
+        }()
+        let hashIndexRows = loadHashIndexRows(forAssetIDs: localAssetIDs)
+
+        var seenRemoteResourceIDs = Set<String>()
+        let remoteOnlyResources = remoteOnlyItems
+            .flatMap(\.resources)
+            .filter { seenRemoteResourceIDs.insert($0.id).inserted }
+            .sorted { lhs, rhs in
+                if lhs.creationDate != rhs.creationDate {
+                    return lhs.creationDate > rhs.creationDate
+                }
+                return lhs.fileName < rhs.fileName
+            }
+
+        let mapRemoteResource: (RemoteManifestResource) -> [String: Any] = { resource in
+            [
+                "id": resource.id,
+                "monthKey": resource.monthKey,
+                "fileName": resource.fileName,
+                "remoteRelativePath": resource.remoteRelativePath,
+                "resourceType": resource.resourceType,
+                "fileSize": resource.fileSize,
+                "creationDate": Self.debugISO8601Formatter.string(from: resource.creationDate),
+                "contentHashHex": resource.contentHashHex
+            ]
+        }
+
+        let mapRemoteGroupedItem: (RemoteAlbumItem) -> [String: Any] = { [self] item in
+            [
+                "id": item.id,
+                "creationDate": Self.debugISO8601Formatter.string(from: item.creationDate),
+                "mediaKind": self.mediaKindText(item.mediaKind),
+                "resourceCount": item.resources.count,
+                "representativePath": item.representative.remoteRelativePath,
+                "contentHashes": item.contentHashes.map(Self.hexString),
+                "resources": item.resources
+                    .sorted { lhs, rhs in
+                        if lhs.creationDate != rhs.creationDate {
+                            return lhs.creationDate > rhs.creationDate
+                        }
+                        return lhs.fileName < rhs.fileName
+                    }
+                    .map(mapRemoteResource)
+            ]
+        }
+
+        let basePayload: [String: Any] = [
+            "generatedAt": Self.debugISO8601Formatter.string(from: Date()),
+            "trigger": scope.triggerText,
+            "month": monthText,
+            "scope": scope.scopeText,
+            "connection": [
+                "connected": hasActiveConnection,
+                "profileName": dependencies.appSession.activeProfile?.name as Any,
+                "host": dependencies.appSession.activeProfile?.host as Any,
+                "shareName": dependencies.appSession.activeProfile?.shareName as Any,
+                "basePath": dependencies.appSession.activeProfile?.basePath as Any,
+                "username": dependencies.appSession.activeProfile?.username as Any
+            ]
+        ]
+
+        var report = basePayload
+        switch scope {
+        case .all:
+            let mergedPayload: [[String: Any]] = mergedMonthItems.map { [self] item in
+                let sourceText: String
+                switch item.sourceTag {
+                case .localOnly:
+                    sourceText = "localOnly"
+                case .remoteOnly:
+                    sourceText = "remoteOnly"
+                case .both:
+                    sourceText = "both"
+                }
+
+                return [
+                    "id": item.id,
+                    "creationDate": Self.debugISO8601Formatter.string(from: item.creationDate),
+                    "sourceTag": sourceText,
+                    "mediaKind": self.mediaKindText(item.mediaKind),
+                    "localAssetIdentifier": item.localItem?.id as Any,
+                    "remoteItemIdentifier": item.remoteItem?.id as Any
+                ]
+            }
+
+            report["counts"] = [
+                "localItems": localMonthItems.count,
+                "remoteSnapshotResources": remoteSnapshotResources.count,
+                "remoteGroupedItems": remoteMonthItems.count,
+                "mergedItems": mergedMonthItems.count,
+                "localHashIndexRows": hashIndexRows.count,
+                "localOnlyItems": localOnlyItems.count,
+                "remoteOnlyItems": remoteOnlyItems.count,
+                "bothItems": max(mergedMonthItems.count - localOnlyItems.count - remoteOnlyItems.count, 0)
+            ]
+            report["localItems"] = localMonthItems.map { [self] item in
+                [
+                    "assetLocalIdentifier": item.id,
+                    "creationDate": Self.debugISO8601Formatter.string(from: item.creationDate),
+                    "mediaKind": self.mediaKindText(item.mediaKind),
+                    "isBackedUp": item.isBackedUp,
+                    "contentHashes": item.contentHashes.map(Self.hexString)
+                ] as [String: Any]
+            }
+            report["localHashIndexRows"] = hashIndexRows
+            report["remoteSnapshotResources"] = remoteSnapshotResources.map(mapRemoteResource)
+            report["remoteGroupedItems"] = remoteMonthItems.map(mapRemoteGroupedItem)
+            report["mergedItems"] = mergedPayload
+
+        case .unmatchedOnly:
+            report["counts"] = [
+                "localOnlyItems": localOnlyItems.count,
+                "remoteOnlyItems": remoteOnlyItems.count,
+                "remoteOnlyResources": remoteOnlyResources.count,
+                "localOnlyHashIndexRows": hashIndexRows.count,
+                "excludedBothItems": max(mergedMonthItems.count - localOnlyItems.count - remoteOnlyItems.count, 0)
+            ]
+            report["localOnlyItems"] = localOnlyItems.map { [self] item in
+                [
+                    "assetLocalIdentifier": item.id,
+                    "creationDate": Self.debugISO8601Formatter.string(from: item.creationDate),
+                    "mediaKind": self.mediaKindText(item.mediaKind),
+                    "isBackedUp": item.isBackedUp,
+                    "contentHashes": item.contentHashes.map(Self.hexString)
+                ] as [String: Any]
+            }
+            report["localOnlyHashIndexRows"] = hashIndexRows
+            report["remoteOnlyItems"] = remoteOnlyItems.map(mapRemoteGroupedItem)
+            report["remoteOnlyResources"] = remoteOnlyResources.map(mapRemoteResource)
+        }
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            let filename = "month_debug_\(scope.fileTag)_\(key.year)_\(String(format: "%02d", key.month))_\(Self.debugFileNameFormatter.string(from: Date())).json"
+            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+            try data.write(to: fileURL, options: .atomic)
+            presentShareSheet(for: fileURL)
+        } catch {
+            presentAlert(title: "导出失败", message: error.localizedDescription)
+        }
+    }
+
+    private func loadHashIndexRows(forAssetIDs assetIDs: [String]) -> [[String: Any]] {
+        guard !assetIDs.isEmpty else { return [] }
+        do {
+            return try dependencies.databaseManager.read { db in
+                let placeholders = Array(repeating: "?", count: assetIDs.count).joined(separator: ",")
+                let sql = """
+                SELECT assetLocalIdentifier, resourceLocalIdentifier, hex(contentHash) AS contentHashHex
+                FROM content_hash_index
+                WHERE assetLocalIdentifier IN (\(placeholders))
+                ORDER BY assetLocalIdentifier, resourceLocalIdentifier
+                """
+                let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(assetIDs))
+                return rows.map { row in
+                    [
+                        "assetLocalIdentifier": row["assetLocalIdentifier"] as String,
+                        "resourceLocalIdentifier": row["resourceLocalIdentifier"] as String,
+                        "contentHashHex": row["contentHashHex"] as String
+                    ]
+                }
+            }
+        } catch {
+            return [["error": error.localizedDescription]]
+        }
+    }
+
+    private func presentShareSheet(for fileURL: URL) {
+        let activityVC = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = view
+            popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            popover.permittedArrowDirections = []
+        }
+        present(activityVC, animated: true)
+    }
+
+    private func mediaKindText(_ kind: AlbumMediaKind) -> String {
+        switch kind {
+        case .photo:
+            return "photo"
+        case .video:
+            return "video"
+        case .livePhoto:
+            return "livePhoto"
+        }
+    }
+
+    private func openRemoteOnlyDetail(for item: HomeAlbumItem) {
+        guard let remote = item.remoteItem else {
+            presentAlert(title: "仅远端资源", message: "该项目当前仅存在远端，但缺少可展示的信息。")
+            return
+        }
+
+        var lines: [String] = []
+
+        lines.append("来源: 仅远端")
+        lines.append("条目标识: \(remote.id)")
+        lines.append("媒体类型: \(mediaKindText(remote.mediaKind))")
+        lines.append("创建时间: \(Self.detailDateFormatter.string(from: remote.creationDate))")
+        lines.append("月份: \(remote.representative.monthKey)")
+
+        if let profile = dependencies.appSession.activeProfile {
+            let normalizedPath: String
+            if profile.basePath.isEmpty {
+                normalizedPath = "/"
+            } else if profile.basePath.hasPrefix("/") {
+                normalizedPath = profile.basePath
+            } else {
+                normalizedPath = "/\(profile.basePath)"
+            }
+            lines.append("当前连接: \(profile.username)@\(profile.shareName)\(normalizedPath)")
+        } else {
+            lines.append("当前连接: 未连接")
+        }
+
+        lines.append("资源数量: \(remote.resources.count)")
+        lines.append("")
+        lines.append("资源明细")
+
+        let sortedResources = remote.resources.sorted { lhs, rhs in
+            if lhs.creationDate != rhs.creationDate {
+                return lhs.creationDate > rhs.creationDate
+            }
+            return lhs.fileName < rhs.fileName
+        }
+
+        for (index, resource) in sortedResources.enumerated() {
+            lines.append("")
+            lines.append("[\(index + 1)] \(resource.fileName)")
+            lines.append("路径: \(resource.remoteRelativePath)")
+            lines.append("类型: \(PhotoLibraryService.resourceTypeName(from: resource.resourceType)) (\(resource.resourceType))")
+            lines.append("大小: \(ByteCountFormatter.string(fromByteCount: resource.fileSize, countStyle: .file))")
+            lines.append("创建时间: \(Self.detailDateFormatter.string(from: resource.creationDate))")
+            lines.append("Hash: \(resource.contentHashHex)")
+        }
+
+        let detailVC = RemoteOnlyItemInfoViewController(infoText: lines.joined(separator: "\n"))
+        navigationController?.pushViewController(detailVC, animated: true)
+    }
+
+    nonisolated private static func yearMonth(for date: Date) -> YearMonth {
+        let components = Calendar(identifier: .gregorian).dateComponents([.year, .month], from: date)
+        return YearMonth(year: components.year ?? 1970, month: components.month ?? 1)
+    }
+
+    nonisolated private static func hexString(_ data: Data) -> String {
+        data.map { String(format: "%02x", $0) }.joined()
+    }
+
     private func presentAlert(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "确定", style: .default))
@@ -1159,6 +1567,24 @@ final class HomeViewController: UIViewController {
     private static let dayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MM-dd"
+        return formatter
+    }()
+
+    private static let debugISO8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let debugFileNameFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd_HHmmss"
+        return formatter
+    }()
+
+    private static let detailDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter
     }()
 }
@@ -1218,6 +1644,13 @@ extension HomeViewController: UICollectionViewDataSource, UICollectionViewDelega
         view.setRoundedRectStyle(true)
         view.setHorizontalInset(GridLayout.sectionHeaderInset)
         view.setTitle(sections[indexPath.section].title)
+        let sectionKey = sections[indexPath.section].key
+        view.onTap = { [weak self] in
+            self?.exportMonthDebugReport(for: sectionKey, scope: .all)
+        }
+        view.onLongPress = { [weak self] in
+            self?.exportMonthDebugReport(for: sectionKey, scope: .unmatchedOnly)
+        }
         return view
     }
 
@@ -1246,7 +1679,7 @@ extension HomeViewController: UICollectionViewDataSource, UICollectionViewDelega
             return
         }
 
-        presentAlert(title: "仅远端资源", message: "该项目当前仅存在远端，暂不支持本地详情展示。")
+        openRemoteOnlyDetail(for: item)
     }
 
     func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
@@ -1285,6 +1718,41 @@ extension HomeViewController: UICollectionViewDataSource, UICollectionViewDelega
         for indexPath in indexPaths {
             prefetchTasks[indexPath]?.cancel()
             prefetchTasks[indexPath] = nil
+        }
+    }
+}
+
+private final class RemoteOnlyItemInfoViewController: UIViewController {
+    private let infoText: String
+    private let textView = UITextView()
+
+    init(infoText: String) {
+        self.infoText = infoText
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        title = "远端条目信息"
+        navigationItem.largeTitleDisplayMode = .never
+
+        textView.backgroundColor = .secondarySystemBackground
+        textView.isEditable = false
+        textView.alwaysBounceVertical = true
+        textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.textContainerInset = UIEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
+        textView.layer.cornerRadius = 12
+        textView.text = infoText
+
+        view.addSubview(textView)
+        textView.snp.makeConstraints { make in
+            make.edges.equalTo(view.safeAreaLayoutGuide).inset(12)
         }
     }
 }

@@ -98,6 +98,7 @@ final class BackupSessionController {
     private var runTask: Task<Void, Never>?
     private var terminationIntent: TerminationIntent = .none
     private var currentRunMode: RunMode = .full
+    private var lastPausedRunMode: RunMode?
     private var hasStartedAtLeastOnce = false
 
     private(set) var state: State = .idle
@@ -144,7 +145,10 @@ final class BackupSessionController {
 
     @discardableResult
     func startBackup() -> Bool {
-        startBackup(mode: .full)
+        if state == .paused {
+            return resumeFromPause()
+        }
+        return startBackup(mode: .full)
     }
 
     @discardableResult
@@ -212,6 +216,7 @@ final class BackupSessionController {
 
         terminationIntent = .none
         currentRunMode = mode
+        lastPausedRunMode = nil
         hasStartedAtLeastOnce = true
 
         let shouldResetSessionItems =
@@ -321,6 +326,7 @@ final class BackupSessionController {
         total = result.total
 
         if intent == .stop {
+            lastPausedRunMode = nil
             state = .stopped
             statusText = "备份已停止"
             appendLog("任务已停止")
@@ -330,6 +336,7 @@ final class BackupSessionController {
         }
 
         if result.paused || intent == .pause {
+            lastPausedRunMode = runMode
             state = .paused
             statusText = "备份已暂停"
             appendLog("任务已暂停")
@@ -338,6 +345,7 @@ final class BackupSessionController {
             return
         }
 
+        lastPausedRunMode = nil
         state = .completed
         let verb = runMode.isRetry ? "重试" : "备份"
         statusText = result.failed == 0 ? "\(verb)完成" : "\(verb)完成（部分失败）"
@@ -395,6 +403,139 @@ final class BackupSessionController {
         }
 
         rebuildFailedItems()
+    }
+
+    @discardableResult
+    private func resumeFromPause() -> Bool {
+        guard runTask == nil else {
+            appendLog("已有备份任务正在执行")
+            return false
+        }
+        guard dependencies.appSession.activeProfile != nil,
+              dependencies.appSession.activePassword != nil else {
+            state = .failed
+            statusText = "请先登录 SMB"
+            appendLog("错误: 未登录 SMB 服务器")
+            notifyObservers()
+            return false
+        }
+
+        state = .running
+        statusText = "正在准备继续..."
+        appendLog("计算剩余备份项...")
+        notifyObservers()
+
+        let pausedMode = lastPausedRunMode ?? .full
+        runTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let pendingResourceIDs: Set<String>
+                switch pausedMode {
+                case .retry(let resourceIDs):
+                    pendingResourceIDs = resourceIDs.subtracting(self.completedResourceIDs())
+                case .full:
+                    pendingResourceIDs = try await self.computePendingResourceIDsForFullRun()
+                }
+
+                self.runTask = nil
+
+                guard self.state == .running else { return }
+                guard !pendingResourceIDs.isEmpty else {
+                    self.lastPausedRunMode = nil
+                    self.state = .completed
+                    self.statusText = "备份完成"
+                    self.appendLog("无剩余项，已完成")
+                    self.rebuildFailedItems()
+                    self.notifyObservers()
+                    return
+                }
+
+                self.appendLog("继续备份剩余 \(pendingResourceIDs.count) 项")
+                _ = self.startBackup(mode: .retry(resourceIDs: pendingResourceIDs))
+            } catch is CancellationError {
+                self.runTask = nil
+                let intent = self.terminationIntent
+                self.terminationIntent = .none
+                self.currentRunMode = .full
+                self.state = intent == .stop ? .stopped : .paused
+                self.statusText = intent == .stop ? "备份已停止" : "备份已暂停"
+                self.appendLog(intent == .stop ? "任务已停止" : "任务已暂停")
+                self.rebuildFailedItems()
+                self.notifyObservers()
+            } catch {
+                self.runTask = nil
+                self.terminationIntent = .none
+                self.currentRunMode = .full
+                self.state = .failed
+                self.statusText = "继续备份失败"
+                self.appendLog("继续失败: \(error.localizedDescription)")
+                self.rebuildFailedItems()
+                self.notifyObservers()
+            }
+        }
+
+        return true
+    }
+
+    private func completedResourceIDs() -> Set<String> {
+        Set(
+            processedItemsByResourceID.values
+                .filter { item in
+                    item.status == .success || item.status == .skipped
+                }
+                .map(\.resourceLocalIdentifier)
+        )
+    }
+
+    private func computePendingResourceIDsForFullRun() async throws -> Set<String> {
+        let status = dependencies.photoLibraryService.authorizationStatus()
+        let authorized: Bool
+        if status == .authorized || status == .limited {
+            authorized = true
+        } else {
+            let requested = await dependencies.photoLibraryService.requestAuthorization()
+            authorized = (requested == .authorized || requested == .limited)
+        }
+        guard authorized else {
+            throw BackupError.photoPermissionDenied
+        }
+
+        let completed = completedResourceIDs()
+        let assets = dependencies.photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
+        var pending = Set<String>()
+
+        for index in 0 ..< assets.count {
+            try Task.checkCancellation()
+            let asset = assets.object(at: index)
+            let resources = Self.selectedBackupResources(for: asset)
+            for (resourceIndex, resource) in resources {
+                let resourceID = "\(asset.localIdentifier)::\(resourceIndex)::\(resource.type.rawValue)"
+                if !completed.contains(resourceID) {
+                    pending.insert(resourceID)
+                }
+            }
+        }
+
+        return pending
+    }
+
+    private static func selectedBackupResources(for asset: PHAsset) -> [(Int, PHAssetResource)] {
+        let indexed = Array(PHAssetResource.assetResources(for: asset).enumerated())
+
+        switch asset.mediaType {
+        case .image:
+            let fullSizePhotos = indexed.filter { $0.element.type == .fullSizePhoto }
+            let photos = indexed.filter { $0.element.type == .photo }
+            var selected = fullSizePhotos.isEmpty ? photos : fullSizePhotos
+            if PhotoLibraryService.isLivePhoto(asset) {
+                selected.append(contentsOf: indexed.filter { $0.element.type == .pairedVideo })
+            }
+            return selected
+        case .video:
+            return indexed.filter { $0.element.type == .video }
+        default:
+            return []
+        }
     }
 
     private func primaryActionTitle(for state: State) -> String {

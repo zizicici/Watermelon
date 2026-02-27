@@ -95,6 +95,17 @@ final class AMSMB2Client: SMBClientProtocol {
         #endif
     }
 
+    func setModificationDate(_ date: Date, forPath path: String) async throws {
+        #if canImport(AMSMB2)
+        try await manager.setAttributes(
+            attributes: [.contentModificationDateKey: date],
+            ofItemAtPath: RemotePathBuilder.normalizePath(path)
+        )
+        #else
+        throw SMBClientError.unavailable
+        #endif
+    }
+
     func download(remotePath: String, localURL: URL) async throws {
         #if canImport(AMSMB2)
         try await manager.downloadItem(

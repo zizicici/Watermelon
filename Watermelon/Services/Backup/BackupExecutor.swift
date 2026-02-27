@@ -120,7 +120,10 @@ final class BackupExecutor {
 
             let asset = assetsResult.object(at: index)
             let monthKey = Self.monthKey(for: asset.creationDate)
-            let resources = PHAssetResource.assetResources(for: asset)
+            let resources = Self.selectedResources(
+                for: asset,
+                from: PHAssetResource.assetResources(for: asset)
+            )
 
             if resources.isEmpty {
                 continue
@@ -146,7 +149,7 @@ final class BackupExecutor {
                 continue
             }
 
-            for (resourceIndex, resource) in resources.enumerated() {
+            for (resourceIndex, resource) in resources {
                 if retryMode, retryTargets.isEmpty {
                     break outerLoop
                 }
@@ -327,6 +330,10 @@ final class BackupExecutor {
             local.fileSize,
             (try? FileManager.default.attributesOfItem(atPath: tempFileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
         )
+        let shotDate = local.asset.creationDate ?? local.resourceModificationDate
+        if let shotDate {
+            try? FileManager.default.setAttributes([.modificationDate: shotDate], ofItemAtPath: tempFileURL.path)
+        }
 
         if monthStore.containsHash(localHash) {
             try contentHashIndexRepository.upsert(
@@ -404,6 +411,9 @@ final class BackupExecutor {
                     remotePath: remoteAbsolutePath,
                     respectTaskCancellation: true
                 )
+                if let shotDate {
+                    try? await smbClient.setModificationDate(shotDate, forPath: remoteAbsolutePath)
+                }
 
                 let backedUpAtNs = Self.nanosecondsSinceEpoch(Date()) ?? 0
                 let manifestItem = RemoteManifestResource(
@@ -572,6 +582,31 @@ final class BackupExecutor {
     private static func nanosecondsSinceEpoch(_ date: Date?) -> Int64? {
         guard let date else { return nil }
         return Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded())
+    }
+
+    private static func selectedResources(
+        for asset: PHAsset,
+        from resources: [PHAssetResource]
+    ) -> [(Int, PHAssetResource)] {
+        let indexed = Array(resources.enumerated())
+
+        switch asset.mediaType {
+        case .image:
+            let fullSizePhotos = indexed.filter { $0.element.type == .fullSizePhoto }
+            let photos = indexed.filter { $0.element.type == .photo }
+            var selected = fullSizePhotos.isEmpty ? photos : fullSizePhotos
+
+            if PhotoLibraryService.isLivePhoto(asset) {
+                selected.append(contentsOf: indexed.filter { $0.element.type == .pairedVideo })
+            }
+            return selected
+
+        case .video:
+            return indexed.filter { $0.element.type == .video }
+
+        default:
+            return []
+        }
     }
 
     private static func contentHash(of fileURL: URL) throws -> Data {

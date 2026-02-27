@@ -5,6 +5,9 @@ final class AlbumSectionHeaderView: UICollectionReusableView {
     static let reuseID = "AlbumSectionHeaderView"
 
     private let titleButton = UIButton(type: .system)
+    var onTap: (() -> Void)?
+    var onLongPress: (() -> Void)?
+
     private var leadingConstraint: Constraint?
     private var trailingConstraint: Constraint?
     private var heightConstraint: Constraint?
@@ -14,10 +17,15 @@ final class AlbumSectionHeaderView: UICollectionReusableView {
     override init(frame: CGRect) {
         super.init(frame: frame)
 
-        titleButton.isUserInteractionEnabled = false
+        titleButton.isUserInteractionEnabled = true
         titleButton.contentHorizontalAlignment = .leading
         titleButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         titleButton.setContentHuggingPriority(.required, for: .horizontal)
+        titleButton.addTarget(self, action: #selector(titleButtonTapped), for: .touchUpInside)
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(titleButtonLongPressed(_:)))
+        longPress.minimumPressDuration = 0.45
+        longPress.cancelsTouchesInView = true
+        titleButton.addGestureRecognizer(longPress)
 
         addSubview(titleButton)
         titleButton.snp.makeConstraints { make in
@@ -32,6 +40,8 @@ final class AlbumSectionHeaderView: UICollectionReusableView {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        onTap = nil
+        onLongPress = nil
         currentTitle = nil
         setTitle(nil)
         setRoundedRectStyle(false)
@@ -82,6 +92,17 @@ final class AlbumSectionHeaderView: UICollectionReusableView {
         }
 
         titleButton.configuration = config
+    }
+
+    @objc
+    private func titleButtonTapped() {
+        onTap?()
+    }
+
+    @objc
+    private func titleButtonLongPressed(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        onLongPress?()
     }
 
     @available(*, unavailable)

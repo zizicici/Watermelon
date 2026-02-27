@@ -623,8 +623,27 @@ final class AlbumViewController: UIViewController {
             let previous = self.lastObservedBackupState
             self.lastObservedBackupState = snapshot.state
             if previous == .running && snapshot.state != .running {
-                Task { await self.reloadAllData() }
+                self.reloadRemoteIndexAfterBackupEnded()
             }
+        }
+    }
+
+    private func reloadRemoteIndexAfterBackupEnded() {
+        guard let profile = dependencies.appSession.activeProfile,
+              let password = dependencies.appSession.activePassword else {
+            Task { [weak self] in
+                await self?.reloadAllData()
+            }
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            _ = try? await self.dependencies.backupExecutor.reloadRemoteIndex(
+                profile: profile,
+                password: password
+            )
+            await self.reloadAllData()
         }
     }
 
