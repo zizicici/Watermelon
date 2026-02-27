@@ -107,6 +107,35 @@ struct RemoteLibrarySnapshot {
     }
 }
 
+struct LibraryMonthKey: Hashable, Comparable {
+    let year: Int
+    let month: Int
+
+    var text: String {
+        String(format: "%04d-%02d", year, month)
+    }
+
+    static func < (lhs: LibraryMonthKey, rhs: LibraryMonthKey) -> Bool {
+        if lhs.year == rhs.year {
+            return lhs.month < rhs.month
+        }
+        return lhs.year < rhs.year
+    }
+}
+
+struct RemoteLibraryMonthDelta {
+    let month: LibraryMonthKey
+    let resources: [RemoteManifestResource]
+    let assets: [RemoteManifestAsset]
+    let assetResourceLinks: [RemoteAssetResourceLink]
+}
+
+struct RemoteLibrarySnapshotState {
+    let revision: UInt64
+    let isFullSnapshot: Bool
+    let monthDeltas: [RemoteLibraryMonthDelta]
+}
+
 enum ResourceTypeCode {
     static let unknown = 0
     static let photo = 1

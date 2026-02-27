@@ -90,8 +90,7 @@ final class HomeViewController: UIViewController {
     }
 
     private let dependencies: DependencyContainer
-    private let contentHashIndexRepository: ContentHashIndexRepository
-    private let calendar = Calendar(identifier: .gregorian)
+    private let homeDataManager: HomeIncrementalDataManager
     private let discoveryService = SMBDiscoveryService()
 
     private let collectionView: UICollectionView
@@ -112,7 +111,7 @@ final class HomeViewController: UIViewController {
         title: "备份",
         style: .prominent,
         target: self,
-        action: #selector(openBackupStatusTapped)
+        action: #selector(openBackupTapped)
     )
 
     private var sourceFilterMode: SourceFilterMode = .all
@@ -125,12 +124,7 @@ final class HomeViewController: UIViewController {
     private var didAttemptAutoConnect = false
     private var isConnecting = false
 
-    private var localItems: [LocalAlbumItem] = []
-    private var remoteItems: [RemoteAlbumItem] = []
-    private var mergedItems: [HomeAlbumItem] = []
     private var sections: [AlbumSection] = []
-    private var localAssetsByID: [String: PHAsset] = [:]
-    private var localAssetIdentifierByHash: [Data: [String]] = [:]
 
     private let remoteImageCache = ImageCache(name: "home_remote_album_cache")
     private let remoteThumbnailService = RemoteThumbnailService()
@@ -142,6 +136,7 @@ final class HomeViewController: UIViewController {
     private lazy var backupSessionController = BackupSessionController(dependencies: dependencies)
     private var backupSessionObserverID: UUID?
     private var lastObservedBackupState: BackupSessionController.State = .idle
+    private var processedItemVersionByAssetID: [String: Date] = [:]
 
     private var hasActiveConnection: Bool {
         dependencies.appSession.activeProfile != nil && dependencies.appSession.activePassword != nil
@@ -149,7 +144,10 @@ final class HomeViewController: UIViewController {
 
     init(dependencies: DependencyContainer) {
         self.dependencies = dependencies
-        self.contentHashIndexRepository = ContentHashIndexRepository(databaseManager: dependencies.databaseManager)
+        self.homeDataManager = HomeIncrementalDataManager(
+            photoLibraryService: dependencies.photoLibraryService,
+            contentHashIndexRepository: ContentHashIndexRepository(databaseManager: dependencies.databaseManager)
+        )
 
         let layout = UICollectionViewFlowLayout()
         layout.minimumInteritemSpacing = GridLayout.itemSpacing
@@ -195,6 +193,7 @@ final class HomeViewController: UIViewController {
         bindSession()
         bindDiscovery()
         bindBackupSession()
+        bindHomeDataManager()
 
         loadSavedProfiles()
         updateConnectionIndicator()
@@ -287,41 +286,53 @@ final class HomeViewController: UIViewController {
         }
     }
 
+    private func bindHomeDataManager() {
+        homeDataManager.onDataChanged = { [weak self] in
+            guard let self else { return }
+            self.applySections(reloadMode: .nonAnimatedDiff)
+        }
+    }
+
     private func bindBackupSession() {
         if let existing = backupSessionObserverID {
             backupSessionController.removeObserver(existing)
         }
         backupSessionObserverID = backupSessionController.addObserver { [weak self] snapshot in
             guard let self else { return }
-            self.backupToolbarItem.title = snapshot.state == .running ? "备份中" : "备份"
-            self.updateFilterMenu()
+            let previous = self.lastObservedBackupState
+            let wasRunning = previous == .running
+            let isRunning = snapshot.state == .running
 
-            if snapshot.state == .running, self.hasActiveConnection {
+            let backupTitle = isRunning ? "备份中" : "备份"
+            if self.backupToolbarItem.title != backupTitle {
+                self.backupToolbarItem.title = backupTitle
+            }
+
+            if isRunning, self.hasActiveConnection {
                 self.scheduleRemoteSectionRefresh()
             }
 
-            let previous = self.lastObservedBackupState
-            self.lastObservedBackupState = snapshot.state
-            if previous == .running && snapshot.state != .running {
-                self.reloadRemoteIndexAfterBackupEnded()
+            if wasRunning != isRunning {
+                self.updateFilterMenu()
             }
-        }
-    }
 
-    private func reloadRemoteIndexAfterBackupEnded() {
-        guard let profile = dependencies.appSession.activeProfile,
-              let password = dependencies.appSession.activePassword else {
-            scheduleReloadAllData()
-            return
-        }
+            if snapshot.state == .idle {
+                self.processedItemVersionByAssetID.removeAll()
+            }
 
-        Task { [weak self] in
-            guard let self else { return }
-            _ = try? await self.dependencies.backupExecutor.reloadRemoteIndex(
-                profile: profile,
-                password: password
-            )
-            await MainActor.run {
+            if let event = snapshot.latestItemEvent {
+                let assetID = event.assetLocalIdentifier
+                if self.processedItemVersionByAssetID[assetID] != event.updatedAt {
+                    self.processedItemVersionByAssetID[assetID] = event.updatedAt
+                    let localChanged = self.homeDataManager.refreshLocalIndex(forAssetIDs: [assetID])
+                    if localChanged {
+                        self.applySections(reloadMode: .nonAnimatedDiff)
+                    }
+                }
+            }
+
+            self.lastObservedBackupState = snapshot.state
+            if wasRunning && !isRunning {
                 self.scheduleReloadAllData()
             }
         }
@@ -330,25 +341,18 @@ final class HomeViewController: UIViewController {
     private func scheduleRemoteSectionRefresh() {
         guard hasActiveConnection else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastRunningSectionRefreshAt) >= 2.4 else { return }
+        guard now.timeIntervalSince(lastRunningSectionRefreshAt) >= 1.8 else { return }
         guard !pendingRemoteSectionRefresh else { return }
         pendingRemoteSectionRefresh = true
         lastRunningSectionRefreshAt = now
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self else { return }
-            Task { [weak self] in
-                guard let self else { return }
-                await MainActor.run {
-                    self.pendingRemoteSectionRefresh = false
-                }
-                guard self.hasActiveConnection else { return }
-                await self.refreshLocalHashMirrorIndex()
-                await MainActor.run {
-                    self.loadRemoteItems()
-                    self.rebuildMergedItems()
-                    self.applySections(reloadMode: .nonAnimatedDiff)
-                }
+            self.pendingRemoteSectionRefresh = false
+            guard self.hasActiveConnection else { return }
+
+            if self.syncRemoteDataIfNeeded() {
+                self.applySections(reloadMode: .nonAnimatedDiff)
             }
         }
     }
@@ -573,9 +577,9 @@ final class HomeViewController: UIViewController {
     }
 
     @objc
-    private func openBackupStatusTapped() {
-        let statusVC = BackupStatusViewController(sessionController: backupSessionController)
-        let nav = UINavigationController(rootViewController: statusVC)
+    private func openBackupTapped() {
+        let backupVC = BackupViewController(sessionController: backupSessionController)
+        let nav = UINavigationController(rootViewController: backupVC)
         nav.modalPresentationStyle = .pageSheet
         present(nav, animated: true)
     }
@@ -627,134 +631,63 @@ final class HomeViewController: UIViewController {
     }
 
     private func reloadAllData() async {
-        await loadLocalItems()
-        await MainActor.run {
-            self.loadRemoteItems()
-            self.rebuildMergedItems()
+        let localChanged = await homeDataManager.ensureLocalIndexLoaded()
+        let remoteChanged = syncRemoteDataIfNeeded()
+
+        if localChanged || remoteChanged || sections.isEmpty {
             self.applySections()
         }
     }
 
-    private func loadLocalItems() async {
-        let status = dependencies.photoLibraryService.authorizationStatus()
-        let authorized: Bool
-        if status == .authorized || status == .limited {
-            authorized = true
-        } else {
-            let requested = await dependencies.photoLibraryService.requestAuthorization()
-            authorized = (requested == .authorized || requested == .limited)
-        }
-
-        guard authorized else {
-            await MainActor.run {
-                self.localItems = []
-                self.localAssetsByID = [:]
-                self.localAssetIdentifierByHash = [:]
-            }
-            return
-        }
-
-        let assets = dependencies.photoLibraryService.fetchAssets()
-        let snapshot = dependencies.backupExecutor.currentRemoteSnapshot()
-        let remoteAssetFingerprintSet = snapshot.assetFingerprintSet
-
-        let localHashMapByAsset = (try? contentHashIndexRepository.fetchHashMapByAsset()) ?? [:]
-        let localFingerprintByAsset = (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset()) ?? [:]
-
-        let finalizedLocalAssetByHash = HomeAlbumMatching.makeHashToAssetIndex(localHashMapByAsset)
-
-        let builtItems: [LocalAlbumItem] = assets.map { asset in
-            let mediaKind: AlbumMediaKind
-            if PhotoLibraryService.isLivePhoto(asset) {
-                mediaKind = .livePhoto
-            } else if asset.mediaType == .video {
-                mediaKind = .video
-            } else {
-                mediaKind = .photo
-            }
-
-            let hashes = localHashMapByAsset[asset.localIdentifier] ?? []
-            let isBackedUp: Bool
-            if let fingerprint = localFingerprintByAsset[asset.localIdentifier] {
-                isBackedUp = remoteAssetFingerprintSet.contains(fingerprint)
-            } else {
-                isBackedUp = false
-            }
-
-            return LocalAlbumItem(
-                id: asset.localIdentifier,
-                asset: asset,
-                creationDate: asset.creationDate ?? Date(timeIntervalSince1970: 0),
-                isBackedUp: isBackedUp,
-                mediaKind: mediaKind,
-                contentHashes: hashes
-            )
-        }
-
-        let mapping = Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) })
-        await MainActor.run {
-            self.localItems = builtItems
-            self.localAssetsByID = mapping
-            self.localAssetIdentifierByHash = finalizedLocalAssetByHash
-        }
-    }
-
-    private func loadRemoteItems() {
-        guard hasActiveConnection else {
-            remoteItems = []
-            return
-        }
-
-        let snapshot = dependencies.backupExecutor.currentRemoteSnapshot()
-        remoteItems = HomeAlbumMatching.buildRemoteItems(from: snapshot)
-    }
-
-    private func rebuildMergedItems() {
-        mergedItems = HomeAlbumMatching.mergeItems(
-            localItems: localItems,
-            remoteItems: remoteItems,
-            localAssetIdentifierByHash: localAssetIdentifierByHash,
+    @discardableResult
+    private func syncRemoteDataIfNeeded() -> Bool {
+        let snapshotState = dependencies.backupExecutor.currentRemoteSnapshotState(
+            since: homeDataManager.remoteSnapshotRevision
+        )
+        let changed = homeDataManager.syncRemoteSnapshot(
+            state: snapshotState,
             hasActiveConnection: hasActiveConnection
         )
+        return changed
     }
 
     private func applySections(reloadMode: SectionReloadMode = .full) {
-        let filteredItems: [HomeAlbumItem]
-        switch sourceFilterMode {
-        case .all:
-            filteredItems = mergedItems
-        case .localOnly:
-            filteredItems = mergedItems.filter { $0.sourceTag == .localOnly }
-        case .remoteOnly:
-            filteredItems = mergedItems.filter { $0.sourceTag == .remoteOnly }
-        case .both:
-            filteredItems = mergedItems.filter { $0.sourceTag == .both }
-        }
+        let monthSections = homeDataManager.mergedMonthItemsSnapshot()
+        let orderedMonthSections: [HomeIncrementalDataManager.MergedMonthSection] =
+            sortMode == .descending ? monthSections : monthSections.reversed()
 
-        let grouped = Dictionary(grouping: filteredItems) { item -> YearMonth in
-            let components = calendar.dateComponents([.year, .month], from: item.creationDate)
-            return YearMonth(year: components.year ?? 1970, month: components.month ?? 1)
-        }
+        var newSections: [AlbumSection] = []
+        newSections.reserveCapacity(orderedMonthSections.count)
 
-        let sortedKeys = grouped.keys.sorted {
+        for monthSection in orderedMonthSections {
+            let sourceFiltered: [HomeAlbumItem]
+            switch sourceFilterMode {
+            case .all:
+                sourceFiltered = monthSection.items
+            case .localOnly:
+                sourceFiltered = monthSection.items.filter { $0.sourceTag == .localOnly }
+            case .remoteOnly:
+                sourceFiltered = monthSection.items.filter { $0.sourceTag == .remoteOnly }
+            case .both:
+                sourceFiltered = monthSection.items.filter { $0.sourceTag == .both }
+            }
+
+            guard !sourceFiltered.isEmpty else { continue }
+
+            let values: [HomeAlbumItem]
             switch sortMode {
             case .descending:
-                return $0 > $1
+                values = sourceFiltered
             case .ascending:
-                return $0 < $1
+                values = sourceFiltered.sorted { $0.creationDate < $1.creationDate }
             }
-        }
 
-        let newSections = sortedKeys.map { key in
-            let values = (grouped[key] ?? []).sorted {
-                switch sortMode {
-                case .descending:
-                    return $0.creationDate > $1.creationDate
-                case .ascending:
-                    return $0.creationDate < $1.creationDate
-                }
-            }
-            return AlbumSection(key: key, items: values)
+            newSections.append(
+                AlbumSection(
+                    key: YearMonth(year: monthSection.month.year, month: monthSection.month.month),
+                    items: values
+                )
+            )
         }
 
         let oldSections = sections
@@ -1047,22 +980,10 @@ final class HomeViewController: UIViewController {
         ]
     }
 
-    private func refreshLocalHashMirrorIndex() async {
-        let mirrorMap: [Data: [String]]
-        do {
-            let hashMapByAsset = try contentHashIndexRepository.fetchHashMapByAsset()
-            mirrorMap = HomeAlbumMatching.makeHashToAssetIndex(hashMapByAsset)
-        } catch {
-            mirrorMap = [:]
-        }
-
-        await MainActor.run {
-            self.localAssetIdentifierByHash = mirrorMap
-        }
-    }
-
     private func exportMonthDebugReport(for key: YearMonth, scope: MonthDebugExportScope = .all) {
         let monthText = String(format: "%04d-%02d", key.year, key.month)
+        let localItems = homeDataManager.localItemsSnapshot()
+        let remoteItems = homeDataManager.remoteItemsSnapshot()
 
         let localMonthItems = localItems
             .filter { Self.yearMonth(for: $0.creationDate) == key }
@@ -1083,9 +1004,10 @@ final class HomeViewController: UIViewController {
             }
             .sorted { $0.creationDate > $1.creationDate }
 
-        let mergedMonthItems = mergedItems
-            .filter { Self.yearMonth(for: $0.creationDate) == key }
-            .sorted { $0.creationDate > $1.creationDate }
+        let mergedMonthItems = homeDataManager.mergedMonthItemsSnapshot()
+            .first { $0.month.year == key.year && $0.month.month == key.month }?
+            .items
+            .sorted { $0.creationDate > $1.creationDate } ?? []
 
         let localOnlyItems = mergedMonthItems
             .filter { $0.sourceTag == .localOnly }

@@ -143,6 +143,14 @@ final class BackupExecutor {
             )
         }
 
+        let localHashCacheByAssetID: [String: LocalAssetHashCache]
+        do {
+            localHashCacheByAssetID = try contentHashIndexRepository.fetchAssetHashCaches()
+        } catch {
+            localHashCacheByAssetID = [:]
+            await onLog("Local hash cache load warning: \(error.localizedDescription)")
+        }
+
         var activeMonth: MonthKey?
         var activeStore: MonthManifestStore?
 
@@ -189,6 +197,7 @@ final class BackupExecutor {
                 let result = try await processAsset(
                     asset: asset,
                     selectedResources: selectedResources,
+                    cachedLocalHash: localHashCacheByAssetID[asset.localIdentifier],
                     monthStore: monthStore,
                     profile: profile,
                     smbClient: smbClient,
@@ -293,6 +302,10 @@ final class BackupExecutor {
         remoteSnapshotCache.current()
     }
 
+    func currentRemoteSnapshotState(since revision: UInt64?) -> RemoteLibrarySnapshotState {
+        remoteSnapshotCache.state(since: revision)
+    }
+
     private func updateCachedRemoteSnapshot(_ snapshot: RemoteLibrarySnapshot) {
         remoteSnapshotCache.replace(with: snapshot)
     }
@@ -308,6 +321,7 @@ final class BackupExecutor {
     private func processAsset(
         asset: PHAsset,
         selectedResources: [BackupSelectedResource],
+        cachedLocalHash: LocalAssetHashCache?,
         monthStore: MonthManifestStore,
         profile: ServerProfileRecord,
         smbClient: SMBClientProtocol,
@@ -326,6 +340,16 @@ final class BackupExecutor {
         }
 
         let displayName = BackupAssetResourcePlanner.assetDisplayName(asset: asset, selectedResources: selectedResources)
+
+        if let cachedResult = try processAssetWithLocalCache(
+            asset: asset,
+            selectedResources: selectedResources,
+            cachedLocalHash: cachedLocalHash,
+            monthStore: monthStore,
+            displayName: displayName
+        ) {
+            return cachedResult
+        }
 
         for (resourcePosition, selected) in selectedResources.enumerated() {
             try Task.checkCancellation()
@@ -465,6 +489,106 @@ final class BackupExecutor {
             resourceSummary: "资源\(preparedResources.count) 上传\(successResults.count) 跳过\(skippedResults.count) 失败0",
             assetFingerprint: assetFingerprint
         )
+    }
+
+    private func processAssetWithLocalCache(
+        asset: PHAsset,
+        selectedResources: [BackupSelectedResource],
+        cachedLocalHash: LocalAssetHashCache?,
+        monthStore: MonthManifestStore,
+        displayName: String
+    ) throws -> AssetProcessingResult? {
+        guard let cachedLocalHash else { return nil }
+        guard cachedLocalHash.resourceCount == selectedResources.count else { return nil }
+
+        if let modificationDate = asset.modificationDate, modificationDate > cachedLocalHash.updatedAt {
+            return nil
+        }
+
+        guard let roleSlotHashes = roleSlotHashes(from: selectedResources, cachedLocalHash: cachedLocalHash),
+              roleSlotHashes.count == selectedResources.count else {
+            return nil
+        }
+
+        let cachedFingerprint = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: roleSlotHashes
+        )
+        guard cachedFingerprint == cachedLocalHash.assetFingerprint else {
+            return nil
+        }
+
+        if monthStore.containsAssetFingerprint(cachedFingerprint) {
+            try contentHashIndexRepository.upsertAssetFingerprint(
+                assetLocalIdentifier: asset.localIdentifier,
+                assetFingerprint: cachedFingerprint,
+                resourceCount: selectedResources.count
+            )
+            return AssetProcessingResult(
+                status: .skipped,
+                reason: "asset_exists_cached",
+                displayName: displayName,
+                resourceSummary: "资源\(selectedResources.count) 已存在（缓存命中）",
+                assetFingerprint: cachedFingerprint
+            )
+        }
+
+        let links = roleSlotHashes.map { item in
+            RemoteAssetResourceLink(
+                year: monthStore.year,
+                month: monthStore.month,
+                assetFingerprint: cachedFingerprint,
+                resourceHash: item.contentHash,
+                role: item.role,
+                slot: item.slot
+            )
+        }
+
+        for link in links where monthStore.findResourceByHash(link.resourceHash) == nil {
+            return nil
+        }
+
+        let manifestAsset = RemoteManifestAsset(
+            year: monthStore.year,
+            month: monthStore.month,
+            assetFingerprint: cachedFingerprint,
+            creationDateNs: Self.nanosecondsSinceEpoch(asset.creationDate),
+            backedUpAtNs: Self.nanosecondsSinceEpoch(Date()) ?? 0,
+            resourceCount: links.count
+        )
+        try monthStore.upsertAsset(manifestAsset, links: links)
+        upsertCachedRemoteSnapshotAsset(manifestAsset, links: links)
+
+        try contentHashIndexRepository.upsertAssetFingerprint(
+            assetLocalIdentifier: asset.localIdentifier,
+            assetFingerprint: cachedFingerprint,
+            resourceCount: selectedResources.count
+        )
+
+        return AssetProcessingResult(
+            status: .skipped,
+            reason: "resources_reused_cached",
+            displayName: displayName,
+            resourceSummary: "资源\(selectedResources.count) 上传0 跳过\(selectedResources.count) 失败0（缓存命中）",
+            assetFingerprint: cachedFingerprint
+        )
+    }
+
+    private func roleSlotHashes(
+        from selectedResources: [BackupSelectedResource],
+        cachedLocalHash: LocalAssetHashCache
+    ) -> [(role: Int, slot: Int, contentHash: Data)]? {
+        var result: [(role: Int, slot: Int, contentHash: Data)] = []
+        result.reserveCapacity(selectedResources.count)
+
+        for selected in selectedResources {
+            let key = AssetResourceRoleSlot(role: selected.role, slot: selected.slot)
+            guard let contentHash = cachedLocalHash.hashesByRoleSlot[key] else {
+                return nil
+            }
+            result.append((role: selected.role, slot: selected.slot, contentHash: contentHash))
+        }
+
+        return result
     }
 
     private func processPreparedResource(

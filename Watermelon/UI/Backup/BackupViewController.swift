@@ -3,7 +3,7 @@ import SnapKit
 import UIKit
 
 @MainActor
-final class BackupStatusViewController: UIViewController {
+final class BackupViewController: UIViewController {
     private enum FilterMode: Int, CaseIterable {
         case all
         case success
@@ -55,6 +55,7 @@ final class BackupStatusViewController: UIViewController {
     private var renderedLogCount: Int = 0
     private var latestSnapshot: BackupSessionController.Snapshot?
     private var filteredItems: [BackupSessionController.ProcessedItem] = []
+    private var deferredTableReload = false
 
     init(sessionController: BackupSessionController) {
         self.sessionController = sessionController
@@ -69,7 +70,7 @@ final class BackupStatusViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        title = "备份状态"
+        title = "备份"
         navigationItem.largeTitleDisplayMode = .never
 
         startBarButtonItem.accessibilityLabel = "开始备份"
@@ -102,7 +103,7 @@ final class BackupStatusViewController: UIViewController {
         filterControl.selectedIndex = FilterMode.all.rawValue
         filterControl.addTarget(self, action: #selector(filterChanged), for: .valueChanged)
 
-        tableView.register(BackupStatusItemCell.self, forCellReuseIdentifier: BackupStatusItemCell.reuseID)
+        tableView.register(BackupItemCell.self, forCellReuseIdentifier: BackupItemCell.reuseID)
         tableView.dataSource = self
         tableView.delegate = self
         tableView.rowHeight = 88
@@ -148,7 +149,7 @@ final class BackupStatusViewController: UIViewController {
         statusLabel.text = snapshot.statusText
         updateFilterTitles(using: snapshot)
         updateLogContent(snapshot.logs)
-        applyFilter()
+        applyFilter(using: snapshot)
 
         switch snapshot.state {
         case .running:
@@ -167,10 +168,10 @@ final class BackupStatusViewController: UIViewController {
     }
 
     private func updateFilterTitles(using snapshot: BackupSessionController.Snapshot) {
-        let all = snapshot.processedItems.count
-        let success = snapshot.processedItems.filter { $0.status == .success }.count
-        let failed = snapshot.processedItems.filter { $0.status == .failed }.count
-        let skipped = snapshot.processedItems.filter { $0.status == .skipped }.count
+        let success = snapshot.succeeded
+        let failed = snapshot.failed
+        let skipped = snapshot.skipped
+        let all = success + failed + skipped
         let logs = snapshot.logs.count
 
         filterControl.setSubtitle("\(all) 项", forItemAt: FilterMode.all.rawValue)
@@ -181,6 +182,7 @@ final class BackupStatusViewController: UIViewController {
     }
 
     private func updateLogContent(_ logs: [String]) {
+        let shouldAutoScroll = shouldKeepLogPinnedToBottom()
         if logs.count < renderedLogCount {
             logTextView.text = logs.joined(separator: "\n")
             renderedLogCount = logs.count
@@ -194,15 +196,22 @@ final class BackupStatusViewController: UIViewController {
             renderedLogCount = logs.count
         }
 
-        if renderedLogCount > 0 {
+        if renderedLogCount > 0, shouldAutoScroll {
             let range = NSRange(location: max(logTextView.text.count - 1, 0), length: 1)
             logTextView.scrollRangeToVisible(range)
         }
     }
 
-    private func applyFilter() {
-        guard let snapshot = latestSnapshot else { return }
-        let mode = FilterMode(rawValue: filterControl.selectedIndex) ?? .all
+    private func shouldKeepLogPinnedToBottom() -> Bool {
+        guard !logTextView.isDragging, !logTextView.isDecelerating else {
+            return false
+        }
+        let visibleBottom = logTextView.contentOffset.y + logTextView.bounds.height
+        return visibleBottom >= logTextView.contentSize.height - 24
+    }
+
+    private func applyFilter(using snapshot: BackupSessionController.Snapshot, forceReload: Bool = false) {
+        let mode = currentFilterMode()
 
         if mode == .log {
             tableView.isHidden = true
@@ -213,25 +222,51 @@ final class BackupStatusViewController: UIViewController {
         tableView.isHidden = false
         logTextView.isHidden = true
 
+        let nextItems: [BackupSessionController.ProcessedItem]
         switch mode {
         case .all:
-            filteredItems = snapshot.processedItems
+            nextItems = snapshot.processedItems
         case .success:
-            filteredItems = snapshot.processedItems.filter { $0.status == .success }
+            nextItems = snapshot.processedItems.filter { $0.status == .success }
         case .failed:
-            filteredItems = snapshot.processedItems.filter { $0.status == .failed }
+            nextItems = snapshot.processedItems.filter { $0.status == .failed }
         case .skipped:
-            filteredItems = snapshot.processedItems.filter { $0.status == .skipped }
+            nextItems = snapshot.processedItems.filter { $0.status == .skipped }
         case .log:
-            filteredItems = []
+            nextItems = []
         }
 
+        let changed = nextItems != filteredItems
+        filteredItems = nextItems
+
+        if !forceReload, (tableView.isDragging || tableView.isDecelerating) {
+            if changed {
+                deferredTableReload = true
+            }
+            return
+        }
+
+        if changed || forceReload || deferredTableReload {
+            deferredTableReload = false
+            tableView.reloadData()
+        }
+    }
+
+    private func currentFilterMode() -> FilterMode {
+        FilterMode(rawValue: filterControl.selectedIndex) ?? .all
+    }
+
+    private func flushDeferredTableReloadIfNeeded() {
+        guard deferredTableReload else { return }
+        guard !tableView.isHidden else { return }
+        deferredTableReload = false
         tableView.reloadData()
     }
 
     @objc
     private func filterChanged() {
-        applyFilter()
+        guard let snapshot = latestSnapshot else { return }
+        applyFilter(using: snapshot, forceReload: true)
     }
 
     @objc
@@ -293,7 +328,7 @@ final class BackupStatusViewController: UIViewController {
     }
 
     private func configure(_ cell: UITableViewCell, with item: BackupSessionController.ProcessedItem) {
-        guard let cell = cell as? BackupStatusItemCell else { return }
+        guard let cell = cell as? BackupItemCell else { return }
         let summary = item.resourceSummary?.trimmingCharacters(in: .whitespacesAndNewlines)
         let reason = item.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
         let detailText: String?
@@ -314,13 +349,13 @@ final class BackupStatusViewController: UIViewController {
     }
 }
 
-extension BackupStatusViewController: UITableViewDataSource, UITableViewDelegate {
+extension BackupViewController: UITableViewDataSource, UITableViewDelegate {
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         filteredItems.count
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: BackupStatusItemCell.reuseID, for: indexPath)
+        let cell = tableView.dequeueReusableCell(withIdentifier: BackupItemCell.reuseID, for: indexPath)
         guard indexPath.row < filteredItems.count else { return cell }
 
         let item = filteredItems[indexPath.row]
@@ -328,9 +363,21 @@ extension BackupStatusViewController: UITableViewDataSource, UITableViewDelegate
         requestThumbnailIfNeeded(for: item)
         return cell
     }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if scrollView === tableView, !decelerate {
+            flushDeferredTableReloadIfNeeded()
+        }
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        if scrollView === tableView {
+            flushDeferredTableReloadIfNeeded()
+        }
+    }
 }
 
-private final class BackupStatusItemCell: UITableViewCell {
+private final class BackupItemCell: UITableViewCell {
     static let reuseID = "backup_item"
 
     private let thumbnailContainerView = UIView()

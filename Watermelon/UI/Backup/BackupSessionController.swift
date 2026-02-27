@@ -63,6 +63,7 @@ final class BackupSessionController {
         let logs: [String]
         let processedItems: [ProcessedItem]
         let failedItems: [FailedItem]
+        let latestItemEvent: BackupItemEvent?
     }
 
     private enum TerminationIntent {
@@ -107,7 +108,11 @@ final class BackupSessionController {
     private(set) var total: Int = 0
     private(set) var logs: [String] = []
     private var processedItemsByAssetID: [String: ProcessedItem] = [:]
+    private var sortedProcessedItemsCache: [ProcessedItem] = []
+    private var processedItemsDirty = true
+    private(set) var latestItemEvent: BackupItemEvent?
     private var retryCountByAssetID: [String: Int] = [:]
+    private var failedItemsByAssetID: [String: FailedItem] = [:]
     private(set) var failedItems: [FailedItem] = []
 
     init(dependencies: DependencyContainer) {
@@ -124,9 +129,18 @@ final class BackupSessionController {
             skipped: skipped,
             total: total,
             logs: logs,
-            processedItems: processedItemsByAssetID.values.sorted { $0.updatedAt > $1.updatedAt },
-            failedItems: failedItems
+            processedItems: processedItemsSnapshot(),
+            failedItems: failedItems,
+            latestItemEvent: latestItemEvent
         )
+    }
+
+    private func processedItemsSnapshot() -> [ProcessedItem] {
+        if processedItemsDirty {
+            sortedProcessedItemsCache = processedItemsByAssetID.values.sorted { $0.updatedAt > $1.updatedAt }
+            processedItemsDirty = false
+        }
+        return sortedProcessedItemsCache
     }
 
     @discardableResult
@@ -224,7 +238,11 @@ final class BackupSessionController {
 
         if shouldResetSessionItems {
             processedItemsByAssetID.removeAll()
+            sortedProcessedItemsCache.removeAll()
+            processedItemsDirty = true
+            latestItemEvent = nil
             retryCountByAssetID.removeAll()
+            failedItemsByAssetID.removeAll()
             failedItems.removeAll()
             logs.removeAll()
         }
@@ -352,21 +370,7 @@ final class BackupSessionController {
     }
 
     private func rebuildFailedItems() {
-        let all = processedItemsByAssetID.values
-        let failed = all
-            .filter { $0.status == .failed }
-            .sorted { $0.updatedAt > $1.updatedAt }
-
-        failedItems = failed.map { item in
-            FailedItem(
-                jobID: 0,
-                assetLocalIdentifier: item.assetLocalIdentifier,
-                displayName: item.displayName,
-                errorMessage: item.reason ?? "未知错误",
-                retryCount: retryCountByAssetID[item.assetLocalIdentifier, default: 0],
-                updatedAt: item.updatedAt
-            )
-        }
+        failedItems = failedItemsByAssetID.values.sorted { $0.updatedAt > $1.updatedAt }
     }
 
     private func notifyObservers() {
@@ -385,6 +389,7 @@ final class BackupSessionController {
 
     private func applyProgressEvent(_ event: BackupItemEvent?) {
         guard let event else { return }
+        latestItemEvent = event
         processedItemsByAssetID[event.assetLocalIdentifier] = ProcessedItem(
             assetLocalIdentifier: event.assetLocalIdentifier,
             displayName: event.displayName,
@@ -393,9 +398,21 @@ final class BackupSessionController {
             resourceSummary: event.resourceSummary,
             updatedAt: event.updatedAt
         )
+        processedItemsDirty = true
 
         if event.status == .failed {
             retryCountByAssetID[event.assetLocalIdentifier, default: 0] += 1
+            let retryCount = retryCountByAssetID[event.assetLocalIdentifier, default: 0]
+            failedItemsByAssetID[event.assetLocalIdentifier] = FailedItem(
+                jobID: 0,
+                assetLocalIdentifier: event.assetLocalIdentifier,
+                displayName: event.displayName,
+                errorMessage: event.reason ?? "未知错误",
+                retryCount: retryCount,
+                updatedAt: event.updatedAt
+            )
+        } else {
+            failedItemsByAssetID[event.assetLocalIdentifier] = nil
         }
 
         rebuildFailedItems()

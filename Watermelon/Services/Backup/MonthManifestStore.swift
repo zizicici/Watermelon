@@ -35,6 +35,7 @@ final class MonthManifestStore {
     private(set) var assetLinksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
 
     private(set) var remoteFilesByName: [String: SMBRemoteEntry] = [:]
+    private(set) var existingFileNameSet: Set<String> = []
     private(set) var dirty: Bool = false
 
     private init(
@@ -54,6 +55,7 @@ final class MonthManifestStore {
         self.localManifestURL = localManifestURL
         self.dbQueue = dbQueue
         self.remoteFilesByName = remoteFilesByName
+        existingFileNameSet = Set(remoteFilesByName.keys)
         self.dirty = dirty
     }
 
@@ -223,7 +225,7 @@ final class MonthManifestStore {
     }
 
     func existingFileNames() -> Set<String> {
-        Set(itemsByFileName.keys).union(remoteFilesByName.keys)
+        existingFileNameSet
     }
 
     func allItems() -> [RemoteManifestResource] {
@@ -285,6 +287,7 @@ final class MonthManifestStore {
 
         itemsByFileName[item.fileName] = item
         itemsByHash[item.contentHash] = item
+        existingFileNameSet.insert(item.fileName)
         dirty = true
 
         return item
@@ -370,6 +373,7 @@ final class MonthManifestStore {
             creationDate: creationDate,
             modificationDate: Date()
         )
+        existingFileNameSet.insert(name)
     }
 
     @discardableResult
@@ -536,5 +540,6 @@ final class MonthManifestStore {
         itemsByHash = resourcesByHash
         self.assetsByFingerprint = assetsByFingerprint
         assetLinksByFingerprint = linksByFingerprint
+        existingFileNameSet = Set(resourcesByName.keys).union(remoteFilesByName.keys)
     }
 }
