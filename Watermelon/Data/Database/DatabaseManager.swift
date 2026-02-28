@@ -89,12 +89,6 @@ final class DatabaseManager {
         }
     }
 
-    func fetchServerProfile(id: Int64) throws -> ServerProfileRecord? {
-        try read { db in
-            try ServerProfileRecord.fetchOne(db, key: id)
-        }
-    }
-
     func findServerProfile(host: String, shareName: String, basePath: String, username: String) throws -> ServerProfileRecord? {
         try read { db in
             try ServerProfileRecord
