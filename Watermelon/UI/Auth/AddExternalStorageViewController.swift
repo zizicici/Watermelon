@@ -4,6 +4,8 @@ import UIKit
 
 final class AddExternalStorageViewController: UIViewController {
     private let dependencies: DependencyContainer
+    private let editingProfile: ServerProfileRecord?
+    private let shouldPopToRootOnSave: Bool
     private let onSaved: (ServerProfileRecord, String) -> Void
     private let bookmarkStore = SecurityScopedBookmarkStore()
 
@@ -14,10 +16,16 @@ final class AddExternalStorageViewController: UIViewController {
     private let saveButton = UIButton(type: .system)
 
     private var selectedDirectoryURL: URL?
-    private var selectedDisplayPath: String?
 
-    init(dependencies: DependencyContainer, onSaved: @escaping (ServerProfileRecord, String) -> Void) {
+    init(
+        dependencies: DependencyContainer,
+        editingProfile: ServerProfileRecord? = nil,
+        shouldPopToRootOnSave: Bool = true,
+        onSaved: @escaping (ServerProfileRecord, String) -> Void
+    ) {
         self.dependencies = dependencies
+        self.editingProfile = editingProfile
+        self.shouldPopToRootOnSave = shouldPopToRootOnSave
         self.onSaved = onSaved
         super.init(nibName: nil, bundle: nil)
     }
@@ -30,8 +38,9 @@ final class AddExternalStorageViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        title = "添加外接存储"
+        title = editingProfile == nil ? "添加外接存储" : "编辑外接存储"
         configureUI()
+        fillInitialValues()
         updateSaveButtonState()
     }
 
@@ -45,11 +54,11 @@ final class AddExternalStorageViewController: UIViewController {
         pathLabel.text = "尚未选择目录"
 
         pickButton.configuration = .tinted()
-        pickButton.configuration?.title = "选择目录"
+        pickButton.configuration?.title = editingProfile == nil ? "选择目录" : "重新选择目录"
         pickButton.addTarget(self, action: #selector(pickDirectoryTapped), for: .touchUpInside)
 
         saveButton.configuration = .filled()
-        saveButton.configuration?.title = "保存并连接"
+        saveButton.configuration?.title = editingProfile == nil ? "保存并连接" : "保存更改"
         saveButton.addTarget(self, action: #selector(saveTapped), for: .touchUpInside)
 
         view.addSubview(stackView)
@@ -64,8 +73,24 @@ final class AddExternalStorageViewController: UIViewController {
         stackView.addArrangedSubview(saveButton)
     }
 
+    private func fillInitialValues() {
+        guard let editingProfile else { return }
+        nameRow.textField.text = editingProfile.name
+        if let path = editingProfile.externalVolumeParams?.displayPath, !path.isEmpty {
+            pathLabel.text = "当前目录: \(path)"
+        }
+    }
+
     private func updateSaveButtonState() {
-        saveButton.isEnabled = selectedDirectoryURL != nil
+        if selectedDirectoryURL != nil {
+            saveButton.isEnabled = true
+            return
+        }
+        if let path = editingProfile?.externalVolumeParams?.displayPath, !path.isEmpty {
+            saveButton.isEnabled = true
+            return
+        }
+        saveButton.isEnabled = false
     }
 
     @objc
@@ -78,39 +103,57 @@ final class AddExternalStorageViewController: UIViewController {
 
     @objc
     private func saveTapped() {
-        guard let selectedDirectoryURL,
-              let selectedDisplayPath else {
-            presentAlert(title: "未选择目录", message: "请先选择要备份到的外接存储目录")
-            return
-        }
-
         do {
-            let scoped = selectedDirectoryURL.startAccessingSecurityScopedResource()
-            defer {
-                if scoped {
-                    selectedDirectoryURL.stopAccessingSecurityScopedResource()
+            let selectedDisplayPath: String
+            let encodedParams: Data
+            if let selectedDirectoryURL {
+                let scoped = selectedDirectoryURL.startAccessingSecurityScopedResource()
+                defer {
+                    if scoped {
+                        selectedDirectoryURL.stopAccessingSecurityScopedResource()
+                    }
                 }
+                let bookmarkData = try bookmarkStore.makeBookmarkData(for: selectedDirectoryURL)
+                selectedDisplayPath = selectedDirectoryURL.path
+                let params = ExternalVolumeConnectionParams(
+                    rootBookmarkData: bookmarkData,
+                    displayPath: selectedDisplayPath
+                )
+                encodedParams = try ServerProfileRecord.encodedConnectionParams(params)
+            } else if let editingProfile,
+                      let existingPath = editingProfile.externalVolumeParams?.displayPath,
+                      let existingParams = editingProfile.connectionParams {
+                selectedDisplayPath = existingPath
+                encodedParams = existingParams
+            } else {
+                presentAlert(title: "未选择目录", message: "请先选择要备份到的外接存储目录")
+                return
             }
-            let bookmarkData = try bookmarkStore.makeBookmarkData(for: selectedDirectoryURL)
-            let params = ExternalVolumeConnectionParams(
-                rootBookmarkData: bookmarkData,
-                displayPath: selectedDisplayPath
-            )
-            let encodedParams = try ServerProfileRecord.encodedConnectionParams(params)
 
             let existing = try findExistingProfile(displayPath: selectedDisplayPath)
+            if let editingProfile,
+               let existing,
+               existing.id != editingProfile.id {
+                throw NSError(
+                    domain: "AddExternalStorage",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "已存在相同的外接存储目录"]
+                )
+            }
+            let baseProfile = editingProfile ?? existing
             let finalName = (nameRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let profileName = finalName.isEmpty
-                ? selectedDirectoryURL.lastPathComponent
+                ? URL(fileURLWithPath: selectedDisplayPath).lastPathComponent
                 : finalName
-            let credentialRef = existing?.credentialRef ?? "external:\(UUID().uuidString)"
-            let shareName = existing?.shareName ?? "external-\(UUID().uuidString)"
+            let credentialRef = baseProfile?.credentialRef ?? "external:\(UUID().uuidString)"
+            let shareName = baseProfile?.shareName ?? "external-\(UUID().uuidString)"
 
             var profile = ServerProfileRecord(
-                id: existing?.id,
+                id: baseProfile?.id,
                 name: profileName,
                 storageType: StorageType.externalVolume.rawValue,
                 connectionParams: encodedParams,
+                sortOrder: baseProfile?.sortOrder ?? 0,
                 host: "external",
                 port: 0,
                 shareName: shareName,
@@ -118,16 +161,29 @@ final class AddExternalStorageViewController: UIViewController {
                 username: "local",
                 domain: nil,
                 credentialRef: credentialRef,
-                createdAt: existing?.createdAt ?? Date(),
+                createdAt: baseProfile?.createdAt ?? Date(),
                 updatedAt: Date()
             )
 
             try dependencies.databaseManager.saveServerProfile(&profile)
             onSaved(profile, "")
-            navigationController?.popToRootViewController(animated: true)
+            popAfterSave()
         } catch {
             presentAlert(title: "保存失败", message: error.localizedDescription)
         }
+    }
+
+    private func popAfterSave() {
+        guard let navigationController else { return }
+        if shouldPopToRootOnSave {
+            navigationController.popToRootViewController(animated: true)
+            return
+        }
+        if let manageVC = navigationController.viewControllers.first(where: { $0 is ManageStorageProfilesViewController }) {
+            navigationController.popToViewController(manageVC, animated: true)
+            return
+        }
+        navigationController.popViewController(animated: true)
     }
 
     private func findExistingProfile(displayPath: String) throws -> ServerProfileRecord? {
@@ -150,7 +206,6 @@ extension AddExternalStorageViewController: UIDocumentPickerDelegate {
         guard let url = urls.first else { return }
 
         selectedDirectoryURL = url
-        selectedDisplayPath = url.path
         pathLabel.text = "已选择: \(url.path)"
 
         if (nameRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

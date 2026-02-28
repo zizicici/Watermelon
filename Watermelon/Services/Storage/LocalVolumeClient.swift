@@ -26,9 +26,14 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
 
     func connect() async throws {
         if rootURL != nil { return }
-        let resolved = try bookmarkStore.resolveBookmarkData(config.rootBookmarkData)
+        let resolved: URL
+        do {
+            resolved = try bookmarkStore.resolveBookmarkData(config.rootBookmarkData)
+        } catch {
+            throw mapStorageError(error)
+        }
         guard resolved.startAccessingSecurityScopedResource() else {
-            throw RemoteStorageClientError.invalidConfiguration
+            throw RemoteStorageClientError.externalStorageUnavailable
         }
         rootURL = resolved
         isAccessing = true
@@ -43,24 +48,32 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
 
     func list(path: String) async throws -> [RemoteStorageEntry] {
         let root = try requireRootURL()
-        let directoryURL = try remoteFileURL(forRemotePath: path, rootURL: root)
-        let urls = try FileManager.default.contentsOfDirectory(
-            at: directoryURL,
-            includingPropertiesForKeys: nil,
-            options: []
-        )
-        return try urls.map { url in
-            try makeEntry(fileURL: url, rootURL: root)
+        do {
+            let directoryURL = try remoteFileURL(forRemotePath: path, rootURL: root)
+            let urls = try FileManager.default.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: nil,
+                options: []
+            )
+            return try urls.map { url in
+                try makeEntry(fileURL: url, rootURL: root)
+            }
+        } catch {
+            throw mapStorageError(error)
         }
     }
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {
         let root = try requireRootURL()
-        let url = try remoteFileURL(forRemotePath: path, rootURL: root)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return nil
+        do {
+            let url = try remoteFileURL(forRemotePath: path, rootURL: root)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return nil
+            }
+            return try makeEntry(fileURL: url, rootURL: root)
+        } catch {
+            throw mapStorageError(error)
         }
-        return try makeEntry(fileURL: url, rootURL: root)
     }
 
     func upload(
@@ -70,74 +83,102 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         onProgress: ((Double) -> Void)?
     ) async throws {
         let root = try requireRootURL()
-        if respectTaskCancellation {
-            try Task.checkCancellation()
-        }
+        do {
+            if respectTaskCancellation {
+                try Task.checkCancellation()
+            }
 
-        let destinationURL = try remoteFileURL(forRemotePath: remotePath, rootURL: root)
-        let parentURL = destinationURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            try FileManager.default.removeItem(at: destinationURL)
+            let destinationURL = try remoteFileURL(forRemotePath: remotePath, rootURL: root)
+            let parentURL = destinationURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+            try FileManager.default.copyItem(at: localURL, to: destinationURL)
+            onProgress?(1)
+        } catch {
+            throw mapStorageError(error)
         }
-        try FileManager.default.copyItem(at: localURL, to: destinationURL)
-        onProgress?(1)
     }
 
     func setModificationDate(_ date: Date, forPath path: String) async throws {
         let root = try requireRootURL()
-        let url = try remoteFileURL(forRemotePath: path, rootURL: root)
-        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+        do {
+            let url = try remoteFileURL(forRemotePath: path, rootURL: root)
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+        } catch {
+            throw mapStorageError(error)
+        }
     }
 
     func download(remotePath: String, localURL: URL) async throws {
         let root = try requireRootURL()
-        try Task.checkCancellation()
-        let sourceURL = try remoteFileURL(forRemotePath: remotePath, rootURL: root)
-        let parentURL = localURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
-        if FileManager.default.fileExists(atPath: localURL.path) {
-            try FileManager.default.removeItem(at: localURL)
+        do {
+            try Task.checkCancellation()
+            let sourceURL = try remoteFileURL(forRemotePath: remotePath, rootURL: root)
+            let parentURL = localURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: localURL.path) {
+                try FileManager.default.removeItem(at: localURL)
+            }
+            try FileManager.default.copyItem(at: sourceURL, to: localURL)
+            try Task.checkCancellation()
+        } catch {
+            throw mapStorageError(error)
         }
-        try FileManager.default.copyItem(at: sourceURL, to: localURL)
-        try Task.checkCancellation()
     }
 
     func exists(path: String) async throws -> Bool {
         let root = try requireRootURL()
-        let url = try remoteFileURL(forRemotePath: path, rootURL: root)
-        return FileManager.default.fileExists(atPath: url.path)
+        do {
+            let url = try remoteFileURL(forRemotePath: path, rootURL: root)
+            return FileManager.default.fileExists(atPath: url.path)
+        } catch {
+            throw mapStorageError(error)
+        }
     }
 
     func delete(path: String) async throws {
         let root = try requireRootURL()
-        let normalized = RemotePathBuilder.normalizePath(path)
-        guard normalized != "/" else {
-            throw RemoteStorageClientError.invalidConfiguration
+        do {
+            let normalized = RemotePathBuilder.normalizePath(path)
+            guard normalized != "/" else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            let url = try remoteFileURL(forRemotePath: normalized, rootURL: root)
+            guard FileManager.default.fileExists(atPath: url.path) else { return }
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            throw mapStorageError(error)
         }
-        let url = try remoteFileURL(forRemotePath: normalized, rootURL: root)
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        try FileManager.default.removeItem(at: url)
     }
 
     func createDirectory(path: String) async throws {
         let root = try requireRootURL()
-        let normalized = RemotePathBuilder.normalizePath(path)
-        guard normalized != "/" else { return }
-        let url = try remoteFileURL(forRemotePath: normalized, rootURL: root)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        do {
+            let normalized = RemotePathBuilder.normalizePath(path)
+            guard normalized != "/" else { return }
+            let url = try remoteFileURL(forRemotePath: normalized, rootURL: root)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        } catch {
+            throw mapStorageError(error)
+        }
     }
 
     func move(from sourcePath: String, to destinationPath: String) async throws {
         let root = try requireRootURL()
-        let sourceURL = try remoteFileURL(forRemotePath: sourcePath, rootURL: root)
-        let destinationURL = try remoteFileURL(forRemotePath: destinationPath, rootURL: root)
-        let destinationParent = destinationURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: destinationParent, withIntermediateDirectories: true)
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            try FileManager.default.removeItem(at: destinationURL)
+        do {
+            let sourceURL = try remoteFileURL(forRemotePath: sourcePath, rootURL: root)
+            let destinationURL = try remoteFileURL(forRemotePath: destinationPath, rootURL: root)
+            let destinationParent = destinationURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: destinationParent, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+            try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+        } catch {
+            throw mapStorageError(error)
         }
-        try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
     }
 
     private func requireRootURL() throws -> URL {
@@ -191,5 +232,18 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             return "/"
         }
         return RemotePathBuilder.normalizePath(suffix)
+    }
+
+    private func mapStorageError(_ error: Error) -> Error {
+        if error is CancellationError {
+            return error
+        }
+        if let storageError = error as? RemoteStorageClientError {
+            return storageError
+        }
+        if RemoteStorageClientError.isLikelyExternalStorageUnavailable(error) {
+            return RemoteStorageClientError.externalStorageUnavailable
+        }
+        return RemoteStorageClientError.underlying(error)
     }
 }

@@ -5,6 +5,8 @@ final class SMBSharePathPickerViewController: UIViewController {
     private let dependencies: DependencyContainer
     private let setupService = SMBSetupService()
     private let auth: SMBServerAuthContext
+    private let editingProfile: ServerProfileRecord?
+    private let shouldPopToRootOnSave: Bool
     private let onSaved: (ServerProfileRecord, String) -> Void
 
     private var shares: [SMBShareInfo]
@@ -23,13 +25,23 @@ final class SMBSharePathPickerViewController: UIViewController {
         dependencies: DependencyContainer,
         auth: SMBServerAuthContext,
         initialShares: [SMBShareInfo],
+        editingProfile: ServerProfileRecord? = nil,
+        shouldPopToRootOnSave: Bool = true,
         onSaved: @escaping (ServerProfileRecord, String) -> Void
     ) {
         self.dependencies = dependencies
         self.auth = auth
         self.shares = initialShares
+        self.editingProfile = editingProfile
+        self.shouldPopToRootOnSave = shouldPopToRootOnSave
         self.onSaved = onSaved
-        self.selectedShare = initialShares.first
+        if let editingProfile,
+           let matchedShare = initialShares.first(where: { $0.name == editingProfile.shareName }) {
+            self.selectedShare = matchedShare
+            self.currentPath = RemotePathBuilder.normalizePath(editingProfile.basePath)
+        } else {
+            self.selectedShare = initialShares.first
+        }
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -103,7 +115,13 @@ final class SMBSharePathPickerViewController: UIViewController {
         }
 
         let context = SMBServerPathContext(auth: auth, shareName: selectedShare.name, basePath: currentPath)
-        let finalizeVC = AddSMBServerViewController(dependencies: dependencies, context: context, onSaved: onSaved)
+        let finalizeVC = AddSMBServerViewController(
+            dependencies: dependencies,
+            context: context,
+            editingProfile: editingProfile,
+            shouldPopToRootOnSave: shouldPopToRootOnSave,
+            onSaved: onSaved
+        )
         navigationController?.pushViewController(finalizeVC, animated: true)
     }
 

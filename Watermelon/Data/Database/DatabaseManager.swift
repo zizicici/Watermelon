@@ -29,6 +29,7 @@ final class DatabaseManager {
                 table.column("name", .text).notNull()
                 table.column("storageType", .text).notNull().defaults(to: StorageType.smb.rawValue)
                 table.column("connectionParams", .blob)
+                table.column("sortOrder", .integer).notNull().defaults(to: 0)
                 table.column("host", .text).notNull()
                 table.column("port", .integer).notNull()
                 table.column("shareName", .text).notNull()
@@ -93,6 +94,43 @@ final class DatabaseManager {
             }
         }
 
+        migrator.registerMigration("v5_server_profiles_sort_order") { db in
+            guard try db.tableExists(ServerProfileRecord.databaseTableName) else { return }
+
+            let existingColumns = try Self.tableColumnNames(
+                db: db,
+                tableName: ServerProfileRecord.databaseTableName
+            )
+
+            if !existingColumns.contains("sortOrder") {
+                try db.execute(
+                    sql: """
+                    ALTER TABLE \(ServerProfileRecord.databaseTableName)
+                    ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            }
+
+            let ids = try Int64.fetchAll(
+                db,
+                sql: """
+                SELECT id
+                FROM \(ServerProfileRecord.databaseTableName)
+                ORDER BY updatedAt DESC, id DESC
+                """
+            )
+            for (index, id) in ids.enumerated() {
+                try db.execute(
+                    sql: """
+                    UPDATE \(ServerProfileRecord.databaseTableName)
+                    SET sortOrder = ?
+                    WHERE id = ?
+                    """,
+                    arguments: [index, id]
+                )
+            }
+        }
+
         return migrator
     }
 
@@ -114,7 +152,9 @@ final class DatabaseManager {
 
     func fetchServerProfiles() throws -> [ServerProfileRecord] {
         try read { db in
-            try ServerProfileRecord.order(Column("updatedAt").desc).fetchAll(db)
+            try ServerProfileRecord
+                .order(Column("sortOrder").asc, Column("updatedAt").desc)
+                .fetchAll(db)
         }
     }
 
@@ -137,13 +177,41 @@ final class DatabaseManager {
     }
 
     func saveServerProfile(_ profile: inout ServerProfileRecord) throws {
-        let now = Date()
-        profile.updatedAt = now
-        if profile.id == nil {
-            profile.createdAt = now
-        }
         try write { db in
+            let now = Date()
+            profile.updatedAt = now
+            if profile.id == nil {
+                profile.createdAt = now
+                let maxSortOrder = try Int.fetchOne(
+                    db,
+                    sql: "SELECT MAX(sortOrder) FROM \(ServerProfileRecord.databaseTableName)"
+                ) ?? -1
+                if profile.sortOrder <= maxSortOrder {
+                    profile.sortOrder = maxSortOrder + 1
+                }
+            }
             try profile.save(db)
+        }
+    }
+
+    func deleteServerProfile(id: Int64) throws {
+        try write { db in
+            _ = try ServerProfileRecord.deleteOne(db, key: id)
+        }
+    }
+
+    func saveServerProfileSortOrder(profileIDs: [Int64]) throws {
+        try write { db in
+            for (index, id) in profileIDs.enumerated() {
+                try db.execute(
+                    sql: """
+                    UPDATE \(ServerProfileRecord.databaseTableName)
+                    SET sortOrder = ?
+                    WHERE id = ?
+                    """,
+                    arguments: [index, id]
+                )
+            }
         }
     }
 

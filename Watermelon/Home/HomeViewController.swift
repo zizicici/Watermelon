@@ -139,7 +139,8 @@ final class HomeViewController: UIViewController {
     private var processedItemVersionByAssetID: [String: Date] = [:]
 
     private var hasActiveConnection: Bool {
-        dependencies.appSession.activeProfile != nil && dependencies.appSession.activePassword != nil
+        guard let profile = dependencies.appSession.activeProfile else { return false }
+        return resolvedSessionPassword(for: profile) != nil
     }
 
     init(dependencies: DependencyContainer) {
@@ -402,7 +403,7 @@ final class HomeViewController: UIViewController {
         let disconnected = dependencies.appSession.activeProfile == nil
         let disconnectAction = makeMenuAction(
             title: "单机模式",
-            subtitle: "不连接远端存储",
+            subtitle: nil,
             state: disconnected ? .on : .off
         ) { [weak self] _ in
             self?.disconnectRemote()
@@ -418,13 +419,25 @@ final class HomeViewController: UIViewController {
                 let storageProfile = profile.storageProfile
                 let title = storageProfile.displayTitle
                 let subtitle = storageProfile.displaySubtitle
+                let symbolName: String
+                switch profile.resolvedStorageType {
+                case .smb:
+                    symbolName = "network"
+                case .externalVolume:
+                    symbolName = "externaldrive"
+                }
                 let state: UIMenuElement.State
                 if let active = dependencies.appSession.activeProfile?.id, active == profile.id {
                     state = .on
                 } else {
                     state = .off
                 }
-                return makeMenuAction(title: title, subtitle: subtitle, state: state) { [weak self] _ in
+                return makeMenuAction(
+                    title: title,
+                    subtitle: subtitle,
+                    image: UIImage(systemName: symbolName),
+                    state: state
+                ) { [weak self] _ in
                     self?.promptPasswordAndConnect(profile: profile)
                 }
             }
@@ -458,7 +471,10 @@ final class HomeViewController: UIViewController {
             }
         }
         let discoveredSection = UIMenu(title: "SMB 局域网发现", options: .displayInline, children: discoveredChildren)
-        let manualAdd = UIAction(title: "手动添加 SMB 服务器", image: UIImage(systemName: "plus")) { [weak self] _ in
+        let addSMB = UIAction(
+            title: "添加 SMB 存储",
+            image: UIImage(systemName: "network")
+        ) { [weak self] _ in
             self?.openAddServerFlow(
                 draft: SMBServerLoginDraft(
                     name: "",
@@ -469,26 +485,36 @@ final class HomeViewController: UIViewController {
                 )
             )
         }
-        let manualSection = UIMenu(title: "", options: .displayInline, children: [manualAdd])
-        let addServerMenu = UIMenu(
-            title: "添加 SMB 存储",
-            children: [discoveredSection, manualSection]
-        )
-
         let addExternal = UIAction(
             title: "添加外接存储目录",
             image: UIImage(systemName: "externaldrive.badge.plus")
         ) { [weak self] _ in
             self?.openAddExternalStorageFlow()
         }
-        let externalMenu = UIMenu(title: "添加本地存储", options: .displayInline, children: [addExternal])
 
-        return UIMenu(children: [currentMenu, addServerMenu, externalMenu])
+        let addActionsSection = UIMenu(title: "", options: .displayInline, children: [addSMB, addExternal])
+        let addStorageMenu = UIMenu(title: "添加存储", image: UIImage(systemName: "plus"), children: [discoveredSection, addActionsSection])
+
+        let manageStorageAction: UIMenuElement
+        if savedProfiles.isEmpty {
+            manageStorageAction = UIAction(title: "管理存储", attributes: [.disabled]) { _ in }
+        } else {
+            manageStorageAction = UIAction(
+                title: "管理存储",
+                image: UIImage(systemName: "slider.horizontal.3")
+            ) { [weak self] _ in
+                self?.openManageStorageFlow()
+            }
+        }
+        let manageSection = UIMenu(title: "", options: .displayInline, children: [manageStorageAction])
+
+        return UIMenu(children: [currentMenu, addStorageMenu, manageSection])
     }
 
     private func makeMenuAction(
         title: String,
         subtitle: String?,
+        image: UIImage? = nil,
         state: UIMenuElement.State = .off,
         handler: @escaping UIActionHandler
     ) -> UIAction {
@@ -496,7 +522,7 @@ final class HomeViewController: UIViewController {
             return UIAction(
                 title: title,
                 subtitle: subtitle,
-                image: nil,
+                image: image,
                 identifier: nil,
                 discoverabilityTitle: nil,
                 attributes: [],
@@ -505,10 +531,10 @@ final class HomeViewController: UIViewController {
             )
         }
 
-        if let subtitle, !subtitle.isEmpty {
+        if let subtitle, !subtitle.isEmpty, image == nil {
             return UIAction(title: "\(title) · \(subtitle)", state: state, handler: handler)
         }
-        return UIAction(title: title, state: state, handler: handler)
+        return UIAction(title: title, image: image, state: state, handler: handler)
     }
 
     private func disconnectRemote() {
@@ -549,6 +575,26 @@ final class HomeViewController: UIViewController {
         present(alert, animated: true)
     }
 
+    private func resolvedSessionPassword(for profile: ServerProfileRecord) -> String? {
+        if profile.storageProfile.requiresPassword {
+            guard let password = dependencies.appSession.activePassword,
+                  !password.isEmpty else {
+                return nil
+            }
+            return password
+        }
+        return dependencies.appSession.activePassword ?? ""
+    }
+
+    @discardableResult
+    private func clearSessionIfExternalStorageUnavailable(profile: ServerProfileRecord, error: Error) -> Bool {
+        guard profile.isExternalStorageUnavailableError(error) else { return false }
+        guard dependencies.appSession.activeProfile?.id == profile.id else { return false }
+        try? dependencies.databaseManager.setActiveServerProfileID(nil)
+        dependencies.appSession.clear()
+        return true
+    }
+
     private func connect(profile: ServerProfileRecord, password: String, showFailureAlert: Bool = true) {
         guard !isConnecting else { return }
         isConnecting = true
@@ -578,7 +624,10 @@ final class HomeViewController: UIViewController {
                     self.updateConnectionIndicator()
                     self.updateConnectionMenu()
                     if showFailureAlert {
-                        self.presentAlert(title: "连接失败", message: error.localizedDescription)
+                        self.presentAlert(
+                            title: "连接失败",
+                            message: profile.userFacingStorageErrorMessage(error)
+                        )
                     }
                 }
             }
@@ -605,6 +654,16 @@ final class HomeViewController: UIViewController {
         navigationController?.pushViewController(addVC, animated: true)
     }
 
+    private func openManageStorageFlow() {
+        let manageVC = ManageStorageProfilesViewController(dependencies: dependencies) { [weak self] in
+            guard let self else { return }
+            self.loadSavedProfiles()
+            self.updateConnectionIndicator()
+            self.updateConnectionMenu()
+        }
+        navigationController?.pushViewController(manageVC, animated: true)
+    }
+
     @objc
     private func openBackupTapped() {
         let backupVC = BackupViewController(sessionController: backupSessionController)
@@ -624,7 +683,7 @@ final class HomeViewController: UIViewController {
             return
         }
         guard let profile = dependencies.appSession.activeProfile,
-              let password = dependencies.appSession.activePassword else {
+              let password = resolvedSessionPassword(for: profile) else {
             presentAlert(title: "未连接", message: "请先连接远端存储")
             return
         }
@@ -646,7 +705,8 @@ final class HomeViewController: UIViewController {
                 }
             } catch {
                 await MainActor.run {
-                    self.presentAlert(title: "重建失败", message: error.localizedDescription)
+                    _ = self.clearSessionIfExternalStorageUnavailable(profile: profile, error: error)
+                    self.presentAlert(title: "重建失败", message: profile.userFacingStorageErrorMessage(error))
                 }
             }
         }
@@ -938,7 +998,7 @@ final class HomeViewController: UIViewController {
         }
 
         guard let profile = dependencies.appSession.activeProfile,
-              let password = dependencies.appSession.activePassword else {
+              let password = resolvedSessionPassword(for: profile) else {
             applyLoadingPlaceholder(to: cell.imageView, symbolName: "photo")
             return
         }
@@ -1471,7 +1531,7 @@ extension HomeViewController: UICollectionViewDataSource, UICollectionViewDelega
     func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
         guard hasActiveConnection else { return }
         guard let profile = dependencies.appSession.activeProfile,
-              let password = dependencies.appSession.activePassword else {
+              let password = resolvedSessionPassword(for: profile) else {
             return
         }
 

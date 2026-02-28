@@ -4,6 +4,8 @@ import UIKit
 final class AddSMBServerLoginViewController: UIViewController {
     private let dependencies: DependencyContainer
     private let draft: SMBServerLoginDraft
+    private let editingProfile: ServerProfileRecord?
+    private let shouldPopToRootOnSave: Bool
     private let setupService = SMBSetupService()
     private let onSaved: (ServerProfileRecord, String) -> Void
 
@@ -22,9 +24,17 @@ final class AddSMBServerLoginViewController: UIViewController {
     private let loadingView = UIActivityIndicatorView(style: .medium)
     private var keyboardObservers: [NSObjectProtocol] = []
 
-    init(dependencies: DependencyContainer, draft: SMBServerLoginDraft, onSaved: @escaping (ServerProfileRecord, String) -> Void) {
+    init(
+        dependencies: DependencyContainer,
+        draft: SMBServerLoginDraft,
+        editingProfile: ServerProfileRecord? = nil,
+        shouldPopToRootOnSave: Bool = true,
+        onSaved: @escaping (ServerProfileRecord, String) -> Void
+    ) {
         self.dependencies = dependencies
         self.draft = draft
+        self.editingProfile = editingProfile
+        self.shouldPopToRootOnSave = shouldPopToRootOnSave
         self.onSaved = onSaved
         super.init(nibName: nil, bundle: nil)
     }
@@ -37,7 +47,7 @@ final class AddSMBServerLoginViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        title = "登录 SMB"
+        title = editingProfile == nil ? "登录 SMB" : "编辑 SMB"
 
         configureUI()
         fillDraft()
@@ -90,7 +100,7 @@ final class AddSMBServerLoginViewController: UIViewController {
         installKeyboardAccessoryToolbar()
 
         nextButton.configuration = .filled()
-        nextButton.configuration?.title = "登录并选择 Share"
+        nextButton.configuration?.title = editingProfile == nil ? "登录并选择 Share" : "验证并选择 Share"
         nextButton.addTarget(self, action: #selector(nextTapped), for: .touchUpInside)
         stackView.addArrangedSubview(nextButton)
 
@@ -139,6 +149,8 @@ final class AddSMBServerLoginViewController: UIViewController {
                         dependencies: self.dependencies,
                         auth: auth,
                         initialShares: shares,
+                        editingProfile: self.editingProfile,
+                        shouldPopToRootOnSave: self.shouldPopToRootOnSave,
                         onSaved: self.onSaved
                     )
                     self.navigationController?.pushViewController(picker, animated: true)
@@ -157,9 +169,20 @@ final class AddSMBServerLoginViewController: UIViewController {
     private func buildAuthContext() throws -> SMBServerAuthContext {
         let host = (hostRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let username = (usernameRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let password = passwordRow.textField.text ?? ""
+        let inputPassword = passwordRow.textField.text ?? ""
         let domain = (domainRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let name = (nameRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let password: String
+
+        if !inputPassword.isEmpty {
+            password = inputPassword
+        } else if let editingProfile,
+                  let saved = try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef),
+                  !saved.isEmpty {
+            password = saved
+        } else {
+            password = ""
+        }
 
         guard !host.isEmpty, !username.isEmpty, !password.isEmpty else {
             throw NSError(domain: "AddSMBServerLogin", code: 1, userInfo: [NSLocalizedDescriptionKey: "请填写 host / username / password"])

@@ -108,6 +108,9 @@ final class BackupExecutor {
             )
             await onLog("Remote index synced. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s).")
         } catch {
+            if profile.isExternalStorageUnavailableError(error) {
+                throw error
+            }
             await onLog("Remote index scan warning: \(error.localizedDescription)")
         }
 
@@ -253,11 +256,16 @@ final class BackupExecutor {
                     state.paused = true
                     break
                 }
+                if profile.isExternalStorageUnavailableError(error) {
+                    await onLog("External storage unavailable. Stop backup immediately.")
+                    throw error
+                }
 
                 state.failed += 1
 
                 let displayName = BackupAssetResourcePlanner.assetDisplayName(asset: asset, selectedResources: selectedResources)
-                await onLog("Failed asset: \(displayName) - \(error.localizedDescription)")
+                let errorMessage = profile.userFacingStorageErrorMessage(error)
+                await onLog("Failed asset: \(displayName) - \(errorMessage)")
                 await onProgress(
                     progressSnapshot(
                         state: state,
@@ -268,7 +276,7 @@ final class BackupExecutor {
                             displayName: displayName,
                             resourceDate: asset.creationDate,
                             status: .failed,
-                            reason: error.localizedDescription,
+                            reason: errorMessage,
                             resourceSummary: "资源处理失败"
                         )
                     )
@@ -905,6 +913,9 @@ final class BackupExecutor {
                 )
             } catch {
                 if error is CancellationError {
+                    throw error
+                }
+                if profile.isExternalStorageUnavailableError(error) {
                     throw error
                 }
                 lastError = error

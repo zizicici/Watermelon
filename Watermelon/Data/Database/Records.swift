@@ -13,6 +13,7 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
     var name: String
     var storageType: String
     var connectionParams: Data?
+    var sortOrder: Int
     var host: String
     var port: Int
     var shareName: String

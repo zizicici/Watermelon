@@ -304,10 +304,17 @@ final class BackupSessionController {
                 self.terminationIntent = .none
                 self.currentRunMode = .full
 
+                let userMessage = profile.userFacingStorageErrorMessage(error)
+                let externalUnavailable = profile.isExternalStorageUnavailableError(error)
+                if externalUnavailable,
+                   self.dependencies.appSession.activeProfile?.id == profile.id {
+                    try? self.dependencies.databaseManager.setActiveServerProfileID(nil)
+                    self.dependencies.appSession.clear()
+                }
                 self.state = .failed
-                self.statusText = "备份失败"
+                self.statusText = externalUnavailable ? "外接存储已断开" : "备份失败"
                 self.transferState = nil
-                self.appendLog("错误: \(error.localizedDescription)")
+                self.appendLog("错误: \(userMessage)")
                 self.rebuildFailedItems()
                 self.notifyObservers()
             }

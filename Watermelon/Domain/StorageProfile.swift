@@ -31,7 +31,7 @@ struct StorageProfile {
             return "SMB://\(record.host)/\(record.shareName)\(record.basePath)"
         case .externalVolume:
             if let path = record.externalVolumeParams?.displayPath, !path.isEmpty {
-                return "外接存储 · \(path)"
+                return Self.relativeExternalPath(from: path)
             }
             return "外接存储"
         }
@@ -42,10 +42,7 @@ struct StorageProfile {
         case .smb:
             return "\(record.username)@\(record.shareName)\(record.basePath)"
         case .externalVolume:
-            if let path = record.externalVolumeParams?.displayPath, !path.isEmpty {
-                return "外接存储: \(path)"
-            }
-            return "外接存储: \(record.name)"
+            return record.name
         }
     }
 
@@ -75,6 +72,23 @@ struct StorageProfile {
             ].joined(separator: "|")
         }
     }
+
+    private static func relativeExternalPath(from absolutePath: String) -> String {
+        let normalized = absolutePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !normalized.isEmpty else { return "/" }
+
+        let components = normalized.split(separator: "/").map(String.init)
+        if let uuidIndex = components.firstIndex(where: { UUID(uuidString: $0) != nil }),
+           uuidIndex + 1 < components.count {
+            return components[(uuidIndex + 1)...].joined(separator: "/")
+        }
+
+        if components.count >= 2 {
+            return components.suffix(2).joined(separator: "/")
+        }
+
+        return components.last ?? "/"
+    }
 }
 
 extension ServerProfileRecord {
@@ -93,5 +107,16 @@ extension ServerProfileRecord {
 
     static func encodedConnectionParams<T: Encodable>(_ params: T) throws -> Data {
         try JSONEncoder().encode(params)
+    }
+
+    func isExternalStorageUnavailableError(_ error: Error) -> Bool {
+        resolvedStorageType == .externalVolume && RemoteStorageClientError.isLikelyExternalStorageUnavailable(error)
+    }
+
+    func userFacingStorageErrorMessage(_ error: Error) -> String {
+        if isExternalStorageUnavailableError(error) {
+            return "外接存储不可用，可能已拔出。请重新连接硬盘后再试。"
+        }
+        return error.localizedDescription
     }
 }
