@@ -5,6 +5,12 @@ protocol StorageClientFactoryProtocol {
 }
 
 final class StorageClientFactory: StorageClientFactoryProtocol {
+    private let databaseManager: DatabaseManager?
+
+    init(databaseManager: DatabaseManager? = nil) {
+        self.databaseManager = databaseManager
+    }
+
     func makeClient(profile: ServerProfileRecord, password: String) throws -> any RemoteStorageClientProtocol {
         let storageType = profile.resolvedStorageType
         switch storageType {
@@ -22,7 +28,27 @@ final class StorageClientFactory: StorageClientFactoryProtocol {
             guard let params = profile.externalVolumeParams else {
                 throw RemoteStorageClientError.invalidConfiguration
             }
-            return LocalVolumeClient(config: LocalVolumeClient.Config(rootBookmarkData: params.rootBookmarkData))
+            let onBookmarkRefreshed: ((LocalVolumeClient.BookmarkRefreshPayload) -> Void)?
+            if profile.id != nil, databaseManager != nil {
+                onBookmarkRefreshed = { [profile, weak databaseManager] payload in
+                    guard let databaseManager else { return }
+                    var updated = profile
+                    let refreshedParams = ExternalVolumeConnectionParams(
+                        rootBookmarkData: payload.bookmarkData,
+                        displayPath: payload.displayPath
+                    )
+                    guard let encoded = try? ServerProfileRecord.encodedConnectionParams(refreshedParams) else { return }
+                    updated.connectionParams = encoded
+                    try? databaseManager.saveServerProfile(&updated)
+                }
+            } else {
+                onBookmarkRefreshed = nil
+            }
+
+            return LocalVolumeClient(config: LocalVolumeClient.Config(
+                rootBookmarkData: params.rootBookmarkData,
+                onBookmarkRefreshed: onBookmarkRefreshed
+            ))
         }
     }
 }

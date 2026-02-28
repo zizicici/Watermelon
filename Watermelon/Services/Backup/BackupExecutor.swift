@@ -347,7 +347,7 @@ final class BackupExecutor {
     }
 
     private func syncRemoteIndexIncrementally(
-        client: SMBClientProtocol,
+        client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         onLog: (@MainActor (String) -> Void)? = nil
     ) async throws -> RemoteLibrarySnapshot {
@@ -454,7 +454,7 @@ final class BackupExecutor {
         cachedLocalHash: LocalAssetHashCache?,
         monthStore: MonthManifestStore,
         profile: ServerProfileRecord,
-        smbClient: SMBClientProtocol,
+        smbClient: RemoteStorageClientProtocol,
         assetPosition: Int,
         totalAssets: Int,
         onTransferProgress: @escaping @MainActor (BackupTransferState) async -> Void,
@@ -799,7 +799,7 @@ final class BackupExecutor {
         prepared: PreparedResource,
         monthStore: MonthManifestStore,
         profile: ServerProfileRecord,
-        smbClient: SMBClientProtocol,
+        smbClient: RemoteStorageClientProtocol,
         onUploadProgress: ((Double) -> Void)? = nil
     ) async throws -> ResourceUploadResult {
         let local = prepared.local
@@ -951,7 +951,7 @@ final class BackupExecutor {
 
     private func downloadAndHashRemoteFile(
         profile: ServerProfileRecord,
-        smbClient: SMBClientProtocol,
+        smbClient: RemoteStorageClientProtocol,
         monthStore: MonthManifestStore,
         fileName: String
     ) async throws -> Data {

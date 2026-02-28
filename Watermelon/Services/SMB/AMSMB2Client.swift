@@ -4,7 +4,7 @@ import Foundation
 import AMSMB2
 #endif
 
-final class AMSMB2Client: SMBClientProtocol {
+final class AMSMB2Client: RemoteStorageClientProtocol {
     private let config: SMBServerConfig
 
     #if canImport(AMSMB2)
@@ -17,7 +17,7 @@ final class AMSMB2Client: SMBClientProtocol {
         #if canImport(AMSMB2)
         let normalizedHost = config.host.replacingOccurrences(of: "smb://", with: "")
         guard let url = URL(string: "smb://\(normalizedHost):\(config.port)") else {
-            throw SMBClientError.invalidConfiguration
+            throw RemoteStorageClientError.invalidConfiguration
         }
 
         let user = [config.domain, config.username]
@@ -30,7 +30,7 @@ final class AMSMB2Client: SMBClientProtocol {
         let credential = URLCredential(user: user.isEmpty ? config.username : user, password: config.password, persistence: .forSession)
 
         guard let manager = SMB2Manager(url: url, credential: credential) else {
-            throw SMBClientError.invalidConfiguration
+            throw RemoteStorageClientError.invalidConfiguration
         }
 
         self.manager = manager
@@ -41,7 +41,7 @@ final class AMSMB2Client: SMBClientProtocol {
         #if canImport(AMSMB2)
         try await manager.connectShare(name: config.shareName)
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 
@@ -51,7 +51,7 @@ final class AMSMB2Client: SMBClientProtocol {
         #endif
     }
 
-    func list(path: String) async throws -> [SMBRemoteEntry] {
+    func list(path: String) async throws -> [RemoteStorageEntry] {
         #if canImport(AMSMB2)
         let remotePath = RemotePathBuilder.normalizePath(path)
         let items = try await manager.contentsOfDirectory(atPath: remotePath, recursive: false)
@@ -66,7 +66,7 @@ final class AMSMB2Client: SMBClientProtocol {
             let modificationDate = values[.contentModificationDateKey] as? Date
 
             let fullPath = RemotePathBuilder.normalizePath(remotePath + "/" + name)
-            return SMBRemoteEntry(
+            return RemoteStorageEntry(
                 path: fullPath,
                 name: name,
                 isDirectory: isDirectory,
@@ -76,11 +76,11 @@ final class AMSMB2Client: SMBClientProtocol {
             )
         }
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 
-    func metadata(path: String) async throws -> SMBRemoteEntry? {
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
         #if canImport(AMSMB2)
         let remotePath = RemotePathBuilder.normalizePath(path)
         do {
@@ -92,7 +92,7 @@ final class AMSMB2Client: SMBClientProtocol {
             let creationDate = values[.creationDateKey] as? Date
             let modificationDate = values[.contentModificationDateKey] as? Date
 
-            return SMBRemoteEntry(
+            return RemoteStorageEntry(
                 path: remotePath,
                 name: name,
                 isDirectory: isDirectory,
@@ -104,7 +104,7 @@ final class AMSMB2Client: SMBClientProtocol {
             return nil
         }
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 
@@ -128,7 +128,7 @@ final class AMSMB2Client: SMBClientProtocol {
             }
         )
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 
@@ -139,7 +139,7 @@ final class AMSMB2Client: SMBClientProtocol {
             ofItemAtPath: RemotePathBuilder.normalizePath(path)
         )
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 
@@ -183,7 +183,7 @@ final class AMSMB2Client: SMBClientProtocol {
             progress: { _, _ in !Task.isCancelled }
         )
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 
@@ -196,7 +196,7 @@ final class AMSMB2Client: SMBClientProtocol {
             return false
         }
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 
@@ -204,7 +204,7 @@ final class AMSMB2Client: SMBClientProtocol {
         #if canImport(AMSMB2)
         try await manager.removeItem(atPath: RemotePathBuilder.normalizePath(path))
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 
@@ -229,7 +229,7 @@ final class AMSMB2Client: SMBClientProtocol {
             }
         }
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 
@@ -237,7 +237,7 @@ final class AMSMB2Client: SMBClientProtocol {
         #if canImport(AMSMB2)
         try await manager.moveItem(atPath: RemotePathBuilder.normalizePath(sourcePath), toPath: RemotePathBuilder.normalizePath(destinationPath))
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 }

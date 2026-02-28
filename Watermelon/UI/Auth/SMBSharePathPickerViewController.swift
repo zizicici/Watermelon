@@ -12,7 +12,7 @@ final class SMBSharePathPickerViewController: UIViewController {
     private var shares: [SMBShareInfo]
     private var selectedShare: SMBShareInfo?
     private var currentPath: String = "/"
-    private var directories: [SMBRemoteEntry] = []
+    private var directories: [RemoteStorageEntry] = []
     private var loadTask: Task<Void, Never>?
     private var loadRequestID: UInt64 = 0
 

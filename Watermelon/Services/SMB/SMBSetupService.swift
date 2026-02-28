@@ -16,11 +16,11 @@ final class SMBSetupService {
         let shares = try await manager.listShares(enumerateHidden: false)
         return shares.map { SMBShareInfo(name: $0.name, comment: $0.comment) }
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 
-    func listDirectories(auth: SMBServerAuthContext, shareName: String, path: String) async throws -> [SMBRemoteEntry] {
+    func listDirectories(auth: SMBServerAuthContext, shareName: String, path: String) async throws -> [RemoteStorageEntry] {
         #if canImport(AMSMB2)
         let manager = try makeManager(auth: auth)
         try await manager.connectShare(name: shareName)
@@ -43,7 +43,7 @@ final class SMBSetupService {
             let size = (values[.fileSizeKey] as? NSNumber)?.int64Value ?? 0
 
             let fullPath = RemotePathBuilder.normalizePath("\(normalized)/\(name)")
-            return SMBRemoteEntry(
+            return RemoteStorageEntry(
                 path: fullPath,
                 name: name,
                 isDirectory: true,
@@ -53,7 +53,7 @@ final class SMBSetupService {
             )
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 
@@ -61,7 +61,7 @@ final class SMBSetupService {
         #if canImport(AMSMB2)
         let normalizedHost = auth.host.replacingOccurrences(of: "smb://", with: "")
         guard let url = URL(string: "smb://\(normalizedHost):\(auth.port)") else {
-            throw SMBClientError.invalidConfiguration
+            throw RemoteStorageClientError.invalidConfiguration
         }
 
         let user = [auth.domain, auth.username]
@@ -78,11 +78,11 @@ final class SMBSetupService {
         )
 
         guard let manager = SMB2Manager(url: url, credential: credential) else {
-            throw SMBClientError.invalidConfiguration
+            throw RemoteStorageClientError.invalidConfiguration
         }
         return manager
         #else
-        throw SMBClientError.unavailable
+        throw RemoteStorageClientError.unavailable
         #endif
     }
 }

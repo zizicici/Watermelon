@@ -2,7 +2,7 @@ import Foundation
 
 final class RemoteManifestIndexScanner {
     func scanManifestDigests(
-        client: SMBClientProtocol,
+        client: RemoteStorageClientProtocol,
         basePath: String
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
         let normalizedBasePath = RemotePathBuilder.normalizePath(basePath)

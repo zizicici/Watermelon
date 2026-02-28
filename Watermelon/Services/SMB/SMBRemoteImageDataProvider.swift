@@ -25,10 +25,7 @@ struct SMBRemoteImageDataProvider: ImageDataProvider {
 
         let pixelKey = Int(self.maxPixelSize.rounded())
         self.cacheKey = [
-            profile.host,
-            String(profile.port),
-            profile.shareName,
-            profile.basePath,
+            profile.storageProfile.identityKey,
             remoteAbsolutePath,
             "px:\(pixelKey)"
         ].joined(separator: "|")

@@ -127,7 +127,9 @@ final class HomeViewController: UIViewController {
     private var sections: [AlbumSection] = []
 
     private let remoteImageCache = ImageCache(name: "home_remote_album_cache")
-    private let remoteThumbnailService = RemoteThumbnailService()
+    private lazy var remoteThumbnailService = RemoteThumbnailService(
+        storageClientFactory: dependencies.storageClientFactory
+    )
     private var prefetchTasks: [IndexPath: Task<Void, Never>] = [:]
     private var reloadTask: Task<Void, Never>?
     private var pendingRemoteSectionRefresh = false

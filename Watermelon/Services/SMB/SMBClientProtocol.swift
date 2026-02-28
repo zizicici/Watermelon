@@ -92,7 +92,3 @@ protocol RemoteStorageClientProtocol {
     func createDirectory(path: String) async throws
     func move(from sourcePath: String, to destinationPath: String) async throws
 }
-
-typealias SMBRemoteEntry = RemoteStorageEntry
-typealias SMBClientError = RemoteStorageClientError
-typealias SMBClientProtocol = RemoteStorageClientProtocol

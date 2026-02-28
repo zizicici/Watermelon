@@ -39,8 +39,8 @@ final class DatabaseManager {
                 table.column("credentialRef", .text).notNull()
                 table.column("createdAt", .datetime).notNull()
                 table.column("updatedAt", .datetime).notNull()
-                table.uniqueKey(["host", "shareName", "basePath", "username"])
             }
+            try Self.createSMBOnlyProfileUniqueIndex(db: db, tableName: ServerProfileRecord.databaseTableName)
 
             try db.create(table: SyncStateRecord.databaseTableName) { table in
                 table.column("stateKey", .text).notNull().primaryKey()
@@ -129,6 +129,68 @@ final class DatabaseManager {
                     arguments: [index, id]
                 )
             }
+        }
+
+        migrator.registerMigration("v6_server_profiles_partial_unique_smb") { db in
+            let tableName = ServerProfileRecord.databaseTableName
+            guard try db.tableExists(tableName) else { return }
+
+            if try !Self.hasLegacyServerProfileUniqueConstraint(
+                db: db,
+                tableName: tableName
+            ) {
+                try Self.createSMBOnlyProfileUniqueIndex(db: db, tableName: tableName)
+                return
+            }
+
+            let rebuiltTableName = "\(tableName)_v6_rebuild"
+            if try db.tableExists(rebuiltTableName) {
+                try db.drop(table: rebuiltTableName)
+            }
+
+            try db.create(table: rebuiltTableName) { table in
+                table.autoIncrementedPrimaryKey("id")
+                table.column("name", .text).notNull()
+                table.column("storageType", .text).notNull().defaults(to: StorageType.smb.rawValue)
+                table.column("connectionParams", .blob)
+                table.column("sortOrder", .integer).notNull().defaults(to: 0)
+                table.column("host", .text).notNull()
+                table.column("port", .integer).notNull()
+                table.column("shareName", .text).notNull()
+                table.column("basePath", .text).notNull()
+                table.column("username", .text).notNull()
+                table.column("domain", .text)
+                table.column("credentialRef", .text).notNull()
+                table.column("createdAt", .datetime).notNull()
+                table.column("updatedAt", .datetime).notNull()
+            }
+
+            try db.execute(
+                sql: """
+                INSERT INTO \(rebuiltTableName)
+                (id, name, storageType, connectionParams, sortOrder, host, port, shareName, basePath, username, domain, credentialRef, createdAt, updatedAt)
+                SELECT id, name, storageType, connectionParams, sortOrder, host, port, shareName, basePath, username, domain, credentialRef, createdAt, updatedAt
+                FROM \(tableName)
+                """
+            )
+
+            // Keep one row per SMB endpoint before creating partial unique index.
+            try db.execute(
+                sql: """
+                DELETE FROM \(rebuiltTableName)
+                WHERE storageType = 'smb'
+                  AND id NOT IN (
+                      SELECT MAX(id)
+                      FROM \(rebuiltTableName)
+                      WHERE storageType = 'smb'
+                      GROUP BY host, shareName, basePath, username
+                  )
+                """
+            )
+
+            try db.drop(table: tableName)
+            try db.rename(table: rebuiltTableName, to: tableName)
+            try Self.createSMBOnlyProfileUniqueIndex(db: db, tableName: tableName)
         }
 
         return migrator
@@ -261,5 +323,24 @@ final class DatabaseManager {
             }
         }
         return result
+    }
+
+    private static func hasLegacyServerProfileUniqueConstraint(db: Database, tableName: String) throws -> Bool {
+        let rows = try Row.fetchAll(db, sql: "PRAGMA index_list(\(tableName))")
+        return rows.contains { row in
+            let isUnique = (row["unique"] as Int?) == 1
+            let origin = row["origin"] as String?
+            return isUnique && origin == "u"
+        }
+    }
+
+    private static func createSMBOnlyProfileUniqueIndex(db: Database, tableName: String) throws {
+        try db.execute(
+            sql: """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_server_profiles_unique_smb
+            ON \(tableName)(host, shareName, basePath, username)
+            WHERE storageType = 'smb'
+            """
+        )
     }
 }

@@ -19,7 +19,7 @@ final class DependencyContainer {
 
         keychainService = KeychainService()
         appSession = AppSession()
-        storageClientFactory = StorageClientFactory()
+        storageClientFactory = StorageClientFactory(databaseManager: databaseManager)
         photoLibraryService = PhotoLibraryService()
         metadataService = MetadataService()
         backupExecutor = BackupExecutor(

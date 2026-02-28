@@ -23,7 +23,7 @@ final class MonthManifestStore {
         RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath + "/" + Self.manifestFileName)
     }
 
-    private let client: SMBClientProtocol
+    private let client: RemoteStorageClientProtocol
     private let basePath: String
     private let localManifestURL: URL
     private let dbQueue: DatabaseQueue
@@ -34,18 +34,18 @@ final class MonthManifestStore {
     private(set) var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
     private(set) var assetLinksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
 
-    private(set) var remoteFilesByName: [String: SMBRemoteEntry] = [:]
+    private(set) var remoteFilesByName: [String: RemoteStorageEntry] = [:]
     private(set) var existingFileNameSet: Set<String> = []
     private(set) var dirty: Bool = false
 
     private init(
-        client: SMBClientProtocol,
+        client: RemoteStorageClientProtocol,
         basePath: String,
         year: Int,
         month: Int,
         localManifestURL: URL,
         dbQueue: DatabaseQueue,
-        remoteFilesByName: [String: SMBRemoteEntry],
+        remoteFilesByName: [String: RemoteStorageEntry],
         dirty: Bool
     ) {
         self.client = client
@@ -64,7 +64,7 @@ final class MonthManifestStore {
     }
 
     static func loadOrCreate(
-        client: SMBClientProtocol,
+        client: RemoteStorageClientProtocol,
         basePath: String,
         year: Int,
         month: Int
@@ -150,7 +150,7 @@ final class MonthManifestStore {
     }
 
     static func loadIfExists(
-        client: SMBClientProtocol,
+        client: RemoteStorageClientProtocol,
         basePath: String,
         year: Int,
         month: Int
@@ -158,7 +158,7 @@ final class MonthManifestStore {
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
 
-        let entries: [SMBRemoteEntry]
+        let entries: [RemoteStorageEntry]
         do {
             entries = try await client.list(path: monthAbsolutePath)
         } catch {
@@ -223,7 +223,7 @@ final class MonthManifestStore {
     }
 
     static func loadManifestOnlyIfExists(
-        client: SMBClientProtocol,
+        client: RemoteStorageClientProtocol,
         basePath: String,
         year: Int,
         month: Int
@@ -297,7 +297,7 @@ final class MonthManifestStore {
         assetLinksByFingerprint[fingerprint] ?? []
     }
 
-    func remoteEntry(named fileName: String) -> SMBRemoteEntry? {
+    func remoteEntry(named fileName: String) -> RemoteStorageEntry? {
         remoteFilesByName[fileName]
     }
 
@@ -442,7 +442,7 @@ final class MonthManifestStore {
 
     func markRemoteFile(name: String, size: Int64, creationDate: Date?) {
         let path = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath + "/" + name)
-        remoteFilesByName[name] = SMBRemoteEntry(
+        remoteFilesByName[name] = RemoteStorageEntry(
             path: path,
             name: name,
             isDirectory: false,

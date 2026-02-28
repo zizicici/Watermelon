@@ -3,9 +3,23 @@ import Foundation
 final actor LocalVolumeClient: RemoteStorageClientProtocol {
     struct Config {
         let rootBookmarkData: Data
+        let onBookmarkRefreshed: ((BookmarkRefreshPayload) -> Void)?
     }
 
-    private let config: Config
+    struct BookmarkRefreshPayload {
+        let bookmarkData: Data
+        let displayPath: String
+    }
+
+    private static let prefetchedResourceKeys: [URLResourceKey] = [
+        .isDirectoryKey,
+        .creationDateKey,
+        .contentModificationDateKey,
+        .fileSizeKey,
+        .nameKey
+    ]
+
+    private var config: Config
     private let bookmarkStore: SecurityScopedBookmarkStore
     private var rootURL: URL?
     private var isAccessing = false
@@ -26,16 +40,20 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
 
     func connect() async throws {
         if rootURL != nil { return }
-        let resolved: URL
+        let resolved: SecurityScopedBookmarkStore.ResolvedBookmark
         do {
             resolved = try bookmarkStore.resolveBookmarkData(config.rootBookmarkData)
         } catch {
             throw mapStorageError(error)
         }
-        guard resolved.startAccessingSecurityScopedResource() else {
+        if let refreshed = resolved.refreshedBookmarkData {
+            config = Config(rootBookmarkData: refreshed, onBookmarkRefreshed: config.onBookmarkRefreshed)
+            config.onBookmarkRefreshed?(BookmarkRefreshPayload(bookmarkData: refreshed, displayPath: resolved.url.path))
+        }
+        guard resolved.url.startAccessingSecurityScopedResource() else {
             throw RemoteStorageClientError.externalStorageUnavailable
         }
-        rootURL = resolved
+        rootURL = resolved.url
         isAccessing = true
     }
 
@@ -52,7 +70,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             let directoryURL = try remoteFileURL(forRemotePath: path, rootURL: root)
             let urls = try FileManager.default.contentsOfDirectory(
                 at: directoryURL,
-                includingPropertiesForKeys: nil,
+                includingPropertiesForKeys: Self.prefetchedResourceKeys,
                 options: []
             )
             return try urls.map { url in
@@ -208,7 +226,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     }
 
     private func makeEntry(fileURL: URL, rootURL: URL) throws -> RemoteStorageEntry {
-        let values = try fileURL.resourceValues(forKeys: [.isDirectoryKey, .creationDateKey, .contentModificationDateKey, .fileSizeKey, .nameKey])
+        let values = try fileURL.resourceValues(forKeys: Set(Self.prefetchedResourceKeys))
         let fullPath = normalizedRemotePath(for: fileURL, rootURL: rootURL)
         return RemoteStorageEntry(
             path: fullPath,
