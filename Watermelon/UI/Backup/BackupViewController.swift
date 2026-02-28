@@ -24,7 +24,17 @@ final class BackupViewController: UIViewController {
 
     private let sessionController: BackupSessionController
 
-    private let statusLabel = UILabel()
+    private let statusCardView = UIView()
+    private let statusThumbnailContainer = UIView()
+    private let statusThumbnailImageView = UIImageView()
+    private let statusTitleLabel = UILabel()
+    private let statusRightStack = UIStackView()
+    private let statusTopRowStack = UIStackView()
+    private let statusDateLabel = UILabel()
+    private let resourcePercentLabel = UILabel()
+    private let overallProgressLeadingLabel = UILabel()
+    private let overallProgressPercentLabel = UILabel()
+    private let overallProgressView = UIProgressView(progressViewStyle: .default)
     private let filterControl = TwoLineSegmentedControl(items: FilterMode.allCases.map { $0.baseTitle })
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let logTextView = UITextView()
@@ -56,6 +66,13 @@ final class BackupViewController: UIViewController {
     private var latestSnapshot: BackupSessionController.Snapshot?
     private var filteredItems: [BackupSessionController.ProcessedItem] = []
     private var deferredTableReload = false
+    private var statusThumbnailAssetID: String?
+
+    private static let resourceDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
 
     init(sessionController: BackupSessionController) {
         self.sessionController = sessionController
@@ -95,10 +112,68 @@ final class BackupViewController: UIViewController {
     }
 
     private func buildUI() {
-        statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
-        statusLabel.textColor = .secondaryLabel
-        statusLabel.numberOfLines = 2
-        statusLabel.text = "未开始"
+        statusCardView.backgroundColor = .secondarySystemBackground
+        statusCardView.layer.cornerRadius = 12
+        statusCardView.layer.masksToBounds = true
+
+        statusThumbnailContainer.backgroundColor = .tertiarySystemBackground
+        statusThumbnailContainer.layer.cornerRadius = 8
+        statusThumbnailContainer.layer.masksToBounds = true
+
+        statusThumbnailImageView.image = UIImage(systemName: "photo")
+        statusThumbnailImageView.tintColor = .secondaryLabel
+        statusThumbnailImageView.contentMode = .scaleAspectFit
+
+        statusTitleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        statusTitleLabel.textColor = .label
+        statusTitleLabel.numberOfLines = 1
+        statusTitleLabel.lineBreakMode = .byTruncatingMiddle
+        statusTitleLabel.text = "未开始"
+        statusTitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusTitleLabel.setContentHuggingPriority(.required, for: .vertical)
+
+        statusRightStack.axis = .vertical
+        statusRightStack.alignment = .fill
+        statusRightStack.distribution = .fill
+        statusRightStack.spacing = 4
+
+        statusTopRowStack.axis = .horizontal
+        statusTopRowStack.alignment = .firstBaseline
+        statusTopRowStack.distribution = .fill
+        statusTopRowStack.spacing = 8
+
+        statusDateLabel.font = .systemFont(ofSize: 12, weight: .regular)
+        statusDateLabel.textColor = .secondaryLabel
+        statusDateLabel.numberOfLines = 1
+        statusDateLabel.textAlignment = .left
+        statusDateLabel.lineBreakMode = .byTruncatingHead
+        statusDateLabel.text = "--"
+        statusDateLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        statusDateLabel.setContentHuggingPriority(.required, for: .horizontal)
+        statusDateLabel.setContentHuggingPriority(.required, for: .vertical)
+
+        resourcePercentLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        resourcePercentLabel.textColor = .secondaryLabel
+        resourcePercentLabel.numberOfLines = 1
+        resourcePercentLabel.textAlignment = .left
+        resourcePercentLabel.lineBreakMode = .byTruncatingMiddle
+        resourcePercentLabel.text = "--"
+
+        overallProgressLeadingLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        overallProgressLeadingLabel.textColor = .secondaryLabel
+        overallProgressLeadingLabel.numberOfLines = 1
+        overallProgressLeadingLabel.lineBreakMode = .byTruncatingTail
+        overallProgressLeadingLabel.text = "0/0（未开始）"
+
+        overallProgressPercentLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        overallProgressPercentLabel.textColor = .label
+        overallProgressPercentLabel.numberOfLines = 1
+        overallProgressPercentLabel.textAlignment = .right
+        overallProgressPercentLabel.text = "0%"
+
+        overallProgressView.trackTintColor = .tertiarySystemFill
+        overallProgressView.progressTintColor = .systemGreen
+        overallProgressView.progress = 0
 
         filterControl.selectedIndex = FilterMode.all.rawValue
         filterControl.addTarget(self, action: #selector(filterChanged), for: .valueChanged)
@@ -115,41 +190,93 @@ final class BackupViewController: UIViewController {
         logTextView.textContainerInset = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         logTextView.isHidden = true
 
-        view.addSubview(statusLabel)
+        view.addSubview(statusCardView)
+        statusCardView.addSubview(statusThumbnailContainer)
+        statusThumbnailContainer.addSubview(statusThumbnailImageView)
+        statusCardView.addSubview(statusRightStack)
+        statusRightStack.addArrangedSubview(statusTopRowStack)
+        statusTopRowStack.addArrangedSubview(statusTitleLabel)
+        statusTopRowStack.addArrangedSubview(statusDateLabel)
+        statusRightStack.addArrangedSubview(resourcePercentLabel)
+        statusCardView.addSubview(overallProgressLeadingLabel)
+        statusCardView.addSubview(overallProgressPercentLabel)
+        statusCardView.addSubview(overallProgressView)
+
         view.addSubview(filterControl)
         view.addSubview(tableView)
         view.addSubview(logTextView)
 
-        statusLabel.snp.makeConstraints { make in
+        statusCardView.snp.makeConstraints { make in
             make.top.equalTo(view.safeAreaLayoutGuide).offset(8)
             make.leading.trailing.equalToSuperview().inset(12)
+            make.height.greaterThanOrEqualTo(120)
+        }
+
+        statusThumbnailContainer.snp.makeConstraints { make in
+            make.leading.top.equalToSuperview().inset(12)
+            make.size.equalTo(CGSize(width: 56, height: 56))
+        }
+
+        statusThumbnailImageView.snp.makeConstraints { make in
+            make.edges.equalToSuperview().inset(4)
+        }
+
+        statusRightStack.snp.makeConstraints { make in
+            make.leading.equalTo(statusThumbnailContainer.snp.trailing).offset(10)
+            make.trailing.equalToSuperview().inset(12)
+            make.centerY.equalTo(statusThumbnailContainer.snp.centerY)
+            make.bottom.lessThanOrEqualTo(overallProgressLeadingLabel.snp.top).offset(-8)
+        }
+
+        statusDateLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        statusDateLabel.setContentHuggingPriority(.required, for: .horizontal)
+
+        overallProgressLeadingLabel.snp.makeConstraints { make in
+            make.top.equalTo(statusThumbnailContainer.snp.bottom).offset(10)
+            make.leading.equalToSuperview().inset(12)
+            make.trailing.lessThanOrEqualTo(overallProgressPercentLabel.snp.leading).offset(-8)
+        }
+
+        overallProgressPercentLabel.snp.makeConstraints { make in
+            make.centerY.equalTo(overallProgressLeadingLabel)
+            make.trailing.equalToSuperview().inset(12)
+        }
+
+        overallProgressView.snp.makeConstraints { make in
+            make.top.equalTo(overallProgressLeadingLabel.snp.bottom).offset(6)
+            make.leading.trailing.equalToSuperview().inset(12)
+            make.height.equalTo(4)
+            make.bottom.equalToSuperview().inset(12)
         }
 
         filterControl.snp.makeConstraints { make in
-            make.top.equalTo(statusLabel.snp.bottom).offset(8)
             make.leading.trailing.equalToSuperview().inset(12)
+            make.bottom.equalTo(view.safeAreaLayoutGuide).inset(12)
             make.height.greaterThanOrEqualTo(58)
         }
 
         tableView.snp.makeConstraints { make in
-            make.top.equalTo(filterControl.snp.bottom).offset(10)
+            make.top.equalTo(statusCardView.snp.bottom).offset(10)
             make.leading.trailing.equalToSuperview().inset(12)
-            make.bottom.equalTo(view.safeAreaLayoutGuide).inset(12)
+            make.bottom.equalTo(filterControl.snp.top).offset(-10)
         }
 
         logTextView.snp.makeConstraints { make in
-            make.top.equalTo(filterControl.snp.bottom).offset(10)
+            make.top.equalTo(statusCardView.snp.bottom).offset(10)
             make.leading.trailing.equalToSuperview().inset(12)
-            make.bottom.equalTo(view.safeAreaLayoutGuide).inset(12)
+            make.bottom.equalTo(filterControl.snp.top).offset(-10)
         }
     }
 
     private func render(snapshot: BackupSessionController.Snapshot) {
+        let previousSnapshot = latestSnapshot
         latestSnapshot = snapshot
-        statusLabel.text = snapshot.statusText
+        updateStatusCard(using: snapshot)
         updateFilterTitles(using: snapshot)
         updateLogContent(snapshot.logs)
-        applyFilter(using: snapshot)
+        if shouldRefreshProcessedItems(previous: previousSnapshot, next: snapshot) {
+            applyFilter(using: snapshot)
+        }
 
         switch snapshot.state {
         case .running:
@@ -164,6 +291,98 @@ final class BackupViewController: UIViewController {
             startBarButtonItem.isEnabled = true
             pauseBarButtonItem.isEnabled = false
             stopBarButtonItem.isEnabled = false
+        }
+    }
+
+    private func shouldRefreshProcessedItems(
+        previous: BackupSessionController.Snapshot?,
+        next: BackupSessionController.Snapshot
+    ) -> Bool {
+        guard let previous else { return true }
+        let previousEventTime = previous.latestItemEvent?.updatedAt
+        let nextEventTime = next.latestItemEvent?.updatedAt
+        return previousEventTime != nextEventTime || previous.processedItems.count != next.processedItems.count
+    }
+
+    private func updateStatusCard(using snapshot: BackupSessionController.Snapshot) {
+        let completed = snapshot.succeeded + snapshot.failed + snapshot.skipped
+        let total = snapshot.total
+        let overallFraction: Float = total > 0 ? Float(completed) / Float(total) : 0
+        let overallPercent = Int((overallFraction * 100).rounded())
+        overallProgressLeadingLabel.text = "\(completed)/\(total)（\(taskStateText(for: snapshot))）"
+        overallProgressPercentLabel.text = "\(overallPercent)%"
+        overallProgressView.progress = overallFraction
+
+        guard let transfer = snapshot.transferState else {
+            statusTitleLabel.text = snapshot.latestItemEvent?.displayName ?? "暂无上传项目"
+            if let date = snapshot.latestItemEvent?.resourceDate {
+                statusDateLabel.text = Self.resourceDateFormatter.string(from: date)
+            } else {
+                statusDateLabel.text = "--"
+            }
+            resourcePercentLabel.text = "--"
+            applyStatusThumbnail(assetLocalIdentifier: snapshot.latestItemEvent?.assetLocalIdentifier)
+            return
+        }
+
+        let clamped = transfer.clampedResourceFraction
+        let resourcePercent = clamped >= 1 ? 100 : Int(floor(Double(clamped) * 100))
+        statusTitleLabel.text = transfer.assetDisplayName
+        if let resourceDate = transfer.resourceDate {
+            statusDateLabel.text = Self.resourceDateFormatter.string(from: resourceDate)
+        } else {
+            statusDateLabel.text = "--"
+        }
+        resourcePercentLabel.text = "\(resourcePercent)%"
+        applyStatusThumbnail(assetLocalIdentifier: transfer.assetLocalIdentifier)
+    }
+
+    private func taskStateText(for snapshot: BackupSessionController.Snapshot) -> String {
+        if snapshot.statusText.contains("正在停止") {
+            return "正在停止"
+        }
+        switch snapshot.state {
+        case .running:
+            return "进行中"
+        case .paused:
+            return "已暂停"
+        case .stopped:
+            return "已停止"
+        case .failed:
+            return "失败"
+        case .completed:
+            return "已完成"
+        case .idle:
+            return "未开始"
+        }
+    }
+
+    private func applyStatusThumbnail(assetLocalIdentifier: String?) {
+        guard statusThumbnailAssetID != assetLocalIdentifier else { return }
+        statusThumbnailAssetID = assetLocalIdentifier
+        statusThumbnailImageView.image = UIImage(systemName: "photo")
+
+        guard let assetLocalIdentifier else { return }
+        let auth = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard auth == .authorized || auth == .limited else { return }
+
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [assetLocalIdentifier], options: nil)
+        guard let asset = fetched.firstObject else { return }
+
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .fastFormat
+        options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
+
+        imageManager.requestImage(
+            for: asset,
+            targetSize: CGSize(width: 120, height: 120),
+            contentMode: .aspectFill,
+            options: options
+        ) { [weak self] image, _ in
+            guard let self else { return }
+            guard self.statusThumbnailAssetID == assetLocalIdentifier else { return }
+            self.statusThumbnailImageView.image = image ?? UIImage(systemName: "photo")
         }
     }
 
@@ -222,16 +441,17 @@ final class BackupViewController: UIViewController {
         tableView.isHidden = false
         logTextView.isHidden = true
 
+        let displayOrderedItems = Array(snapshot.processedItems.reversed())
         let nextItems: [BackupSessionController.ProcessedItem]
         switch mode {
         case .all:
-            nextItems = snapshot.processedItems
+            nextItems = displayOrderedItems
         case .success:
-            nextItems = snapshot.processedItems.filter { $0.status == .success }
+            nextItems = displayOrderedItems.filter { $0.status == .success }
         case .failed:
-            nextItems = snapshot.processedItems.filter { $0.status == .failed }
+            nextItems = displayOrderedItems.filter { $0.status == .failed }
         case .skipped:
-            nextItems = snapshot.processedItems.filter { $0.status == .skipped }
+            nextItems = displayOrderedItems.filter { $0.status == .skipped }
         case .log:
             nextItems = []
         }

@@ -108,12 +108,21 @@ final class AMSMB2Client: SMBClientProtocol {
         #endif
     }
 
-    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool) async throws {
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
         #if canImport(AMSMB2)
+        let expectedByteCount = Self.fileSizeInBytes(for: localURL)
         try await manager.uploadItem(
             at: localURL,
             toPath: RemotePathBuilder.normalizePath(remotePath),
-            progress: { _ in
+            progress: { value in
+                if let normalized = Self.normalizedProgressValue(value, expectedByteCount: expectedByteCount) {
+                    onProgress?(normalized)
+                }
                 guard respectTaskCancellation else { return true }
                 return !Task.isCancelled
             }
@@ -132,6 +141,38 @@ final class AMSMB2Client: SMBClientProtocol {
         #else
         throw SMBClientError.unavailable
         #endif
+    }
+
+    private static func normalizedProgressValue<T>(_ value: T, expectedByteCount: Int64?) -> Double? {
+        if let double = value as? Double {
+            return normalizedFraction(fromRawProgress: double, expectedByteCount: expectedByteCount)
+        }
+        if let float = value as? Float {
+            return normalizedFraction(fromRawProgress: Double(float), expectedByteCount: expectedByteCount)
+        }
+        if let number = value as? NSNumber {
+            return normalizedFraction(fromRawProgress: number.doubleValue, expectedByteCount: expectedByteCount)
+        }
+        return nil
+    }
+
+    private static func normalizedFraction(fromRawProgress raw: Double, expectedByteCount: Int64?) -> Double {
+        let nonNegativeRaw = max(raw, 0)
+        if nonNegativeRaw <= 1 {
+            return min(max(nonNegativeRaw, 0), 1)
+        }
+        guard let expectedByteCount, expectedByteCount > 0 else {
+            return min(max(nonNegativeRaw, 0), 1)
+        }
+        return min(max(nonNegativeRaw / Double(expectedByteCount), 0), 1)
+    }
+
+    private static func fileSizeInBytes(for fileURL: URL) -> Int64? {
+        guard let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey]),
+              let fileSize = values.fileSize else {
+            return nil
+        }
+        return Int64(fileSize)
     }
 
     func download(remotePath: String, localURL: URL) async throws {

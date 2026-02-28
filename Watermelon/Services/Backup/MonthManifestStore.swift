@@ -446,7 +446,8 @@ final class MonthManifestStore {
         try await client.upload(
             localURL: localManifestURL,
             remotePath: tempRemotePath,
-            respectTaskCancellation: false
+            respectTaskCancellation: false,
+            onProgress: nil
         )
 
         if try await client.exists(path: finalPath) {

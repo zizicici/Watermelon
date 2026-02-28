@@ -11,10 +11,40 @@ struct BackupItemEvent {
     let assetLocalIdentifier: String
     let assetFingerprint: Data?
     let displayName: String
+    let resourceDate: Date?
     let status: BackupItemStatus
     let reason: String?
     let resourceSummary: String?
     let updatedAt: Date
+}
+
+struct BackupTransferState {
+    let assetLocalIdentifier: String
+    let assetDisplayName: String
+    let resourceDate: Date?
+    let assetPosition: Int
+    let totalAssets: Int
+    let resourceDisplayName: String
+    let resourcePosition: Int
+    let totalResources: Int
+    let resourceFraction: Float
+    let stageDescription: String
+
+    var clampedResourceFraction: Float {
+        min(max(resourceFraction, 0), 1)
+    }
+
+    var assetFraction: Float {
+        guard totalResources > 0 else { return 0 }
+        let completedResources = Float(max(resourcePosition - 1, 0))
+        return min(max((completedResources + clampedResourceFraction) / Float(totalResources), 0), 1)
+    }
+
+    var overallFraction: Float {
+        guard totalAssets > 0 else { return 0 }
+        let completedAssets = Float(max(assetPosition - 1, 0))
+        return min(max((completedAssets + assetFraction) / Float(totalAssets), 0), 1)
+    }
 }
 
 struct LocalPhotoResource {
@@ -45,6 +75,7 @@ struct BackupProgress {
     let total: Int
     let message: String
     let itemEvent: BackupItemEvent?
+    let transferState: BackupTransferState?
 
     var processed: Int {
         succeeded + failed + skipped

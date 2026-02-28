@@ -44,7 +44,12 @@ protocol SMBClientProtocol {
     func disconnect() async
     func list(path: String) async throws -> [SMBRemoteEntry]
     func metadata(path: String) async throws -> SMBRemoteEntry?
-    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool) async throws
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws
     func setModificationDate(_ date: Date, forPath path: String) async throws
     func download(remotePath: String, localURL: URL) async throws
     func exists(path: String) async throws -> Bool

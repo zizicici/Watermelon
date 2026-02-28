@@ -203,10 +203,16 @@ final class BackupExecutor {
                     monthStore: monthStore,
                     profile: profile,
                     smbClient: smbClient,
-                    position: currentPosition - 1,
+                    assetPosition: currentPosition,
                     totalAssets: state.total,
-                    onProgressMessage: { [state] message in
-                        onProgress(self.progressSnapshot(state: state, message: message))
+                    onTransferProgress: { [state] transferState in
+                        onProgress(
+                            self.progressSnapshot(
+                                state: state,
+                                message: Self.transferMessage(for: transferState),
+                                transferState: transferState
+                            )
+                        )
                     },
                     onLog: onLog
                 )
@@ -228,6 +234,7 @@ final class BackupExecutor {
                             assetLocalIdentifier: asset.localIdentifier,
                             assetFingerprint: result.assetFingerprint,
                             displayName: result.displayName,
+                            resourceDate: asset.creationDate,
                             status: result.status,
                             reason: result.reason,
                             resourceSummary: result.resourceSummary
@@ -252,6 +259,7 @@ final class BackupExecutor {
                             assetLocalIdentifier: asset.localIdentifier,
                             assetFingerprint: nil,
                             displayName: displayName,
+                            resourceDate: asset.creationDate,
                             status: .failed,
                             reason: error.localizedDescription,
                             resourceSummary: "资源处理失败"
@@ -428,9 +436,9 @@ final class BackupExecutor {
         monthStore: MonthManifestStore,
         profile: ServerProfileRecord,
         smbClient: SMBClientProtocol,
-        position: Int,
+        assetPosition: Int,
         totalAssets: Int,
-        onProgressMessage: @escaping @MainActor (String) async -> Void,
+        onTransferProgress: @escaping @MainActor (BackupTransferState) async -> Void,
         onLog: @escaping @MainActor (String) -> Void
     ) async throws -> AssetProcessingResult {
         var preparedResources: [PreparedResource] = []
@@ -458,8 +466,20 @@ final class BackupExecutor {
             try Task.checkCancellation()
 
             let local = makeLocalResource(asset: asset, selected: selected)
-            let stageText = "[\(position + 1)/\(max(totalAssets, 1))] \(displayName) · [\(resourcePosition + 1)/\(selectedResources.count)] \(local.originalFilename)"
-            await onProgressMessage(stageText)
+            await onTransferProgress(
+                Self.makeTransferState(
+                    assetLocalIdentifier: asset.localIdentifier,
+                    assetDisplayName: displayName,
+                    resourceDate: local.asset.creationDate ?? local.resourceModificationDate,
+                    assetPosition: assetPosition,
+                    totalAssets: totalAssets,
+                    resourceDisplayName: local.originalFilename,
+                    resourcePosition: resourcePosition + 1,
+                    totalResources: selectedResources.count,
+                    resourceFraction: 0,
+                    stageDescription: "准备资源"
+                )
+            )
 
             let tempFileURL = try await photoLibraryService.exportResourceToTempFile(local.resource)
             let localHash = try Self.contentHash(of: tempFileURL)
@@ -516,16 +536,71 @@ final class BackupExecutor {
         var links: [RemoteAssetResourceLink] = []
         links.reserveCapacity(preparedResources.count)
 
-        for prepared in preparedResources {
+        for (resourceOffset, prepared) in preparedResources.enumerated() {
             try Task.checkCancellation()
 
+            let resourcePosition = resourceOffset + 1
+            let totalResources = max(preparedResources.count, 1)
+            await onTransferProgress(
+                Self.makeTransferState(
+                    assetLocalIdentifier: prepared.local.assetLocalIdentifier,
+                    assetDisplayName: displayName,
+                    resourceDate: prepared.shotDate,
+                    assetPosition: assetPosition,
+                    totalAssets: totalAssets,
+                    resourceDisplayName: prepared.local.originalFilename,
+                    resourcePosition: resourcePosition,
+                    totalResources: totalResources,
+                    resourceFraction: 0,
+                    stageDescription: "上传资源"
+                )
+            )
+
+            var lastReportedPercent = -1
             let uploadResult = try await processPreparedResource(
                 prepared: prepared,
                 monthStore: monthStore,
                 profile: profile,
-                smbClient: smbClient
+                smbClient: smbClient,
+                onUploadProgress: { fraction in
+                    let clamped = min(max(fraction, 0), 1)
+                    let percent = clamped >= 1 ? 100 : Int(floor(clamped * 100))
+                    guard percent != lastReportedPercent else { return }
+                    lastReportedPercent = percent
+                    Task { @MainActor in
+                        await onTransferProgress(
+                            Self.makeTransferState(
+                                assetLocalIdentifier: prepared.local.assetLocalIdentifier,
+                                assetDisplayName: displayName,
+                                resourceDate: prepared.shotDate,
+                                assetPosition: assetPosition,
+                                totalAssets: totalAssets,
+                                resourceDisplayName: prepared.local.originalFilename,
+                                resourcePosition: resourcePosition,
+                                totalResources: totalResources,
+                                resourceFraction: Float(clamped),
+                                stageDescription: "上传资源"
+                            )
+                        )
+                    }
+                }
             )
             uploadResults.append(uploadResult)
+
+            await onTransferProgress(
+                Self.makeTransferState(
+                    assetLocalIdentifier: prepared.local.assetLocalIdentifier,
+                    assetDisplayName: displayName,
+                    resourceDate: prepared.shotDate,
+                    assetPosition: assetPosition,
+                    totalAssets: totalAssets,
+                    resourceDisplayName: prepared.local.originalFilename,
+                    resourcePosition: resourcePosition,
+                    totalResources: totalResources,
+                    resourceFraction: 1,
+                    stageDescription: "上传完成"
+                )
+            )
 
             if uploadResult.status != .failed {
                 links.append(
@@ -698,7 +773,8 @@ final class BackupExecutor {
         prepared: PreparedResource,
         monthStore: MonthManifestStore,
         profile: ServerProfileRecord,
-        smbClient: SMBClientProtocol
+        smbClient: SMBClientProtocol,
+        onUploadProgress: ((Double) -> Void)? = nil
     ) async throws -> ResourceUploadResult {
         let local = prepared.local
         let localHash = prepared.contentHash
@@ -781,7 +857,8 @@ final class BackupExecutor {
                 try await smbClient.upload(
                     localURL: prepared.tempFileURL,
                     remotePath: remoteAbsolutePath,
-                    respectTaskCancellation: true
+                    respectTaskCancellation: true,
+                    onProgress: onUploadProgress
                 )
                 if let shotDate = prepared.shotDate {
                     try? await smbClient.setModificationDate(shotDate, forPath: remoteAbsolutePath)
@@ -900,7 +977,8 @@ final class BackupExecutor {
     private func progressSnapshot(
         state: RunState,
         message: String,
-        itemEvent: BackupItemEvent? = nil
+        itemEvent: BackupItemEvent? = nil,
+        transferState: BackupTransferState? = nil
     ) -> BackupProgress {
         BackupProgress(
             succeeded: state.succeeded,
@@ -908,8 +986,41 @@ final class BackupExecutor {
             skipped: state.skipped,
             total: state.total,
             message: message,
-            itemEvent: itemEvent
+            itemEvent: itemEvent,
+            transferState: transferState
         )
+    }
+
+    private static func makeTransferState(
+        assetLocalIdentifier: String,
+        assetDisplayName: String,
+        resourceDate: Date?,
+        assetPosition: Int,
+        totalAssets: Int,
+        resourceDisplayName: String,
+        resourcePosition: Int,
+        totalResources: Int,
+        resourceFraction: Float,
+        stageDescription: String
+    ) -> BackupTransferState {
+        BackupTransferState(
+            assetLocalIdentifier: assetLocalIdentifier,
+            assetDisplayName: assetDisplayName,
+            resourceDate: resourceDate,
+            assetPosition: max(1, assetPosition),
+            totalAssets: max(totalAssets, 1),
+            resourceDisplayName: resourceDisplayName,
+            resourcePosition: max(1, resourcePosition),
+            totalResources: max(totalResources, 1),
+            resourceFraction: min(max(resourceFraction, 0), 1),
+            stageDescription: stageDescription
+        )
+    }
+
+    private static func transferMessage(for state: BackupTransferState) -> String {
+        let clamped = state.clampedResourceFraction
+        let resourcePercent = clamped >= 1 ? 100 : Int(floor(Double(clamped) * 100))
+        return "[\(state.assetPosition)/\(max(state.totalAssets, 1))] \(state.assetDisplayName) · [\(state.resourcePosition)/\(state.totalResources)] \(state.resourceDisplayName) \(resourcePercent)%"
     }
 
     private func message(for result: AssetProcessingResult, position: Int, total: Int) -> String {
@@ -931,6 +1042,7 @@ final class BackupExecutor {
         assetLocalIdentifier: String,
         assetFingerprint: Data?,
         displayName: String,
+        resourceDate: Date?,
         status: BackupItemStatus,
         reason: String? = nil,
         resourceSummary: String? = nil
@@ -939,6 +1051,7 @@ final class BackupExecutor {
             assetLocalIdentifier: assetLocalIdentifier,
             assetFingerprint: assetFingerprint,
             displayName: displayName,
+            resourceDate: resourceDate,
             status: status,
             reason: reason,
             resourceSummary: resourceSummary,

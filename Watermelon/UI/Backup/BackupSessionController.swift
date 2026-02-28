@@ -64,6 +64,7 @@ final class BackupSessionController {
         let processedItems: [ProcessedItem]
         let failedItems: [FailedItem]
         let latestItemEvent: BackupItemEvent?
+        let transferState: BackupTransferState?
     }
 
     private enum TerminationIntent {
@@ -111,6 +112,7 @@ final class BackupSessionController {
     private var processedItemsQueue: [ProcessedItem] = []
     private var processedItemQueueIndexByAssetID: [String: Int] = [:]
     private(set) var latestItemEvent: BackupItemEvent?
+    private(set) var transferState: BackupTransferState?
     private var retryCountByAssetID: [String: Int] = [:]
     private var failedItemsByAssetID: [String: FailedItem] = [:]
     private(set) var failedItems: [FailedItem] = []
@@ -131,7 +133,8 @@ final class BackupSessionController {
             logs: logs,
             processedItems: processedItemsSnapshot(),
             failedItems: failedItems,
-            latestItemEvent: latestItemEvent
+            latestItemEvent: latestItemEvent,
+            transferState: transferState
         )
     }
 
@@ -235,6 +238,7 @@ final class BackupSessionController {
         if shouldResetSessionItems {
             clearProcessedItems()
             latestItemEvent = nil
+            transferState = nil
             retryCountByAssetID.removeAll()
             failedItemsByAssetID.removeAll()
             failedItems.removeAll()
@@ -273,6 +277,7 @@ final class BackupSessionController {
                         self.skipped = progress.skipped
                         self.total = progress.total
                         self.statusText = progress.message
+                        self.transferState = progress.transferState
                         self.applyProgressEvent(progress.itemEvent)
                         self.notifyObservers()
                     },
@@ -288,6 +293,7 @@ final class BackupSessionController {
 
                 self.state = .failed
                 self.statusText = "备份失败"
+                self.transferState = nil
                 self.appendLog("错误: \(error.localizedDescription)")
                 self.rebuildFailedItems()
                 self.notifyObservers()
@@ -301,11 +307,13 @@ final class BackupSessionController {
         guard runTask != nil else {
             state = .paused
             statusText = "备份已暂停"
+            transferState = nil
             notifyObservers()
             return
         }
         terminationIntent = .pause
         statusText = "正在暂停..."
+        transferState = nil
         runTask?.cancel()
         notifyObservers()
     }
@@ -314,11 +322,13 @@ final class BackupSessionController {
         guard runTask != nil else {
             state = .stopped
             statusText = "备份已停止"
+            transferState = nil
             notifyObservers()
             return
         }
         terminationIntent = .stop
         statusText = "正在停止..."
+        transferState = nil
         runTask?.cancel()
         notifyObservers()
     }
@@ -338,6 +348,7 @@ final class BackupSessionController {
             lastPausedRunMode = nil
             state = .stopped
             statusText = "备份已停止"
+            transferState = nil
             appendLog("任务已停止")
             rebuildFailedItems()
             notifyObservers()
@@ -348,6 +359,7 @@ final class BackupSessionController {
             lastPausedRunMode = runMode
             state = .paused
             statusText = "备份已暂停"
+            transferState = nil
             appendLog("任务已暂停")
             rebuildFailedItems()
             notifyObservers()
@@ -358,6 +370,7 @@ final class BackupSessionController {
         state = .completed
         let verb = runMode.isRetry ? "重试" : "备份"
         statusText = result.failed == 0 ? "\(verb)完成" : "\(verb)完成（部分失败）"
+        transferState = nil
         appendLog("完成: 成功\(succeeded) 失败\(result.failed) 跳过\(result.skipped)")
         rebuildFailedItems()
         notifyObservers()
@@ -477,6 +490,7 @@ final class BackupSessionController {
                     self.lastPausedRunMode = nil
                     self.state = .completed
                     self.statusText = "备份完成"
+                    self.transferState = nil
                     self.appendLog("无剩余 Asset，已完成")
                     self.rebuildFailedItems()
                     self.notifyObservers()
@@ -492,6 +506,7 @@ final class BackupSessionController {
                 self.currentRunMode = .full
                 self.state = intent == .stop ? .stopped : .paused
                 self.statusText = intent == .stop ? "备份已停止" : "备份已暂停"
+                self.transferState = nil
                 self.appendLog(intent == .stop ? "任务已停止" : "任务已暂停")
                 self.rebuildFailedItems()
                 self.notifyObservers()
@@ -501,6 +516,7 @@ final class BackupSessionController {
                 self.currentRunMode = .full
                 self.state = .failed
                 self.statusText = "继续备份失败"
+                self.transferState = nil
                 self.appendLog("继续失败: \(error.localizedDescription)")
                 self.rebuildFailedItems()
                 self.notifyObservers()
