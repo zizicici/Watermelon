@@ -73,10 +73,12 @@ The central flow runs inside `BackupExecutor.runBackup(...)`:
 - `local_assets` — per-asset fingerprint cache
 - `local_asset_resources` — per-resource content hash by `(assetLocalIdentifier, role, slot)`
 
-**Remote monthly manifest** (`MonthManifestStore`), path `/{YYYY}/{MM}/.watermelon_manifest.sqlite`, migration `month_manifest_v2_reset_schema`:
+**Remote monthly manifest** (`MonthManifestStore`), path `/{YYYY}/{MM}/.watermelon_manifest.sqlite`, migrations `month_manifest_v2_reset_schema` + `month_manifest_v2_schema_baseline` (idempotent baseline, non-destructive):
 - `resources` — individual files (keyed by `fileName`, unique on `contentHash`)
 - `assets` — logical asset records (keyed by `assetFingerprint`)
 - `asset_resources` — join table linking asset ↔ resource with `role`/`slot`
+
+Remote manifest migrations must stay incremental and non-destructive (no reset/drop-recreate for schema upgrades).
 
 Manifest writes are deferred: `upsertResource/upsertAsset` mark `dirty=true`; `flushToRemote()` uploads the sqlite file at month boundaries and at `runBackup` completion.
 

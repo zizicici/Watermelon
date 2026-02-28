@@ -71,7 +71,7 @@ ON local_asset_resources(contentHash);
 
 路径：`/{YYYY}/{MM}/.watermelon_manifest.sqlite`
 
-迁移名：`month_manifest_v2_reset_schema`。
+迁移名：`month_manifest_v2_reset_schema` + `month_manifest_v2_schema_baseline`（幂等基线迁移，非破坏式）。
 
 ### `resources`
 
@@ -82,9 +82,11 @@ CREATE TABLE resources (
   fileSize INTEGER NOT NULL,
   resourceType INTEGER NOT NULL,
   creationDateNs INTEGER,
-  backedUpAtNs INTEGER NOT NULL,
-  UNIQUE(contentHash)
+  backedUpAtNs INTEGER NOT NULL
 );
+
+CREATE UNIQUE INDEX idx_resources_contentHash
+ON resources(contentHash);
 ```
 
 ### `assets`

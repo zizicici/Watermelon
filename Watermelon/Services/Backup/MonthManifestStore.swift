@@ -493,42 +493,53 @@ final class MonthManifestStore {
 
     private static func migrate(_ queue: DatabaseQueue) throws {
         var migrator = DatabaseMigrator()
+        // Remote manifests are user data on NAS: migrations must stay incremental/non-destructive.
         migrator.registerMigration("month_manifest_v2_reset_schema") { db in
-            let candidateTables = ["manifest_items", "resources", "assets", "asset_resources"]
-            for tableName in candidateTables where try db.tableExists(tableName) {
-                try db.drop(table: tableName)
-            }
-
-            try db.create(table: "resources") { table in
-                table.column("fileName", .text).notNull().primaryKey()
-                table.column("contentHash", .blob).notNull()
-                table.column("fileSize", .integer).notNull()
-                table.column("resourceType", .integer).notNull()
-                table.column("creationDateNs", .integer)
-                table.column("backedUpAtNs", .integer).notNull()
-                table.uniqueKey(["contentHash"])
-            }
-
-            try db.create(table: "assets") { table in
-                table.column("assetFingerprint", .blob).notNull().primaryKey()
-                table.column("creationDateNs", .integer)
-                table.column("backedUpAtNs", .integer).notNull()
-                table.column("resourceCount", .integer).notNull()
-            }
-
-            try db.create(table: "asset_resources") { table in
-                table.column("assetFingerprint", .blob).notNull()
-                table.column("resourceHash", .blob).notNull()
-                table.column("role", .integer).notNull()
-                table.column("slot", .integer).notNull()
-                table.primaryKey(["assetFingerprint", "role", "slot"])
-            }
-
-            try db.create(index: "idx_resources_contentHash", on: "resources", columns: ["contentHash"], unique: true)
-            try db.create(index: "idx_asset_resources_asset", on: "asset_resources", columns: ["assetFingerprint"])
-            try db.create(index: "idx_asset_resources_hash", on: "asset_resources", columns: ["resourceHash"])
+            try ensureSchemaBaseline(db)
+        }
+        migrator.registerMigration("month_manifest_v2_schema_baseline") { db in
+            try ensureSchemaBaseline(db)
         }
         try migrator.migrate(queue)
+    }
+
+    private static func ensureSchemaBaseline(_ db: Database) throws {
+        try db.execute(
+            sql: """
+            CREATE TABLE IF NOT EXISTS resources (
+              fileName TEXT PRIMARY KEY NOT NULL,
+              contentHash BLOB NOT NULL,
+              fileSize INTEGER NOT NULL,
+              resourceType INTEGER NOT NULL,
+              creationDateNs INTEGER,
+              backedUpAtNs INTEGER NOT NULL
+            )
+            """
+        )
+        try db.execute(
+            sql: """
+            CREATE TABLE IF NOT EXISTS assets (
+              assetFingerprint BLOB PRIMARY KEY NOT NULL,
+              creationDateNs INTEGER,
+              backedUpAtNs INTEGER NOT NULL,
+              resourceCount INTEGER NOT NULL
+            )
+            """
+        )
+        try db.execute(
+            sql: """
+            CREATE TABLE IF NOT EXISTS asset_resources (
+              assetFingerprint BLOB NOT NULL,
+              resourceHash BLOB NOT NULL,
+              role INTEGER NOT NULL,
+              slot INTEGER NOT NULL,
+              PRIMARY KEY(assetFingerprint, role, slot)
+            )
+            """
+        )
+        try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_resources_contentHash ON resources(contentHash)")
+        try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_asset_resources_asset ON asset_resources(assetFingerprint)")
+        try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_asset_resources_hash ON asset_resources(resourceHash)")
     }
 
     private func reloadCache() throws {
