@@ -2,7 +2,7 @@
 
 ## 1. 当前状态（一句话）
 
-当前主线是“单个 Home 页面 + 备份状态页 + 多存储连接管理（SMB/外接存储）”，备份按 Asset 计数，远端月 manifest 使用三表关系模型（resources/assets/asset_resources）。
+当前主线是“单个 Home 页面 + 备份状态页 + 多存储连接管理（SMB/WebDAV/外接存储）”，备份按 Asset 计数，远端月 manifest 使用三表关系模型（resources/assets/asset_resources）。
 
 ## 2. 优先阅读文件
 
@@ -20,7 +20,7 @@
 
 1. `AppCoordinator.start()` 直接 `showHome()`。
 2. Home 右上角是连接按钮（当前连接/添加存储/管理存储）。
-3. 添加存储支持 SMB 和外接存储目录。
+3. 添加存储支持 SMB、WebDAV 和外接存储目录。
 4. 管理页支持删除、排序、编辑连接参数；点击连接项会直接进入参数编辑页（名称在参数页内编辑）。
 5. 连接成功后会先 `reloadRemoteIndex`，拿到远端快照并缓存。
 6. 底部工具栏右侧“备份”打开 `BackupStatusViewController`。

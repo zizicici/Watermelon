@@ -24,6 +24,16 @@ final class StorageClientFactory: StorageClientFactoryProtocol {
                 password: password,
                 domain: profile.domain
             ))
+        case .webdav:
+            guard let params = profile.webDAVParams,
+                  let endpointURL = URL(string: params.endpointURLString) else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            return WebDAVClient(config: WebDAVClient.Config(
+                endpointURL: endpointURL,
+                username: profile.username,
+                password: password
+            ))
         case .externalVolume:
             guard let params = profile.externalVolumeParams else {
                 throw RemoteStorageClientError.invalidConfiguration

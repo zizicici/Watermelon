@@ -3,6 +3,7 @@ import GRDB
 
 enum StorageType: String, Codable {
     case smb
+    case webdav
     case externalVolume
 }
 

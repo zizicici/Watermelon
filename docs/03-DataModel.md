@@ -2,7 +2,7 @@
 
 ## 1. 本地 SQLite（`DatabaseManager`）
 
-迁移名：`v3_dev_reset_schema`、`v4_server_profiles_storage_type`、`v5_server_profiles_sort_order`。
+迁移名：`v3_dev_reset_schema`、`v4_server_profiles_storage_type`、`v5_server_profiles_sort_order`、`v6_server_profiles_partial_unique_smb`。
 
 开发期策略：重建 schema（会 drop 已知旧表）。
 
@@ -23,9 +23,12 @@ CREATE TABLE server_profiles (
   domain TEXT,
   credentialRef TEXT NOT NULL,
   createdAt DATETIME NOT NULL,
-  updatedAt DATETIME NOT NULL,
-  UNIQUE(host, shareName, basePath, username)
+  updatedAt DATETIME NOT NULL
 );
+
+CREATE UNIQUE INDEX idx_server_profiles_unique_smb
+ON server_profiles(host, shareName, basePath, username)
+WHERE storageType = 'smb';
 ```
 
 ### `sync_state`
@@ -127,8 +130,8 @@ ON asset_resources(resourceHash);
 
 1. `local_assets.assetFingerprint`：由 Asset 下资源的 `(role, slot, contentHash)` 组合计算得到。
 2. `local_asset_resources`：记录单个 Asset 在本地对应资源位点（role/slot）的 hash。
-3. `server_profiles.storageType`：连接类型（`smb` / `externalVolume`）。
-4. `server_profiles.connectionParams`：类型特定参数（如外接存储 bookmark + displayPath 的 JSON 编码数据）。
+3. `server_profiles.storageType`：连接类型（`smb` / `webdav` / `externalVolume`）。
+4. `server_profiles.connectionParams`：类型特定参数（如 WebDAV 的 `endpointURLString`、外接存储的 bookmark + displayPath）。
 5. `server_profiles.sortOrder`：连接列表排序值，管理页拖拽后更新。
 
 ### remote manifest side
@@ -151,4 +154,4 @@ ON asset_resources(resourceHash);
 
 1. service：`com.zizicici.watermelon.credentials`
 2. account：`credentialRef`
-3. SMB 连接使用该密码；外接存储不依赖密码（bookmark 在 `connectionParams`）。
+3. SMB / WebDAV 连接使用该密码；外接存储不依赖密码（bookmark 在 `connectionParams`）。

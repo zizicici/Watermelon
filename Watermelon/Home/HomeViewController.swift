@@ -425,6 +425,8 @@ final class HomeViewController: UIViewController {
                 switch profile.resolvedStorageType {
                 case .smb:
                     symbolName = "network"
+                case .webdav:
+                    symbolName = "globe"
                 case .externalVolume:
                     symbolName = "externaldrive"
                 }
@@ -487,6 +489,12 @@ final class HomeViewController: UIViewController {
                 )
             )
         }
+        let addWebDAV = UIAction(
+            title: "添加 WebDAV 存储",
+            image: UIImage(systemName: "globe.badge.chevron.backward")
+        ) { [weak self] _ in
+            self?.openAddWebDAVStorageFlow()
+        }
         let addExternal = UIAction(
             title: "添加外接存储目录",
             image: UIImage(systemName: "externaldrive.badge.plus")
@@ -494,7 +502,7 @@ final class HomeViewController: UIViewController {
             self?.openAddExternalStorageFlow()
         }
 
-        let addActionsSection = UIMenu(title: "", options: .displayInline, children: [addSMB, addExternal])
+        let addActionsSection = UIMenu(title: "", options: .displayInline, children: [addSMB, addWebDAV, addExternal])
         let addStorageMenu = UIMenu(title: "添加存储", image: UIImage(systemName: "plus"), children: [discoveredSection, addActionsSection])
 
         let manageStorageAction: UIMenuElement
@@ -648,6 +656,16 @@ final class HomeViewController: UIViewController {
 
     private func openAddExternalStorageFlow() {
         let addVC = AddExternalStorageViewController(dependencies: dependencies) { [weak self] profile, password in
+            guard let self else { return }
+            self.loadSavedProfiles()
+            self.updateConnectionMenu()
+            self.connect(profile: profile, password: password)
+        }
+        navigationController?.pushViewController(addVC, animated: true)
+    }
+
+    private func openAddWebDAVStorageFlow() {
+        let addVC = AddWebDAVStorageViewController(dependencies: dependencies) { [weak self] profile, password in
             guard let self else { return }
             self.loadSavedProfiles()
             self.updateConnectionMenu()

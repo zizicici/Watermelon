@@ -5,6 +5,10 @@ struct ExternalVolumeConnectionParams: Codable {
     let displayPath: String
 }
 
+struct WebDAVConnectionParams: Codable {
+    let endpointURLString: String
+}
+
 struct StorageProfile {
     let record: ServerProfileRecord
 
@@ -13,12 +17,19 @@ struct StorageProfile {
     }
 
     var requiresPassword: Bool {
-        storageType == .smb
+        switch storageType {
+        case .smb, .webdav:
+            return true
+        case .externalVolume:
+            return false
+        }
     }
 
     var displayTitle: String {
         switch storageType {
         case .smb:
+            return "\(record.username)@\(record.name)"
+        case .webdav:
             return "\(record.username)@\(record.name)"
         case .externalVolume:
             return record.name
@@ -29,6 +40,12 @@ struct StorageProfile {
         switch storageType {
         case .smb:
             return "SMB://\(record.host)/\(record.shareName)\(record.basePath)"
+        case .webdav:
+            let endpoint = record.webDAVParams?.endpointURLString ?? "WebDAV"
+            if record.basePath == "/" {
+                return endpoint
+            }
+            return "\(endpoint)\(record.basePath)"
         case .externalVolume:
             if let path = record.externalVolumeParams?.displayPath, !path.isEmpty {
                 return Self.relativeExternalPath(from: path)
@@ -41,6 +58,8 @@ struct StorageProfile {
         switch storageType {
         case .smb:
             return "\(record.username)@\(record.shareName)\(record.basePath)"
+        case .webdav:
+            return "\(record.username)@\(record.name)"
         case .externalVolume:
             return record.name
         }
@@ -57,6 +76,13 @@ struct StorageProfile {
                 RemotePathBuilder.normalizePath(record.basePath),
                 record.username,
                 record.domain ?? ""
+            ].joined(separator: "|")
+        case .webdav:
+            return [
+                storageType.rawValue,
+                record.webDAVParams?.endpointURLString ?? "missing_endpoint",
+                RemotePathBuilder.normalizePath(record.basePath),
+                record.username
             ].joined(separator: "|")
         case .externalVolume:
             let bookmarkTag: String
@@ -98,6 +124,10 @@ extension ServerProfileRecord {
 
     var externalVolumeParams: ExternalVolumeConnectionParams? {
         decodedConnectionParams(as: ExternalVolumeConnectionParams.self)
+    }
+
+    var webDAVParams: WebDAVConnectionParams? {
+        decodedConnectionParams(as: WebDAVConnectionParams.self)
     }
 
     func decodedConnectionParams<T: Decodable>(as type: T.Type) -> T? {

@@ -8,14 +8,12 @@ App 启动后直接进入 `HomeViewController`。
 
 1. 右上角连接按钮显示当前状态：`加载中……` / `当前连接标识` / `单机模式`。
 2. `SMB` 连接时标识是 `username@share/basePath`。
-3. `外接存储` 连接时标识是 profile 名称（用户输入的名称）。
-4. 连接按钮菜单包含：
-5. 当前模式切换（单机模式/已保存连接，含类型图标）。
-6. 添加存储子菜单：
-7. `SMB` 局域网发现列表。
-8. `添加 SMB 存储`。
-9. `添加外接存储目录`。
-10. 管理入口：`管理存储`（单机模式不在此处管理）。
+3. `WebDAV` 连接时标识是 `username@profileName`。
+4. `外接存储` 连接时标识是 profile 名称（用户输入的名称）。
+5. 连接按钮菜单包含三段：
+6. 当前模式切换（单机模式/已保存连接）。已保存连接有类型图标：SMB=`network`，WebDAV=`globe`，外接存储=`externaldrive`；单机模式无图标。
+7. 添加存储子菜单：`SMB 局域网发现`、`添加 SMB 存储`、`添加 WebDAV 存储`、`添加外接存储目录`。
+8. 管理入口：`管理存储`（无已保存连接时禁用；单机模式不在管理页）。
 
 ### 底部工具栏
 
@@ -75,11 +73,19 @@ App 启动后直接进入 `HomeViewController`。
 
 保存成功后回到 Home，并尝试连接该 profile。
 
+### 添加 WebDAV
+
+1. `AddWebDAVStorageViewController`
+2. 输入名称、Endpoint URL、备份根路径、用户名、密码
+3. 保存后写入 `server_profiles`（`storageType=webdav` + `connectionParams.endpointURLString`）并写 Keychain
+
+保存成功后回到 Home，并尝试连接该 profile。
+
 ### 管理存储
 
 1. `ManageStorageProfilesViewController`
 2. 支持删除、排序（编辑模式拖拽）、编辑连接参数。
-3. 点击某个连接项会直接进入“按类型的连接参数编辑页”（不再先弹“编辑名称/编辑连接参数”二选一）。
+3. 点击某个连接项会直接进入“按类型的连接参数编辑页”（不再先弹“编辑名称/编辑连接参数”二选一；WebDAV 也同样直接进入参数页）。
 4. 名称修改包含在参数编辑页内。
 
 ## 7. 当前未接入主入口的页面

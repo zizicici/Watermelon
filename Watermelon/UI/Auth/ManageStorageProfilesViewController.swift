@@ -55,6 +55,8 @@ final class ManageStorageProfilesViewController: UIViewController {
         switch profile.resolvedStorageType {
         case .smb:
             return UIImage(systemName: "network")
+        case .webdav:
+            return UIImage(systemName: "globe")
         case .externalVolume:
             return UIImage(systemName: "externaldrive")
         }
@@ -78,6 +80,8 @@ final class ManageStorageProfilesViewController: UIViewController {
         switch profile.resolvedStorageType {
         case .smb:
             openSMBEditor(for: profile)
+        case .webdav:
+            openWebDAVEditor(for: profile)
         case .externalVolume:
             openExternalEditor(for: profile)
         }
@@ -104,6 +108,17 @@ final class ManageStorageProfilesViewController: UIViewController {
 
     private func openExternalEditor(for profile: ServerProfileRecord) {
         let editor = AddExternalStorageViewController(
+            dependencies: dependencies,
+            editingProfile: profile,
+            shouldPopToRootOnSave: false
+        ) { [weak self] _, _ in
+            self?.handleConnectionProfileEdited(editedProfileID: profile.id)
+        }
+        navigationController?.pushViewController(editor, animated: true)
+    }
+
+    private func openWebDAVEditor(for profile: ServerProfileRecord) {
+        let editor = AddWebDAVStorageViewController(
             dependencies: dependencies,
             editingProfile: profile,
             shouldPopToRootOnSave: false

@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-iOS photo backup app ("Watermelon") that backs up `PHAsset` items to remote storage (SMB or external-volume folder). The repository name is `PhotoBackup`; the Xcode target is `Watermelon`.
+iOS photo backup app ("Watermelon") that backs up `PHAsset` items to remote storage (SMB/WebDAV/external-volume folder). The repository name is `PhotoBackup`; the Xcode target is `Watermelon`.
 
-Build with `Watermelon.xcodeproj`. There is no package manager CLI or test runner — all building and testing is done through Xcode. The project has no automated test suite; regression testing is done manually on device with a real NAS.
+Build with `Watermelon.xcodeproj`. There is no package manager CLI or test runner — all building and testing is done through Xcode. The project has no automated test suite; regression testing is done manually on device with SMB/WebDAV server and external drive.
 
 ## Source Layout
 
@@ -20,7 +20,7 @@ Watermelon/
                 # ContentHashIndexRepository, RemoteNameCollisionResolver
     SMB/        # AMSMB2Client, SMBSetupService
     Storage/    # RemoteStorageClientProtocol, StorageClientFactory,
-                # LocalVolumeClient, SecurityScopedBookmarkStore
+                # WebDAVClient, LocalVolumeClient, SecurityScopedBookmarkStore
                 # RemoteThumbnailService
     Discovery/  # SMBDiscoveryService (Bonjour, _smb._tcp)
     PhotoLibrary/ Restore/ Metadata/
@@ -47,7 +47,7 @@ No TabBar. `ServerSelectionViewController` and `SettingsViewController` exist in
 Single `DependencyContainer` created at startup holds all top-level singletons:
 `DatabaseManager`, `KeychainService`, `AppSession`, `StorageClientFactory`, `PhotoLibraryService`, `MetadataService`, `BackupExecutor`, `RestoreService`.
 
-`AppSession` holds the active `ServerProfileRecord` and in-memory password (SMB requires it; external-volume does not).
+`AppSession` holds the active `ServerProfileRecord` and in-memory password (SMB/WebDAV require it; external-volume does not).
 
 ### Backup Pipeline
 
@@ -69,11 +69,13 @@ The central flow runs inside `BackupExecutor.runBackup(...)`:
 
 ### Data Storage
 
-**Local SQLite** (GRDB, `DatabaseManager`), migrations `v3_dev_reset_schema`, `v4_server_profiles_storage_type`, `v5_server_profiles_sort_order`:
+**Local SQLite** (GRDB, `DatabaseManager`), migrations `v3_dev_reset_schema`, `v4_server_profiles_storage_type`, `v5_server_profiles_sort_order`, `v6_server_profiles_partial_unique_smb`:
 - `server_profiles` — saved storage profiles (`storageType`, `connectionParams`, `sortOrder`)
 - `sync_state` — key/value store (e.g. `active_server_profile_id`)
 - `local_assets` — per-asset fingerprint cache
 - `local_asset_resources` — per-resource content hash by `(assetLocalIdentifier, role, slot)`
+
+`server_profiles` uniqueness is now SMB-only via partial unique index on `(host, shareName, basePath, username)` with `WHERE storageType = 'smb'`.
 
 **Remote monthly manifest** (`MonthManifestStore`), path `/{YYYY}/{MM}/.watermelon_manifest.sqlite`, migrations `month_manifest_v2_reset_schema` + `month_manifest_v2_schema_baseline` (idempotent baseline, non-destructive):
 - `resources` — individual files (keyed by `fileName`, unique on `contentHash`)
@@ -92,7 +94,7 @@ Manifest writes are deferred: `upsertResource/upsertAsset` mark `dirty=true`; `f
 
 ### Remote Thumbnails
 
-`RemoteThumbnailService` downloads the full remote file and downsamples it locally (actor-based concurrency limiting). `SMBRemoteImageDataProvider` bridges into Kingfisher.
+`RemoteThumbnailService` downloads the full remote file and downsamples it locally (actor-based concurrency limiting). Thumbnail cache key uses `StorageProfile.identityKey` to avoid cross-storage collisions.
 
 ## Key Rules & Invariants
 

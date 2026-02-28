@@ -23,19 +23,20 @@
 7. `BackupExecutor`
 8. `RestoreService`
 
-`AppSession` 保存当前活跃 `ServerProfileRecord` 和内存态密码（SMB 需要，外接存储为空串）。
+`AppSession` 保存当前活跃 `ServerProfileRecord` 和内存态密码（SMB/WebDAV 需要，外接存储为空串）。
 
 ## 3. Services 分工
 
-### Storage / SMB
+### Storage / 连接协议层
 
-1. `RemoteStorageClientProtocol`：统一远端文件系统接口（SMB/外接存储共用）。
+1. `RemoteStorageClientProtocol`：统一远端文件系统接口（SMB/WebDAV/外接存储共用）。
 2. `StorageClientFactory`：按 `ServerProfileRecord.storageType` 构建具体 client。
 3. `AMSMB2Client`：SMB client 实现。
-4. `LocalVolumeClient`：外接存储目录实现（security-scoped bookmark）。
-5. `SMBSetupService`：添加/编辑 SMB 时枚举 share 与路径。
-6. `SMBDiscoveryService`：Bonjour 发现 `_smb._tcp`。
-7. `RemoteThumbnailService`：远端文件下载 + 本地下采样（actor 限流）。
+4. `WebDAVClient`：WebDAV client 实现。
+5. `LocalVolumeClient`：外接存储目录实现（security-scoped bookmark）。
+6. `SMBSetupService`：添加/编辑 SMB 时枚举 share 与路径。
+7. `SMBDiscoveryService`：Bonjour 发现 `_smb._tcp`。
+8. `RemoteThumbnailService`：远端文件下载 + 本地下采样（actor 限流）。
 
 ### Backup
 
@@ -72,8 +73,9 @@
 1. `AddSMBServerLoginViewController`
 2. `SMBSharePathPickerViewController`
 3. `AddSMBServerViewController`
-4. `AddExternalStorageViewController`
-5. `ManageStorageProfilesViewController`
+4. `AddWebDAVStorageViewController`
+5. `AddExternalStorageViewController`
+6. `ManageStorageProfilesViewController`
 
 这些链路由 Home 右上角连接菜单触发。
 
