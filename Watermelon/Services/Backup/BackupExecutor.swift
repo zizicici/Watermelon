@@ -482,6 +482,12 @@ final class BackupExecutor {
             )
 
             let tempFileURL = try await photoLibraryService.exportResourceToTempFile(local.resource)
+            var shouldRemoveTempFile = true
+            defer {
+                if shouldRemoveTempFile {
+                    try? FileManager.default.removeItem(at: tempFileURL)
+                }
+            }
             let localHash = try Self.contentHash(of: tempFileURL)
             let localFileSize = max(
                 local.fileSize,
@@ -508,6 +514,7 @@ final class BackupExecutor {
                     shotDate: shotDate
                 )
             )
+            shouldRemoveTempFile = false
         }
 
         let assetFingerprint = BackupAssetResourcePlanner.assetFingerprint(
@@ -789,6 +796,7 @@ final class BackupExecutor {
 
         var targetFileName = RemotePathBuilder.sanitizeFilename(local.originalFilename)
         var skipReason: String?
+        var attemptedFileNames: Set<String> = [targetFileName]
 
         if monthStore.existingFileNames().contains(targetFileName) {
             let existingManifestResource = monthStore.findByFileName(targetFileName)
@@ -817,6 +825,7 @@ final class BackupExecutor {
                     baseName: targetFileName,
                     occupiedNames: monthStore.existingFileNames()
                 )
+                attemptedFileNames.insert(targetFileName)
             }
         }
 
@@ -891,10 +900,14 @@ final class BackupExecutor {
 
                 let message = error.localizedDescription
                 if message.contains("STATUS_OBJECT_NAME_COLLISION") {
+                    var occupiedNames = monthStore.existingFileNames()
+                    occupiedNames.formUnion(attemptedFileNames)
+                    occupiedNames.insert(targetFileName)
                     targetFileName = RemoteNameCollisionResolver.resolveNextAvailableName(
                         baseName: targetFileName,
-                        occupiedNames: monthStore.existingFileNames()
+                        occupiedNames: occupiedNames
                     )
+                    attemptedFileNames.insert(targetFileName)
                     let retryRelativePath = monthStore.monthRelativePath + "/" + targetFileName
                     remoteAbsolutePath = RemotePathBuilder.absolutePath(basePath: profile.basePath, remoteRelativePath: retryRelativePath)
                     continue

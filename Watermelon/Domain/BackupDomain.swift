@@ -62,12 +62,6 @@ struct LocalPhotoResource {
     let resourceModificationDate: Date?
 }
 
-struct PlannedBackupItem {
-    let localResource: LocalPhotoResource
-    let fingerprint: String
-    let remoteRelativePath: String
-}
-
 struct BackupProgress {
     let succeeded: Int
     let failed: Int

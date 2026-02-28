@@ -95,6 +95,14 @@ final class MonthManifestStore {
                 try await client.download(remotePath: manifestAbsolutePath, localURL: localURL)
             } catch {
                 try? FileManager.default.removeItem(at: localURL)
+                throw NSError(
+                    domain: "MonthManifestStore",
+                    code: -31,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "Failed to download existing month manifest for \(monthRelativePath).",
+                        NSUnderlyingErrorKey: error
+                    ]
+                )
             }
         }
 
@@ -107,6 +115,16 @@ final class MonthManifestStore {
             }
         } catch {
             try? FileManager.default.removeItem(at: localURL)
+            if manifestExists {
+                throw NSError(
+                    domain: "MonthManifestStore",
+                    code: -32,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "Existing month manifest for \(monthRelativePath) is corrupted and cannot be loaded.",
+                        NSUnderlyingErrorKey: error
+                    ]
+                )
+            }
             dbQueue = try DatabaseQueue(path: localURL.path)
             try Self.migrate(dbQueue)
         }

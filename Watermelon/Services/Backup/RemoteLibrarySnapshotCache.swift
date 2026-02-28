@@ -189,11 +189,7 @@ final class RemoteLibrarySnapshotCache {
         }
 
         monthResources[item.id] = item
-        if monthResources.isEmpty {
-            resourcesByMonth[month] = nil
-        } else {
-            resourcesByMonth[month] = monthResources
-        }
+        resourcesByMonth[month] = monthResources
 
         fullSnapshotDirty = true
         bumpRevisionLocked([month])
