@@ -2,7 +2,7 @@ import Foundation
 import Photos
 import UIKit
 
-final class PhotoLibraryService {
+final class PhotoLibraryService: @unchecked Sendable {
     private let imageManager = PHCachingImageManager()
     private let resourceManager = PHAssetResourceManager.default()
 
@@ -195,3 +195,5 @@ final class PhotoLibraryService {
         }
     }
 }
+
+extension PhotoLibraryService: PhotoLibraryServiceProtocol {}

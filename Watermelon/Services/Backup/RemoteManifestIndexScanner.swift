@@ -1,6 +1,6 @@
 import Foundation
 
-final class RemoteManifestIndexScanner {
+final class RemoteManifestIndexScanner: @unchecked Sendable {
     func scanManifestDigests(
         client: RemoteStorageClientProtocol,
         basePath: String
@@ -62,3 +62,5 @@ final class RemoteManifestIndexScanner {
         return Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded())
     }
 }
+
+extension RemoteManifestIndexScanner: RemoteManifestIndexScannerProtocol {}

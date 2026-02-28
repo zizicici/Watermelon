@@ -1,10 +1,10 @@
 import Foundation
 
-protocol StorageClientFactoryProtocol {
+protocol StorageClientFactoryProtocol: Sendable {
     func makeClient(profile: ServerProfileRecord, password: String) throws -> any RemoteStorageClientProtocol
 }
 
-final class StorageClientFactory: StorageClientFactoryProtocol {
+final class StorageClientFactory: StorageClientFactoryProtocol, @unchecked Sendable {
     private let databaseManager: DatabaseManager?
 
     init(databaseManager: DatabaseManager? = nil) {

@@ -67,6 +67,8 @@ final class BackupViewController: UIViewController {
     private var filteredItems: [BackupSessionController.ProcessedItem] = []
     private var deferredTableReload = false
     private var statusThumbnailAssetID: String?
+    private var statusThumbnailRequestID: PHImageRequestID?
+    private var thumbnailRequestIDs: [String: PHImageRequestID] = [:]
 
     private static let resourceDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -96,6 +98,10 @@ final class BackupViewController: UIViewController {
         stopBarButtonItem.tintColor = .systemRed
         navigationItem.rightBarButtonItems = [stopBarButtonItem, pauseBarButtonItem, startBarButtonItem]
 
+        // Backup list keeps changing; cap cache to avoid unbounded growth during long runs.
+        thumbnailCache.countLimit = 240
+        thumbnailCache.totalCostLimit = 40 * 1024 * 1024
+
         buildUI()
 
         observerID = sessionController.addObserver { [weak self] snapshot in
@@ -108,6 +114,8 @@ final class BackupViewController: UIViewController {
         if (isBeingDismissed || isMovingFromParent), let observerID {
             sessionController.removeObserver(observerID)
             self.observerID = nil
+            cancelAllImageRequests()
+            thumbnailCache.removeAllObjects()
         }
     }
 
@@ -360,9 +368,18 @@ final class BackupViewController: UIViewController {
     private func applyStatusThumbnail(assetLocalIdentifier: String?) {
         guard statusThumbnailAssetID != assetLocalIdentifier else { return }
         statusThumbnailAssetID = assetLocalIdentifier
+        if let requestID = statusThumbnailRequestID {
+            imageManager.cancelImageRequest(requestID)
+            statusThumbnailRequestID = nil
+        }
         statusThumbnailImageView.image = UIImage(systemName: "photo")
 
         guard let assetLocalIdentifier else { return }
+        let key = assetLocalIdentifier as NSString
+        if let cached = thumbnailCache.object(forKey: key) {
+            statusThumbnailImageView.image = cached
+            return
+        }
         let auth = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard auth == .authorized || auth == .limited else { return }
 
@@ -374,16 +391,24 @@ final class BackupViewController: UIViewController {
         options.resizeMode = .fast
         options.isNetworkAccessAllowed = true
 
-        imageManager.requestImage(
+        let requestID = imageManager.requestImage(
             for: asset,
             targetSize: CGSize(width: 120, height: 120),
             contentMode: .aspectFill,
             options: options
-        ) { [weak self] image, _ in
+        ) { [weak self] image, info in
             guard let self else { return }
+            if (info?[PHImageCancelledKey] as? Bool) == true { return }
+            if (info?[PHImageResultIsDegradedKey] as? Bool) == true { return }
             guard self.statusThumbnailAssetID == assetLocalIdentifier else { return }
-            self.statusThumbnailImageView.image = image ?? UIImage(systemName: "photo")
+            guard let image else {
+                self.statusThumbnailImageView.image = UIImage(systemName: "photo")
+                return
+            }
+            self.thumbnailCache.setObject(image, forKey: key, cost: Self.imageCost(image))
+            self.statusThumbnailImageView.image = image
         }
+        statusThumbnailRequestID = requestID
     }
 
     private func updateFilterTitles(using snapshot: BackupSessionController.Snapshot) {
@@ -519,6 +544,7 @@ final class BackupViewController: UIViewController {
     private func requestThumbnailIfNeeded(for item: BackupSessionController.ProcessedItem) {
         let key = item.assetLocalIdentifier as NSString
         if thumbnailCache.object(forKey: key) != nil { return }
+        if thumbnailRequestIDs[item.assetLocalIdentifier] != nil { return }
 
         let auth = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard auth == .authorized || auth == .limited else { return }
@@ -531,20 +557,47 @@ final class BackupViewController: UIViewController {
         options.resizeMode = .fast
         options.isNetworkAccessAllowed = true
 
-        imageManager.requestImage(
+        let requestID = imageManager.requestImage(
             for: asset,
             targetSize: CGSize(width: 140, height: 140),
             contentMode: .aspectFit,
             options: options
-        ) { [weak self] image, _ in
-            guard let self, let image else { return }
-            self.thumbnailCache.setObject(image, forKey: key)
+        ) { [weak self] image, info in
+            guard let self else { return }
+            if (info?[PHImageCancelledKey] as? Bool) == true {
+                self.thumbnailRequestIDs[item.assetLocalIdentifier] = nil
+                return
+            }
+            if (info?[PHImageResultIsDegradedKey] as? Bool) == true {
+                return
+            }
+            self.thumbnailRequestIDs[item.assetLocalIdentifier] = nil
+            guard let image else { return }
+            self.thumbnailCache.setObject(image, forKey: key, cost: Self.imageCost(image))
 
             guard let row = self.filteredItems.firstIndex(where: { $0.id == item.id }) else { return }
             let indexPath = IndexPath(row: row, section: 0)
             guard let cell = self.tableView.cellForRow(at: indexPath) else { return }
             self.configure(cell, with: item)
         }
+        thumbnailRequestIDs[item.assetLocalIdentifier] = requestID
+    }
+
+    private func cancelAllImageRequests() {
+        if let requestID = statusThumbnailRequestID {
+            imageManager.cancelImageRequest(requestID)
+            statusThumbnailRequestID = nil
+        }
+        for requestID in thumbnailRequestIDs.values {
+            imageManager.cancelImageRequest(requestID)
+        }
+        thumbnailRequestIDs.removeAll()
+    }
+
+    private static func imageCost(_ image: UIImage) -> Int {
+        let width = Int(image.size.width * image.scale)
+        let height = Int(image.size.height * image.scale)
+        return max(width * height * 4, 1)
     }
 
     private func configure(_ cell: UITableViewCell, with item: BackupSessionController.ProcessedItem) {

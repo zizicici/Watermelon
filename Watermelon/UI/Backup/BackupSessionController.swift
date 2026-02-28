@@ -94,11 +94,17 @@ final class BackupSessionController {
         }
     }
 
-    private let dependencies: DependencyContainer
+    private let backupCoordinator: BackupCoordinatorProtocol
+    private let appSession: AppSession
+    private let databaseManager: DatabaseManager
+    private let photoLibraryService: PhotoLibraryServiceProtocol
+
     private var observers: [UUID: (Snapshot) -> Void] = [:]
     private var runTask: Task<Void, Never>?
+    private var eventListenerTask: Task<Void, Never>?
     private var terminationIntent: TerminationIntent = .none
     private var currentRunMode: RunMode = .full
+    private var activeRunToken: UInt64 = 0
     private var lastPausedRunMode: RunMode?
 
     private(set) var state: State = .idle
@@ -117,8 +123,25 @@ final class BackupSessionController {
     private var failedItemsByAssetID: [String: FailedItem] = [:]
     private(set) var failedItems: [FailedItem] = []
 
-    init(dependencies: DependencyContainer) {
-        self.dependencies = dependencies
+    init(
+        backupCoordinator: BackupCoordinatorProtocol,
+        appSession: AppSession,
+        databaseManager: DatabaseManager,
+        photoLibraryService: PhotoLibraryServiceProtocol
+    ) {
+        self.backupCoordinator = backupCoordinator
+        self.appSession = appSession
+        self.databaseManager = databaseManager
+        self.photoLibraryService = photoLibraryService
+    }
+
+    convenience init(dependencies: DependencyContainer) {
+        self.init(
+            backupCoordinator: dependencies.backupCoordinator,
+            appSession: dependencies.appSession,
+            databaseManager: dependencies.databaseManager,
+            photoLibraryService: dependencies.photoLibraryService
+        )
     }
 
     func snapshot() -> Snapshot {
@@ -183,7 +206,7 @@ final class BackupSessionController {
         for item: FailedItem,
         targetSize: CGSize = CGSize(width: 1200, height: 1200)
     ) async -> UIImage? {
-        let authStatus = dependencies.photoLibraryService.authorizationStatus()
+        let authStatus = photoLibraryService.authorizationStatus()
         guard authStatus == .authorized || authStatus == .limited else { return nil }
 
         let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [item.assetLocalIdentifier], options: nil)
@@ -216,7 +239,7 @@ final class BackupSessionController {
             appendLog("已有备份任务正在执行")
             return false
         }
-        guard let profile = dependencies.appSession.activeProfile else {
+        guard let profile = appSession.activeProfile else {
             state = .failed
             statusText = "请先连接远端存储"
             appendLog("错误: 未连接远端存储")
@@ -225,7 +248,7 @@ final class BackupSessionController {
         }
         let password: String
         if profile.storageProfile.requiresPassword {
-            guard let activePassword = dependencies.appSession.activePassword,
+            guard let activePassword = appSession.activePassword,
                   !activePassword.isEmpty else {
                 state = .failed
                 statusText = "请先连接远端存储"
@@ -235,7 +258,7 @@ final class BackupSessionController {
             }
             password = activePassword
         } else {
-            password = dependencies.appSession.activePassword ?? ""
+            password = appSession.activePassword ?? ""
         }
 
         terminationIntent = .none
@@ -267,6 +290,20 @@ final class BackupSessionController {
         appendLog(mode.isRetry ? "开始重试失败 Asset（\(mode.retryCount)）" : "开始备份任务（按 Asset 计数）")
         notifyObservers()
 
+        activeRunToken &+= 1
+        let runToken = activeRunToken
+        eventListenerTask?.cancel()
+        eventListenerTask = nil
+        eventListenerTask = Task { [weak self] in
+            guard let self else { return }
+            for await event in self.backupCoordinator.eventStream {
+                await self.handleEvent(event, runToken: runToken)
+                if event.isTerminal {
+                    break
+                }
+            }
+        }
+
         runTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -278,38 +315,38 @@ final class BackupSessionController {
                     retryAssetIdentifiers = assetIDs
                 }
 
-                let result = try await self.dependencies.backupExecutor.runBackup(
+                let result = try await self.backupCoordinator.runBackup(
                     profile: profile,
                     password: password,
-                    appVersion: self.dependencies.appVersion,
-                    onlyAssetLocalIdentifiers: retryAssetIdentifiers,
-                    onProgress: { [weak self] progress in
-                        guard let self else { return }
-                        self.succeeded = progress.succeeded
-                        self.failed = progress.failed
-                        self.skipped = progress.skipped
-                        self.total = progress.total
-                        self.statusText = progress.message
-                        self.transferState = progress.transferState
-                        self.applyProgressEvent(progress.itemEvent)
-                        self.notifyObservers()
-                    },
-                    onLog: { [weak self] line in
-                        self?.appendLog(line)
-                    }
+                    onlyAssetLocalIdentifiers: retryAssetIdentifiers
                 )
-                self.finishRun(result: result, runMode: mode)
+                _ = result
             } catch {
+                guard self.activeRunToken == runToken else {
+                    self.runTask = nil
+                    return
+                }
                 self.runTask = nil
+                self.eventListenerTask?.cancel()
+                self.eventListenerTask = nil
                 self.terminationIntent = .none
                 self.currentRunMode = .full
 
                 let userMessage = profile.userFacingStorageErrorMessage(error)
+                if let backupError = error as? BackupError,
+                   case .backupAlreadyRunning = backupError {
+                    self.state = .failed
+                    self.statusText = "已有备份任务运行中"
+                    self.transferState = nil
+                    self.appendLog("错误: 已有备份任务运行中")
+                    self.notifyObservers()
+                    return
+                }
                 let externalUnavailable = profile.isExternalStorageUnavailableError(error)
                 if externalUnavailable,
-                   self.dependencies.appSession.activeProfile?.id == profile.id {
-                    try? self.dependencies.databaseManager.setActiveServerProfileID(nil)
-                    self.dependencies.appSession.clear()
+                   self.appSession.activeProfile?.id == profile.id {
+                    try? self.databaseManager.setActiveServerProfileID(nil)
+                    self.appSession.clear()
                 }
                 self.state = .failed
                 self.statusText = externalUnavailable ? "外接存储已断开" : "备份失败"
@@ -353,8 +390,95 @@ final class BackupSessionController {
         notifyObservers()
     }
 
-    private func finishRun(result: BackupExecutionResult, runMode: RunMode) {
+    private func handleEvent(_ event: BackupEvent, runToken: UInt64) async {
+        guard runToken == activeRunToken else { return }
+
+        switch event {
+        case .progress(let progress):
+            succeeded = progress.succeeded
+            failed = progress.failed
+            skipped = progress.skipped
+            total = progress.total
+            statusText = progress.message
+            transferState = progress.transferState
+            if let itemEvent = progress.itemEvent {
+                applyProgressEvent(itemEvent)
+            }
+            notifyObservers()
+
+        case .log(let message):
+            appendLog(message)
+
+        case .transferState(let state):
+            transferState = state
+            notifyObservers()
+
+        case .assetCompleted(let completion):
+            if isDuplicateAssetCompletion(completion) {
+                break
+            }
+
+            let updatedAt = Date()
+            let item = ProcessedItem(
+                assetLocalIdentifier: completion.assetLocalIdentifier,
+                displayName: completion.displayName,
+                status: completion.status,
+                reason: completion.reason,
+                resourceSummary: completion.resourceSummary,
+                updatedAt: updatedAt
+            )
+            processedItemsByAssetID[completion.assetLocalIdentifier] = item
+            upsertProcessedItemInQueue(item)
+
+            if completion.status == .failed {
+                retryCountByAssetID[completion.assetLocalIdentifier, default: 0] += 1
+                let retryCount = retryCountByAssetID[completion.assetLocalIdentifier, default: 0]
+                failedItemsByAssetID[completion.assetLocalIdentifier] = FailedItem(
+                    jobID: 0,
+                    assetLocalIdentifier: completion.assetLocalIdentifier,
+                    displayName: completion.displayName,
+                    errorMessage: completion.reason ?? "未知错误",
+                    retryCount: retryCount,
+                    updatedAt: updatedAt
+                )
+            } else {
+                failedItemsByAssetID[completion.assetLocalIdentifier] = nil
+            }
+            rebuildFailedItems()
+            notifyObservers()
+
+        case .monthChanged(let change):
+            let monthText = String(format: "%04d年%02d月", change.year, change.month)
+            switch change.action {
+            case .started:
+                appendLog("Processing month \(monthText).")
+            case .flushed:
+                appendLog("Month \(monthText) manifest flushed.")
+            case .flushFailed(let error):
+                appendLog("Month \(monthText) manifest flush failed: \(error)")
+            }
+
+        case .remoteIndexSynced(let syncEvent):
+            appendLog("Remote index synced. \(syncEvent.resourceCount) resource(s), \(syncEvent.assetCount) asset(s).")
+
+        case .started(let totalAssets):
+            total = totalAssets
+            notifyObservers()
+
+        case .finished(let result):
+            finishRun(result: result, runMode: currentRunMode, runToken: runToken)
+
+        case .failed:
+            break
+        }
+    }
+
+    private func finishRun(result: BackupExecutionResult, runMode: RunMode, runToken: UInt64) {
+        guard runToken == activeRunToken else { return }
+
         runTask = nil
+        eventListenerTask?.cancel()
+        eventListenerTask = nil
         let intent = terminationIntent
         terminationIntent = .none
         currentRunMode = .full
@@ -414,8 +538,7 @@ final class BackupSessionController {
         notifyObservers()
     }
 
-    private func applyProgressEvent(_ event: BackupItemEvent?) {
-        guard let event else { return }
+    private func applyProgressEvent(_ event: BackupItemEvent) {
         latestItemEvent = event
         let item = ProcessedItem(
             assetLocalIdentifier: event.assetLocalIdentifier,
@@ -444,6 +567,16 @@ final class BackupSessionController {
         }
 
         rebuildFailedItems()
+    }
+
+    private func isDuplicateAssetCompletion(_ completion: AssetCompletionEvent) -> Bool {
+        guard let latest = latestItemEvent else { return false }
+        return latest.assetLocalIdentifier == completion.assetLocalIdentifier &&
+            latest.assetFingerprint == completion.assetFingerprint &&
+            latest.displayName == completion.displayName &&
+            latest.status == completion.status &&
+            latest.reason == completion.reason &&
+            latest.resourceSummary == completion.resourceSummary
     }
 
     private func clearProcessedItems() {
@@ -477,7 +610,7 @@ final class BackupSessionController {
             appendLog("已有备份任务正在执行")
             return false
         }
-        guard let profile = dependencies.appSession.activeProfile else {
+        guard let profile = appSession.activeProfile else {
             state = .failed
             statusText = "请先连接远端存储"
             appendLog("错误: 未连接远端存储")
@@ -485,7 +618,7 @@ final class BackupSessionController {
             return false
         }
         if profile.storageProfile.requiresPassword,
-           (dependencies.appSession.activePassword ?? "").isEmpty {
+           (appSession.activePassword ?? "").isEmpty {
             state = .failed
             statusText = "请先连接远端存储"
             appendLog("错误: 未提供远端存储凭据")
@@ -564,12 +697,12 @@ final class BackupSessionController {
     }
 
     private func computePendingAssetIDsForFullRun() async throws -> Set<String> {
-        let status = dependencies.photoLibraryService.authorizationStatus()
+        let status = photoLibraryService.authorizationStatus()
         let authorized: Bool
         if status == .authorized || status == .limited {
             authorized = true
         } else {
-            let requested = await dependencies.photoLibraryService.requestAuthorization()
+            let requested = await photoLibraryService.requestAuthorization()
             authorized = (requested == .authorized || requested == .limited)
         }
         guard authorized else {
@@ -577,7 +710,7 @@ final class BackupSessionController {
         }
 
         let completed = completedAssetIDs()
-        let assets = dependencies.photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
+        let assets = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
         var pending = Set<String>()
 
         for index in 0 ..< assets.count {

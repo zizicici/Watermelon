@@ -13,7 +13,7 @@ struct LocalAssetHashCache {
     var hashesByRoleSlot: [AssetResourceRoleSlot: Data]
 }
 
-final class ContentHashIndexRepository {
+final class ContentHashIndexRepository: @unchecked Sendable {
     private let databaseManager: DatabaseManager
 
     init(databaseManager: DatabaseManager) {
@@ -210,3 +210,5 @@ final class ContentHashIndexRepository {
         }
     }
 }
+
+extension ContentHashIndexRepository: ContentHashIndexRepositoryProtocol {}

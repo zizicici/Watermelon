@@ -615,7 +615,7 @@ final class HomeViewController: UIViewController {
             guard let self else { return }
 
             do {
-                _ = try await self.dependencies.backupExecutor.reloadRemoteIndex(
+                _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
                     profile: profile,
                     password: password
                 )
@@ -711,7 +711,7 @@ final class HomeViewController: UIViewController {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let snapshot = try await self.dependencies.backupExecutor.reloadRemoteIndex(
+                let snapshot = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
                     profile: profile,
                     password: password
                 )
@@ -750,7 +750,7 @@ final class HomeViewController: UIViewController {
 
     @discardableResult
     private func syncRemoteDataIfNeeded() -> Bool {
-        let snapshotState = dependencies.backupExecutor.currentRemoteSnapshotState(
+        let snapshotState = dependencies.backupCoordinator.currentRemoteSnapshotState(
             since: homeDataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: hasActiveConnection)
         )
         let changed = homeDataManager.syncRemoteSnapshot(
@@ -1143,7 +1143,7 @@ final class HomeViewController: UIViewController {
             .filter { Self.yearMonth(for: $0.creationDate) == key }
             .sorted { $0.creationDate > $1.creationDate }
 
-        let remoteSnapshotResources = dependencies.backupExecutor.currentRemoteSnapshot().resources
+        let remoteSnapshotResources = dependencies.backupCoordinator.currentRemoteSnapshot().resources
             .filter { $0.year == key.year && $0.month == key.month }
             .sorted { lhs, rhs in
                 if lhs.creationDate != rhs.creationDate {

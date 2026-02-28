@@ -7,7 +7,8 @@ final class DependencyContainer {
     let storageClientFactory: StorageClientFactory
     let photoLibraryService: PhotoLibraryService
     let metadataService: MetadataService
-    let backupExecutor: BackupExecutor
+    let hashIndexRepository: ContentHashIndexRepositoryProtocol
+    let backupCoordinator: BackupCoordinatorProtocol
     let restoreService: RestoreService
 
     init() {
@@ -22,11 +23,15 @@ final class DependencyContainer {
         storageClientFactory = StorageClientFactory(databaseManager: databaseManager)
         photoLibraryService = PhotoLibraryService()
         metadataService = MetadataService()
-        backupExecutor = BackupExecutor(
-            databaseManager: databaseManager,
+
+        hashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
+
+        backupCoordinator = BackupCoordinator(
             photoLibraryService: photoLibraryService,
-            storageClientFactory: storageClientFactory
+            storageClientFactory: storageClientFactory,
+            hashIndexRepository: hashIndexRepository
         )
+
         restoreService = RestoreService(
             databaseManager: databaseManager,
             storageClientFactory: storageClientFactory
