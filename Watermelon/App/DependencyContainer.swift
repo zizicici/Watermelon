@@ -4,6 +4,7 @@ final class DependencyContainer {
     let databaseManager: DatabaseManager
     let keychainService: KeychainService
     let appSession: AppSession
+    let storageClientFactory: StorageClientFactory
     let photoLibraryService: PhotoLibraryService
     let metadataService: MetadataService
     let backupExecutor: BackupExecutor
@@ -18,13 +19,18 @@ final class DependencyContainer {
 
         keychainService = KeychainService()
         appSession = AppSession()
+        storageClientFactory = StorageClientFactory()
         photoLibraryService = PhotoLibraryService()
         metadataService = MetadataService()
         backupExecutor = BackupExecutor(
             databaseManager: databaseManager,
-            photoLibraryService: photoLibraryService
+            photoLibraryService: photoLibraryService,
+            storageClientFactory: storageClientFactory
         )
-        restoreService = RestoreService(databaseManager: databaseManager)
+        restoreService = RestoreService(
+            databaseManager: databaseManager,
+            storageClientFactory: storageClientFactory
+        )
     }
 
     var appVersion: String {

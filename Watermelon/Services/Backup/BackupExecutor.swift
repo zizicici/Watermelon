@@ -64,6 +64,7 @@ final class BackupExecutor {
     private static let smallFileThresholdBytes: Int64 = 5 * 1024 * 1024
 
     private let photoLibraryService: PhotoLibraryService
+    private let storageClientFactory: StorageClientFactoryProtocol
     private let contentHashIndexRepository: ContentHashIndexRepository
     private let remoteManifestIndexScanner: RemoteManifestIndexScanner
     private let remoteSnapshotCache = RemoteLibrarySnapshotCache()
@@ -72,9 +73,11 @@ final class BackupExecutor {
 
     init(
         databaseManager: DatabaseManager,
-        photoLibraryService: PhotoLibraryService
+        photoLibraryService: PhotoLibraryService,
+        storageClientFactory: StorageClientFactoryProtocol = StorageClientFactory()
     ) {
         self.photoLibraryService = photoLibraryService
+        self.storageClientFactory = storageClientFactory
         contentHashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
         remoteManifestIndexScanner = RemoteManifestIndexScanner()
     }
@@ -89,7 +92,7 @@ final class BackupExecutor {
     ) async throws -> BackupExecutionResult {
         try await ensurePhotoAuthorization()
 
-        let smbClient = try makeSMBClient(profile: profile, password: password)
+        let smbClient = try makeStorageClient(profile: profile, password: password)
         try await smbClient.connect()
         defer {
             Task { await smbClient.disconnect() }
@@ -301,7 +304,7 @@ final class BackupExecutor {
         password: String,
         onLog: (@MainActor (String) -> Void)? = nil
     ) async throws -> RemoteLibrarySnapshot {
-        let smbClient = try makeSMBClient(profile: profile, password: password)
+        let smbClient = try makeStorageClient(profile: profile, password: password)
         try await smbClient.connect()
         defer {
             Task { await smbClient.disconnect() }
@@ -966,16 +969,8 @@ final class BackupExecutor {
         }
     }
 
-    private func makeSMBClient(profile: ServerProfileRecord, password: String) throws -> AMSMB2Client {
-        try AMSMB2Client(config: SMBServerConfig(
-            host: profile.host,
-            port: profile.port,
-            shareName: profile.shareName,
-            basePath: profile.basePath,
-            username: profile.username,
-            password: password,
-            domain: profile.domain
-        ))
+    private func makeStorageClient(profile: ServerProfileRecord, password: String) throws -> any RemoteStorageClientProtocol {
+        try storageClientFactory.makeClient(profile: profile, password: password)
     }
 
     private func makeLocalResource(asset: PHAsset, selected: BackupSelectedResource) -> LocalPhotoResource {
@@ -1090,7 +1085,7 @@ final class BackupExecutor {
     }
 
     private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {
-        "\(profile.host.lowercased())|\(profile.port)|\(profile.shareName.lowercased())|\(RemotePathBuilder.normalizePath(profile.basePath))|\(profile.username.lowercased())"
+        profile.storageProfile.identityKey
     }
 
     private static func nanosecondsSinceEpoch(_ date: Date?) -> Int64? {

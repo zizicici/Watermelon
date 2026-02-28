@@ -2,7 +2,14 @@ import Foundation
 import Photos
 
 final class RestoreService {
-    init(databaseManager _: DatabaseManager) {}
+    private let storageClientFactory: StorageClientFactoryProtocol
+
+    init(
+        databaseManager _: DatabaseManager,
+        storageClientFactory: StorageClientFactoryProtocol = StorageClientFactory()
+    ) {
+        self.storageClientFactory = storageClientFactory
+    }
 
     func restore(
         resources: [RemoteManifestResource],
@@ -14,19 +21,11 @@ final class RestoreService {
             throw BackupError.restoreNoSelection
         }
 
-        let smbClient = try AMSMB2Client(config: SMBServerConfig(
-            host: profile.host,
-            port: profile.port,
-            shareName: profile.shareName,
-            basePath: profile.basePath,
-            username: profile.username,
-            password: password,
-            domain: profile.domain
-        ))
+        let storageClient = try storageClientFactory.makeClient(profile: profile, password: password)
 
-        try await smbClient.connect()
+        try await storageClient.connect()
         defer {
-            Task { await smbClient.disconnect() }
+            Task { await storageClient.disconnect() }
         }
 
         let restoreGroups = Self.groupResourcesForRestore(resources)
@@ -42,7 +41,7 @@ final class RestoreService {
                     basePath: profile.basePath,
                     remoteRelativePath: resource.remoteRelativePath
                 )
-                try await smbClient.download(remotePath: remotePath, localURL: tempURL)
+                try await storageClient.download(remotePath: remotePath, localURL: tempURL)
                 downloaded.append((resource, tempURL))
             }
 

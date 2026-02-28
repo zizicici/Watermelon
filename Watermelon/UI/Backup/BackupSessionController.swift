@@ -216,13 +216,26 @@ final class BackupSessionController {
             appendLog("已有备份任务正在执行")
             return false
         }
-        guard let profile = dependencies.appSession.activeProfile,
-              let password = dependencies.appSession.activePassword else {
+        guard let profile = dependencies.appSession.activeProfile else {
             state = .failed
-            statusText = "请先登录 SMB"
-            appendLog("错误: 未登录 SMB 服务器")
+            statusText = "请先连接远端存储"
+            appendLog("错误: 未连接远端存储")
             notifyObservers()
             return false
+        }
+        let password: String
+        if profile.storageProfile.requiresPassword {
+            guard let activePassword = dependencies.appSession.activePassword,
+                  !activePassword.isEmpty else {
+                state = .failed
+                statusText = "请先连接远端存储"
+                appendLog("错误: 未提供远端存储凭据")
+                notifyObservers()
+                return false
+            }
+            password = activePassword
+        } else {
+            password = dependencies.appSession.activePassword ?? ""
         }
 
         terminationIntent = .none
@@ -457,11 +470,18 @@ final class BackupSessionController {
             appendLog("已有备份任务正在执行")
             return false
         }
-        guard dependencies.appSession.activeProfile != nil,
-              dependencies.appSession.activePassword != nil else {
+        guard let profile = dependencies.appSession.activeProfile else {
             state = .failed
-            statusText = "请先登录 SMB"
-            appendLog("错误: 未登录 SMB 服务器")
+            statusText = "请先连接远端存储"
+            appendLog("错误: 未连接远端存储")
+            notifyObservers()
+            return false
+        }
+        if profile.storageProfile.requiresPassword,
+           (dependencies.appSession.activePassword ?? "").isEmpty {
+            state = .failed
+            statusText = "请先连接远端存储"
+            appendLog("错误: 未提供远端存储凭据")
             notifyObservers()
             return false
         }

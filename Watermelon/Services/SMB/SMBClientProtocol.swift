@@ -10,7 +10,7 @@ struct SMBServerConfig {
     let domain: String?
 }
 
-struct SMBRemoteEntry {
+struct RemoteStorageEntry {
     let path: String
     let name: String
     let isDirectory: Bool
@@ -19,31 +19,34 @@ struct SMBRemoteEntry {
     let modificationDate: Date?
 }
 
-enum SMBClientError: LocalizedError {
+enum RemoteStorageClientError: LocalizedError {
     case notConnected
     case unavailable
     case invalidConfiguration
+    case unsupportedStorageType(String)
     case underlying(Error)
 
     var errorDescription: String? {
         switch self {
         case .notConnected:
-            return "SMB session is not connected."
+            return "Storage session is not connected."
         case .unavailable:
-            return "SMB support is unavailable on this build."
+            return "Storage support is unavailable on this build."
         case .invalidConfiguration:
-            return "Invalid SMB configuration."
+            return "Invalid storage configuration."
+        case .unsupportedStorageType(let type):
+            return "Unsupported storage type: \(type)."
         case .underlying(let error):
             return error.localizedDescription
         }
     }
 }
 
-protocol SMBClientProtocol {
+protocol RemoteStorageClientProtocol {
     func connect() async throws
     func disconnect() async
-    func list(path: String) async throws -> [SMBRemoteEntry]
-    func metadata(path: String) async throws -> SMBRemoteEntry?
+    func list(path: String) async throws -> [RemoteStorageEntry]
+    func metadata(path: String) async throws -> RemoteStorageEntry?
     func upload(
         localURL: URL,
         remotePath: String,
@@ -57,3 +60,7 @@ protocol SMBClientProtocol {
     func createDirectory(path: String) async throws
     func move(from sourcePath: String, to destinationPath: String) async throws
 }
+
+typealias SMBRemoteEntry = RemoteStorageEntry
+typealias SMBClientError = RemoteStorageClientError
+typealias SMBClientProtocol = RemoteStorageClientProtocol

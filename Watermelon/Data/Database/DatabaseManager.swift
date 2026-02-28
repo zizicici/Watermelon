@@ -27,6 +27,8 @@ final class DatabaseManager {
             try db.create(table: ServerProfileRecord.databaseTableName) { table in
                 table.autoIncrementedPrimaryKey("id")
                 table.column("name", .text).notNull()
+                table.column("storageType", .text).notNull().defaults(to: StorageType.smb.rawValue)
+                table.column("connectionParams", .blob)
                 table.column("host", .text).notNull()
                 table.column("port", .integer).notNull()
                 table.column("shareName", .text).notNull()
@@ -64,6 +66,33 @@ final class DatabaseManager {
             try db.create(index: "idx_local_asset_resources_hash", on: LocalAssetResourceRecord.databaseTableName, columns: ["contentHash"])
         }
 
+        migrator.registerMigration("v4_server_profiles_storage_type") { db in
+            guard try db.tableExists(ServerProfileRecord.databaseTableName) else { return }
+
+            let existingColumns = try Self.tableColumnNames(
+                db: db,
+                tableName: ServerProfileRecord.databaseTableName
+            )
+
+            if !existingColumns.contains("storageType") {
+                try db.execute(
+                    sql: """
+                    ALTER TABLE \(ServerProfileRecord.databaseTableName)
+                    ADD COLUMN storageType TEXT NOT NULL DEFAULT 'smb'
+                    """
+                )
+            }
+
+            if !existingColumns.contains("connectionParams") {
+                try db.execute(
+                    sql: """
+                    ALTER TABLE \(ServerProfileRecord.databaseTableName)
+                    ADD COLUMN connectionParams BLOB
+                    """
+                )
+            }
+        }
+
         return migrator
     }
 
@@ -89,9 +118,16 @@ final class DatabaseManager {
         }
     }
 
-    func findServerProfile(host: String, shareName: String, basePath: String, username: String) throws -> ServerProfileRecord? {
+    func findServerProfile(
+        host: String,
+        shareName: String,
+        basePath: String,
+        username: String,
+        storageType: String = StorageType.smb.rawValue
+    ) throws -> ServerProfileRecord? {
         try read { db in
             try ServerProfileRecord
+                .filter(Column("storageType") == storageType)
                 .filter(Column("host") == host)
                 .filter(Column("shareName") == shareName)
                 .filter(Column("basePath") == basePath)
@@ -145,5 +181,17 @@ final class DatabaseManager {
     static func defaultDatabaseURL() -> URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return support.appendingPathComponent("Watermelon/database.sqlite")
+    }
+
+    private static func tableColumnNames(db: Database, tableName: String) throws -> Set<String> {
+        let rows = try Row.fetchAll(db, sql: "PRAGMA table_info(\(tableName))")
+        var result = Set<String>()
+        result.reserveCapacity(rows.count)
+        for row in rows {
+            if let name: String = row["name"] {
+                result.insert(name)
+            }
+        }
+        return result
     }
 }

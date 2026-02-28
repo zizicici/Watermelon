@@ -1,11 +1,18 @@
 import Foundation
 import GRDB
 
+enum StorageType: String, Codable {
+    case smb
+    case externalVolume
+}
+
 struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, Identifiable {
     static let databaseTableName = "server_profiles"
 
     var id: Int64?
     var name: String
+    var storageType: String
+    var connectionParams: Data?
     var host: String
     var port: Int
     var shareName: String
@@ -15,6 +22,10 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
     var credentialRef: String
     var createdAt: Date
     var updatedAt: Date
+
+    var resolvedStorageType: StorageType {
+        StorageType(rawValue: storageType) ?? .smb
+    }
 
     mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID

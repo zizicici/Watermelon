@@ -97,6 +97,8 @@ final class AddSMBServerViewController: UIViewController {
         var profile = ServerProfileRecord(
             id: existing?.id,
             name: profileName,
+            storageType: StorageType.smb.rawValue,
+            connectionParams: nil,
             host: context.auth.host,
             port: context.auth.port,
             shareName: context.shareName,

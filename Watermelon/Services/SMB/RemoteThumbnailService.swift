@@ -34,8 +34,13 @@ actor RemoteThumbnailService {
     }
 
     private let limiter = AsyncLimiter(limit: 3)
-    private var client: AMSMB2Client?
+    private let storageClientFactory: StorageClientFactoryProtocol
+    private var client: (any RemoteStorageClientProtocol)?
     private var clientKey: String?
+
+    init(storageClientFactory: StorageClientFactoryProtocol = StorageClientFactory()) {
+        self.storageClientFactory = storageClientFactory
+    }
 
     deinit {
         let client = client
@@ -82,23 +87,15 @@ actor RemoteThumbnailService {
         clientKey = nil
     }
 
-    private func resolvedClient(profile: ServerProfileRecord, password: String) async throws -> AMSMB2Client {
-        let key = "\(profile.host)|\(profile.port)|\(profile.shareName)|\(profile.basePath)|\(profile.username)|\(profile.domain ?? "")"
+    private func resolvedClient(profile: ServerProfileRecord, password: String) async throws -> any RemoteStorageClientProtocol {
+        let key = profile.storageProfile.identityKey
         if let client, clientKey == key {
             return client
         }
 
         await self.client?.disconnect()
 
-        let nextClient = try AMSMB2Client(config: SMBServerConfig(
-            host: profile.host,
-            port: profile.port,
-            shareName: profile.shareName,
-            basePath: profile.basePath,
-            username: profile.username,
-            password: password,
-            domain: profile.domain
-        ))
+        let nextClient = try storageClientFactory.makeClient(profile: profile, password: password)
         try await nextClient.connect()
 
         client = nextClient

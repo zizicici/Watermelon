@@ -367,20 +367,26 @@ final class HomeViewController: UIViewController {
         didAttemptAutoConnect = true
 
         guard let activeID = activeProfileID,
-              let activeProfile = savedProfiles.first(where: { $0.id == activeID }),
-              let password = try? dependencies.keychainService.readPassword(account: activeProfile.credentialRef),
-              !password.isEmpty else {
+              let activeProfile = savedProfiles.first(where: { $0.id == activeID }) else {
             return
         }
 
-        connect(profile: activeProfile, password: password, showFailureAlert: false)
+        if activeProfile.storageProfile.requiresPassword {
+            guard let password = try? dependencies.keychainService.readPassword(account: activeProfile.credentialRef),
+                  !password.isEmpty else {
+                return
+            }
+            connect(profile: activeProfile, password: password, showFailureAlert: false)
+        } else {
+            connect(profile: activeProfile, password: "", showFailureAlert: false)
+        }
     }
 
     private func updateConnectionIndicator() {
         if isConnecting {
             connectionBarButtonItem.title = "加载中……"
         } else if let profile = dependencies.appSession.activeProfile {
-            connectionBarButtonItem.title = "\(profile.username)@\(profile.shareName)\(profile.basePath)"
+            connectionBarButtonItem.title = profile.storageProfile.indicatorText
         } else {
             connectionBarButtonItem.title = "单机模式"
         }
@@ -396,7 +402,7 @@ final class HomeViewController: UIViewController {
         let disconnected = dependencies.appSession.activeProfile == nil
         let disconnectAction = makeMenuAction(
             title: "单机模式",
-            subtitle: "不连接外部存储",
+            subtitle: "不连接远端存储",
             state: disconnected ? .on : .off
         ) { [weak self] _ in
             self?.disconnectRemote()
@@ -405,12 +411,13 @@ final class HomeViewController: UIViewController {
         let savedServerActions: [UIMenuElement]
         if savedProfiles.isEmpty {
             savedServerActions = [
-                UIAction(title: "暂无已保存 SMB 服务器", attributes: [.disabled]) { _ in }
+                UIAction(title: "暂无已保存远端存储", attributes: [.disabled]) { _ in }
             ]
         } else {
             savedServerActions = savedProfiles.map { profile in
-                let title = "\(profile.username)@\(profile.name)"
-                let subtitle = "SMB://\(profile.host)/\(profile.shareName)\(profile.basePath)"
+                let storageProfile = profile.storageProfile
+                let title = storageProfile.displayTitle
+                let subtitle = storageProfile.displaySubtitle
                 let state: UIMenuElement.State
                 if let active = dependencies.appSession.activeProfile?.id, active == profile.id {
                     state = .on
@@ -450,7 +457,7 @@ final class HomeViewController: UIViewController {
                 }
             }
         }
-        let discoveredSection = UIMenu(title: "局域网发现", options: .displayInline, children: discoveredChildren)
+        let discoveredSection = UIMenu(title: "SMB 局域网发现", options: .displayInline, children: discoveredChildren)
         let manualAdd = UIAction(title: "手动添加 SMB 服务器", image: UIImage(systemName: "plus")) { [weak self] _ in
             self?.openAddServerFlow(
                 draft: SMBServerLoginDraft(
@@ -464,11 +471,19 @@ final class HomeViewController: UIViewController {
         }
         let manualSection = UIMenu(title: "", options: .displayInline, children: [manualAdd])
         let addServerMenu = UIMenu(
-            title: "添加SMB服务器",
+            title: "添加 SMB 存储",
             children: [discoveredSection, manualSection]
         )
 
-        return UIMenu(children: [currentMenu, addServerMenu])
+        let addExternal = UIAction(
+            title: "添加外接存储目录",
+            image: UIImage(systemName: "externaldrive.badge.plus")
+        ) { [weak self] _ in
+            self?.openAddExternalStorageFlow()
+        }
+        let externalMenu = UIMenu(title: "添加本地存储", options: .displayInline, children: [addExternal])
+
+        return UIMenu(children: [currentMenu, addServerMenu, externalMenu])
     }
 
     private func makeMenuAction(
@@ -507,6 +522,10 @@ final class HomeViewController: UIViewController {
 
     private func promptPasswordAndConnect(profile: ServerProfileRecord) {
         if isConnecting { return }
+        if !profile.storageProfile.requiresPassword {
+            connect(profile: profile, password: "")
+            return
+        }
 
         if let saved = try? dependencies.keychainService.readPassword(account: profile.credentialRef),
            !saved.isEmpty {
@@ -576,6 +595,16 @@ final class HomeViewController: UIViewController {
         navigationController?.pushViewController(addVC, animated: true)
     }
 
+    private func openAddExternalStorageFlow() {
+        let addVC = AddExternalStorageViewController(dependencies: dependencies) { [weak self] profile, password in
+            guard let self else { return }
+            self.loadSavedProfiles()
+            self.updateConnectionMenu()
+            self.connect(profile: profile, password: password)
+        }
+        navigationController?.pushViewController(addVC, animated: true)
+    }
+
     @objc
     private func openBackupTapped() {
         let backupVC = BackupViewController(sessionController: backupSessionController)
@@ -587,7 +616,7 @@ final class HomeViewController: UIViewController {
     @objc
     private func reloadRemoteIndexTapped() {
         guard hasActiveConnection else {
-            presentAlert(title: "未连接", message: "请先连接 SMB 服务器")
+            presentAlert(title: "未连接", message: "请先连接远端存储")
             return
         }
         guard backupSessionController.state != .running else {
@@ -596,7 +625,7 @@ final class HomeViewController: UIViewController {
         }
         guard let profile = dependencies.appSession.activeProfile,
               let password = dependencies.appSession.activePassword else {
-            presentAlert(title: "未连接", message: "请先连接 SMB 服务器")
+            presentAlert(title: "未连接", message: "请先连接远端存储")
             return
         }
 
@@ -1019,10 +1048,7 @@ final class HomeViewController: UIViewController {
     ) -> String {
         let pixelKey = Int(maxPixelSize.rounded())
         return [
-            profile.host,
-            String(profile.port),
-            profile.shareName,
-            profile.basePath,
+            profile.storageProfile.identityKey,
             remoteAbsolutePath,
             "px:\(pixelKey)"
         ].joined(separator: "|")
@@ -1128,6 +1154,7 @@ final class HomeViewController: UIViewController {
             "connection": [
                 "connected": hasActiveConnection,
                 "profileName": dependencies.appSession.activeProfile?.name as Any,
+                "storageType": dependencies.appSession.activeProfile?.storageType as Any,
                 "host": dependencies.appSession.activeProfile?.host as Any,
                 "shareName": dependencies.appSession.activeProfile?.shareName as Any,
                 "basePath": dependencies.appSession.activeProfile?.basePath as Any,
@@ -1278,15 +1305,7 @@ final class HomeViewController: UIViewController {
         lines.append("月份: \(remote.representative.monthKey)")
 
         if let profile = dependencies.appSession.activeProfile {
-            let normalizedPath: String
-            if profile.basePath.isEmpty {
-                normalizedPath = "/"
-            } else if profile.basePath.hasPrefix("/") {
-                normalizedPath = profile.basePath
-            } else {
-                normalizedPath = "/\(profile.basePath)"
-            }
-            lines.append("当前连接: \(profile.username)@\(profile.shareName)\(normalizedPath)")
+            lines.append("当前连接: \(profile.storageProfile.indicatorText)")
         } else {
             lines.append("当前连接: 未连接")
         }
