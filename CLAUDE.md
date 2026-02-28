@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-iOS photo backup app ("Watermelon") that backs up `PHAsset` items to an SMB share. The repository name is `PhotoBackup`; the Xcode target is `Watermelon`.
+iOS photo backup app ("Watermelon") that backs up `PHAsset` items to remote storage (SMB or external-volume folder). The repository name is `PhotoBackup`; the Xcode target is `Watermelon`.
 
 Build with `Watermelon.xcodeproj`. There is no package manager CLI or test runner — all building and testing is done through Xcode. The project has no automated test suite; regression testing is done manually on device with a real NAS.
 
@@ -18,8 +18,10 @@ Watermelon/
     Backup/     # BackupExecutor, BackupAssetResourcePlanner, MonthManifestStore,
                 # RemoteLibraryScanner, RemoteLibrarySnapshotCache,
                 # ContentHashIndexRepository, RemoteNameCollisionResolver
-    SMB/        # AMSMB2Client, SMBClientProtocol, SMBSetupService,
-                # SMBRemoteImageDataProvider, RemoteThumbnailService
+    SMB/        # AMSMB2Client, SMBSetupService
+    Storage/    # RemoteStorageClientProtocol, StorageClientFactory,
+                # LocalVolumeClient, SecurityScopedBookmarkStore
+                # RemoteThumbnailService
     Discovery/  # SMBDiscoveryService (Bonjour, _smb._tcp)
     PhotoLibrary/ Restore/ Metadata/
   UI/
@@ -43,16 +45,16 @@ No TabBar. `ServerSelectionViewController` and `SettingsViewController` exist in
 ### Dependency Injection
 
 Single `DependencyContainer` created at startup holds all top-level singletons:
-`DatabaseManager`, `KeychainService`, `AppSession`, `PhotoLibraryService`, `MetadataService`, `BackupExecutor`, `RestoreService`.
+`DatabaseManager`, `KeychainService`, `AppSession`, `StorageClientFactory`, `PhotoLibraryService`, `MetadataService`, `BackupExecutor`, `RestoreService`.
 
-`AppSession` holds the active `ServerProfileRecord` and in-memory SMB password.
+`AppSession` holds the active `ServerProfileRecord` and in-memory password (SMB requires it; external-volume does not).
 
 ### Backup Pipeline
 
 The central flow runs inside `BackupExecutor.runBackup(...)`:
 
 1. Request photo permission.
-2. Connect SMB, ensure `basePath` exists.
+2. Build storage client via `StorageClientFactory`, connect, ensure `basePath` exists.
 3. `RemoteLibraryScanner.scanYearMonthTree` — **read-only** scan of `YYYY/MM/.watermelon_manifest.sqlite` files; populates `RemoteLibrarySnapshotCache`.
 4. Iterate `PHAsset` sorted by `creationDate ASC`.
 5. Per-asset: `BackupAssetResourcePlanner` assigns role/slot order and computes `assetFingerprint` (SHA-256 of sorted `role|slot|hashHex` tokens).
@@ -67,8 +69,8 @@ The central flow runs inside `BackupExecutor.runBackup(...)`:
 
 ### Data Storage
 
-**Local SQLite** (GRDB, `DatabaseManager`), migration `v3_dev_reset_schema` (drops and rebuilds on schema change):
-- `server_profiles` — saved SMB connections
+**Local SQLite** (GRDB, `DatabaseManager`), migrations `v3_dev_reset_schema`, `v4_server_profiles_storage_type`, `v5_server_profiles_sort_order`:
+- `server_profiles` — saved storage profiles (`storageType`, `connectionParams`, `sortOrder`)
 - `sync_state` — key/value store (e.g. `active_server_profile_id`)
 - `local_assets` — per-asset fingerprint cache
 - `local_asset_resources` — per-resource content hash by `(assetLocalIdentifier, role, slot)`

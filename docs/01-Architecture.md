@@ -17,22 +17,25 @@
 1. `DatabaseManager`
 2. `KeychainService`
 3. `AppSession`
-4. `PhotoLibraryService`
-5. `MetadataService`
-6. `BackupExecutor`
-7. `RestoreService`
+4. `StorageClientFactory`
+5. `PhotoLibraryService`
+6. `MetadataService`
+7. `BackupExecutor`
+8. `RestoreService`
 
-`AppSession` 保存当前活跃 `ServerProfileRecord` 和内存态密码。
+`AppSession` 保存当前活跃 `ServerProfileRecord` 和内存态密码（SMB 需要，外接存储为空串）。
 
 ## 3. Services 分工
 
-### SMB
+### Storage / SMB
 
-1. `AMSMB2Client`：`SMBClientProtocol` 实现（connect/list/upload/download/move/delete）。
-2. `SMBSetupService`：添加服务器时枚举 share 与路径。
-3. `SMBDiscoveryService`：Bonjour 发现 `_smb._tcp`。
-4. `SMBRemoteImageDataProvider`：Kingfisher 远端图片 provider。
-5. `RemoteThumbnailService`：远端文件下载 + 本地下采样（actor 限流）。
+1. `RemoteStorageClientProtocol`：统一远端文件系统接口（SMB/外接存储共用）。
+2. `StorageClientFactory`：按 `ServerProfileRecord.storageType` 构建具体 client。
+3. `AMSMB2Client`：SMB client 实现。
+4. `LocalVolumeClient`：外接存储目录实现（security-scoped bookmark）。
+5. `SMBSetupService`：添加/编辑 SMB 时枚举 share 与路径。
+6. `SMBDiscoveryService`：Bonjour 发现 `_smb._tcp`。
+7. `RemoteThumbnailService`：远端文件下载 + 本地下采样（actor 限流）。
 
 ### Backup
 
@@ -64,13 +67,15 @@
 2. `BackupStatusViewController`：开始/暂停/停止、结果筛选、日志展示。
 3. `BackupFailedItemsViewController` 与 `BackupFailedItemDetailViewController`：失败项重试入口。
 
-### 添加 SMB
+### 存储配置与管理
 
 1. `AddSMBServerLoginViewController`
 2. `SMBSharePathPickerViewController`
 3. `AddSMBServerViewController`
+4. `AddExternalStorageViewController`
+5. `ManageStorageProfilesViewController`
 
-这条链路由 Home 连接菜单触发。
+这些链路由 Home 右上角连接菜单触发。
 
 ## 5. 当前主链路文件建议
 

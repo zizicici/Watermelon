@@ -9,7 +9,7 @@
 ## 2. 主流程（按当前代码）
 
 1. 校验/请求照片权限。
-2. 建立 SMB 连接，确保 `basePath` 存在。
+2. 通过 `StorageClientFactory` 建立远端连接（SMB 或外接存储），确保 `basePath` 存在。
 3. 扫描远端月目录树（`RemoteLibraryScanner.scanYearMonthTree`），刷新内存快照。
 4. 按 `creationDate ASC` 遍历 `PHAsset`。
 5. 每个 Asset 取 `PHAssetResource.assetResources(for:)`，经 `BackupAssetResourcePlanner` 生成有序资源列表（role + slot）。

@@ -5,9 +5,10 @@
 当前主链路：
 
 1. 启动直接进入 `HomeViewController`。
-2. 备份按 `Asset` 粒度执行，远端按月写入 `.watermelon_manifest.sqlite`。
-3. 月 manifest 使用三表结构：`resources`、`assets`、`asset_resources`。
-4. 本地索引使用两张表：`local_assets`、`local_asset_resources`。
+2. 远端存储支持 `SMB` 与 `外接存储目录`（iOS security-scoped bookmark）。
+3. 备份按 `Asset` 粒度执行，远端按月写入 `.watermelon_manifest.sqlite`。
+4. 月 manifest 使用三表结构：`resources`、`assets`、`asset_resources`。
+5. 本地索引使用两张表：`local_assets`、`local_asset_resources`。
 
 建议先读 `docs/`：
 

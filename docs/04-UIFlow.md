@@ -6,11 +6,16 @@ App 启动后直接进入 `HomeViewController`。
 
 ### 顶部导航
 
-1. 右上角连接按钮显示当前状态：`加载中……` / `用户@share/basePath` / `单机模式`。
-2. 连接按钮菜单包含：
-3. 当前模式切换（单机模式/已保存服务器）。
-4. 局域网 SMB 发现列表。
-5. 手动添加 SMB 服务器入口。
+1. 右上角连接按钮显示当前状态：`加载中……` / `当前连接标识` / `单机模式`。
+2. `SMB` 连接时标识是 `username@share/basePath`。
+3. `外接存储` 连接时标识是 profile 名称（用户输入的名称）。
+4. 连接按钮菜单包含：
+5. 当前模式切换（单机模式/已保存连接，含类型图标）。
+6. 添加存储子菜单：
+7. `SMB` 局域网发现列表。
+8. `添加 SMB 存储`。
+9. `添加外接存储目录`。
+10. 管理入口：`管理存储`（单机模式不在此处管理）。
 
 ### 底部工具栏
 
@@ -26,7 +31,7 @@ App 启动后直接进入 `HomeViewController`。
 ## 2. Home 的数据刷新行为
 
 1. 首次进入与会话变化后会 `reloadAllData`。
-2. 连接 SMB 成功会先 `backupExecutor.reloadRemoteIndex` 再刷新 UI。
+2. 连接任意存储类型成功后都会先 `backupExecutor.reloadRemoteIndex` 再刷新 UI。
 3. 备份运行中会节流刷新远端 section（不是每次 progress 都全量重建）。
 4. 备份从 running 变为非 running 时，会自动重载一次远端索引。
 
@@ -53,13 +58,29 @@ App 启动后直接进入 `HomeViewController`。
 2. 支持重试全部失败项或单项重试。
 3. retry 是按 Asset ID 集合执行。
 
-## 6. 添加 SMB 流程（由 Home 触发）
+## 6. 存储添加与管理流程（由 Home 触发）
+
+### 添加 SMB
 
 1. `AddSMBServerLoginViewController`
 2. `SMBSharePathPickerViewController`
 3. `AddSMBServerViewController`
 
-保存成功后回到 Home，并尝试连接新服务器。
+保存成功后回到 Home，并尝试连接该 profile。
+
+### 添加外接存储
+
+1. `AddExternalStorageViewController`
+2. 选择目录并保存 bookmark 到 `connectionParams`
+
+保存成功后回到 Home，并尝试连接该 profile。
+
+### 管理存储
+
+1. `ManageStorageProfilesViewController`
+2. 支持删除、排序（编辑模式拖拽）、编辑连接参数。
+3. 点击某个连接项会直接进入“按类型的连接参数编辑页”（不再先弹“编辑名称/编辑连接参数”二选一）。
+4. 名称修改包含在参数编辑页内。
 
 ## 7. 当前未接入主入口的页面
 

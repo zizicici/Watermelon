@@ -2,7 +2,7 @@
 
 ## 1. 当前状态（一句话）
 
-当前主线是“单个 Home 页面 + 备份状态页”，备份按 Asset 计数，远端月 manifest 已升级为三表关系模型（resources/assets/asset_resources）。
+当前主线是“单个 Home 页面 + 备份状态页 + 多存储连接管理（SMB/外接存储）”，备份按 Asset 计数，远端月 manifest 使用三表关系模型（resources/assets/asset_resources）。
 
 ## 2. 优先阅读文件
 
@@ -19,11 +19,13 @@
 ## 3. 运行时主流程
 
 1. `AppCoordinator.start()` 直接 `showHome()`。
-2. Home 右上角是连接按钮（当前服务器/发现服务器/手动添加）。
-3. 连接成功后会先 `reloadRemoteIndex`，拿到远端快照并缓存。
-4. 底部工具栏右侧“备份”打开 `BackupStatusViewController`。
-5. 备份状态由 `BackupSessionController` 统一驱动（start/pause/stop/retry）。
-6. Home 页面根据本地索引 + 远端快照进行本地/远端匹配显示。
+2. Home 右上角是连接按钮（当前连接/添加存储/管理存储）。
+3. 添加存储支持 SMB 和外接存储目录。
+4. 管理页支持删除、排序、编辑连接参数；点击连接项会直接进入参数编辑页（名称在参数页内编辑）。
+5. 连接成功后会先 `reloadRemoteIndex`，拿到远端快照并缓存。
+6. 底部工具栏右侧“备份”打开 `BackupStatusViewController`。
+7. 备份状态由 `BackupSessionController` 统一驱动（start/pause/stop/retry）。
+8. Home 页面根据本地索引 + 远端快照进行本地/远端匹配显示。
 
 ## 4. 备份链路要点
 
@@ -42,6 +44,8 @@
 2. `sync_state`
 3. `local_assets`
 4. `local_asset_resources`
+
+`server_profiles` 关键字段包含 `storageType`、`connectionParams`、`sortOrder`，用于多存储类型连接管理。
 
 远端每月 manifest（`.watermelon_manifest.sqlite`）核心表：
 

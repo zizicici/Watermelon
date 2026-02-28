@@ -2,7 +2,7 @@
 
 ## 1. 本地 SQLite（`DatabaseManager`）
 
-迁移名：`v3_dev_reset_schema`。
+迁移名：`v3_dev_reset_schema`、`v4_server_profiles_storage_type`、`v5_server_profiles_sort_order`。
 
 开发期策略：重建 schema（会 drop 已知旧表）。
 
@@ -12,6 +12,9 @@
 CREATE TABLE server_profiles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
+  storageType TEXT NOT NULL DEFAULT 'smb',
+  connectionParams BLOB,
+  sortOrder INTEGER NOT NULL DEFAULT 0,
   host TEXT NOT NULL,
   port INTEGER NOT NULL,
   shareName TEXT NOT NULL,
@@ -124,6 +127,9 @@ ON asset_resources(resourceHash);
 
 1. `local_assets.assetFingerprint`：由 Asset 下资源的 `(role, slot, contentHash)` 组合计算得到。
 2. `local_asset_resources`：记录单个 Asset 在本地对应资源位点（role/slot）的 hash。
+3. `server_profiles.storageType`：连接类型（`smb` / `externalVolume`）。
+4. `server_profiles.connectionParams`：类型特定参数（如外接存储 bookmark + displayPath 的 JSON 编码数据）。
+5. `server_profiles.sortOrder`：连接列表排序值，管理页拖拽后更新。
 
 ### remote manifest side
 
@@ -144,4 +150,5 @@ ON asset_resources(resourceHash);
 密码不入库，保存在 Keychain：
 
 1. service：`com.zizicici.watermelon.credentials`
-2. account：`credentialRef`（host/share/username 组合）
+2. account：`credentialRef`
+3. SMB 连接使用该密码；外接存储不依赖密码（bookmark 在 `connectionParams`）。
