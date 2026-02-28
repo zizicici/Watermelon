@@ -8,6 +8,7 @@ final class AlbumGridCell: UICollectionViewCell {
     let imageView = UIImageView()
     let titleLabel = UILabel()
     var representedID: String?
+    var remoteThumbnailTask: Task<Void, Never>?
 
     private let topLeftBadgeLabel = UILabel()
     private let topRightBadgeLabel = UILabel()
@@ -77,6 +78,8 @@ final class AlbumGridCell: UICollectionViewCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        remoteThumbnailTask?.cancel()
+        remoteThumbnailTask = nil
         imageView.kf.cancelDownloadTask()
         representedID = nil
         imageView.image = nil

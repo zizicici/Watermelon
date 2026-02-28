@@ -52,6 +52,7 @@ actor RemoteThumbnailService {
     ) async throws -> Data {
         await limiter.acquire()
         do {
+            try Task.checkCancellation()
             let client = try await resolvedClient(profile: profile, password: password)
             let tempURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("remote_preview_\(UUID().uuidString)")
@@ -59,6 +60,7 @@ actor RemoteThumbnailService {
             defer { try? FileManager.default.removeItem(at: tempURL) }
 
             try await client.download(remotePath: remoteAbsolutePath, localURL: tempURL)
+            try Task.checkCancellation()
 
             let data: Data
             if let thumbnailData = try Self.downsampleData(at: tempURL, maxPixelSize: maxPixelSize) {

@@ -128,7 +128,7 @@ final class HomeViewController: UIViewController {
 
     private let remoteImageCache = ImageCache(name: "home_remote_album_cache")
     private let remoteThumbnailService = RemoteThumbnailService()
-    private var prefetchTasks: [IndexPath: DownloadTask] = [:]
+    private var prefetchTasks: [IndexPath: Task<Void, Never>] = [:]
     private var reloadTask: Task<Void, Never>?
     private var pendingRemoteSectionRefresh = false
     private var lastRunningSectionRefreshAt: Date = .distantPast
@@ -854,6 +854,8 @@ final class HomeViewController: UIViewController {
     }
 
     private func configureCell(_ cell: AlbumGridCell, item: HomeAlbumItem) {
+        cell.remoteThumbnailTask?.cancel()
+        cell.remoteThumbnailTask = nil
         cell.representedID = item.id
         cell.titleLabel.text = Self.dayFormatter.string(from: item.creationDate)
         cell.setBadges(topLeftSourceBadges(for: item))
@@ -906,28 +908,90 @@ final class HomeViewController: UIViewController {
             return
         }
 
-        guard let source = makeRemoteKingfisherSource(for: item, traitCollection: cell.traitCollection) else {
+        guard let profile = dependencies.appSession.activeProfile,
+              let password = dependencies.appSession.activePassword else {
             applyLoadingPlaceholder(to: cell.imageView, symbolName: "photo")
             return
         }
 
-        let placeholder = loadingPlaceholderImage(symbolName: "photo")
         applyLoadingPlaceholder(to: cell.imageView, symbolName: "photo")
-        cell.imageView.kf.indicatorType = .activity
-        cell.imageView.kf.setImage(
-            with: source,
-            placeholder: placeholder,
-            options: remoteKingfisherOptions(displayScale: max(cell.traitCollection.displayScale, 1))
-        ) { [weak cell] result in
-            guard let cell, cell.representedID == representedID else { return }
-            switch result {
-            case .success:
-                cell.imageView.contentMode = .scaleAspectFill
-                cell.imageView.tintColor = nil
-            case .failure:
-                cell.imageView.contentMode = .center
-                cell.imageView.tintColor = .systemGray3
-                cell.imageView.image = self.loadingPlaceholderImage(symbolName: "exclamationmark.triangle")
+        cell.remoteThumbnailTask?.cancel()
+        cell.remoteThumbnailTask = nil
+
+        let maxPixelSize = remoteThumbnailMaxPixelSize(for: cell.traitCollection)
+        let remoteAbsolutePath = RemotePathBuilder.absolutePath(
+            basePath: profile.basePath,
+            remoteRelativePath: item.representative.remoteRelativePath
+        )
+        let cacheKey = remoteThumbnailCacheKey(
+            profile: profile,
+            remoteAbsolutePath: remoteAbsolutePath,
+            maxPixelSize: maxPixelSize
+        )
+
+        if let cached = remoteImageCache.retrieveImageInMemoryCache(forKey: cacheKey) {
+            cell.imageView.contentMode = .scaleAspectFill
+            cell.imageView.tintColor = nil
+            cell.imageView.image = cached
+            return
+        }
+
+        cell.remoteThumbnailTask = Task { [weak self, weak cell] in
+            guard let self else { return }
+
+            do {
+                if let cached = try await self.remoteImageCache.retrieveImageInDiskCache(forKey: cacheKey) {
+                    try Task.checkCancellation()
+                    await MainActor.run {
+                        guard let cell, cell.representedID == representedID else { return }
+                        cell.imageView.contentMode = .scaleAspectFill
+                        cell.imageView.tintColor = nil
+                        cell.imageView.image = cached
+                    }
+                    return
+                }
+
+                try Task.checkCancellation()
+                let data = try await self.remoteThumbnailService.loadThumbnailData(
+                    profile: profile,
+                    password: password,
+                    remoteAbsolutePath: remoteAbsolutePath,
+                    maxPixelSize: maxPixelSize
+                )
+                try Task.checkCancellation()
+
+                guard let image = UIImage(data: data) else {
+                    await MainActor.run {
+                        guard let cell, cell.representedID == representedID else { return }
+                        cell.imageView.contentMode = .center
+                        cell.imageView.tintColor = .systemGray3
+                        cell.imageView.image = self.loadingPlaceholderImage(symbolName: "exclamationmark.triangle")
+                    }
+                    return
+                }
+
+                try await self.remoteImageCache.store(
+                    image,
+                    original: data,
+                    forKey: cacheKey,
+                    toDisk: true
+                )
+
+                await MainActor.run {
+                    guard let cell, cell.representedID == representedID else { return }
+                    cell.imageView.contentMode = .scaleAspectFill
+                    cell.imageView.tintColor = nil
+                    cell.imageView.image = image
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                await MainActor.run {
+                    guard let cell, cell.representedID == representedID else { return }
+                    cell.imageView.contentMode = .center
+                    cell.imageView.tintColor = .systemGray3
+                    cell.imageView.image = self.loadingPlaceholderImage(symbolName: "exclamationmark.triangle")
+                }
             }
         }
     }
@@ -943,41 +1007,25 @@ final class HomeViewController: UIViewController {
         return UIImage(systemName: symbolName, withConfiguration: config)?.withRenderingMode(.alwaysTemplate)
     }
 
-    private func makeRemoteKingfisherSource(
-        for item: RemoteAlbumItem,
-        traitCollection: UITraitCollection
-    ) -> Source? {
-        guard let profile = dependencies.appSession.activeProfile,
-              let password = dependencies.appSession.activePassword else {
-            return nil
-        }
-
+    private func remoteThumbnailMaxPixelSize(for traitCollection: UITraitCollection) -> CGFloat {
         let scale = max(traitCollection.displayScale, 1)
-        let maxPixelSize = max(gridItemWidth() * scale * 1.6, 220)
-        let remoteAbsolutePath = RemotePathBuilder.absolutePath(
-            basePath: profile.basePath,
-            remoteRelativePath: item.representative.remoteRelativePath
-        )
-
-        let provider = SMBRemoteImageDataProvider(
-            profile: profile,
-            password: password,
-            remoteAbsolutePath: remoteAbsolutePath,
-            maxPixelSize: maxPixelSize,
-            thumbnailService: remoteThumbnailService
-        )
-        return .provider(provider)
+        return max(gridItemWidth() * scale * 1.6, 220)
     }
 
-    private func remoteKingfisherOptions(displayScale: CGFloat) -> KingfisherOptionsInfo {
-        [
-            .targetCache(remoteImageCache),
-            .memoryCacheExpiration(.seconds(600)),
-            .diskCacheExpiration(.days(7)),
-            .backgroundDecode,
-            .scaleFactor(max(displayScale, 1)),
-            .transition(.fade(0.12))
-        ]
+    private func remoteThumbnailCacheKey(
+        profile: ServerProfileRecord,
+        remoteAbsolutePath: String,
+        maxPixelSize: CGFloat
+    ) -> String {
+        let pixelKey = Int(maxPixelSize.rounded())
+        return [
+            profile.host,
+            String(profile.port),
+            profile.shareName,
+            profile.basePath,
+            remoteAbsolutePath,
+            "px:\(pixelKey)"
+        ].joined(separator: "|")
     }
 
     private func exportMonthDebugReport(for key: YearMonth, scope: MonthDebugExportScope = .all) {
@@ -1403,6 +1451,10 @@ extension HomeViewController: UICollectionViewDataSource, UICollectionViewDelega
 
     func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
         guard hasActiveConnection else { return }
+        guard let profile = dependencies.appSession.activeProfile,
+              let password = dependencies.appSession.activePassword else {
+            return
+        }
 
         for indexPath in indexPaths {
             guard prefetchTasks[indexPath] == nil else { continue }
@@ -1415,20 +1467,61 @@ extension HomeViewController: UICollectionViewDataSource, UICollectionViewDelega
             guard albumItem.sourceTag == .remoteOnly,
                   albumItem.localItem == nil,
                   albumItem.mediaKind != .video,
-                  let remoteItem = albumItem.remoteItem,
-                  let source = makeRemoteKingfisherSource(for: remoteItem, traitCollection: collectionView.traitCollection) else {
+                  let remoteItem = albumItem.remoteItem else {
                 continue
             }
 
-            let task = KingfisherManager.shared.retrieveImage(
-                with: source,
-                options: remoteKingfisherOptions(displayScale: max(collectionView.traitCollection.displayScale, 1)),
-                completionHandler: { [weak self] _ in
+            let maxPixelSize = remoteThumbnailMaxPixelSize(for: collectionView.traitCollection)
+            let remoteAbsolutePath = RemotePathBuilder.absolutePath(
+                basePath: profile.basePath,
+                remoteRelativePath: remoteItem.representative.remoteRelativePath
+            )
+            let cacheKey = remoteThumbnailCacheKey(
+                profile: profile,
+                remoteAbsolutePath: remoteAbsolutePath,
+                maxPixelSize: maxPixelSize
+            )
+
+            if remoteImageCache.retrieveImageInMemoryCache(forKey: cacheKey) != nil {
+                continue
+            }
+
+            let task = Task { [weak self] in
+                guard let self else { return }
+                defer {
                     Task { @MainActor [weak self] in
-                        self?.prefetchTasks[indexPath] = nil
+                        guard let self else { return }
+                        self.prefetchTasks[indexPath] = nil
                     }
                 }
-            )
+
+                do {
+                    if try await self.remoteImageCache.retrieveImageInDiskCache(forKey: cacheKey) != nil {
+                        return
+                    }
+
+                    try Task.checkCancellation()
+                    let data = try await self.remoteThumbnailService.loadThumbnailData(
+                        profile: profile,
+                        password: password,
+                        remoteAbsolutePath: remoteAbsolutePath,
+                        maxPixelSize: maxPixelSize
+                    )
+                    try Task.checkCancellation()
+
+                    guard let image = UIImage(data: data) else { return }
+                    try await self.remoteImageCache.store(
+                        image,
+                        original: data,
+                        forKey: cacheKey,
+                        toDisk: true
+                    )
+                } catch is CancellationError {
+                    return
+                } catch {
+                    return
+                }
+            }
             prefetchTasks[indexPath] = task
         }
     }
