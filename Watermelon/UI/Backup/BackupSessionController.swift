@@ -108,8 +108,8 @@ final class BackupSessionController {
     private(set) var total: Int = 0
     private(set) var logs: [String] = []
     private var processedItemsByAssetID: [String: ProcessedItem] = [:]
-    private var sortedProcessedItemsCache: [ProcessedItem] = []
-    private var processedItemsDirty = true
+    private var processedItemsQueue: [ProcessedItem] = []
+    private var processedItemQueueIndexByAssetID: [String: Int] = [:]
     private(set) var latestItemEvent: BackupItemEvent?
     private var retryCountByAssetID: [String: Int] = [:]
     private var failedItemsByAssetID: [String: FailedItem] = [:]
@@ -136,11 +136,7 @@ final class BackupSessionController {
     }
 
     private func processedItemsSnapshot() -> [ProcessedItem] {
-        if processedItemsDirty {
-            sortedProcessedItemsCache = processedItemsByAssetID.values.sorted { $0.updatedAt > $1.updatedAt }
-            processedItemsDirty = false
-        }
-        return sortedProcessedItemsCache
+        return processedItemsQueue
     }
 
     @discardableResult
@@ -237,9 +233,7 @@ final class BackupSessionController {
             (state == .stopped && !mode.isRetry)
 
         if shouldResetSessionItems {
-            processedItemsByAssetID.removeAll()
-            sortedProcessedItemsCache.removeAll()
-            processedItemsDirty = true
+            clearProcessedItems()
             latestItemEvent = nil
             retryCountByAssetID.removeAll()
             failedItemsByAssetID.removeAll()
@@ -390,7 +384,7 @@ final class BackupSessionController {
     private func applyProgressEvent(_ event: BackupItemEvent?) {
         guard let event else { return }
         latestItemEvent = event
-        processedItemsByAssetID[event.assetLocalIdentifier] = ProcessedItem(
+        let item = ProcessedItem(
             assetLocalIdentifier: event.assetLocalIdentifier,
             displayName: event.displayName,
             status: event.status,
@@ -398,7 +392,8 @@ final class BackupSessionController {
             resourceSummary: event.resourceSummary,
             updatedAt: event.updatedAt
         )
-        processedItemsDirty = true
+        processedItemsByAssetID[event.assetLocalIdentifier] = item
+        upsertProcessedItemInQueue(item)
 
         if event.status == .failed {
             retryCountByAssetID[event.assetLocalIdentifier, default: 0] += 1
@@ -416,6 +411,31 @@ final class BackupSessionController {
         }
 
         rebuildFailedItems()
+    }
+
+    private func clearProcessedItems() {
+        processedItemsByAssetID.removeAll()
+        processedItemsQueue.removeAll()
+        processedItemQueueIndexByAssetID.removeAll()
+    }
+
+    private func upsertProcessedItemInQueue(_ item: ProcessedItem) {
+        let assetID = item.assetLocalIdentifier
+
+        if let oldIndex = processedItemQueueIndexByAssetID[assetID] {
+            processedItemsQueue.remove(at: oldIndex)
+            reindexProcessedItemsQueue(from: oldIndex)
+        }
+
+        processedItemsQueue.append(item)
+        processedItemQueueIndexByAssetID[assetID] = processedItemsQueue.count - 1
+    }
+
+    private func reindexProcessedItemsQueue(from start: Int) {
+        guard start < processedItemsQueue.count else { return }
+        for index in start ..< processedItemsQueue.count {
+            processedItemQueueIndexByAssetID[processedItemsQueue[index].assetLocalIdentifier] = index
+        }
     }
 
     @discardableResult
