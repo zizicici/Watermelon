@@ -177,8 +177,12 @@ final class BackupExecutor {
             let monthKey = Self.monthKey(for: asset.creationDate)
             if activeMonth != monthKey {
                 if let activeStore {
-                    _ = try? await activeStore.flushToRemote()
-                    await onLog("Month \(activeMonth?.text ?? "unknown") manifest flushed.")
+                    do {
+                        _ = try await activeStore.flushToRemote()
+                        await onLog("Month \(activeMonth?.text ?? "unknown") manifest flushed.")
+                    } catch {
+                        await onLog("Month \(activeMonth?.text ?? "unknown") manifest flush failed: \(error.localizedDescription)")
+                    }
                 }
 
                 activeMonth = monthKey
@@ -270,8 +274,12 @@ final class BackupExecutor {
         }
 
         if let activeStore {
-            _ = try? await activeStore.flushToRemote()
-            await onLog("Month \(activeMonth?.text ?? "unknown") manifest flushed.")
+            do {
+                _ = try await activeStore.flushToRemote()
+                await onLog("Month \(activeMonth?.text ?? "unknown") manifest flushed.")
+            } catch {
+                await onLog("Month \(activeMonth?.text ?? "unknown") manifest flush failed: \(error.localizedDescription)")
+            }
         }
 
         let finalMessage = state.paused
