@@ -1,5 +1,5 @@
 {
-  "originHash" : "036953805176314f2d6050f0a75de4279c619a28f3551cda6eeadc6c78c9b140",
+  "originHash" : "e316f7eecb27904b12e8b8e871098343c90ffc942450c314315b32071fb8b50a",
   "pins" : [
     {
       "identity" : "amsmb2",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "1726aaaf7adf63d7d1d2a0c5d1b0e635028215c0",
         "version" : "4.0.3"
+      }
+    },
+    {
+      "identity" : "appinfo",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/zizicici/AppInfo",
+      "state" : {
+        "revision" : "3a5854d1c50d3f27714ee27f1f35703641ef5e4e",
+        "version" : "1.3.0"
       }
     },
     {

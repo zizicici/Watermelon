@@ -1,7 +1,108 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "appjun.more" : {
 
+    },
+    "button.ok" : {
+
+    },
+    "controller.more.title" : {
+
+    },
+    "controller.specifications.title" : {
+
+    },
+    "more.item.about.eula" : {
+
+    },
+    "more.item.about.privacyPolicy" : {
+
+    },
+    "more.item.about.review" : {
+
+    },
+    "more.item.about.share" : {
+
+    },
+    "more.item.about.specifications" : {
+
+    },
+    "more.item.contact.bilibili" : {
+
+    },
+    "more.item.contact.email" : {
+
+    },
+    "more.item.contact.xiaohongshu" : {
+
+    },
+    "more.item.settings.language" : {
+
+    },
+    "more.item.settings.language.value" : {
+
+    },
+    "more.section.about" : {
+
+    },
+    "more.section.appjun" : {
+
+    },
+    "more.section.backup" : {
+
+    },
+    "more.section.contact" : {
+
+    },
+    "more.section.dataSource" : {
+
+    },
+    "more.section.general" : {
+
+    },
+    "more.section.help" : {
+
+    },
+    "more.section.notification" : {
+
+    },
+    "settings.tutorialEntranceType.first" : {
+
+    },
+    "settings.tutorialEntranceType.hidden" : {
+
+    },
+    "settings.tutorialEntranceType.second" : {
+
+    },
+    "settings.tutorialEntranceType.title" : {
+
+    },
+    "specifications.item.summary.dateOfProduction" : {
+      "comment" : "Date of Production"
+    },
+    "specifications.item.summary.icp" : {
+      "comment" : "ICP Filing Number"
+    },
+    "specifications.item.summary.manufacturer" : {
+      "comment" : "Manufacturer"
+    },
+    "specifications.item.summary.name" : {
+      "comment" : "Name"
+    },
+    "specifications.item.summary.publisher" : {
+      "comment" : "Publisher"
+    },
+    "specifications.item.summary.version" : {
+      "comment" : "Version"
+    },
+    "specifications.item.thirdParty.footer" : {
+      "comment" : "We extend our heartfelt appreciation to all developers of open-source projects."
+    },
+    "specifications.item.thirdParty.header" : {
+      "comment" : "Third Party Framework"
+    }
   },
   "version" : "1.1"
 }
