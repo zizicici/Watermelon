@@ -51,6 +51,22 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         #endif
     }
 
+    func storageCapacity() async throws -> RemoteStorageCapacity? {
+        #if canImport(AMSMB2)
+        let queryPath = RemotePathBuilder.normalizePath(config.basePath)
+        let attributes = try await manager.attributesOfFileSystem(forPath: queryPath)
+
+        let available = (attributes[.systemFreeSize] as? NSNumber)?.int64Value
+        let total = (attributes[.systemSize] as? NSNumber)?.int64Value
+        if available == nil, total == nil {
+            return nil
+        }
+        return RemoteStorageCapacity(availableBytes: available, totalBytes: total)
+        #else
+        throw RemoteStorageClientError.unavailable
+        #endif
+    }
+
     func list(path: String) async throws -> [RemoteStorageEntry] {
         #if canImport(AMSMB2)
         let remotePath = RemotePathBuilder.normalizePath(path)

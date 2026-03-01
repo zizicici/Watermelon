@@ -81,6 +81,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
         }
 
         try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
+        await emitStorageCapacityHint(client: client, eventSink: eventSink)
 
         do {
             let snapshot = try await remoteIndexService.syncIndex(
@@ -339,6 +340,24 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
         }
     }
 
+    private func emitStorageCapacityHint(
+        client: any RemoteStorageClientProtocol,
+        eventSink: BackupEventStream
+    ) async {
+        do {
+            guard let capacity = try await client.storageCapacity() else { return }
+            let availableText = capacity.availableBytes.map(Self.formatByteCount) ?? "未知"
+            let totalText = capacity.totalBytes.map(Self.formatByteCount) ?? "未知"
+            eventSink.emit(.log("远端容量：可用 \(availableText) / 总量 \(totalText)"))
+
+            if let available = capacity.availableBytes, available < Self.lowCapacityWarningThresholdBytes {
+                eventSink.emit(.log("警告：远端可用空间不足（低于 \(Self.formatByteCount(Self.lowCapacityWarningThresholdBytes))），备份中断风险较高。"))
+            }
+        } catch {
+            eventSink.emit(.log("远端容量读取失败：\(error.localizedDescription)"))
+        }
+    }
+
     private func makeStorageClient(
         profile: ServerProfileRecord,
         password: String
@@ -421,4 +440,19 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
             return "\(prefix) Asset skipped \(result.displayName)"
         }
     }
+
+    private static func formatByteCount(_ bytes: Int64) -> String {
+        byteCountFormatter.string(fromByteCount: max(bytes, 0))
+    }
+
+    private static let lowCapacityWarningThresholdBytes: Int64 = 1_000_000_000
+
+    private static let byteCountFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB, .useTB]
+        formatter.countStyle = .file
+        formatter.includesUnit = true
+        formatter.isAdaptive = true
+        return formatter
+    }()
 }

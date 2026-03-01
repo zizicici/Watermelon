@@ -11,6 +11,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         var href: String = ""
         var displayName: String?
         var contentLength: Int64?
+        var quotaAvailableBytes: Int64?
+        var quotaUsedBytes: Int64?
         var creationDate: Date?
         var modificationDate: Date?
         var hasAnyStatus = false
@@ -23,6 +25,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             "href",
             "displayname",
             "getcontentlength",
+            "quota-available-bytes",
+            "quota-used-bytes",
             "getlastmodified",
             "creationdate",
             "status"
@@ -98,6 +102,14 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             case "getcontentlength":
                 if let parsed = Int64(value) {
                     entry.contentLength = parsed
+                }
+            case "quota-available-bytes":
+                if let parsed = Int64(value) {
+                    entry.quotaAvailableBytes = parsed
+                }
+            case "quota-used-bytes":
+                if let parsed = Int64(value) {
+                    entry.quotaUsedBytes = parsed
                 }
             case "creationdate":
                 entry.creationDate = WebDAVClient.parseDate(value)
@@ -185,6 +197,49 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
 
     func disconnect() async {
         isConnected = false
+    }
+
+    func storageCapacity() async throws -> RemoteStorageCapacity? {
+        try requireConnected()
+        let targetURL = try remoteURL(forRemotePath: "/")
+        let request = makeRequest(
+            url: targetURL,
+            method: "PROPFIND",
+            headers: [
+                "Depth": "0",
+                "Content-Type": "application/xml; charset=utf-8"
+            ],
+            body: Self.quotaPropfindBody
+        )
+        let (data, response) = try await sendData(request)
+        let status = response.statusCode
+        if status == 404 {
+            return nil
+        }
+        guard status == 207 || (200 ... 299).contains(status) else {
+            throw Self.statusError(status, method: "PROPFIND", url: request.url)
+        }
+
+        let parsedEntries = try PropfindXMLParser().parse(data)
+        let targetEntry = parsedEntries.first { entry in
+            guard !entry.hasAnyStatus || entry.hasSuccessStatus else { return false }
+            guard let path = remotePath(fromHref: entry.href) else { return false }
+            return path == "/"
+        } ?? parsedEntries.first(where: { !$0.hasAnyStatus || $0.hasSuccessStatus })
+
+        guard let targetEntry else { return nil }
+        let available = targetEntry.quotaAvailableBytes
+        let total: Int64?
+        if let available, let used = targetEntry.quotaUsedBytes {
+            let (sum, overflow) = available.addingReportingOverflow(used)
+            total = overflow ? nil : sum
+        } else {
+            total = nil
+        }
+        if available == nil, total == nil {
+            return nil
+        }
+        return RemoteStorageCapacity(availableBytes: available, totalBytes: total)
     }
 
     func list(path: String) async throws -> [RemoteStorageEntry] {
@@ -413,6 +468,18 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             <d:getlastmodified />
             <d:creationdate />
             <d:displayname />
+          </d:prop>
+        </d:propfind>
+        """.utf8
+    )
+
+    private static let quotaPropfindBody = Data(
+        """
+        <?xml version="1.0" encoding="utf-8" ?>
+        <d:propfind xmlns:d="DAV:">
+          <d:prop>
+            <d:quota-available-bytes />
+            <d:quota-used-bytes />
           </d:prop>
         </d:propfind>
         """.utf8

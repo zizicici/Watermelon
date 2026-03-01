@@ -64,6 +64,36 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         isAccessing = false
     }
 
+    func storageCapacity() async throws -> RemoteStorageCapacity? {
+        let root = try requireRootURL()
+        do {
+            let values = try root.resourceValues(forKeys: [
+                .volumeAvailableCapacityForImportantUsageKey,
+                .volumeAvailableCapacityForOpportunisticUsageKey,
+                .volumeAvailableCapacityKey,
+                .volumeTotalCapacityKey
+            ])
+
+            let availableImportant = values.volumeAvailableCapacityForImportantUsage.map { Int64($0) }
+            let availableOpportunistic = values.volumeAvailableCapacityForOpportunisticUsage.map { Int64($0) }
+            let availableLegacy = values.volumeAvailableCapacity.map { Int64($0) }
+
+            // Some external providers report 0 for unknown capacity. Treat non-positive values as unavailable.
+            let available = [availableImportant, availableOpportunistic, availableLegacy]
+                .compactMap { $0 }
+                .first(where: { $0 > 0 })
+            let total = values.volumeTotalCapacity
+                .map { Int64($0) }
+                .flatMap { $0 > 0 ? $0 : nil }
+            if available == nil, total == nil {
+                return nil
+            }
+            return RemoteStorageCapacity(availableBytes: available, totalBytes: total)
+        } catch {
+            throw mapStorageError(error)
+        }
+    }
+
     func list(path: String) async throws -> [RemoteStorageEntry] {
         let root = try requireRootURL()
         do {

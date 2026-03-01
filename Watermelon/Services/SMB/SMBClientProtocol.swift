@@ -19,6 +19,11 @@ struct RemoteStorageEntry {
     let modificationDate: Date?
 }
 
+struct RemoteStorageCapacity: Sendable {
+    let availableBytes: Int64?
+    let totalBytes: Int64?
+}
+
 enum RemoteStorageClientError: LocalizedError {
     case notConnected
     case unavailable
@@ -77,6 +82,7 @@ enum RemoteStorageClientError: LocalizedError {
 protocol RemoteStorageClientProtocol: Sendable {
     func connect() async throws
     func disconnect() async
+    func storageCapacity() async throws -> RemoteStorageCapacity?
     func list(path: String) async throws -> [RemoteStorageEntry]
     func metadata(path: String) async throws -> RemoteStorageEntry?
     func upload(
