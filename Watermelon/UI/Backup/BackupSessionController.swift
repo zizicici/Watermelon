@@ -71,7 +71,7 @@ final class BackupSessionController {
     private let appSession: AppSession
     private let databaseManager: DatabaseManager
     private let photoLibraryService: PhotoLibraryServiceProtocol
-    private let backupEngine: BackupEngineActor
+    private let backupEngine: BackupRunCommandActor
 
     private var observers: [UUID: (Snapshot) -> Void] = [:]
     private var commandSignalTask: Task<Void, Never>?
@@ -92,6 +92,9 @@ final class BackupSessionController {
     private var processedItemsByAssetID: [String: ProcessedItem] = [:]
     private var processedItemsQueue: [ProcessedItem] = []
     private var processedItemQueueIndexByAssetID: [String: Int] = [:]
+    private var processedItemsInvalidIndexes: Set<Int> = []
+    private var processedItemsSnapshotCache: [ProcessedItem] = []
+    private var processedItemsSnapshotDirty = false
     private(set) var latestItemEvent: BackupItemEvent?
     private(set) var transferState: BackupTransferState?
     private var retryCountByAssetID: [String: Int] = [:]
@@ -107,7 +110,7 @@ final class BackupSessionController {
         self.appSession = appSession
         self.databaseManager = databaseManager
         self.photoLibraryService = photoLibraryService
-        backupEngine = BackupEngineActor(
+        backupEngine = BackupRunCommandActor(
             backupCoordinator: backupCoordinator,
             photoLibraryService: photoLibraryService
         )
@@ -156,7 +159,22 @@ final class BackupSessionController {
     }
 
     private func processedItemsSnapshot() -> [ProcessedItem] {
-        return processedItemsQueue
+        if !processedItemsSnapshotDirty {
+            return processedItemsSnapshotCache
+        }
+
+        if processedItemsInvalidIndexes.isEmpty {
+            processedItemsSnapshotCache = processedItemsQueue
+        } else {
+            var items: [ProcessedItem] = []
+            items.reserveCapacity(processedItemsByAssetID.count)
+            for (index, item) in processedItemsQueue.enumerated() where !processedItemsInvalidIndexes.contains(index) {
+                items.append(item)
+            }
+            processedItemsSnapshotCache = items
+        }
+        processedItemsSnapshotDirty = false
+        return processedItemsSnapshotCache
     }
 
     @discardableResult
@@ -444,40 +462,6 @@ final class BackupSessionController {
             transferState = state
             scheduleObserverNotification()
 
-        case .assetCompleted(let completion):
-            if isDuplicateAssetCompletion(completion) {
-                break
-            }
-
-            let updatedAt = Date()
-            let item = ProcessedItem(
-                assetLocalIdentifier: completion.assetLocalIdentifier,
-                displayName: completion.displayName,
-                status: completion.status,
-                reason: completion.reason,
-                resourceSummary: completion.resourceSummary,
-                updatedAt: updatedAt
-            )
-            processedItemsByAssetID[completion.assetLocalIdentifier] = item
-            upsertProcessedItemInQueue(item)
-
-            if completion.status == .failed {
-                retryCountByAssetID[completion.assetLocalIdentifier, default: 0] += 1
-                let retryCount = retryCountByAssetID[completion.assetLocalIdentifier, default: 0]
-                failedItemsByAssetID[completion.assetLocalIdentifier] = FailedItem(
-                    jobID: 0,
-                    assetLocalIdentifier: completion.assetLocalIdentifier,
-                    displayName: completion.displayName,
-                    errorMessage: completion.reason ?? "未知错误",
-                    retryCount: retryCount,
-                    updatedAt: updatedAt
-                )
-            } else {
-                failedItemsByAssetID[completion.assetLocalIdentifier] = nil
-            }
-            rebuildFailedItems()
-            scheduleObserverNotification()
-
         case .monthChanged(let change):
             let monthText = String(format: "%04d年%02d月", change.year, change.month)
             switch change.action {
@@ -628,39 +612,49 @@ final class BackupSessionController {
         rebuildFailedItems()
     }
 
-    private func isDuplicateAssetCompletion(_ completion: AssetCompletionEvent) -> Bool {
-        guard let latest = latestItemEvent else { return false }
-        return latest.assetLocalIdentifier == completion.assetLocalIdentifier &&
-            latest.assetFingerprint == completion.assetFingerprint &&
-            latest.displayName == completion.displayName &&
-            latest.status == completion.status &&
-            latest.reason == completion.reason &&
-            latest.resourceSummary == completion.resourceSummary
-    }
-
     private func clearProcessedItems() {
         processedItemsByAssetID.removeAll()
         processedItemsQueue.removeAll()
         processedItemQueueIndexByAssetID.removeAll()
+        processedItemsInvalidIndexes.removeAll()
+        processedItemsSnapshotCache.removeAll()
+        processedItemsSnapshotDirty = false
     }
 
     private func upsertProcessedItemInQueue(_ item: ProcessedItem) {
         let assetID = item.assetLocalIdentifier
 
         if let oldIndex = processedItemQueueIndexByAssetID[assetID] {
-            processedItemsQueue.remove(at: oldIndex)
-            reindexProcessedItemsQueue(from: oldIndex)
+            processedItemsInvalidIndexes.insert(oldIndex)
         }
 
         processedItemsQueue.append(item)
         processedItemQueueIndexByAssetID[assetID] = processedItemsQueue.count - 1
+        processedItemsSnapshotDirty = true
+        compactProcessedItemsQueueIfNeeded()
     }
 
-    private func reindexProcessedItemsQueue(from start: Int) {
-        guard start < processedItemsQueue.count else { return }
-        for index in start ..< processedItemsQueue.count {
-            processedItemQueueIndexByAssetID[processedItemsQueue[index].assetLocalIdentifier] = index
+    private func compactProcessedItemsQueueIfNeeded() {
+        guard !processedItemsInvalidIndexes.isEmpty else { return }
+        let invalidCount = processedItemsInvalidIndexes.count
+        let queueCount = processedItemsQueue.count
+        let shouldCompact = invalidCount >= 512 || invalidCount * 4 >= max(queueCount, 1)
+        guard shouldCompact else { return }
+
+        var compacted: [ProcessedItem] = []
+        compacted.reserveCapacity(processedItemsByAssetID.count)
+        var newIndexByAssetID: [String: Int] = [:]
+        newIndexByAssetID.reserveCapacity(processedItemsByAssetID.count)
+
+        for (index, item) in processedItemsQueue.enumerated() where !processedItemsInvalidIndexes.contains(index) {
+            compacted.append(item)
+            newIndexByAssetID[item.assetLocalIdentifier] = compacted.count - 1
         }
+
+        processedItemsQueue = compacted
+        processedItemQueueIndexByAssetID = newIndexByAssetID
+        processedItemsInvalidIndexes.removeAll()
+        processedItemsSnapshotDirty = true
     }
 
     @discardableResult

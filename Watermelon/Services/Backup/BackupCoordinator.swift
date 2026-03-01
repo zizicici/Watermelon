@@ -75,7 +75,9 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
         let client = try makeStorageClient(profile: profile, password: password)
         try await client.connect()
         defer {
-            Task { await client.disconnect() }
+            Task.detached(priority: .utility) { [client] in
+                await client.disconnect()
+            }
         }
 
         try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
@@ -305,7 +307,9 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
         let client = try makeStorageClient(profile: profile, password: password)
         try await client.connect()
         defer {
-            Task { await client.disconnect() }
+            Task.detached(priority: .utility) { [client] in
+                await client.disconnect()
+            }
         }
 
         try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
@@ -370,16 +374,6 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
             transferState: nil
         )
         eventSink.emit(.progress(progress))
-        eventSink.emit(.assetCompleted(AssetCompletionEvent(
-            assetLocalIdentifier: asset.localIdentifier,
-            assetFingerprint: result.assetFingerprint,
-            displayName: result.displayName,
-            status: result.status,
-            reason: result.reason,
-            resourceSummary: result.resourceSummary,
-            position: position,
-            total: state.total
-        )))
     }
 
     private func emitFailureProgress(
@@ -411,16 +405,6 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
             transferState: nil
         )
         eventSink.emit(.progress(progress))
-        eventSink.emit(.assetCompleted(AssetCompletionEvent(
-            assetLocalIdentifier: asset.localIdentifier,
-            assetFingerprint: nil,
-            displayName: displayName,
-            status: .failed,
-            reason: errorMessage,
-            resourceSummary: "资源处理失败",
-            position: position,
-            total: state.total
-        )))
     }
 
     private static func message(for result: AssetProcessResult, position: Int, total: Int) -> String {

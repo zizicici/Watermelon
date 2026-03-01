@@ -74,7 +74,7 @@ enum RemoteStorageClientError: LocalizedError {
     }
 }
 
-protocol RemoteStorageClientProtocol {
+protocol RemoteStorageClientProtocol: Sendable {
     func connect() async throws
     func disconnect() async
     func list(path: String) async throws -> [RemoteStorageEntry]

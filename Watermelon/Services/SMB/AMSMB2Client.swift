@@ -4,7 +4,7 @@ import Foundation
 import AMSMB2
 #endif
 
-final class AMSMB2Client: RemoteStorageClientProtocol {
+final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     private let config: SMBServerConfig
 
     #if canImport(AMSMB2)

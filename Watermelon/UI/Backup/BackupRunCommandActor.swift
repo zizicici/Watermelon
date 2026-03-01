@@ -62,7 +62,7 @@ enum BackupEngineSignal: @unchecked Sendable {
     case runFailed(BackupRunFailureContext)
 }
 
-actor BackupEngineActor {
+actor BackupRunCommandActor {
     private let backupCoordinator: BackupCoordinatorProtocol
     private let photoLibraryService: PhotoLibraryServiceProtocol
 
@@ -216,7 +216,10 @@ actor BackupEngineActor {
             }
         }
 
-        runTask = Task.detached(priority: .userInitiated) { [weak self] in
+        runTask = Task.detached(priority: .userInitiated) { [weak self, eventStream] in
+            defer {
+                eventStream.finish()
+            }
             guard let self else { return }
             do {
                 _ = try await self.backupCoordinator.runBackup(
@@ -236,7 +239,6 @@ actor BackupEngineActor {
                     profile: profile
                 )
             }
-            await self.finishEventStreamIfNeeded(runToken: runToken)
         }
 
         if terminationIntent != .none {
@@ -287,11 +289,6 @@ actor BackupEngineActor {
             error: error,
             intent: intent
         )))
-    }
-
-    private func finishEventStreamIfNeeded(runToken: UInt64) {
-        guard runToken == activeRunToken else { return }
-        activeEventStream?.finish()
     }
 
     private func clearActiveRunState(resetIntent: Bool) {

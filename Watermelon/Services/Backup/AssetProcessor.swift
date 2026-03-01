@@ -33,6 +33,18 @@ struct ResourceUploadResult: Sendable {
     let reason: String?
 }
 
+private struct UploadPreparation {
+    var targetFileName: String
+    var remoteAbsolutePath: String
+    var attemptedFileNames: Set<String>
+    let skipReason: String?
+}
+
+private struct UploadRetryOutcome {
+    let fileName: String?
+    let lastError: Error?
+}
+
 final class AssetProcessor: Sendable {
     private static let monthCalendar = Calendar(identifier: .gregorian)
     private static let smallFileThresholdBytes: Int64 = 5 * 1024 * 1024
@@ -170,7 +182,6 @@ final class AssetProcessor: Sendable {
                 monthStore: context.monthStore,
                 profile: context.profile,
                 client: client,
-                assetFingerprint: assetFingerprint,
                 resourcePosition: resourcePosition + 1,
                 totalResources: preparedResources.count,
                 assetPosition: context.assetPosition,
@@ -376,7 +387,6 @@ final class AssetProcessor: Sendable {
         monthStore: MonthManifestStore,
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
-        assetFingerprint: Data,
         resourcePosition: Int,
         totalResources: Int,
         assetPosition: Int,
@@ -385,13 +395,69 @@ final class AssetProcessor: Sendable {
         eventStream: BackupEventStream,
         cancellationController: BackupCancellationController?
     ) async throws -> ResourceUploadResult {
-        let local = prepared.local
         let localHash = prepared.contentHash
-        let localFileSize = prepared.fileSize
 
         if monthStore.findResourceByHash(localHash) != nil {
             return ResourceUploadResult(status: .skipped, reason: "hash_exists")
         }
+
+        var preparation = try await prepareUpload(
+            prepared: prepared,
+            monthStore: monthStore,
+            profile: profile,
+            client: client,
+            cancellationController: cancellationController
+        )
+
+        if let skipReason = preparation.skipReason {
+            try recordSkippedResource(
+                prepared: prepared,
+                monthStore: monthStore,
+                targetFileName: preparation.targetFileName
+            )
+            return ResourceUploadResult(status: .skipped, reason: skipReason)
+        }
+
+        let retryOutcome = try await performUploadWithRetry(
+            prepared: prepared,
+            monthStore: monthStore,
+            profile: profile,
+            client: client,
+            uploadPreparation: &preparation,
+            resourcePosition: resourcePosition,
+            totalResources: totalResources,
+            assetPosition: assetPosition,
+            totalAssets: totalAssets,
+            displayName: displayName,
+            eventStream: eventStream,
+            cancellationController: cancellationController
+        )
+
+        guard let uploadedFileName = retryOutcome.fileName else {
+            return ResourceUploadResult(
+                status: .failed,
+                reason: retryOutcome.lastError?.localizedDescription ?? "Unknown upload failure"
+            )
+        }
+
+        try recordUploadedResource(
+            prepared: prepared,
+            monthStore: monthStore,
+            targetFileName: uploadedFileName
+        )
+        return ResourceUploadResult(status: .success, reason: nil)
+    }
+
+    private func prepareUpload(
+        prepared: PreparedResource,
+        monthStore: MonthManifestStore,
+        profile: ServerProfileRecord,
+        client: RemoteStorageClientProtocol,
+        cancellationController: BackupCancellationController?
+    ) async throws -> UploadPreparation {
+        let local = prepared.local
+        let localHash = prepared.contentHash
+        let localFileSize = prepared.fileSize
 
         var targetFileName = RemotePathBuilder.sanitizeFilename(local.originalFilename)
         var skipReason: String?
@@ -412,12 +478,10 @@ final class AssetProcessor: Sendable {
                 if remoteHash == localHash {
                     skipReason = "name_same_hash"
                 }
-            } else {
-                if existingManifestResource == nil {
-                    let remoteSize = monthStore.remoteEntry(named: targetFileName)?.size
-                    if remoteSize == localFileSize {
-                        skipReason = "name_same_size"
-                    }
+            } else if existingManifestResource == nil {
+                let remoteSize = monthStore.remoteEntry(named: targetFileName)?.size
+                if remoteSize == localFileSize {
+                    skipReason = "name_same_size"
                 }
             }
 
@@ -430,34 +494,62 @@ final class AssetProcessor: Sendable {
             }
         }
 
-        if let skipReason {
-            let manifestItem = RemoteManifestResource(
-                year: monthStore.year,
-                month: monthStore.month,
-                fileName: targetFileName,
-                contentHash: localHash,
-                fileSize: localFileSize,
-                resourceType: local.resourceTypeCode,
-                creationDateNs: Self.nanosecondsSinceEpoch(local.asset.creationDate),
-                backedUpAtNs: Self.nanosecondsSinceEpoch(Date()) ?? 0
-            )
-
-            if monthStore.findResourceByHash(localHash) == nil {
-                let inserted = try monthStore.upsertResource(manifestItem)
-                remoteIndexService.upsertCachedResource(inserted)
-            }
-
-            monthStore.markRemoteFile(name: targetFileName, size: localFileSize, creationDate: local.asset.creationDate)
-
-            return ResourceUploadResult(status: .skipped, reason: skipReason)
-        }
-
         let remoteRelativePath = monthStore.monthRelativePath + "/" + targetFileName
-        var remoteAbsolutePath = RemotePathBuilder.absolutePath(
+        let remoteAbsolutePath = RemotePathBuilder.absolutePath(
             basePath: profile.basePath,
             remoteRelativePath: remoteRelativePath
         )
 
+        return UploadPreparation(
+            targetFileName: targetFileName,
+            remoteAbsolutePath: remoteAbsolutePath,
+            attemptedFileNames: attemptedFileNames,
+            skipReason: skipReason
+        )
+    }
+
+    private func recordSkippedResource(
+        prepared: PreparedResource,
+        monthStore: MonthManifestStore,
+        targetFileName: String
+    ) throws {
+        let local = prepared.local
+        let localHash = prepared.contentHash
+        let localFileSize = prepared.fileSize
+        let manifestItem = RemoteManifestResource(
+            year: monthStore.year,
+            month: monthStore.month,
+            fileName: targetFileName,
+            contentHash: localHash,
+            fileSize: localFileSize,
+            resourceType: local.resourceTypeCode,
+            creationDateNs: Self.nanosecondsSinceEpoch(local.asset.creationDate),
+            backedUpAtNs: Self.nanosecondsSinceEpoch(Date()) ?? 0
+        )
+
+        if monthStore.findResourceByHash(localHash) == nil {
+            let inserted = try monthStore.upsertResource(manifestItem)
+            remoteIndexService.upsertCachedResource(inserted)
+        }
+
+        monthStore.markRemoteFile(name: targetFileName, size: localFileSize, creationDate: local.asset.creationDate)
+    }
+
+    private func performUploadWithRetry(
+        prepared: PreparedResource,
+        monthStore: MonthManifestStore,
+        profile: ServerProfileRecord,
+        client: RemoteStorageClientProtocol,
+        uploadPreparation: inout UploadPreparation,
+        resourcePosition: Int,
+        totalResources: Int,
+        assetPosition: Int,
+        totalAssets: Int,
+        displayName: String,
+        eventStream: BackupEventStream,
+        cancellationController: BackupCancellationController?
+    ) async throws -> UploadRetryOutcome {
+        let local = prepared.local
         let maxRetry = 3
         var lastError: Error?
         let progressEmitLock = NSLock()
@@ -470,7 +562,7 @@ final class AssetProcessor: Sendable {
                 try Task.checkCancellation()
                 try await client.upload(
                     localURL: prepared.tempFileURL,
-                    remotePath: remoteAbsolutePath,
+                    remotePath: uploadPreparation.remoteAbsolutePath,
                     respectTaskCancellation: true,
                     onProgress: { fraction in
                         let clamped = max(0, min(1, fraction))
@@ -512,27 +604,9 @@ final class AssetProcessor: Sendable {
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
                 if let shotDate = prepared.shotDate {
-                    try? await client.setModificationDate(shotDate, forPath: remoteAbsolutePath)
+                    try? await client.setModificationDate(shotDate, forPath: uploadPreparation.remoteAbsolutePath)
                 }
-                try cancellationController?.throwIfCancelled()
-                try Task.checkCancellation()
-
-                let backedUpAtNs = Self.nanosecondsSinceEpoch(Date()) ?? 0
-                let manifestItem = RemoteManifestResource(
-                    year: monthStore.year,
-                    month: monthStore.month,
-                    fileName: targetFileName,
-                    contentHash: localHash,
-                    fileSize: localFileSize,
-                    resourceType: local.resourceTypeCode,
-                    creationDateNs: Self.nanosecondsSinceEpoch(local.asset.creationDate),
-                    backedUpAtNs: backedUpAtNs
-                )
-                let inserted = try monthStore.upsertResource(manifestItem)
-                monthStore.markRemoteFile(name: targetFileName, size: localFileSize, creationDate: local.asset.creationDate)
-                remoteIndexService.upsertCachedResource(inserted)
-
-                return ResourceUploadResult(status: .success, reason: nil)
+                return UploadRetryOutcome(fileName: uploadPreparation.targetFileName, lastError: nil)
             } catch {
                 if error is CancellationError {
                     throw error
@@ -548,15 +622,15 @@ final class AssetProcessor: Sendable {
                 let message = error.localizedDescription
                 if message.contains("STATUS_OBJECT_NAME_COLLISION") {
                     var occupiedNames = monthStore.existingFileNames()
-                    occupiedNames.formUnion(attemptedFileNames)
-                    occupiedNames.insert(targetFileName)
-                    targetFileName = RemoteNameCollisionResolver.resolveNextAvailableName(
-                        baseName: targetFileName,
+                    occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
+                    occupiedNames.insert(uploadPreparation.targetFileName)
+                    uploadPreparation.targetFileName = RemoteNameCollisionResolver.resolveNextAvailableName(
+                        baseName: uploadPreparation.targetFileName,
                         occupiedNames: occupiedNames
                     )
-                    attemptedFileNames.insert(targetFileName)
-                    let retryRelativePath = monthStore.monthRelativePath + "/" + targetFileName
-                    remoteAbsolutePath = RemotePathBuilder.absolutePath(
+                    uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
+                    let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
+                    uploadPreparation.remoteAbsolutePath = RemotePathBuilder.absolutePath(
                         basePath: profile.basePath,
                         remoteRelativePath: retryRelativePath
                     )
@@ -575,10 +649,31 @@ final class AssetProcessor: Sendable {
             }
         }
 
-        return ResourceUploadResult(
-            status: .failed,
-            reason: lastError?.localizedDescription ?? "Unknown upload failure"
+        return UploadRetryOutcome(fileName: nil, lastError: lastError)
+    }
+
+    private func recordUploadedResource(
+        prepared: PreparedResource,
+        monthStore: MonthManifestStore,
+        targetFileName: String
+    ) throws {
+        let local = prepared.local
+        let localHash = prepared.contentHash
+        let localFileSize = prepared.fileSize
+        let backedUpAtNs = Self.nanosecondsSinceEpoch(Date()) ?? 0
+        let manifestItem = RemoteManifestResource(
+            year: monthStore.year,
+            month: monthStore.month,
+            fileName: targetFileName,
+            contentHash: localHash,
+            fileSize: localFileSize,
+            resourceType: local.resourceTypeCode,
+            creationDateNs: Self.nanosecondsSinceEpoch(local.asset.creationDate),
+            backedUpAtNs: backedUpAtNs
         )
+        let inserted = try monthStore.upsertResource(manifestItem)
+        monthStore.markRemoteFile(name: targetFileName, size: localFileSize, creationDate: local.asset.creationDate)
+        remoteIndexService.upsertCachedResource(inserted)
     }
 
     private func downloadAndHashRemoteFile(
