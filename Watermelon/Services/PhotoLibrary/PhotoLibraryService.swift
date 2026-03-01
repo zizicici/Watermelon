@@ -6,6 +6,62 @@ final class PhotoLibraryService: @unchecked Sendable {
     private let imageManager = PHCachingImageManager()
     private let resourceManager = PHAssetResourceManager.default()
 
+    private final class ExportRequestState {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Error>?
+        private var requestID: PHAssetResourceDataRequestID?
+        private var completed = false
+
+        func bind(continuation: CheckedContinuation<Void, Error>, requestID: PHAssetResourceDataRequestID) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !completed else {
+                return false
+            }
+            self.continuation = continuation
+            self.requestID = requestID
+            return true
+        }
+
+        func complete(_ result: Result<Void, Error>) {
+            let continuation: CheckedContinuation<Void, Error>?
+            lock.lock()
+            guard !completed else {
+                lock.unlock()
+                return
+            }
+            completed = true
+            continuation = self.continuation
+            self.continuation = nil
+            requestID = nil
+            lock.unlock()
+
+            guard let continuation else { return }
+            switch result {
+            case .success:
+                continuation.resume(returning: ())
+            case .failure(let error):
+                continuation.resume(throwing: error)
+            }
+        }
+
+        func cancelRequest(using manager: PHAssetResourceManager) {
+            let requestID: PHAssetResourceDataRequestID?
+            lock.lock()
+            requestID = self.requestID
+            lock.unlock()
+
+            if let requestID {
+                manager.cancelDataRequest(requestID)
+            }
+        }
+
+        func cancel(using manager: PHAssetResourceManager) {
+            cancelRequest(using: manager)
+            complete(.failure(CancellationError()))
+        }
+    }
+
     func requestAuthorization() async -> PHAuthorizationStatus {
         await withCheckedContinuation { continuation in
             PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
@@ -34,24 +90,82 @@ final class PhotoLibraryService: @unchecked Sendable {
         return result
     }
 
-    func exportResourceToTempFile(_ resource: PHAssetResource) async throws -> URL {
+    func exportResourceToTempFile(
+        _ resource: PHAssetResource,
+        cancellationController: BackupCancellationController? = nil
+    ) async throws -> URL {
         let ext = (resource.originalFilename as NSString).pathExtension
         let temp = FileManager.default.temporaryDirectory
         let filename = UUID().uuidString + (ext.isEmpty ? "" : ".\(ext)")
         let url = temp.appendingPathComponent(filename)
         try? FileManager.default.removeItem(at: url)
+        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileWriteUnknownError,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create temporary export file."]
+            )
+        }
+
+        let fileHandle = try FileHandle(forWritingTo: url)
+        defer {
+            try? fileHandle.close()
+        }
 
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            resourceManager.writeData(for: resource, toFile: url, options: options) { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: ())
-                }
+        let resourceManager = self.resourceManager
+        let state = ExportRequestState()
+        let cancellationHandlerID = cancellationController?.addCancellationHandler {
+            state.cancel(using: resourceManager)
+        }
+        defer {
+            if let cancellationHandlerID {
+                cancellationController?.removeCancellationHandler(cancellationHandlerID)
             }
+        }
+        try cancellationController?.throwIfCancelled()
+
+        do {
+            try await withTaskCancellationHandler(operation: {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    let requestID = resourceManager.requestData(
+                        for: resource,
+                        options: options,
+                        dataReceivedHandler: { data in
+                            guard !data.isEmpty else { return }
+                            do {
+                                try fileHandle.write(contentsOf: data)
+                            } catch {
+                                state.cancelRequest(using: resourceManager)
+                                state.complete(.failure(error))
+                            }
+                        },
+                        completionHandler: { error in
+                            if let error {
+                                state.complete(.failure(error))
+                            } else {
+                                state.complete(.success(()))
+                            }
+                        }
+                    )
+
+                    if !state.bind(continuation: continuation, requestID: requestID) {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+
+                    if Task.isCancelled {
+                        state.cancel(using: resourceManager)
+                    }
+                }
+            }, onCancel: {
+                state.cancel(using: resourceManager)
+            })
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
         }
 
         return url

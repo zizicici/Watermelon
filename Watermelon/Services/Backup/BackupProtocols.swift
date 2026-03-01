@@ -25,7 +25,8 @@ protocol ContentHashIndexRepositoryProtocol: Sendable {
 protocol RemoteManifestIndexScannerProtocol: Sendable {
     func scanManifestDigests(
         client: RemoteStorageClientProtocol,
-        basePath: String
+        basePath: String,
+        cancellationController: BackupCancellationController?
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest]
 }
 
@@ -33,7 +34,10 @@ protocol PhotoLibraryServiceProtocol: Sendable {
     func authorizationStatus() -> PHAuthorizationStatus
     func requestAuthorization() async -> PHAuthorizationStatus
     func fetchAssetsResult(ascendingByCreationDate: Bool) -> PHFetchResult<PHAsset>
-    func exportResourceToTempFile(_ resource: PHAssetResource) async throws -> URL
+    func exportResourceToTempFile(
+        _ resource: PHAssetResource,
+        cancellationController: BackupCancellationController?
+    ) async throws -> URL
 }
 
 protocol RemoteLibrarySnapshotCacheProtocol: AnyObject, Sendable {

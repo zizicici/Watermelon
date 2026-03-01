@@ -20,7 +20,7 @@
 4. `StorageClientFactory`
 5. `PhotoLibraryService`
 6. `MetadataService`
-7. `BackupExecutor`
+7. `BackupCoordinator`
 8. `RestoreService`
 
 `AppSession` 保存当前活跃 `ServerProfileRecord` 和内存态密码（SMB/WebDAV 需要，外接存储为空串）。
@@ -40,13 +40,16 @@
 
 ### Backup
 
-1. `BackupExecutor`：备份编排器（按 Asset 主循环）。
-2. `BackupAssetResourcePlanner`：资源排序、role/slot 分配、assetFingerprint 计算。
-3. `MonthManifestStore`：月 manifest sqlite 读写 + flush。
-4. `RemoteLibraryScanner`：只读扫描 `YYYY/MM` 下 manifest，生成快照。
-5. `RemoteLibrarySnapshotCache`：内存快照缓存 + 线程安全 upsert。
-6. `ContentHashIndexRepository`：本地 `local_assets` / `local_asset_resources` 读写。
-7. `RemoteNameCollisionResolver`：文件名冲突 `_n` 递增。
+1. `BackupCoordinator`：无全局运行状态的备份执行器（按 Asset 主循环）。
+2. `BackupCancellationController`：run 级别取消控制器。
+3. `AssetProcessor`：单 Asset 资源导出、hash、上传、重试、manifest 写入。
+4. `BackupAssetResourcePlanner`：资源排序、role/slot 分配、assetFingerprint 计算。
+5. `MonthManifestStore`：月 manifest sqlite 读写 + flush。
+6. `RemoteManifestIndexScanner`：只读扫描 `YYYY/MM` 下 manifest 摘要。
+7. `RemoteIndexSyncService`：按月摘要增量刷新远端快照。
+8. `RemoteLibrarySnapshotCache`：内存快照缓存。
+9. `ContentHashIndexRepository`：本地 `local_assets` / `local_asset_resources` 读写。
+10. `RemoteNameCollisionResolver`：文件名冲突 `_n` 递增。
 
 ### Photo / Restore / Metadata
 
@@ -54,7 +57,23 @@
 2. `RestoreService`：远端文件下载后写回系统相册。
 3. `MetadataService`：文件元信息辅助。
 
-## 4. UI 结构
+## 4. Backup 控制面与执行面
+
+### 控制面（UI/Backup）
+
+1. `BackupEngineActor`（定义在 `BackupRunCommandActor.swift`）：
+2. 唯一负责 `start/pause/stop/resume` 命令编排。
+3. 每次 run 独立创建 `BackupEventStream + BackupCancellationController`。
+4. 维护 run token，避免跨 run 事件污染。
+5. `BackupSessionController`：仅负责 UI 状态聚合与展示，不直接驱动底层执行细节。
+
+### 执行面（Services/Backup）
+
+1. `BackupCoordinator.runBackup(..., context: BackupRunContext)` 接收 run 级上下文执行备份。
+2. `BackupRunContext` 包含 `eventSink` 与 `cancellationController`。
+3. `BackupCoordinator` 不再暴露全局 `eventStream` / `cancelActiveBackup()`。
+
+## 5. UI 结构
 
 ### 主页面
 
@@ -64,9 +83,8 @@
 
 ### 备份状态
 
-1. `BackupSessionController`：备份状态机与日志/进度聚合。
-2. `BackupStatusViewController`：开始/暂停/停止、结果筛选、日志展示。
-3. `BackupFailedItemsViewController` 与 `BackupFailedItemDetailViewController`：失败项重试入口。
+1. `BackupSessionController`：状态机、日志/进度聚合、失败项重试入口。
+2. `BackupViewController`：开始/暂停/停止、结果筛选、日志展示。
 
 ### 存储配置与管理
 
@@ -79,13 +97,14 @@
 
 这些链路由 Home 右上角连接菜单触发。
 
-## 5. 当前主链路文件建议
+## 6. 当前主链路文件建议
 
 后续改动优先集中：
 
 1. `Watermelon/Home/HomeViewController.swift`
-2. `Watermelon/Home/HomeAlbumMatching.swift`
+2. `Watermelon/UI/Backup/BackupRunCommandActor.swift`
 3. `Watermelon/UI/Backup/BackupSessionController.swift`
-4. `Watermelon/Services/Backup/BackupExecutor.swift`
-5. `Watermelon/Services/Backup/MonthManifestStore.swift`
-6. `Watermelon/Services/Backup/RemoteLibraryScanner.swift`
+4. `Watermelon/Services/Backup/BackupCoordinator.swift`
+5. `Watermelon/Services/Backup/AssetProcessor.swift`
+6. `Watermelon/Services/Backup/MonthManifestStore.swift`
+7. `Watermelon/Services/Backup/RemoteIndexSyncService.swift`

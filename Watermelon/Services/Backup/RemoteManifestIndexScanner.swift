@@ -3,9 +3,11 @@ import Foundation
 final class RemoteManifestIndexScanner: @unchecked Sendable {
     func scanManifestDigests(
         client: RemoteStorageClientProtocol,
-        basePath: String
+        basePath: String,
+        cancellationController: BackupCancellationController? = nil
     ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
         let normalizedBasePath = RemotePathBuilder.normalizePath(basePath)
+        try cancellationController?.throwIfCancelled()
 
         let yearEntries = try await client.list(path: normalizedBasePath)
             .filter { $0.isDirectory }
@@ -16,6 +18,8 @@ final class RemoteManifestIndexScanner: @unchecked Sendable {
         digests.reserveCapacity(yearEntries.count * 12)
 
         for yearEntry in yearEntries {
+            try cancellationController?.throwIfCancelled()
+            try Task.checkCancellation()
             guard let year = Self.parseYear(yearEntry.name) else { continue }
 
             let monthEntries = try await client.list(path: yearEntry.path)
@@ -24,6 +28,8 @@ final class RemoteManifestIndexScanner: @unchecked Sendable {
                 .sorted { $0.name < $1.name }
 
             for monthEntry in monthEntries {
+                try cancellationController?.throwIfCancelled()
+                try Task.checkCancellation()
                 guard let month = Self.parseMonth(monthEntry.name) else { continue }
                 let manifestPath = RemotePathBuilder.absolutePath(
                     basePath: normalizedBasePath,

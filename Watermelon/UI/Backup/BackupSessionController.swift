@@ -55,6 +55,7 @@ final class BackupSessionController {
     struct Snapshot {
         let state: State
         let primaryActionTitle: String
+        let controlsLocked: Bool
         let statusText: String
         let succeeded: Int
         let failed: Int
@@ -67,45 +68,19 @@ final class BackupSessionController {
         let transferState: BackupTransferState?
     }
 
-    private enum TerminationIntent {
-        case none
-        case pause
-        case stop
-    }
-
-    private enum RunMode {
-        case full
-        case retry(assetIDs: Set<String>)
-
-        var isRetry: Bool {
-            if case .retry = self {
-                return true
-            }
-            return false
-        }
-
-        var retryCount: Int {
-            switch self {
-            case .full:
-                return 0
-            case .retry(let assetIDs):
-                return assetIDs.count
-            }
-        }
-    }
-
-    private let backupCoordinator: BackupCoordinatorProtocol
     private let appSession: AppSession
     private let databaseManager: DatabaseManager
     private let photoLibraryService: PhotoLibraryServiceProtocol
+    private let backupEngine: BackupEngineActor
 
     private var observers: [UUID: (Snapshot) -> Void] = [:]
-    private var runTask: Task<Void, Never>?
-    private var eventListenerTask: Task<Void, Never>?
-    private var terminationIntent: TerminationIntent = .none
-    private var currentRunMode: RunMode = .full
-    private var activeRunToken: UInt64 = 0
-    private var lastPausedRunMode: RunMode?
+    private var commandSignalTask: Task<Void, Never>?
+    private var startCommandTask: Task<Void, Never>?
+    private var notifyThrottleTask: Task<Void, Never>?
+    private var hasPendingObserverNotification = false
+    private var currentRunMode: BackupRunMode = .full
+    private var lastPausedRunMode: BackupRunMode?
+    private var activeCommandRunToken: UInt64?
 
     private(set) var state: State = .idle
     private(set) var statusText: String = "未开始"
@@ -129,10 +104,22 @@ final class BackupSessionController {
         databaseManager: DatabaseManager,
         photoLibraryService: PhotoLibraryServiceProtocol
     ) {
-        self.backupCoordinator = backupCoordinator
         self.appSession = appSession
         self.databaseManager = databaseManager
         self.photoLibraryService = photoLibraryService
+        backupEngine = BackupEngineActor(
+            backupCoordinator: backupCoordinator,
+            photoLibraryService: photoLibraryService
+        )
+
+        let commandActor = backupEngine
+        commandSignalTask = Task { [weak self] in
+            let signalStream = await commandActor.makeSignalStream()
+            for await signal in signalStream {
+                guard let self else { return }
+                await self.handleCommandSignal(signal)
+            }
+        }
     }
 
     convenience init(dependencies: DependencyContainer) {
@@ -144,10 +131,17 @@ final class BackupSessionController {
         )
     }
 
+    deinit {
+        commandSignalTask?.cancel()
+        startCommandTask?.cancel()
+        notifyThrottleTask?.cancel()
+    }
+
     func snapshot() -> Snapshot {
         Snapshot(
             state: state,
             primaryActionTitle: primaryActionTitle(for: state),
+            controlsLocked: controlsLocked(),
             statusText: statusText,
             succeeded: succeeded,
             failed: failed,
@@ -234,26 +228,27 @@ final class BackupSessionController {
     }
 
     @discardableResult
-    private func startBackup(mode: RunMode) -> Bool {
-        guard runTask == nil else {
+    private func startBackup(mode: BackupRunMode) -> Bool {
+        guard state != .running, startCommandTask == nil else {
             appendLog("已有备份任务正在执行")
+            notifyObserversNow()
             return false
         }
         guard let profile = appSession.activeProfile else {
             state = .failed
             statusText = "请先连接远端存储"
             appendLog("错误: 未连接远端存储")
-            notifyObservers()
+            notifyObserversNow()
             return false
         }
+
         let password: String
         if profile.storageProfile.requiresPassword {
-            guard let activePassword = appSession.activePassword,
-                  !activePassword.isEmpty else {
+            guard let activePassword = appSession.activePassword, !activePassword.isEmpty else {
                 state = .failed
                 statusText = "请先连接远端存储"
                 appendLog("错误: 未提供远端存储凭据")
-                notifyObservers()
+                notifyObserversNow()
                 return false
             }
             password = activePassword
@@ -261,7 +256,6 @@ final class BackupSessionController {
             password = appSession.activePassword ?? ""
         }
 
-        terminationIntent = .none
         currentRunMode = mode
         lastPausedRunMode = nil
 
@@ -288,111 +282,147 @@ final class BackupSessionController {
         skipped = 0
         total = 0
         appendLog(mode.isRetry ? "开始重试失败 Asset（\(mode.retryCount)）" : "开始备份任务（按 Asset 计数）")
-        notifyObservers()
+        notifyObserversNow()
 
-        activeRunToken &+= 1
-        let runToken = activeRunToken
-        eventListenerTask?.cancel()
-        eventListenerTask = nil
-        eventListenerTask = Task { [weak self] in
+        activeCommandRunToken = nil
+        startCommandTask?.cancel()
+        startCommandTask = Task { [weak self] in
             guard let self else { return }
-            for await event in self.backupCoordinator.eventStream {
-                await self.handleEvent(event, runToken: runToken)
-                if event.isTerminal {
-                    break
-                }
+            if Task.isCancelled {
+                self.startCommandTask = nil
+                return
             }
-        }
+            let startedRunToken = await backupEngine.startRun(
+                profile: profile,
+                password: password,
+                mode: mode
+            )
+            self.startCommandTask = nil
+            if Task.isCancelled {
+                return
+            }
 
-        runTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let retryAssetIdentifiers: Set<String>?
-                switch mode {
-                case .full:
-                    retryAssetIdentifiers = nil
-                case .retry(let assetIDs):
-                    retryAssetIdentifiers = assetIDs
-                }
-
-                let result = try await self.backupCoordinator.runBackup(
-                    profile: profile,
-                    password: password,
-                    onlyAssetLocalIdentifiers: retryAssetIdentifiers
-                )
-                _ = result
-            } catch {
-                guard self.activeRunToken == runToken else {
-                    self.runTask = nil
-                    return
-                }
-                self.runTask = nil
-                self.eventListenerTask?.cancel()
-                self.eventListenerTask = nil
-                self.terminationIntent = .none
+            guard let startedRunToken else {
                 self.currentRunMode = .full
-
-                let userMessage = profile.userFacingStorageErrorMessage(error)
-                if let backupError = error as? BackupError,
-                   case .backupAlreadyRunning = backupError {
-                    self.state = .failed
-                    self.statusText = "已有备份任务运行中"
-                    self.transferState = nil
-                    self.appendLog("错误: 已有备份任务运行中")
-                    self.notifyObservers()
-                    return
-                }
-                let externalUnavailable = profile.isExternalStorageUnavailableError(error)
-                if externalUnavailable,
-                   self.appSession.activeProfile?.id == profile.id {
-                    try? self.databaseManager.setActiveServerProfileID(nil)
-                    self.appSession.clear()
-                }
-                self.state = .failed
-                self.statusText = externalUnavailable ? "外接存储已断开" : "备份失败"
                 self.transferState = nil
-                self.appendLog("错误: \(userMessage)")
-                self.rebuildFailedItems()
-                self.notifyObservers()
+                self.state = .failed
+                self.statusText = "已有备份任务运行中"
+                self.appendLog("错误: 已有备份任务运行中")
+                self.notifyObserversNow()
+                return
             }
+            self.activeCommandRunToken = startedRunToken
         }
 
         return true
     }
 
     func pauseBackup() {
-        guard runTask != nil else {
+        if startCommandTask != nil {
+            statusText = "正在暂停..."
+            transferState = nil
+            Task { [backupEngine] in
+                await backupEngine.requestPause()
+            }
+            notifyObserversNow()
+            return
+        }
+        if state != .running {
             state = .paused
             statusText = "备份已暂停"
             transferState = nil
-            notifyObservers()
+            notifyObserversNow()
             return
         }
-        terminationIntent = .pause
+
         statusText = "正在暂停..."
         transferState = nil
-        runTask?.cancel()
-        notifyObservers()
+        Task { [backupEngine] in
+            await backupEngine.requestPause()
+        }
+        notifyObserversNow()
     }
 
     func stopBackup() {
-        guard runTask != nil else {
+        if startCommandTask != nil {
+            statusText = "正在停止..."
+            transferState = nil
+            Task { [backupEngine] in
+                await backupEngine.requestStop()
+            }
+            notifyObserversNow()
+            return
+        }
+        if state != .running {
             state = .stopped
             statusText = "备份已停止"
             transferState = nil
-            notifyObservers()
+            notifyObserversNow()
             return
         }
-        terminationIntent = .stop
+
         statusText = "正在停止..."
         transferState = nil
-        runTask?.cancel()
-        notifyObservers()
+        Task { [backupEngine] in
+            await backupEngine.requestStop()
+        }
+        notifyObserversNow()
     }
 
-    private func handleEvent(_ event: BackupEvent, runToken: UInt64) async {
-        guard runToken == activeRunToken else { return }
+    private func handleCommandSignal(_ signal: BackupEngineSignal) async {
+        switch signal {
+        case .runEvent(let runToken, let runMode, let intent, let event):
+            guard runToken == activeCommandRunToken else { return }
+            _ = await handleEvent(event, runMode: runMode, terminalIntent: intent)
+        case .runFailed(let failure):
+            guard failure.runToken == activeCommandRunToken else { return }
+            handleRunFailure(failure)
+        }
+    }
 
+    private func handleRunFailure(_ failure: BackupRunFailureContext) {
+        activeCommandRunToken = nil
+        currentRunMode = .full
+
+        let effectiveIntent: BackupTerminationIntent =
+            failure.intent != .none ? failure.intent : ((failure.error is CancellationError) ? .pause : .none)
+
+        if effectiveIntent != .none || failure.error is CancellationError {
+            if effectiveIntent == .stop {
+                lastPausedRunMode = nil
+            } else {
+                lastPausedRunMode = failure.runMode
+            }
+            state = effectiveIntent == .stop ? .stopped : .paused
+            statusText = effectiveIntent == .stop ? "备份已停止" : "备份已暂停"
+            transferState = nil
+            appendLog(effectiveIntent == .stop ? "任务已停止" : "任务已暂停")
+            rebuildFailedItems()
+            notifyObserversNow()
+            return
+        }
+
+        let profile = failure.profile
+        let userMessage = profile.userFacingStorageErrorMessage(failure.error)
+        let externalUnavailable = profile.isExternalStorageUnavailableError(failure.error)
+        if externalUnavailable,
+           appSession.activeProfile?.id == profile.id {
+            try? databaseManager.setActiveServerProfileID(nil)
+            appSession.clear()
+        }
+        state = .failed
+        statusText = externalUnavailable ? "外接存储已断开" : "备份失败"
+        transferState = nil
+        appendLog("错误: \(userMessage)")
+        rebuildFailedItems()
+        notifyObserversNow()
+    }
+
+    private func handleEvent(
+        _ event: BackupEvent,
+        runMode: BackupRunMode,
+        terminalIntent: BackupTerminationIntent
+    ) async -> Bool {
         switch event {
         case .progress(let progress):
             succeeded = progress.succeeded
@@ -404,14 +434,15 @@ final class BackupSessionController {
             if let itemEvent = progress.itemEvent {
                 applyProgressEvent(itemEvent)
             }
-            notifyObservers()
+            scheduleObserverNotification()
 
         case .log(let message):
             appendLog(message)
+            scheduleObserverNotification()
 
         case .transferState(let state):
             transferState = state
-            notifyObservers()
+            scheduleObserverNotification()
 
         case .assetCompleted(let completion):
             if isDuplicateAssetCompletion(completion) {
@@ -445,7 +476,7 @@ final class BackupSessionController {
                 failedItemsByAssetID[completion.assetLocalIdentifier] = nil
             }
             rebuildFailedItems()
-            notifyObservers()
+            scheduleObserverNotification()
 
         case .monthChanged(let change):
             let monthText = String(format: "%04d年%02d月", change.year, change.month)
@@ -457,30 +488,32 @@ final class BackupSessionController {
             case .flushFailed(let error):
                 appendLog("Month \(monthText) manifest flush failed: \(error)")
             }
+            scheduleObserverNotification()
 
         case .remoteIndexSynced(let syncEvent):
             appendLog("Remote index synced. \(syncEvent.resourceCount) resource(s), \(syncEvent.assetCount) asset(s).")
+            scheduleObserverNotification()
 
         case .started(let totalAssets):
             total = totalAssets
-            notifyObservers()
+            scheduleObserverNotification()
 
         case .finished(let result):
-            finishRun(result: result, runMode: currentRunMode, runToken: runToken)
+            finishRun(result: result, runMode: runMode, terminalIntent: terminalIntent)
+            return true
 
         case .failed:
-            break
+            return true
         }
+        return false
     }
 
-    private func finishRun(result: BackupExecutionResult, runMode: RunMode, runToken: UInt64) {
-        guard runToken == activeRunToken else { return }
-
-        runTask = nil
-        eventListenerTask?.cancel()
-        eventListenerTask = nil
-        let intent = terminationIntent
-        terminationIntent = .none
+    private func finishRun(
+        result: BackupExecutionResult,
+        runMode: BackupRunMode,
+        terminalIntent: BackupTerminationIntent
+    ) {
+        activeCommandRunToken = nil
         currentRunMode = .full
 
         succeeded = result.succeeded
@@ -488,25 +521,25 @@ final class BackupSessionController {
         skipped = result.skipped
         total = result.total
 
-        if intent == .stop {
+        if terminalIntent == .stop {
             lastPausedRunMode = nil
             state = .stopped
             statusText = "备份已停止"
             transferState = nil
             appendLog("任务已停止")
             rebuildFailedItems()
-            notifyObservers()
+            notifyObserversNow()
             return
         }
 
-        if result.paused || intent == .pause {
+        if result.paused || terminalIntent == .pause {
             lastPausedRunMode = runMode
             state = .paused
             statusText = "备份已暂停"
             transferState = nil
             appendLog("任务已暂停")
             rebuildFailedItems()
-            notifyObservers()
+            notifyObserversNow()
             return
         }
 
@@ -517,7 +550,7 @@ final class BackupSessionController {
         transferState = nil
         appendLog("完成: 成功\(succeeded) 失败\(result.failed) 跳过\(result.skipped)")
         rebuildFailedItems()
-        notifyObservers()
+        notifyObserversNow()
     }
 
     private func rebuildFailedItems() {
@@ -529,13 +562,39 @@ final class BackupSessionController {
         observers.values.forEach { $0(latest) }
     }
 
+    private func scheduleObserverNotification() {
+        guard !hasPendingObserverNotification else { return }
+        hasPendingObserverNotification = true
+        notifyThrottleTask?.cancel()
+        notifyThrottleTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: Self.observerNotificationIntervalNanos)
+            } catch {
+                return
+            }
+            guard let self else { return }
+            self.hasPendingObserverNotification = false
+            self.notifyObservers()
+        }
+    }
+
+    private func notifyObserversNow() {
+        notifyThrottleTask?.cancel()
+        notifyThrottleTask = nil
+        hasPendingObserverNotification = false
+        notifyObservers()
+    }
+
+    private func controlsLocked() -> Bool {
+        startCommandTask != nil
+    }
+
     private func appendLog(_ line: String) {
         let timestamp = Self.timeFormatter.string(from: Date())
         logs.append("[\(timestamp)] \(line)")
         if logs.count > 800 {
             logs.removeFirst(logs.count - 800)
         }
-        notifyObservers()
     }
 
     private func applyProgressEvent(_ event: BackupItemEvent) {
@@ -606,8 +665,9 @@ final class BackupSessionController {
 
     @discardableResult
     private func resumeFromPause() -> Bool {
-        guard runTask == nil else {
+        guard state != .running, startCommandTask == nil else {
             appendLog("已有备份任务正在执行")
+            notifyObserversNow()
             return false
         }
         guard let profile = appSession.activeProfile else {
@@ -629,57 +689,68 @@ final class BackupSessionController {
         state = .running
         statusText = "正在准备继续..."
         appendLog("计算剩余备份 Asset...")
-        notifyObservers()
+        notifyObserversNow()
 
         let pausedMode = lastPausedRunMode ?? .full
-        runTask = Task { [weak self] in
+        let completedIDs = completedAssetIDs()
+        startCommandTask?.cancel()
+        startCommandTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let pendingAssetIDs: Set<String>
-                switch pausedMode {
-                case .retry(let assetIDs):
-                    pendingAssetIDs = assetIDs.subtracting(self.completedAssetIDs())
-                case .full:
-                    pendingAssetIDs = try await self.computePendingAssetIDsForFullRun()
+                let outcome = try await self.backupEngine.resumeRun(
+                    profile: profile,
+                    password: appSession.activePassword ?? "",
+                    pausedMode: pausedMode,
+                    completedAssetIDs: completedIDs
+                )
+
+                self.startCommandTask = nil
+                if Task.isCancelled {
+                    return
                 }
 
-                self.runTask = nil
+                switch outcome {
+                case .started(let runToken, let pendingCount):
+                    self.activeCommandRunToken = runToken
+                    self.appendLog("继续备份剩余 \(pendingCount) 个 Asset")
+                    self.notifyObserversNow()
 
-                guard self.state == .running else { return }
-                guard !pendingAssetIDs.isEmpty else {
+                case .noPending:
                     self.lastPausedRunMode = nil
+                    self.currentRunMode = .full
                     self.state = .completed
                     self.statusText = "备份完成"
                     self.transferState = nil
                     self.appendLog("无剩余 Asset，已完成")
                     self.rebuildFailedItems()
-                    self.notifyObservers()
-                    return
-                }
+                    self.notifyObserversNow()
 
-                self.appendLog("继续备份剩余 \(pendingAssetIDs.count) 个 Asset")
-                _ = self.startBackup(mode: .retry(assetIDs: pendingAssetIDs))
-            } catch is CancellationError {
-                self.runTask = nil
-                let intent = self.terminationIntent
-                self.terminationIntent = .none
-                self.currentRunMode = .full
-                self.state = intent == .stop ? .stopped : .paused
-                self.statusText = intent == .stop ? "备份已停止" : "备份已暂停"
-                self.transferState = nil
-                self.appendLog(intent == .stop ? "任务已停止" : "任务已暂停")
-                self.rebuildFailedItems()
-                self.notifyObservers()
+                case .interrupted(let intent):
+                    self.currentRunMode = .full
+                    self.state = intent == .stop ? .stopped : .paused
+                    self.statusText = intent == .stop ? "备份已停止" : "备份已暂停"
+                    self.transferState = nil
+                    self.appendLog(intent == .stop ? "任务已停止" : "任务已暂停")
+                    self.rebuildFailedItems()
+                    self.notifyObserversNow()
+
+                case .busy:
+                    self.currentRunMode = .full
+                    self.state = .failed
+                    self.statusText = "已有备份任务运行中"
+                    self.transferState = nil
+                    self.appendLog("错误: 已有备份任务运行中")
+                    self.notifyObserversNow()
+                }
             } catch {
-                self.runTask = nil
-                self.terminationIntent = .none
+                self.startCommandTask = nil
                 self.currentRunMode = .full
                 self.state = .failed
                 self.statusText = "继续备份失败"
                 self.transferState = nil
                 self.appendLog("继续失败: \(error.localizedDescription)")
                 self.rebuildFailedItems()
-                self.notifyObservers()
+                self.notifyObserversNow()
             }
         }
 
@@ -694,34 +765,6 @@ final class BackupSessionController {
                 }
                 .map(\.assetLocalIdentifier)
         )
-    }
-
-    private func computePendingAssetIDsForFullRun() async throws -> Set<String> {
-        let status = photoLibraryService.authorizationStatus()
-        let authorized: Bool
-        if status == .authorized || status == .limited {
-            authorized = true
-        } else {
-            let requested = await photoLibraryService.requestAuthorization()
-            authorized = (requested == .authorized || requested == .limited)
-        }
-        guard authorized else {
-            throw BackupError.photoPermissionDenied
-        }
-
-        let completed = completedAssetIDs()
-        let assets = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
-        var pending = Set<String>()
-
-        for index in 0 ..< assets.count {
-            try Task.checkCancellation()
-            let asset = assets.object(at: index)
-            if !completed.contains(asset.localIdentifier) {
-                pending.insert(asset.localIdentifier)
-            }
-        }
-
-        return pending
     }
 
     private func primaryActionTitle(for state: State) -> String {
@@ -742,4 +785,6 @@ final class BackupSessionController {
         formatter.dateFormat = "HH:mm:ss"
         return formatter
     }()
+
+    private static let observerNotificationIntervalNanos: UInt64 = 120_000_000
 }

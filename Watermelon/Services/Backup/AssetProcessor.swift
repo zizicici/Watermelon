@@ -37,6 +37,8 @@ final class AssetProcessor: Sendable {
     private static let monthCalendar = Calendar(identifier: .gregorian)
     private static let smallFileThresholdBytes: Int64 = 5 * 1024 * 1024
     private static let hashBufferSize = 64 * 1024
+    private static let transferProgressMinimumStep = 0.01
+    private static let transferProgressMinimumInterval: TimeInterval = 0.12
 
     private let photoLibraryService: PhotoLibraryServiceProtocol
     private let hashIndexRepository: ContentHashIndexRepositoryProtocol
@@ -64,7 +66,8 @@ final class AssetProcessor: Sendable {
     func process(
         context: AssetProcessContext,
         client: RemoteStorageClientProtocol,
-        eventStream: BackupEventStream
+        eventStream: BackupEventStream,
+        cancellationController: BackupCancellationController?
     ) async throws -> AssetProcessResult {
         var preparedResources: [PreparedResource] = []
         preparedResources.reserveCapacity(context.selectedResources.count)
@@ -82,12 +85,14 @@ final class AssetProcessor: Sendable {
 
         if let cachedResult = try processWithLocalCache(
             context: context,
-            displayName: displayName
+            displayName: displayName,
+            cancellationController: cancellationController
         ) {
             return cachedResult
         }
 
         for (resourcePosition, selected) in context.selectedResources.enumerated() {
+            try cancellationController?.throwIfCancelled()
             try Task.checkCancellation()
 
             let local = makeLocalResource(asset: context.asset, selected: selected)
@@ -106,14 +111,17 @@ final class AssetProcessor: Sendable {
                 )
             ))
 
-            let tempFileURL = try await photoLibraryService.exportResourceToTempFile(local.resource)
+            let tempFileURL = try await photoLibraryService.exportResourceToTempFile(
+                local.resource,
+                cancellationController: cancellationController
+            )
             var shouldRemoveTempFile = true
             defer {
                 if shouldRemoveTempFile {
                     try? FileManager.default.removeItem(at: tempFileURL)
                 }
             }
-            let localHash = try Self.contentHash(of: tempFileURL)
+            let localHash = try Self.contentHash(of: tempFileURL, cancellationController: cancellationController)
             let localFileSize = max(
                 local.fileSize,
                 (try? FileManager.default.attributesOfItem(atPath: tempFileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
@@ -154,6 +162,7 @@ final class AssetProcessor: Sendable {
         links.reserveCapacity(preparedResources.count)
 
         for (resourcePosition, prepared) in preparedResources.enumerated() {
+            try cancellationController?.throwIfCancelled()
             try Task.checkCancellation()
 
             let uploadResult = try await uploadResource(
@@ -167,7 +176,8 @@ final class AssetProcessor: Sendable {
                 assetPosition: context.assetPosition,
                 totalAssets: context.totalAssets,
                 displayName: displayName,
-                eventStream: eventStream
+                eventStream: eventStream,
+                cancellationController: cancellationController
             )
             uploadResults.append(uploadResult)
 
@@ -257,8 +267,11 @@ final class AssetProcessor: Sendable {
 
     private func processWithLocalCache(
         context: AssetProcessContext,
-        displayName: String
+        displayName: String,
+        cancellationController: BackupCancellationController?
     ) throws -> AssetProcessResult? {
+        try cancellationController?.throwIfCancelled()
+        try Task.checkCancellation()
         guard let cachedLocalHash = context.cachedLocalHash else { return nil }
         guard cachedLocalHash.resourceCount == context.selectedResources.count else { return nil }
 
@@ -266,6 +279,8 @@ final class AssetProcessor: Sendable {
             return nil
         }
 
+        try cancellationController?.throwIfCancelled()
+        try Task.checkCancellation()
         guard let roleSlotHashes = roleSlotHashes(
             from: context.selectedResources,
             cachedLocalHash: cachedLocalHash
@@ -307,6 +322,8 @@ final class AssetProcessor: Sendable {
         }
 
         for link in links where context.monthStore.findResourceByHash(link.resourceHash) == nil {
+            try cancellationController?.throwIfCancelled()
+            try Task.checkCancellation()
             return nil
         }
 
@@ -365,7 +382,8 @@ final class AssetProcessor: Sendable {
         assetPosition: Int,
         totalAssets: Int,
         displayName: String,
-        eventStream: BackupEventStream
+        eventStream: BackupEventStream,
+        cancellationController: BackupCancellationController?
     ) async throws -> ResourceUploadResult {
         let local = prepared.local
         let localHash = prepared.contentHash
@@ -382,11 +400,14 @@ final class AssetProcessor: Sendable {
         if monthStore.existingFileNames().contains(targetFileName) {
             let existingManifestResource = monthStore.findByFileName(targetFileName)
             if localFileSize < Self.smallFileThresholdBytes {
+                try cancellationController?.throwIfCancelled()
+                try Task.checkCancellation()
                 let remoteHash = try await downloadAndHashRemoteFile(
                     profile: profile,
                     client: client,
                     monthStore: monthStore,
-                    fileName: targetFileName
+                    fileName: targetFileName,
+                    cancellationController: cancellationController
                 )
                 if remoteHash == localHash {
                     skipReason = "name_same_hash"
@@ -439,9 +460,13 @@ final class AssetProcessor: Sendable {
 
         let maxRetry = 3
         var lastError: Error?
+        let progressEmitLock = NSLock()
+        var lastProgressFraction = -1.0
+        var lastProgressEmitAt = Date.distantPast
 
         for attempt in 0 ..< maxRetry {
             do {
+                try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
                 try await client.upload(
                     localURL: prepared.tempFileURL,
@@ -449,6 +474,25 @@ final class AssetProcessor: Sendable {
                     respectTaskCancellation: true,
                     onProgress: { fraction in
                         let clamped = max(0, min(1, fraction))
+                        let now = Date()
+                        let shouldEmit: Bool
+                        progressEmitLock.lock()
+                        if clamped >= 1 {
+                            shouldEmit = true
+                            lastProgressFraction = clamped
+                            lastProgressEmitAt = now
+                        } else {
+                            let advancedEnough = (clamped - lastProgressFraction) >= Self.transferProgressMinimumStep
+                            let waitedEnough = now.timeIntervalSince(lastProgressEmitAt) >= Self.transferProgressMinimumInterval
+                            shouldEmit = advancedEnough || waitedEnough
+                            if shouldEmit {
+                                lastProgressFraction = clamped
+                                lastProgressEmitAt = now
+                            }
+                        }
+                        progressEmitLock.unlock()
+
+                        guard shouldEmit else { return }
                         eventStream.emit(.transferState(
                             Self.makeTransferState(
                                 assetLocalIdentifier: local.assetLocalIdentifier,
@@ -465,9 +509,13 @@ final class AssetProcessor: Sendable {
                         ))
                     }
                 )
+                try cancellationController?.throwIfCancelled()
+                try Task.checkCancellation()
                 if let shotDate = prepared.shotDate {
                     try? await client.setModificationDate(shotDate, forPath: remoteAbsolutePath)
                 }
+                try cancellationController?.throwIfCancelled()
+                try Task.checkCancellation()
 
                 let backedUpAtNs = Self.nanosecondsSinceEpoch(Date()) ?? 0
                 let manifestItem = RemoteManifestResource(
@@ -488,6 +536,9 @@ final class AssetProcessor: Sendable {
             } catch {
                 if error is CancellationError {
                     throw error
+                }
+                if cancellationController?.isCancelled == true {
+                    throw CancellationError()
                 }
                 if profile.isExternalStorageUnavailableError(error) {
                     throw error
@@ -514,7 +565,11 @@ final class AssetProcessor: Sendable {
 
                 if attempt < maxRetry - 1 {
                     let sleepNanos = UInt64(pow(2.0, Double(attempt))) * 500_000_000
-                    try? await Task.sleep(nanoseconds: sleepNanos)
+                    do {
+                        try await Task.sleep(nanoseconds: sleepNanos)
+                    } catch {
+                        throw CancellationError()
+                    }
                     continue
                 }
             }
@@ -530,7 +585,8 @@ final class AssetProcessor: Sendable {
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
         monthStore: MonthManifestStore,
-        fileName: String
+        fileName: String,
+        cancellationController: BackupCancellationController?
     ) async throws -> Data {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote_compare_\(UUID().uuidString)_\(fileName)")
@@ -539,12 +595,13 @@ final class AssetProcessor: Sendable {
             try? FileManager.default.removeItem(at: tempURL)
         }
 
+        try cancellationController?.throwIfCancelled()
         let remotePath = RemotePathBuilder.absolutePath(
             basePath: profile.basePath,
             remoteRelativePath: monthStore.monthRelativePath + "/" + fileName
         )
         try await client.download(remotePath: remotePath, localURL: tempURL)
-        return try Self.contentHash(of: tempURL)
+        return try Self.contentHash(of: tempURL, cancellationController: cancellationController)
     }
 
     private func makeLocalResource(asset: PHAsset, selected: BackupSelectedResource) -> LocalPhotoResource {
@@ -564,7 +621,10 @@ final class AssetProcessor: Sendable {
         )
     }
 
-    private static func contentHash(of fileURL: URL) throws -> Data {
+    private static func contentHash(
+        of fileURL: URL,
+        cancellationController: BackupCancellationController? = nil
+    ) throws -> Data {
         let fileHandle = try FileHandle(forReadingFrom: fileURL)
         defer {
             try? fileHandle.close()
@@ -572,6 +632,8 @@ final class AssetProcessor: Sendable {
 
         var hasher = SHA256()
         while true {
+            try cancellationController?.throwIfCancelled()
+            try Task.checkCancellation()
             let chunk = try fileHandle.read(upToCount: hashBufferSize) ?? Data()
             if chunk.isEmpty {
                 break

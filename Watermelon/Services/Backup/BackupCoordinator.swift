@@ -13,11 +13,17 @@ struct BackupRunState: Sendable {
     }
 }
 
+struct BackupRunContext: Sendable {
+    let cancellationController: BackupCancellationController
+    let eventSink: BackupEventStream
+}
+
 protocol BackupCoordinatorProtocol: Sendable {
     func runBackup(
         profile: ServerProfileRecord,
         password: String,
-        onlyAssetLocalIdentifiers: Set<String>?
+        onlyAssetLocalIdentifiers: Set<String>?,
+        context: BackupRunContext
     ) async throws -> BackupExecutionResult
 
     func reloadRemoteIndex(
@@ -27,7 +33,6 @@ protocol BackupCoordinatorProtocol: Sendable {
 
     func currentRemoteSnapshot() -> RemoteLibrarySnapshot
     func currentRemoteSnapshotState(since revision: UInt64?) -> RemoteLibrarySnapshotState
-    var eventStream: AsyncStream<BackupEvent> { get }
 }
 
 final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
@@ -36,13 +41,6 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
     private let hashIndexRepository: ContentHashIndexRepositoryProtocol
     private let remoteIndexService: RemoteIndexSyncService
     private let assetProcessor: AssetProcessor
-    private let eventStreamActor = BackupEventStream()
-    private let runLock = NSLock()
-    private var isBackupRunning = false
-
-    var eventStream: AsyncStream<BackupEvent> {
-        eventStreamActor.makeStream()
-    }
 
     init(
         photoLibraryService: PhotoLibraryServiceProtocol,
@@ -62,20 +60,17 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
         )
     }
 
-    deinit {
-        eventStreamActor.finish()
-    }
-
     func runBackup(
         profile: ServerProfileRecord,
         password: String,
-        onlyAssetLocalIdentifiers: Set<String>? = nil
+        onlyAssetLocalIdentifiers: Set<String>? = nil,
+        context: BackupRunContext
     ) async throws -> BackupExecutionResult {
+        let cancellationController = context.cancellationController
+        let eventSink = context.eventSink
+
         try await ensurePhotoAuthorization()
-        try beginBackupRun()
-        defer {
-            endBackupRun()
-        }
+        try cancellationController.throwIfCancelled()
 
         let client = try makeStorageClient(profile: profile, password: password)
         try await client.connect()
@@ -89,16 +84,20 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
             let snapshot = try await remoteIndexService.syncIndex(
                 client: client,
                 profile: profile,
-                eventStream: eventStreamActor
+                eventStream: eventSink,
+                cancellationController: cancellationController
             )
-            eventStreamActor.emit(.log(
+            eventSink.emit(.log(
                 "Remote index synced. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s)."
             ))
         } catch {
+            if error is CancellationError {
+                throw CancellationError()
+            }
             if profile.isExternalStorageUnavailableError(error) {
                 throw error
             }
-            eventStreamActor.emit(.log("Remote index scan warning: \(error.localizedDescription)"))
+            eventSink.emit(.log("Remote index scan warning: \(error.localizedDescription)"))
         }
 
         let assetsResult = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
@@ -121,18 +120,18 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
         if retryMode {
             let requested = onlyAssetLocalIdentifiers?.count ?? 0
             let missing = max(requested - retryAssets.count, 0)
-            eventStreamActor.emit(.log(
+            eventSink.emit(.log(
                 "Retry mode: requested \(requested), resolved \(retryAssets.count), missing \(missing)."
             ))
         } else {
-            eventStreamActor.emit(.log("Start backup by asset (oldest month first)."))
+            eventSink.emit(.log("Start backup by asset (oldest month first)."))
         }
 
-        eventStreamActor.emit(.started(totalAssets: state.total))
+        eventSink.emit(.started(totalAssets: state.total))
 
         if state.total == 0 {
             let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
-            eventStreamActor.emit(.finished(result))
+            eventSink.emit(.finished(result))
             return result
         }
 
@@ -141,7 +140,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
             localHashCacheByAssetID = try hashIndexRepository.fetchAssetHashCaches()
         } catch {
             localHashCacheByAssetID = [:]
-            eventStreamActor.emit(.log("Local hash cache load warning: \(error.localizedDescription)"))
+            eventSink.emit(.log("Local hash cache load warning: \(error.localizedDescription)"))
         }
 
         var activeMonth: MonthKey?
@@ -149,7 +148,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
 
         let loopCount = retryMode ? retryAssets.count : assetsResult.count
         for loopIndex in 0 ..< loopCount {
-            if Task.isCancelled {
+            if Task.isCancelled || cancellationController.isCancelled {
                 state.paused = true
                 break
             }
@@ -166,43 +165,41 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
             let currentPosition = state.processed + 1
             let monthKey = AssetProcessor.monthKey(for: asset.creationDate)
 
-            if activeMonth != monthKey {
-                if let activeStore {
-                    do {
-                        _ = try await activeStore.flushToRemote()
-                        eventStreamActor.emit(.monthChanged(MonthChangeEvent(
-                            year: activeMonth?.year ?? 0,
-                            month: activeMonth?.month ?? 0,
-                            action: .flushed
-                        )))
-                    } catch {
-                        eventStreamActor.emit(.monthChanged(MonthChangeEvent(
-                            year: activeMonth?.year ?? 0,
-                            month: activeMonth?.month ?? 0,
-                            action: .flushFailed(error.localizedDescription)
-                        )))
+            do {
+                try cancellationController.throwIfCancelled()
+                try Task.checkCancellation()
+
+                if activeMonth != monthKey {
+                    if let activeStore {
+                        await flushMonthManifest(
+                            activeStore,
+                            monthKey: activeMonth,
+                            ignoreCancellation: false,
+                            eventSink: eventSink
+                        )
                     }
+
+                    try cancellationController.throwIfCancelled()
+                    try Task.checkCancellation()
+
+                    activeMonth = monthKey
+                    activeStore = try await MonthManifestStore.loadOrCreate(
+                        client: client,
+                        basePath: profile.basePath,
+                        year: monthKey.year,
+                        month: monthKey.month
+                    )
+                    eventSink.emit(.monthChanged(MonthChangeEvent(
+                        year: monthKey.year,
+                        month: monthKey.month,
+                        action: .started
+                    )))
                 }
 
-                activeMonth = monthKey
-                activeStore = try await MonthManifestStore.loadOrCreate(
-                    client: client,
-                    basePath: profile.basePath,
-                    year: monthKey.year,
-                    month: monthKey.month
-                )
-                eventStreamActor.emit(.monthChanged(MonthChangeEvent(
-                    year: monthKey.year,
-                    month: monthKey.month,
-                    action: .started
-                )))
-            }
+                guard let monthStore = activeStore else {
+                    continue
+                }
 
-            guard let monthStore = activeStore else {
-                continue
-            }
-
-            do {
                 let context = AssetProcessContext(
                     asset: asset,
                     selectedResources: selectedResources,
@@ -216,7 +213,8 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
                 let result = try await assetProcessor.process(
                     context: context,
                     client: client,
-                    eventStream: eventStreamActor
+                    eventStream: eventSink,
+                    cancellationController: cancellationController
                 )
 
                 switch result.status {
@@ -228,14 +226,14 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
                     state.skipped += 1
                 }
 
-                emitProgress(state: state, result: result, position: currentPosition, asset: asset)
+                emitProgress(state: state, result: result, position: currentPosition, asset: asset, eventSink: eventSink)
             } catch {
                 if error is CancellationError {
                     state.paused = true
                     break
                 }
                 if profile.isExternalStorageUnavailableError(error) {
-                    eventStreamActor.emit(.log("External storage unavailable. Stop backup immediately."))
+                    eventSink.emit(.log("External storage unavailable. Stop backup immediately."))
                     throw error
                 }
 
@@ -246,32 +244,25 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
                     selectedResources: selectedResources
                 )
                 let errorMessage = profile.userFacingStorageErrorMessage(error)
-                eventStreamActor.emit(.log("Failed asset: \(displayName) - \(errorMessage)"))
+                eventSink.emit(.log("Failed asset: \(displayName) - \(errorMessage)"))
                 emitFailureProgress(
                     state: state,
                     asset: asset,
                     displayName: displayName,
                     errorMessage: errorMessage,
-                    position: currentPosition
+                    position: currentPosition,
+                    eventSink: eventSink
                 )
             }
         }
 
         if let activeStore {
-            do {
-                _ = try await activeStore.flushToRemote()
-                eventStreamActor.emit(.monthChanged(MonthChangeEvent(
-                    year: activeMonth?.year ?? 0,
-                    month: activeMonth?.month ?? 0,
-                    action: .flushed
-                )))
-            } catch {
-                eventStreamActor.emit(.monthChanged(MonthChangeEvent(
-                    year: activeMonth?.year ?? 0,
-                    month: activeMonth?.month ?? 0,
-                    action: .flushFailed(error.localizedDescription)
-                )))
-            }
+            await flushMonthManifest(
+                activeStore,
+                monthKey: activeMonth,
+                ignoreCancellation: state.paused,
+                eventSink: eventSink
+            )
         }
 
         let result = BackupExecutionResult(
@@ -281,8 +272,30 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
             skipped: state.skipped,
             paused: state.paused
         )
-        eventStreamActor.emit(.finished(result))
+        eventSink.emit(.finished(result))
         return result
+    }
+
+    private func flushMonthManifest(
+        _ store: MonthManifestStore,
+        monthKey: MonthKey?,
+        ignoreCancellation: Bool,
+        eventSink: BackupEventStream
+    ) async {
+        do {
+            _ = try await store.flushToRemote(ignoreCancellation: ignoreCancellation)
+            eventSink.emit(.monthChanged(MonthChangeEvent(
+                year: monthKey?.year ?? 0,
+                month: monthKey?.month ?? 0,
+                action: .flushed
+            )))
+        } catch {
+            eventSink.emit(.monthChanged(MonthChangeEvent(
+                year: monthKey?.year ?? 0,
+                month: monthKey?.month ?? 0,
+                action: .flushFailed(error.localizedDescription)
+            )))
+        }
     }
 
     func reloadRemoteIndex(
@@ -296,15 +309,12 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
         }
 
         try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-        let snapshot = try await remoteIndexService.syncIndex(
+        return try await remoteIndexService.syncIndex(
             client: client,
             profile: profile,
-            eventStream: eventStreamActor
+            eventStream: nil,
+            cancellationController: nil
         )
-        eventStreamActor.emit(.log(
-            "Remote index reloaded. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s)."
-        ))
-        return snapshot
     }
 
     func currentRemoteSnapshot() -> RemoteLibrarySnapshot {
@@ -336,7 +346,8 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
         state: BackupRunState,
         result: AssetProcessResult,
         position: Int,
-        asset: PHAsset
+        asset: PHAsset,
+        eventSink: BackupEventStream
     ) {
         let message = Self.message(for: result, position: position, total: state.total)
         let event = BackupItemEvent(
@@ -358,8 +369,8 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
             itemEvent: event,
             transferState: nil
         )
-        eventStreamActor.emit(.progress(progress))
-        eventStreamActor.emit(.assetCompleted(AssetCompletionEvent(
+        eventSink.emit(.progress(progress))
+        eventSink.emit(.assetCompleted(AssetCompletionEvent(
             assetLocalIdentifier: asset.localIdentifier,
             assetFingerprint: result.assetFingerprint,
             displayName: result.displayName,
@@ -376,7 +387,8 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
         asset: PHAsset,
         displayName: String,
         errorMessage: String,
-        position: Int
+        position: Int,
+        eventSink: BackupEventStream
     ) {
         let message = "[\(position)/\(state.total)] Failed asset \(displayName)"
         let event = BackupItemEvent(
@@ -398,8 +410,8 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
             itemEvent: event,
             transferState: nil
         )
-        eventStreamActor.emit(.progress(progress))
-        eventStreamActor.emit(.assetCompleted(AssetCompletionEvent(
+        eventSink.emit(.progress(progress))
+        eventSink.emit(.assetCompleted(AssetCompletionEvent(
             assetLocalIdentifier: asset.localIdentifier,
             assetFingerprint: nil,
             displayName: displayName,
@@ -424,20 +436,5 @@ final class BackupCoordinator: BackupCoordinatorProtocol, @unchecked Sendable {
             }
             return "\(prefix) Asset skipped \(result.displayName)"
         }
-    }
-
-    private func beginBackupRun() throws {
-        runLock.lock()
-        defer { runLock.unlock() }
-        guard !isBackupRunning else {
-            throw BackupError.backupAlreadyRunning
-        }
-        isBackupRunning = true
-    }
-
-    private func endBackupRun() {
-        runLock.lock()
-        isBackupRunning = false
-        runLock.unlock()
     }
 }

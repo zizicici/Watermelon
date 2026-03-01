@@ -15,24 +15,25 @@ Watermelon/
   App/          # AppDelegate, SceneDelegate, AppCoordinator, AppSession, DependencyContainer
   Home/         # HomeViewController, HomeAlbumMatching, HomeLibraryEngines
   Services/
-    Backup/     # BackupExecutor, BackupAssetResourcePlanner, MonthManifestStore,
-                # RemoteLibraryScanner, RemoteLibrarySnapshotCache,
-                # ContentHashIndexRepository, RemoteNameCollisionResolver
+    Backup/     # BackupCoordinator, AssetProcessor, BackupAssetResourcePlanner,
+                # MonthManifestStore, RemoteIndexSyncService,
+                # RemoteManifestIndexScanner, RemoteLibrarySnapshotCache,
+                # ContentHashIndexRepository, BackupCancellationController,
+                # RemoteNameCollisionResolver
     SMB/        # AMSMB2Client, SMBSetupService
     Storage/    # RemoteStorageClientProtocol, StorageClientFactory,
                 # WebDAVClient, LocalVolumeClient, SecurityScopedBookmarkStore
-                # RemoteThumbnailService
     Discovery/  # SMBDiscoveryService (Bonjour, _smb._tcp)
     PhotoLibrary/ Restore/ Metadata/
   UI/
-    Backup/     # BackupSessionController, BackupStatusViewController,
-                # BackupFailedItemsViewController, BackupFailedItemDetailViewController
+    Backup/     # BackupEngineActor (in BackupRunCommandActor.swift),
+                # BackupSessionController, BackupViewController
     Album/      # AlbumGridCell, AlbumSectionHeaderView
     Auth/ Settings/ Browser/ Common/
   Data/
     Database/   # DatabaseManager, Records
     Security/   # KeychainService
-  Domain/       # BackupDomain, RemoteLibraryDomain, FingerprintBuilder, RemotePathBuilder
+  Domain/       # BackupDomain, RemoteLibraryDomain, RemotePathBuilder
 ```
 
 ## Architecture
@@ -45,67 +46,80 @@ No TabBar. `ServerSelectionViewController` and `SettingsViewController` exist in
 ### Dependency Injection
 
 Single `DependencyContainer` created at startup holds all top-level singletons:
-`DatabaseManager`, `KeychainService`, `AppSession`, `StorageClientFactory`, `PhotoLibraryService`, `MetadataService`, `BackupExecutor`, `RestoreService`.
+`DatabaseManager`, `KeychainService`, `AppSession`, `StorageClientFactory`, `PhotoLibraryService`, `MetadataService`, `BackupCoordinator`, `RestoreService`.
 
 `AppSession` holds the active `ServerProfileRecord` and in-memory password (SMB/WebDAV require it; external-volume does not).
 
-### Backup Pipeline
+### Backup Control Plane
 
-The central flow runs inside `BackupExecutor.runBackup(...)`:
+`BackupEngineActor` is the single control plane for backup commands:
+
+1. Handles `start/pause/stop/resume/retry`.
+2. Maintains run token and terminal intent.
+3. Creates per-run `BackupEventStream` and `BackupCancellationController`.
+4. Emits `BackupEngineSignal` for `BackupSessionController` consumption.
+
+`BackupSessionController` is UI-facing state aggregation only (buttons/log/progress/failure list), and does not own low-level run cancellation.
+
+### Backup Execution Plane
+
+The execution flow runs inside `BackupCoordinator.runBackup(..., context: BackupRunContext)`:
 
 1. Request photo permission.
 2. Build storage client via `StorageClientFactory`, connect, ensure `basePath` exists.
-3. `RemoteLibraryScanner.scanYearMonthTree` — **read-only** scan of `YYYY/MM/.watermelon_manifest.sqlite` files; populates `RemoteLibrarySnapshotCache`.
+3. `RemoteIndexSyncService.syncIndex` scans month manifest digests and applies deltas to `RemoteLibrarySnapshotCache`.
 4. Iterate `PHAsset` sorted by `creationDate ASC`.
-5. Per-asset: `BackupAssetResourcePlanner` assigns role/slot order and computes `assetFingerprint` (SHA-256 of sorted `role|slot|hashHex` tokens).
-6. Month boundary: flush previous month's manifest, `loadOrCreate` new month.
-7. End: flush current month's manifest.
+5. Per-asset processing is delegated to `AssetProcessor`.
+6. Month boundary: flush previous month manifest, load/create new month store.
+7. End: flush current month manifest and emit terminal event.
 
-**Asset failure rule**: if any single resource upload fails, the whole asset is marked failed and nothing is written to `assets`/`asset_resources`.
+`BackupRunContext` carries run-scoped dependencies:
 
-**Pause/stop**: implemented as `Task.cancel()`; `BackupExecutor` cooperatively checks `Task.isCancelled`. Current network I/O finishes before exiting.
+- `eventSink: BackupEventStream`
+- `cancellationController: BackupCancellationController`
 
-`BackupSessionController` (in `UI/Backup/`) drives the state machine (idle → running → paused/stopped/failed) and aggregates log entries and progress for `BackupStatusViewController`.
+`BackupCoordinator` no longer exposes global `eventStream` or `cancelActiveBackup` APIs.
 
 ### Data Storage
 
 **Local SQLite** (GRDB, `DatabaseManager`), migrations `v3_dev_reset_schema`, `v4_server_profiles_storage_type`, `v5_server_profiles_sort_order`, `v6_server_profiles_partial_unique_smb`:
+
 - `server_profiles` — saved storage profiles (`storageType`, `connectionParams`, `sortOrder`)
 - `sync_state` — key/value store (e.g. `active_server_profile_id`)
 - `local_assets` — per-asset fingerprint cache
 - `local_asset_resources` — per-resource content hash by `(assetLocalIdentifier, role, slot)`
 
-`server_profiles` uniqueness is now SMB-only via partial unique index on `(host, shareName, basePath, username)` with `WHERE storageType = 'smb'`.
+`server_profiles` uniqueness is SMB-only via partial unique index on `(host, shareName, basePath, username)` with `WHERE storageType = 'smb'`.
 
 **Remote monthly manifest** (`MonthManifestStore`), path `/{YYYY}/{MM}/.watermelon_manifest.sqlite`, migrations `month_manifest_v2_reset_schema` + `month_manifest_v2_schema_baseline` (idempotent baseline, non-destructive):
-- `resources` — individual files (keyed by `fileName`, unique on `contentHash`)
-- `assets` — logical asset records (keyed by `assetFingerprint`)
-- `asset_resources` — join table linking asset ↔ resource with `role`/`slot`
 
-Remote manifest migrations must stay incremental and non-destructive (no reset/drop-recreate for schema upgrades).
+- `resources`
+- `assets`
+- `asset_resources`
 
-Manifest writes are deferred: `upsertResource/upsertAsset` mark `dirty=true`; `flushToRemote()` uploads the sqlite file at month boundaries and at `runBackup` completion.
+Manifest writes are deferred: `upsertResource/upsertAsset` mark `dirty=true`; `flushToRemote()` uploads at month boundaries and run completion.
 
-**Passwords** are stored in Keychain under service `com.zizicici.watermelon.credentials`, not in the database.
+Passwords are stored in Keychain (`com.zizicici.watermelon.credentials`), not in local DB.
 
 ### Home Page Matching
 
-`HomeAlbumMatching` (decoupled from the view) merges the local index and remote snapshot into `localOnly` / `remoteOnly` / `both` entries, grouped by year-month section. Remote items are assembled strictly from the three-table manifest relationship.
+`HomeAlbumMatching` merges local index and remote snapshot into `localOnly` / `remoteOnly` / `both` entries, grouped by year-month section. Remote items are assembled strictly from `assets + asset_resources + resources` relationships.
 
 ### Remote Thumbnails
 
-`RemoteThumbnailService` downloads the full remote file and downsamples it locally (actor-based concurrency limiting). Thumbnail cache key uses `StorageProfile.identityKey` to avoid cross-storage collisions.
+`RemoteThumbnailService` downloads full remote files and downsamples locally (actor-based concurrency limiting). Cache key includes `StorageProfile.identityKey` to avoid cross-storage collisions.
 
 ## Key Rules & Invariants
 
 - Remote scanner is **read-only** — never creates directories or writes manifests during scanning.
-- `assetFingerprint` is the SHA-256 of sorted `role|slot|hashHex` tokens joined by `\n`.
-- Name-collision strategy: files < 5 MiB → download and compare hash; files ≥ 5 MiB → size heuristic; still colliding → `_n` suffix via `RemoteNameCollisionResolver`.
-- Upload retries: max 3 attempts with exponential back-off; `STATUS_OBJECT_NAME_COLLISION` triggers immediate rename retry.
+- `assetFingerprint` is SHA-256 of sorted `role|slot|hashHex` tokens joined by `\n`.
+- Name-collision strategy: files < 5 MiB download+hash compare; files ≥ 5 MiB size heuristic; unresolved conflicts use `_n` suffix.
+- Upload retries: max 3 attempts with exponential back-off; collision status triggers immediate rename retry.
+- Pause/stop are cooperative cancellation (not force-kill I/O): cancellation controller + task cancellation.
 
 ## Known Gaps
 
-- No automated tests; key logic (`BackupExecutor`, collision resolver, flush timing) is untested.
-- `SettingsViewController` and `ServerSelectionViewController` are dead code from the current startup path — clarify intent before modifying.
-- Full backup always re-scans the entire photo library; no incremental resume after pause.
-- Manifest is only flushed at month boundaries and job end — a force-kill mid-month can lose recent progress.
+- No automated tests; critical paths rely on manual regression.
+- Full backup resume still recomputes pending set by rescanning photo library.
+- Manifest flush is month-boundary + run-end; force-kill can still lose unflushed delta.
+- `RemoteIndexSyncService` currently has Sendable warnings that should be resolved before Swift 6 strict mode.

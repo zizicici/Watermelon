@@ -52,41 +52,29 @@ struct RemoteIndexSyncEvent: Sendable {
 }
 
 final class BackupEventStream: @unchecked Sendable {
+    let stream: AsyncStream<BackupEvent>
+    private let continuation: AsyncStream<BackupEvent>.Continuation
     private let lock = NSLock()
-    private var continuations: [UUID: AsyncStream<BackupEvent>.Continuation] = [:]
     private var finished = false
 
-    func makeStream() -> AsyncStream<BackupEvent> {
-        AsyncStream { continuation in
-            let id = UUID()
-
-            lock.lock()
-            if finished {
-                lock.unlock()
-                continuation.finish()
-                return
-            }
-            continuations[id] = continuation
-            lock.unlock()
-
-            continuation.onTermination = { [weak self] _ in
-                self?.removeContinuation(id: id)
-            }
+    init() {
+        var captured: AsyncStream<BackupEvent>.Continuation?
+        let stream = AsyncStream<BackupEvent> { continuation in
+            captured = continuation
         }
+        guard let continuation = captured else {
+            fatalError("BackupEventStream continuation was not initialized.")
+        }
+        self.stream = stream
+        self.continuation = continuation
     }
 
     func emit(_ event: BackupEvent) {
         lock.lock()
-        guard !finished else {
-            lock.unlock()
-            return
-        }
-        let targets = Array(continuations.values)
+        let isFinished = finished
         lock.unlock()
-
-        for continuation in targets {
-            continuation.yield(event)
-        }
+        guard !isFinished else { return }
+        continuation.yield(event)
     }
 
     func finish() {
@@ -96,18 +84,7 @@ final class BackupEventStream: @unchecked Sendable {
             return
         }
         finished = true
-        let targets = Array(continuations.values)
-        continuations.removeAll()
         lock.unlock()
-
-        for continuation in targets {
-            continuation.finish()
-        }
-    }
-
-    private func removeContinuation(id: UUID) {
-        lock.lock()
-        continuations[id] = nil
-        lock.unlock()
+        continuation.finish()
     }
 }

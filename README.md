@@ -9,6 +9,7 @@
 3. 备份按 `Asset` 粒度执行，远端按月写入 `.watermelon_manifest.sqlite`。
 4. 月 manifest 使用三表结构：`resources`、`assets`、`asset_resources`。
 5. 本地索引使用两张表：`local_assets`、`local_asset_resources`。
+6. 备份控制统一由 `BackupEngineActor` 处理，执行由 `BackupCoordinator` 负责。
 
 建议先读 `docs/`：
 

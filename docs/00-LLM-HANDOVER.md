@@ -8,11 +8,12 @@
 
 1. `Watermelon/App/AppCoordinator.swift`
 2. `Watermelon/Home/HomeViewController.swift`
-3. `Watermelon/Home/HomeAlbumMatching.swift`
+3. `Watermelon/UI/Backup/BackupRunCommandActor.swift`
 4. `Watermelon/UI/Backup/BackupSessionController.swift`
-5. `Watermelon/Services/Backup/BackupExecutor.swift`
-6. `Watermelon/Services/Backup/MonthManifestStore.swift`
-7. `Watermelon/Services/Backup/RemoteLibraryScanner.swift`
+5. `Watermelon/Services/Backup/BackupCoordinator.swift`
+6. `Watermelon/Services/Backup/AssetProcessor.swift`
+7. `Watermelon/Services/Backup/MonthManifestStore.swift`
+8. `Watermelon/Services/Backup/RemoteIndexSyncService.swift`
 
 构建入口优先用 `Watermelon.xcodeproj`。
 
@@ -23,18 +24,19 @@
 3. 添加存储支持 SMB、WebDAV 和外接存储目录。
 4. 管理页支持删除、排序、编辑连接参数；点击连接项会直接进入参数编辑页（名称在参数页内编辑）。
 5. 连接成功后会先 `reloadRemoteIndex`，拿到远端快照并缓存。
-6. 底部工具栏右侧“备份”打开 `BackupStatusViewController`。
-7. 备份状态由 `BackupSessionController` 统一驱动（start/pause/stop/retry）。
+6. 底部工具栏右侧“备份”打开 `BackupViewController`。
+7. 备份状态由 `BackupSessionController` 驱动，控制命令统一由 `BackupEngineActor` 处理（start/pause/stop/resume/retry）。
 8. Home 页面根据本地索引 + 远端快照进行本地/远端匹配显示。
 
 ## 4. 备份链路要点
 
-1. `BackupExecutor.runBackup` 按 Asset 遍历，不再按单资源计总进度。
-2. 资源排序/role+slot 分配/assetFingerprint 由 `BackupAssetResourcePlanner` 负责。
-3. 月切换时 flush 上月 manifest，结束时 flush 当前月。
-4. 若 Asset 有任意资源失败，则该 Asset 记失败，不写入 `assets`/`asset_resources`。
-5. 资源重名时继续走历史 `_n` 冲突规避策略。
-6. 远端扫描是只读，不再在扫描时创建目录或写 manifest。
+1. `BackupCoordinator.runBackup(..., context: BackupRunContext)` 是执行入口。
+2. 每个 run 的事件与取消都来自 `BackupRunContext`（`eventSink + cancellationController`），不走全局流。
+3. 资源排序/role+slot 分配/assetFingerprint 由 `BackupAssetResourcePlanner` 负责。
+4. 月切换时 flush 上月 manifest，结束时 flush 当前月；暂停/停止收尾会走 `ignoreCancellation` flush。
+5. 若 Asset 有任意资源失败，则该 Asset 记失败，不写入 `assets`/`asset_resources`。
+6. 资源重名继续走 `_n` 冲突规避策略。
+7. 远端扫描是只读，不在扫描时创建目录或写 manifest。
 
 ## 5. 数据存储（当前真实）
 
@@ -56,8 +58,8 @@
 ## 6. 已清理/已下线链路
 
 1. `ManifestSyncService` 已删除。
-2. `BackupViewController` 已删除。
-3. `BackupExecutor` 里快照缓存锁逻辑已抽离到 `RemoteLibrarySnapshotCache`。
+2. 旧的 `BackupExecutor` 已由 `BackupCoordinator + AssetProcessor + BackupEngineActor` 组合替代。
+3. `BackupViewController` 是当前备份页面（旧 `BackupStatusViewController` 名称不再使用）。
 
 ## 7. 仍在仓库但不在主入口的页面
 

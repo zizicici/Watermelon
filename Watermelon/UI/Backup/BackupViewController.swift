@@ -286,6 +286,21 @@ final class BackupViewController: UIViewController {
             applyFilter(using: snapshot)
         }
 
+        if snapshot.controlsLocked {
+            startBarButtonItem.isEnabled = false
+            pauseBarButtonItem.isEnabled = false
+            stopBarButtonItem.isEnabled = false
+            return
+        }
+
+        if snapshot.state == .running,
+           (snapshot.statusText.contains("正在暂停") || snapshot.statusText.contains("正在停止")) {
+            startBarButtonItem.isEnabled = false
+            pauseBarButtonItem.isEnabled = false
+            stopBarButtonItem.isEnabled = false
+            return
+        }
+
         switch snapshot.state {
         case .running:
             startBarButtonItem.isEnabled = false

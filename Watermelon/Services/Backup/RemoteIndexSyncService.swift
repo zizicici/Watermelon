@@ -1,9 +1,8 @@
 import Foundation
 
-final class RemoteIndexSyncService: @unchecked Sendable {
+final class RemoteIndexSyncService: Sendable {
     private let scanner: RemoteManifestIndexScannerProtocol
     private let snapshotCache: RemoteLibrarySnapshotCache
-    private let stateLock = NSLock()
     private var activeRemoteProfileKey: String?
     private var remoteManifestDigests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
 
@@ -18,15 +17,17 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     func syncIndex(
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
-        eventStream: BackupEventStream? = nil
+        eventStream: BackupEventStream? = nil,
+        cancellationController: BackupCancellationController? = nil
     ) async throws -> RemoteLibrarySnapshot {
-        let syncContext = beginSyncContext(for: profile)
+        ensureRemoteContext(for: profile)
 
         let remoteDigests = try await scanner.scanManifestDigests(
             client: client,
-            basePath: profile.basePath
+            basePath: profile.basePath,
+            cancellationController: cancellationController
         )
-        let previousDigests = syncContext.previousDigests
+        let previousDigests = remoteManifestDigests
 
         let previousMonths = Set(previousDigests.keys)
         let remoteMonths = Set(remoteDigests.keys)
@@ -43,7 +44,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         let removedMonths = previousMonths.subtracting(remoteMonths)
 
         if changedMonths.isEmpty, removedMonths.isEmpty {
-            commitRemoteDigests(remoteDigests, forProfileKey: syncContext.profileKey)
             let snapshot = snapshotCache.current()
             eventStream?.emit(.log("Remote index unchanged. Month digests matched (\(remoteMonths.count) month(s))."))
             return snapshot
@@ -97,7 +97,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             }
         }
 
-        commitRemoteDigests(remoteDigests, forProfileKey: syncContext.profileKey)
+        remoteManifestDigests = remoteDigests
 
         let snapshot = snapshotCache.current()
         eventStream?.emit(.remoteIndexSynced(RemoteIndexSyncEvent(
@@ -127,47 +127,21 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func reset() {
-        stateLock.lock()
         activeRemoteProfileKey = nil
         remoteManifestDigests.removeAll()
-        stateLock.unlock()
         snapshotCache.reset()
     }
 
-    private func beginSyncContext(for profile: ServerProfileRecord) -> SyncContext {
+    private func ensureRemoteContext(for profile: ServerProfileRecord) {
         let profileKey = Self.remoteProfileKey(profile)
-        stateLock.lock()
-        let previousKey = activeRemoteProfileKey
-        if previousKey != profileKey {
-            activeRemoteProfileKey = profileKey
-            remoteManifestDigests.removeAll()
-        }
-        let previousDigests = remoteManifestDigests
-        stateLock.unlock()
+        guard activeRemoteProfileKey != profileKey else { return }
 
-        if previousKey != profileKey {
-            snapshotCache.reset()
-        }
-        return SyncContext(profileKey: profileKey, previousDigests: previousDigests)
-    }
-
-    private func commitRemoteDigests(
-        _ digests: [LibraryMonthKey: RemoteMonthManifestDigest],
-        forProfileKey profileKey: String
-    ) {
-        stateLock.lock()
-        if activeRemoteProfileKey == profileKey {
-            remoteManifestDigests = digests
-        }
-        stateLock.unlock()
+        activeRemoteProfileKey = profileKey
+        remoteManifestDigests.removeAll()
+        snapshotCache.reset()
     }
 
     private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {
-        profile.storageProfile.identityKey
-    }
-
-    private struct SyncContext {
-        let profileKey: String
-        let previousDigests: [LibraryMonthKey: RemoteMonthManifestDigest]
+        "\(profile.id ?? 0):\(profile.storageType):\(profile.host):\(profile.basePath)"
     }
 }

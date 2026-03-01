@@ -29,7 +29,7 @@ App 启动后直接进入 `HomeViewController`。
 ## 2. Home 的数据刷新行为
 
 1. 首次进入与会话变化后会 `reloadAllData`。
-2. 连接任意存储类型成功后都会先 `backupExecutor.reloadRemoteIndex` 再刷新 UI。
+2. 连接任意存储类型成功后都会先 `backupCoordinator.reloadRemoteIndex` 再刷新 UI。
 3. 备份运行中会节流刷新远端 section（不是每次 progress 都全量重建）。
 4. 备份从 running 变为非 running 时，会自动重载一次远端索引。
 
@@ -42,13 +42,14 @@ App 启动后直接进入 `HomeViewController`。
 3. 显示选项：正方形网格 / 原始比例网格。
 4. 已连接远端时额外显示：重建远端索引（备份运行中禁用）。
 
-## 4. 备份状态页（`BackupStatusViewController`）
+## 4. 备份状态页（`BackupViewController`）
 
 1. 通过 Home 工具栏“备份”按钮以 sheet 打开。
 2. 顶部导航按钮：开始（play）、暂停（pause）、停止（stop）。
 3. 过滤项：全部 / 成功 / 失败 / 跳过 / 日志。
 4. 列表项显示：缩略图、Asset 显示名、状态、资源摘要与原因。
 5. 日志视图增量追加，不重复整段刷新。
+6. 控制命令统一进入 `BackupEngineActor`，`BackupSessionController` 只做 UI 状态聚合。
 
 ## 5. 失败重试
 

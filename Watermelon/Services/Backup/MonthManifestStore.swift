@@ -454,41 +454,115 @@ final class MonthManifestStore {
     }
 
     @discardableResult
-    func flushToRemote() async throws -> Bool {
+    func flushToRemote(ignoreCancellation: Bool = false) async throws -> Bool {
         guard dirty else { return false }
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
         try await client.createDirectory(path: monthAbsolutePath)
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
 
         let finalPath = manifestAbsolutePath
         let tempRemotePath = finalPath + ".tmp.\(UUID().uuidString)"
 
-        try await client.upload(
-            localURL: localManifestURL,
-            remotePath: tempRemotePath,
-            respectTaskCancellation: false,
-            onProgress: nil
-        )
-
-        if try await client.exists(path: finalPath) {
-            try? await client.delete(path: finalPath)
-        }
-
         do {
-            try await client.move(from: tempRemotePath, to: finalPath)
-        } catch {
-            if try await client.exists(path: finalPath) {
-                try? await client.delete(path: finalPath)
-                try await client.move(from: tempRemotePath, to: finalPath)
-            } else {
-                throw error
+            try await client.upload(
+                localURL: localManifestURL,
+                remotePath: tempRemotePath,
+                respectTaskCancellation: !ignoreCancellation,
+                onProgress: nil
+            )
+            if !ignoreCancellation {
+                try Task.checkCancellation()
             }
+            try await moveReplacingExistingManifest(
+                tempRemotePath: tempRemotePath,
+                finalPath: finalPath,
+                ignoreCancellation: ignoreCancellation
+            )
+        } catch {
+            if !ignoreCancellation, Task.isCancelled || error is CancellationError {
+                throw CancellationError()
+            }
+            if !ignoreCancellation {
+                try Task.checkCancellation()
+            }
+            if (try? await client.exists(path: tempRemotePath)) == true {
+                try? await client.delete(path: tempRemotePath)
+            }
+            throw error
         }
 
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
         if (try? await client.exists(path: tempRemotePath)) == true {
             try? await client.delete(path: tempRemotePath)
         }
 
+        if !ignoreCancellation {
+            try Task.checkCancellation()
+        }
         dirty = false
         return true
+    }
+
+    private func moveReplacingExistingManifest(
+        tempRemotePath: String,
+        finalPath: String,
+        ignoreCancellation: Bool
+    ) async throws {
+        do {
+            if !ignoreCancellation {
+                try Task.checkCancellation()
+            }
+            try await client.move(from: tempRemotePath, to: finalPath)
+            return
+        } catch {
+            if !ignoreCancellation, Task.isCancelled || error is CancellationError {
+                throw CancellationError()
+            }
+            if !ignoreCancellation {
+                try Task.checkCancellation()
+            }
+            let finalExists = (try? await client.exists(path: finalPath)) ?? false
+            guard finalExists else {
+                throw error
+            }
+
+            let backupPath = finalPath + ".bak.\(UUID().uuidString)"
+            if !ignoreCancellation {
+                try Task.checkCancellation()
+            }
+            try await client.move(from: finalPath, to: backupPath)
+
+            do {
+                if !ignoreCancellation {
+                    try Task.checkCancellation()
+                }
+                try await client.move(from: tempRemotePath, to: finalPath)
+            } catch {
+                if !ignoreCancellation, Task.isCancelled || error is CancellationError {
+                    throw CancellationError()
+                }
+                if (try? await client.exists(path: finalPath)) == true {
+                    try? await client.delete(path: finalPath)
+                }
+                if (try? await client.exists(path: backupPath)) == true {
+                    try? await client.move(from: backupPath, to: finalPath)
+                }
+                throw error
+            }
+
+            if !ignoreCancellation {
+                try Task.checkCancellation()
+            }
+            if (try? await client.exists(path: backupPath)) == true {
+                try? await client.delete(path: backupPath)
+            }
+        }
     }
 
     private static func migrate(_ queue: DatabaseQueue) throws {

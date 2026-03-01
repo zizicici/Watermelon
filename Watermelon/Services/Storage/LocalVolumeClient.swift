@@ -100,6 +100,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws {
+        var destinationURLForCleanup: URL?
         let root = try requireRootURL()
         do {
             if respectTaskCancellation {
@@ -107,14 +108,56 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             }
 
             let destinationURL = try remoteFileURL(forRemotePath: remotePath, rootURL: root)
+            destinationURLForCleanup = destinationURL
             let parentURL = destinationURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: destinationURL.path) {
                 try FileManager.default.removeItem(at: destinationURL)
             }
-            try FileManager.default.copyItem(at: localURL, to: destinationURL)
+
+            guard FileManager.default.createFile(atPath: destinationURL.path, contents: nil) else {
+                throw NSError(
+                    domain: NSCocoaErrorDomain,
+                    code: NSFileWriteUnknownError,
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to create destination file at \(destinationURL.path)"]
+                )
+            }
+
+            let sourceHandle = try FileHandle(forReadingFrom: localURL)
+            let destinationHandle = try FileHandle(forWritingTo: destinationURL)
+            defer {
+                try? sourceHandle.close()
+                try? destinationHandle.close()
+            }
+
+            let fileSize = ((try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size]) as? NSNumber)?.int64Value ?? 0
+            let bufferSize = 1024 * 1024
+            var bytesWritten: Int64 = 0
+
+            while true {
+                if respectTaskCancellation {
+                    try Task.checkCancellation()
+                }
+                let chunk = try sourceHandle.read(upToCount: bufferSize) ?? Data()
+                if chunk.isEmpty {
+                    break
+                }
+                try destinationHandle.write(contentsOf: chunk)
+                bytesWritten += Int64(chunk.count)
+                if fileSize > 0 {
+                    let progress = min(max(Double(bytesWritten) / Double(fileSize), 0), 1)
+                    onProgress?(progress)
+                }
+            }
+
+            if respectTaskCancellation {
+                try Task.checkCancellation()
+            }
             onProgress?(1)
         } catch {
+            if respectTaskCancellation, error is CancellationError, let destinationURLForCleanup {
+                try? FileManager.default.removeItem(at: destinationURLForCleanup)
+            }
             throw mapStorageError(error)
         }
     }

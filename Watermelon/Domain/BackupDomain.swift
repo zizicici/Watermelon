@@ -92,7 +92,6 @@ struct BackupProgress {
 enum BackupError: LocalizedError {
     case missingServerProfile
     case missingCredentials
-    case backupAlreadyRunning
     case photoPermissionDenied
     case smbUnavailable
     case restoreNoSelection
@@ -103,8 +102,6 @@ enum BackupError: LocalizedError {
             return "No server profile configured."
         case .missingCredentials:
             return "Missing server credentials."
-        case .backupAlreadyRunning:
-            return "Backup is already running."
         case .photoPermissionDenied:
             return "Photo library permission denied."
         case .smbUnavailable:
