@@ -22,6 +22,7 @@ protocol ContentHashIndexRepositoryProtocol: Sendable {
     func fetchAssetFingerprintsByAsset() throws -> [String: Data]
     func fetchAssetFingerprintsByAsset(assetIDs: Set<String>) throws -> [String: Data]
     func fetchAssetHashCaches() throws -> [String: LocalAssetHashCache]
+    func fetchAssetHashCaches(assetIDs: Set<String>) throws -> [String: LocalAssetHashCache]
 }
 
 protocol RemoteManifestIndexScannerProtocol: Sendable {

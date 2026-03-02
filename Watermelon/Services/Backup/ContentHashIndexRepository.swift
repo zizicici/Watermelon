@@ -227,6 +227,64 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
+    func fetchAssetHashCaches(assetIDs: Set<String>) throws -> [String: LocalAssetHashCache] {
+        guard !assetIDs.isEmpty else { return [:] }
+
+        return try databaseManager.read { db in
+            let sortedIDs = assetIDs.sorted()
+            let chunkSize = 400
+            var result: [String: LocalAssetHashCache] = [:]
+
+            for chunkStart in stride(from: 0, to: sortedIDs.count, by: chunkSize) {
+                let chunk = Array(sortedIDs[chunkStart ..< min(chunkStart + chunkSize, sortedIDs.count)])
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+
+                let assetRows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT assetLocalIdentifier, assetFingerprint, resourceCount, totalFileSizeBytes, updatedAt
+                    FROM local_assets
+                    WHERE assetLocalIdentifier IN (\(placeholders))
+                    """,
+                    arguments: StatementArguments(chunk)
+                )
+
+                for row in assetRows {
+                    let assetID: String = row["assetLocalIdentifier"]
+                    result[assetID] = LocalAssetHashCache(
+                        assetFingerprint: row["assetFingerprint"],
+                        resourceCount: Int(row["resourceCount"] as Int64),
+                        totalFileSizeBytes: row["totalFileSizeBytes"],
+                        updatedAt: row["updatedAt"],
+                        hashesByRoleSlot: [:]
+                    )
+                }
+
+                let resourceRows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT assetLocalIdentifier, role, slot, contentHash
+                    FROM local_asset_resources
+                    WHERE assetLocalIdentifier IN (\(placeholders))
+                    """,
+                    arguments: StatementArguments(chunk)
+                )
+
+                for row in resourceRows {
+                    let assetID: String = row["assetLocalIdentifier"]
+                    guard var cache = result[assetID] else { continue }
+                    let role = Int(row["role"] as Int64)
+                    let slot = Int(row["slot"] as Int64)
+                    let key = AssetResourceRoleSlot(role: role, slot: slot)
+                    cache.hashesByRoleSlot[key] = row["contentHash"]
+                    result[assetID] = cache
+                }
+            }
+
+            return result
+        }
+    }
+
     func fetchLocalHashIndexStats() throws -> LocalHashIndexStats {
         try databaseManager.read { db in
             let assetCount = try Int.fetchOne(

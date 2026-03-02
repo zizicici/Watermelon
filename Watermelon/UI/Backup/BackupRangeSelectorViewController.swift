@@ -48,6 +48,13 @@ final class BackupRangeSelectorViewController: UIViewController {
         var expanded: Bool
     }
 
+    private struct LoadPayload {
+        let buckets: [MonthKey: [AssetNode]]
+        let allAssetIDs: [String]
+        let bytesByID: [String: Int64]
+        let totalBytes: Int64?
+    }
+
     private let dependencies: DependencyContainer
     private let initialSelection: BackupScopeSelection
     private let readOnly: Bool
@@ -284,57 +291,25 @@ final class BackupRangeSelectorViewController: UIViewController {
             return
         }
 
-        let assetsResult = dependencies.photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
-        let cachedSizesByAssetID: [String: Int64] = {
-            guard let caches = try? dependencies.hashIndexRepository.fetchAssetHashCaches() else { return [:] }
-            var result: [String: Int64] = [:]
-            result.reserveCapacity(caches.count)
-            for (assetID, cache) in caches {
-                result[assetID] = cache.totalFileSizeBytes
-            }
-            return result
-        }()
-        var buckets: [MonthKey: [AssetNode]] = [:]
-        var allAssetIDs: [String] = []
-        var bytesByID: [String: Int64] = [:]
-        bytesByID.reserveCapacity(cachedSizesByAssetID.count)
-
-        for index in 0 ..< assetsResult.count {
-            if Task.isCancelled { return }
-            if index % 200 == 0 { await Task.yield() }
-            let asset = assetsResult.object(at: index)
-            let date = asset.creationDate ?? Date(timeIntervalSince1970: 0)
-            let components = Calendar.current.dateComponents([.year, .month], from: date)
-            let monthKey = MonthKey(year: components.year ?? 1970, month: components.month ?? 1)
-            allAssetIDs.append(asset.localIdentifier)
-            let mediaKind = Self.mediaKind(for: asset)
-            let bytes = cachedSizesByAssetID[asset.localIdentifier]
-            if let bytes {
-                bytesByID[asset.localIdentifier] = bytes
-            }
-
-            let node = AssetNode(
-                asset: asset,
-                assetID: asset.localIdentifier,
-                bytes: bytes,
-                creationDate: asset.creationDate,
-                mediaKind: mediaKind
+        let payload: LoadPayload
+        do {
+            payload = try await Self.buildLoadPayload(
+                photoLibraryService: dependencies.photoLibraryService,
+                hashIndexRepository: dependencies.hashIndexRepository
             )
-            buckets[monthKey, default: []].append(node)
+        } catch is CancellationError {
+            return
+        } catch {
+            presentAlert(title: "加载失败", message: "读取备份范围失败：\(error.localizedDescription)")
+            return
         }
-
-        let totalBytes: Int64? = {
-            guard allAssetIDs.count == bytesByID.count else { return nil }
-            return allAssetIDs.reduce(Int64(0)) { partial, assetID in
-                partial + max(bytesByID[assetID] ?? 0, 0)
-            }
-        }()
+        if Task.isCancelled { return }
 
         applyBuckets(
-            buckets: buckets,
-            allAssetIDs: allAssetIDs,
-            bytesByID: bytesByID,
-            totalBytes: totalBytes
+            buckets: payload.buckets,
+            allAssetIDs: payload.allAssetIDs,
+            bytesByID: payload.bytesByID,
+            totalBytes: payload.totalBytes
         )
     }
 
@@ -456,7 +431,7 @@ final class BackupRangeSelectorViewController: UIViewController {
         return formatter
     }()
 
-    private static func mediaKind(for asset: PHAsset) -> ScopeMediaKind {
+    private nonisolated static func mediaKind(for asset: PHAsset) -> ScopeMediaKind {
         if PhotoLibraryService.isLivePhoto(asset) {
             return .livePhoto
         }
@@ -464,6 +439,75 @@ final class BackupRangeSelectorViewController: UIViewController {
             return .video
         }
         return .photo
+    }
+
+    private nonisolated static func buildLoadPayload(
+        photoLibraryService: PhotoLibraryServiceProtocol,
+        hashIndexRepository: ContentHashIndexRepositoryProtocol
+    ) async throws -> LoadPayload {
+        let workerTask = Task.detached(priority: .userInitiated) { () throws -> LoadPayload in
+            let assetsResult = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
+            let cachedSizesByAssetID: [String: Int64] = {
+                guard let caches = try? hashIndexRepository.fetchAssetHashCaches() else { return [:] }
+                var result: [String: Int64] = [:]
+                result.reserveCapacity(caches.count)
+                for (assetID, cache) in caches {
+                    result[assetID] = cache.totalFileSizeBytes
+                }
+                return result
+            }()
+
+            var buckets: [MonthKey: [AssetNode]] = [:]
+            var allAssetIDs: [String] = []
+            var bytesByID: [String: Int64] = [:]
+            bytesByID.reserveCapacity(cachedSizesByAssetID.count)
+
+            for index in 0 ..< assetsResult.count {
+                if index % 200 == 0 {
+                    try Task.checkCancellation()
+                }
+                let asset = assetsResult.object(at: index)
+                let date = asset.creationDate ?? Date(timeIntervalSince1970: 0)
+                let components = Calendar.current.dateComponents([.year, .month], from: date)
+                let monthKey = MonthKey(year: components.year ?? 1970, month: components.month ?? 1)
+                allAssetIDs.append(asset.localIdentifier)
+                let mediaKind = Self.mediaKind(for: asset)
+                let bytes = cachedSizesByAssetID[asset.localIdentifier]
+                if let bytes {
+                    bytesByID[asset.localIdentifier] = bytes
+                }
+
+                let node = AssetNode(
+                    asset: asset,
+                    assetID: asset.localIdentifier,
+                    bytes: bytes,
+                    creationDate: asset.creationDate,
+                    mediaKind: mediaKind
+                )
+                buckets[monthKey, default: []].append(node)
+            }
+
+            try Task.checkCancellation()
+            let totalBytes: Int64? = {
+                guard allAssetIDs.count == bytesByID.count else { return nil }
+                return allAssetIDs.reduce(Int64(0)) { partial, assetID in
+                    partial + max(bytesByID[assetID] ?? 0, 0)
+                }
+            }()
+
+            return LoadPayload(
+                buckets: buckets,
+                allAssetIDs: allAssetIDs,
+                bytesByID: bytesByID,
+                totalBytes: totalBytes
+            )
+        }
+
+        return try await withTaskCancellationHandler {
+            try await workerTask.value
+        } onCancel: {
+            workerTask.cancel()
+        }
     }
 }
 

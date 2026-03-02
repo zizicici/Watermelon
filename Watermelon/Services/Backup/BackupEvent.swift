@@ -4,7 +4,6 @@ enum BackupEvent: Sendable {
     case progress(BackupProgress)
     case log(String)
     case transferState(BackupTransferState)
-    case assetCompleted(AssetCompletionEvent)
     case monthChanged(MonthChangeEvent)
     case remoteIndexSynced(RemoteIndexSyncEvent)
     case started(totalAssets: Int)
@@ -19,17 +18,6 @@ enum BackupEvent: Sendable {
             return false
         }
     }
-}
-
-struct AssetCompletionEvent: Sendable {
-    let assetLocalIdentifier: String
-    let assetFingerprint: Data?
-    let displayName: String
-    let status: BackupItemStatus
-    let reason: String?
-    let resourceSummary: String?
-    let position: Int
-    let total: Int
 }
 
 struct MonthChangeEvent: Sendable {

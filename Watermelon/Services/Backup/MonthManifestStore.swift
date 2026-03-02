@@ -4,6 +4,12 @@ import GRDB
 final class MonthManifestStore {
     static let manifestFileName = ".watermelon_manifest.sqlite"
 
+    struct Seed {
+        let resources: [RemoteManifestResource]
+        let assets: [RemoteManifestAsset]
+        let assetResourceLinks: [RemoteAssetResourceLink]
+    }
+
     let year: Int
     let month: Int
 
@@ -67,8 +73,19 @@ final class MonthManifestStore {
         client: RemoteStorageClientProtocol,
         basePath: String,
         year: Int,
-        month: Int
+        month: Int,
+        seed: Seed? = nil
     ) async throws -> MonthManifestStore {
+        if let seed {
+            return try loadSeeded(
+                client: client,
+                basePath: basePath,
+                year: year,
+                month: month,
+                seed: seed
+            )
+        }
+
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
         try await client.createDirectory(path: monthAbsolutePath)
@@ -146,6 +163,55 @@ final class MonthManifestStore {
             try await store.flushToRemote()
         }
 
+        return store
+    }
+
+    private static func loadSeeded(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        year: Int,
+        month: Int,
+        seed: Seed
+    ) throws -> MonthManifestStore {
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("month_manifest_\(year)_\(month)_\(UUID().uuidString).sqlite")
+        try? FileManager.default.removeItem(at: localURL)
+
+        let dbQueue = try DatabaseQueue(path: localURL.path)
+        try Self.migrate(dbQueue)
+
+        let monthRelativePath = String(format: "%04d/%02d", year, month)
+        let remoteFilesByName: [String: RemoteStorageEntry] = Dictionary(uniqueKeysWithValues: seed.resources.map { resource in
+            let remotePath = RemotePathBuilder.absolutePath(
+                basePath: basePath,
+                remoteRelativePath: monthRelativePath + "/" + resource.fileName
+            )
+            let createdAt = Self.dateFromEpochNs(resource.creationDateNs)
+            return (
+                resource.fileName,
+                RemoteStorageEntry(
+                    path: remotePath,
+                    name: resource.fileName,
+                    isDirectory: false,
+                    size: resource.fileSize,
+                    creationDate: createdAt,
+                    modificationDate: createdAt
+                )
+            )
+        })
+
+        let store = MonthManifestStore(
+            client: client,
+            basePath: basePath,
+            year: year,
+            month: month,
+            localManifestURL: localURL,
+            dbQueue: dbQueue,
+            remoteFilesByName: remoteFilesByName,
+            dirty: false
+        )
+        try store.seedDatabase(seed)
+        try store.reloadCache()
         return store
     }
 
@@ -620,6 +686,88 @@ final class MonthManifestStore {
         try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_resources_contentHash ON resources(contentHash)")
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_asset_resources_asset ON asset_resources(assetFingerprint)")
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_asset_resources_hash ON asset_resources(resourceHash)")
+    }
+
+    private static func dateFromEpochNs(_ ns: Int64?) -> Date? {
+        guard let ns else { return nil }
+        return Date(timeIntervalSince1970: Double(ns) / 1_000_000_000)
+    }
+
+    private func seedDatabase(_ seed: Seed) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM asset_resources")
+            try db.execute(sql: "DELETE FROM assets")
+            try db.execute(sql: "DELETE FROM resources")
+
+            for resource in seed.resources {
+                try db.execute(
+                    sql: """
+                    INSERT INTO resources (
+                        fileName,
+                        contentHash,
+                        fileSize,
+                        resourceType,
+                        creationDateNs,
+                        backedUpAtNs
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        resource.fileName,
+                        resource.contentHash,
+                        resource.fileSize,
+                        resource.resourceType,
+                        resource.creationDateNs,
+                        resource.backedUpAtNs
+                    ]
+                )
+            }
+
+            for asset in seed.assets {
+                try db.execute(
+                    sql: """
+                    INSERT INTO assets (
+                        assetFingerprint,
+                        creationDateNs,
+                        backedUpAtNs,
+                        resourceCount,
+                        totalFileSizeBytes
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        asset.assetFingerprint,
+                        asset.creationDateNs,
+                        asset.backedUpAtNs,
+                        asset.resourceCount,
+                        asset.totalFileSizeBytes
+                    ]
+                )
+            }
+
+            for link in seed.assetResourceLinks.sorted(by: { lhs, rhs in
+                if lhs.assetFingerprint != rhs.assetFingerprint {
+                    return lhs.assetFingerprint.lexicographicallyPrecedes(rhs.assetFingerprint)
+                }
+                if lhs.role != rhs.role { return lhs.role < rhs.role }
+                return lhs.slot < rhs.slot
+            }) {
+                try db.execute(
+                    sql: """
+                    INSERT INTO asset_resources (
+                        assetFingerprint,
+                        resourceHash,
+                        role,
+                        slot
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        link.assetFingerprint,
+                        link.resourceHash,
+                        link.role,
+                        link.slot
+                    ]
+                )
+            }
+        }
     }
 
     private func reloadCache() throws {

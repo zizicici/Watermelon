@@ -368,39 +368,12 @@ final class BackupViewController: UIViewController {
             applyFilter(using: snapshot)
         }
 
-        if snapshot.controlsLocked {
-            startBarButtonItem.isEnabled = false
-            pauseBarButtonItem.isEnabled = false
-            stopBarButtonItem.isEnabled = false
-            return
-        }
-
-        if snapshot.state == .running,
-           (snapshot.statusText.contains("正在暂停") || snapshot.statusText.contains("正在停止")) {
-            startBarButtonItem.isEnabled = false
-            pauseBarButtonItem.isEnabled = false
-            stopBarButtonItem.isEnabled = false
-            return
-        }
-
-        switch snapshot.state {
-        case .running:
-            startBarButtonItem.isEnabled = false
-            pauseBarButtonItem.isEnabled = true
-            stopBarButtonItem.isEnabled = true
-        case .paused:
-            startBarButtonItem.isEnabled = true
-            pauseBarButtonItem.isEnabled = false
-            stopBarButtonItem.isEnabled = true
-        case .idle, .stopped, .failed, .completed:
-            startBarButtonItem.isEnabled = true
-            pauseBarButtonItem.isEnabled = false
-            stopBarButtonItem.isEnabled = false
-        }
+        startBarButtonItem.isEnabled = snapshot.canStart
+        pauseBarButtonItem.isEnabled = snapshot.canPause
+        stopBarButtonItem.isEnabled = snapshot.canStop
 
         if pendingOpenScopeSelectorAfterStop,
-           snapshot.canAdjustScope,
-           !snapshot.controlsLocked {
+           snapshot.canAdjustScope {
             pendingOpenScopeSelectorAfterStop = false
             presentScopeSelector(readOnly: false)
         }
@@ -445,8 +418,8 @@ final class BackupViewController: UIViewController {
             scopeDetailLabel.text = "已选 \(summary.selectedAssetCount)/\(summary.totalAssetCount) 张 · 容量待统计"
         }
 
-        scopeAdjustButton.isEnabled = !snapshot.controlsLocked
-        scopeAdjustButton.alpha = snapshot.controlsLocked ? 0.5 : 1
+        scopeAdjustButton.isEnabled = snapshot.canAdjustScope
+        scopeAdjustButton.alpha = snapshot.canAdjustScope ? 1 : 0.5
     }
 
     private func updateStatusCard(using snapshot: BackupSessionController.Snapshot) {

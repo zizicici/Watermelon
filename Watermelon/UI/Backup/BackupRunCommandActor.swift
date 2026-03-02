@@ -68,6 +68,7 @@ enum BackupResumeOutcome: Sendable {
 struct BackupRunFailureContext: @unchecked Sendable {
     let runToken: UInt64
     let runMode: BackupRunMode
+    let displayMode: BackupRunMode
     let profile: ServerProfileRecord
     let error: Error
     let intent: BackupTerminationIntent
@@ -77,6 +78,7 @@ enum BackupEngineSignal: @unchecked Sendable {
     case runEvent(
         runToken: UInt64,
         runMode: BackupRunMode,
+        displayMode: BackupRunMode,
         intent: BackupTerminationIntent,
         event: BackupEvent
     )
@@ -89,11 +91,14 @@ actor BackupRunCommandActor {
 
     private var runTask: Task<Void, Never>?
     private var eventListenerTask: Task<Void, Never>?
+    private var activeEventStream: BackupEventStream?
     private var activeRunToken: UInt64 = 0
     private var terminationIntent: BackupTerminationIntent = .none
-    private var queuedIntent: BackupTerminationIntent = .none
+    private var queuedStartIntent: BackupTerminationIntent = .none
+    private var isStartingRun = false
     private var isPreparingResume = false
     private var preparationIntent: BackupTerminationIntent = .none
+    private var runReadyWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     private var signalContinuations: [UUID: AsyncStream<BackupEngineSignal>.Continuation] = [:]
 
@@ -119,17 +124,23 @@ actor BackupRunCommandActor {
         }
     }
 
-    func startRun(profile: ServerProfileRecord, password: String, mode: BackupRunMode) -> UInt64? {
-        startRunInternal(profile: profile, password: password, mode: mode)
+    func startRun(profile: ServerProfileRecord, password: String, mode: BackupRunMode) async -> UInt64? {
+        await startRunWhenReady(
+            profile: profile,
+            password: password,
+            mode: mode,
+            displayMode: mode
+        )
     }
 
     func resumeRun(
         profile: ServerProfileRecord,
         password: String,
         pausedMode: BackupRunMode,
+        pausedDisplayMode: BackupRunMode,
         completedAssetIDs: Set<String>
     ) async throws -> BackupResumeOutcome {
-        guard runTask == nil, eventListenerTask == nil, !isPreparingResume else {
+        guard runTask == nil, eventListenerTask == nil, activeEventStream == nil, !isPreparingResume, !isStartingRun else {
             return .busy
         }
 
@@ -138,6 +149,7 @@ actor BackupRunCommandActor {
         defer {
             isPreparingResume = false
             preparationIntent = .none
+            notifyRunReadyWaitersIfNeeded()
         }
 
         let pendingAssetIDs: Set<String>
@@ -153,7 +165,6 @@ actor BackupRunCommandActor {
         }
 
         if preparationIntent != .none {
-            queuedIntent = preparationIntent
             return .interrupted(intent: preparationIntent)
         }
 
@@ -161,15 +172,18 @@ actor BackupRunCommandActor {
             return .noPending
         }
 
-        // Resume preparation has completed; hand over to normal run-start path.
         isPreparingResume = false
 
-        let resumedMode: BackupRunMode = pausedMode.isRetry ? .retry(assetIDs: pendingAssetIDs) : .scoped(assetIDs: pendingAssetIDs)
-        guard let runToken = startRunInternal(
+        let resumedExecutionMode: BackupRunMode = pausedMode.isRetry ? .retry(assetIDs: pendingAssetIDs) : .scoped(assetIDs: pendingAssetIDs)
+        guard let runToken = await startRunWhenReady(
             profile: profile,
             password: password,
-            mode: resumedMode
+            mode: resumedExecutionMode,
+            displayMode: pausedDisplayMode
         ) else {
+            if preparationIntent != .none {
+                return .interrupted(intent: preparationIntent)
+            }
             return .busy
         }
 
@@ -188,6 +202,36 @@ actor BackupRunCommandActor {
         applyIntent(.stop)
     }
 
+    private func startRunWhenReady(
+        profile: ServerProfileRecord,
+        password: String,
+        mode: BackupRunMode,
+        displayMode: BackupRunMode
+    ) async -> UInt64? {
+        isStartingRun = true
+        defer {
+            isStartingRun = false
+            notifyRunReadyWaitersIfNeeded()
+        }
+
+        do {
+            try await waitUntilReadyForNewRun()
+        } catch {
+            return nil
+        }
+
+        if Task.isCancelled {
+            return nil
+        }
+
+        return startRunInternal(
+            profile: profile,
+            password: password,
+            mode: mode,
+            displayMode: displayMode
+        )
+    }
+
     private func applyIntent(_ intent: BackupTerminationIntent) {
         if runTask != nil {
             terminationIntent = intent
@@ -200,31 +244,41 @@ actor BackupRunCommandActor {
             return
         }
 
-        queuedIntent = intent
+        if isStartingRun {
+            queuedStartIntent = intent
+            return
+        }
+
+        // Intentionally no-op: no active run/resume/start in flight.
+        // Controller state already reflects the control action in this window.
     }
 
     private func startRunInternal(
         profile: ServerProfileRecord,
         password: String,
-        mode: BackupRunMode
+        mode: BackupRunMode,
+        displayMode: BackupRunMode
     ) -> UInt64? {
-        guard runTask == nil, eventListenerTask == nil, !isPreparingResume else {
+        guard runTask == nil, eventListenerTask == nil, activeEventStream == nil, !isPreparingResume else {
             return nil
         }
 
         activeRunToken &+= 1
         let runToken = activeRunToken
+        let eventStream = BackupEventStream()
+        activeEventStream = eventStream
 
-        terminationIntent = queuedIntent
-        queuedIntent = .none
+        terminationIntent = queuedStartIntent
+        queuedStartIntent = .none
 
-        eventListenerTask = Task.detached(priority: .userInitiated) { [weak self] in
+        eventListenerTask = Task.detached(priority: .userInitiated) { [weak self, eventStream] in
             guard let self else { return }
-            for await event in self.backupCoordinator.eventStream {
+            for await event in eventStream.stream {
                 let shouldStop = await self.handleRunEvent(
                     event,
                     runToken: runToken,
-                    runMode: mode
+                    runMode: mode,
+                    displayMode: displayMode
                 )
                 if shouldStop {
                     break
@@ -232,19 +286,25 @@ actor BackupRunCommandActor {
             }
         }
 
-        runTask = Task.detached(priority: .userInitiated) { [weak self] in
+        runTask = Task.detached(priority: .userInitiated) { [weak self, eventStream] in
             guard let self else { return }
+            // Command actor owns stream completion for command-driven runs.
+            defer {
+                eventStream.finish()
+            }
             do {
-                _ = try await self.backupCoordinator.runBackup(
+                let request = BackupRunRequest(
                     profile: profile,
                     password: password,
                     onlyAssetLocalIdentifiers: mode.targetAssetIdentifiers
                 )
+                _ = try await self.backupCoordinator.runBackup(request: request, eventStream: eventStream)
             } catch {
                 await self.handleRunError(
                     error,
                     runToken: runToken,
                     runMode: mode,
+                    displayMode: displayMode,
                     profile: profile
                 )
             }
@@ -260,13 +320,15 @@ actor BackupRunCommandActor {
     private func handleRunEvent(
         _ event: BackupEvent,
         runToken: UInt64,
-        runMode: BackupRunMode
+        runMode: BackupRunMode,
+        displayMode: BackupRunMode
     ) -> Bool {
         guard runToken == activeRunToken else { return false }
         let intentSnapshot = terminationIntent
         emit(.runEvent(
             runToken: runToken,
             runMode: runMode,
+            displayMode: displayMode,
             intent: intentSnapshot,
             event: event
         ))
@@ -283,6 +345,7 @@ actor BackupRunCommandActor {
         _ error: Error,
         runToken: UInt64,
         runMode: BackupRunMode,
+        displayMode: BackupRunMode,
         profile: ServerProfileRecord
     ) {
         guard runToken == activeRunToken else { return }
@@ -293,6 +356,7 @@ actor BackupRunCommandActor {
         emit(.runFailed(BackupRunFailureContext(
             runToken: runToken,
             runMode: runMode,
+            displayMode: displayMode,
             profile: profile,
             error: error,
             intent: intent
@@ -301,11 +365,13 @@ actor BackupRunCommandActor {
 
     private func clearActiveRunState(resetIntent: Bool) {
         runTask = nil
+        activeEventStream = nil
         eventListenerTask?.cancel()
         eventListenerTask = nil
         if resetIntent {
             terminationIntent = .none
         }
+        notifyRunReadyWaitersIfNeeded()
     }
 
     private func computePendingAssetIDsForFullRun(
@@ -342,6 +408,47 @@ actor BackupRunCommandActor {
         if preparationIntent != .none {
             throw CancellationError()
         }
+    }
+
+    private func waitUntilReadyForNewRun() async throws {
+        while !isReadyForNewRun() {
+            try Task.checkCancellation()
+            let waiterID = UUID()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    if self.isReadyForNewRun() {
+                        continuation.resume()
+                    } else {
+                        self.runReadyWaiters[waiterID] = continuation
+                    }
+                }
+            } onCancel: {
+                Task { [weak self] in
+                    await self?.cancelRunReadyWaiter(waiterID: waiterID)
+                }
+            }
+        }
+    }
+
+    private func isReadyForNewRun() -> Bool {
+        runTask == nil &&
+            eventListenerTask == nil &&
+            activeEventStream == nil &&
+            !isPreparingResume
+    }
+
+    private func notifyRunReadyWaitersIfNeeded() {
+        guard isReadyForNewRun(), !runReadyWaiters.isEmpty else { return }
+        let waiters = runReadyWaiters.values
+        runReadyWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func cancelRunReadyWaiter(waiterID: UUID) {
+        guard let waiter = runReadyWaiters.removeValue(forKey: waiterID) else { return }
+        waiter.resume()
     }
 
     private func emit(_ signal: BackupEngineSignal) {
