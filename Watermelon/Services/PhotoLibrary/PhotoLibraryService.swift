@@ -134,12 +134,14 @@ final class PhotoLibraryService: @unchecked Sendable {
                         for: resource,
                         options: options,
                         dataReceivedHandler: { data in
-                            guard !data.isEmpty else { return }
-                            do {
-                                try fileHandle.write(contentsOf: data)
-                            } catch {
-                                state.cancelRequest(using: resourceManager)
-                                state.complete(.failure(error))
+                            autoreleasepool {
+                                guard !data.isEmpty else { return }
+                                do {
+                                    try fileHandle.write(contentsOf: data)
+                                } catch {
+                                    state.cancelRequest(using: resourceManager)
+                                    state.complete(.failure(error))
+                                }
                             }
                         },
                         completionHandler: { error in

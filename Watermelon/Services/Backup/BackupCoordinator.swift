@@ -92,7 +92,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
 
         do {
             try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-            var snapshotSeedByMonth: [MonthKey: MonthManifestStore.Seed] = [:]
+            var snapshotSeedLookup: MonthSeedLookup?
 
             do {
                 let snapshot = try await remoteIndexService.syncIndex(
@@ -100,7 +100,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                     profile: profile,
                     eventStream: eventStream
                 )
-                snapshotSeedByMonth = buildMonthSeedMap(from: snapshot)
+                snapshotSeedLookup = makeMonthSeedLookup(from: snapshot)
                 eventStream.emit(.log(
                     "Remote index synced. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s)."
                 ))
@@ -214,7 +214,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                         basePath: profile.basePath,
                         year: monthKey.year,
                         month: monthKey.month,
-                        seed: snapshotSeedByMonth.removeValue(forKey: monthKey)
+                        seed: snapshotSeedLookup?.seed(for: monthKey)
                     )
                     eventStream.emit(.monthChanged(MonthChangeEvent(
                         year: monthKey.year,
@@ -464,41 +464,89 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
         await client.disconnect()
     }
 
-    private func buildMonthSeedMap(from snapshot: RemoteLibrarySnapshot) -> [MonthKey: MonthManifestStore.Seed] {
-        var resourcesByMonth: [MonthKey: [RemoteManifestResource]] = [:]
-        resourcesByMonth.reserveCapacity(snapshot.resources.count)
-        for resource in snapshot.resources {
-            let month = MonthKey(year: resource.year, month: resource.month)
-            resourcesByMonth[month, default: []].append(resource)
+    private func makeMonthSeedLookup(from snapshot: RemoteLibrarySnapshot) -> MonthSeedLookup? {
+        let lookup = MonthSeedLookup(snapshot: snapshot)
+        return lookup.isEmpty ? nil : lookup
+    }
+}
+
+private struct MonthSeedLookup {
+    private let snapshot: RemoteLibrarySnapshot
+    private let resourceRangesByMonth: [MonthKey: [Range<Int>]]
+    private let assetRangesByMonth: [MonthKey: [Range<Int>]]
+    private let linkRangesByMonth: [MonthKey: [Range<Int>]]
+
+    var isEmpty: Bool {
+        resourceRangesByMonth.isEmpty && assetRangesByMonth.isEmpty && linkRangesByMonth.isEmpty
+    }
+
+    init(snapshot: RemoteLibrarySnapshot) {
+        self.snapshot = snapshot
+        resourceRangesByMonth = Self.makeRangesByMonth(from: snapshot.resources) { resource in
+            MonthKey(year: resource.year, month: resource.month)
+        }
+        assetRangesByMonth = Self.makeRangesByMonth(from: snapshot.assets) { asset in
+            MonthKey(year: asset.year, month: asset.month)
+        }
+        linkRangesByMonth = Self.makeRangesByMonth(from: snapshot.assetResourceLinks) { link in
+            MonthKey(year: link.year, month: link.month)
+        }
+    }
+
+    func seed(for month: MonthKey) -> MonthManifestStore.Seed? {
+        let resources = Self.materialize(from: snapshot.resources, ranges: resourceRangesByMonth[month])
+        let assets = Self.materialize(from: snapshot.assets, ranges: assetRangesByMonth[month])
+        let links = Self.materialize(from: snapshot.assetResourceLinks, ranges: linkRangesByMonth[month])
+        guard !resources.isEmpty || !assets.isEmpty || !links.isEmpty else {
+            return nil
+        }
+        return MonthManifestStore.Seed(
+            resources: resources,
+            assets: assets,
+            assetResourceLinks: links
+        )
+    }
+
+    private static func materialize<T>(
+        from source: [T],
+        ranges: [Range<Int>]?
+    ) -> [T] {
+        guard let ranges, !ranges.isEmpty else { return [] }
+        if ranges.count == 1, let range = ranges.first {
+            return Array(source[range])
         }
 
-        var assetsByMonth: [MonthKey: [RemoteManifestAsset]] = [:]
-        assetsByMonth.reserveCapacity(snapshot.assets.count)
-        for asset in snapshot.assets {
-            let month = MonthKey(year: asset.year, month: asset.month)
-            assetsByMonth[month, default: []].append(asset)
+        var result: [T] = []
+        let totalCount = ranges.reduce(into: 0) { partial, range in
+            partial += range.count
         }
-
-        var linksByMonth: [MonthKey: [RemoteAssetResourceLink]] = [:]
-        linksByMonth.reserveCapacity(snapshot.assetResourceLinks.count)
-        for link in snapshot.assetResourceLinks {
-            let month = MonthKey(year: link.year, month: link.month)
-            linksByMonth[month, default: []].append(link)
+        result.reserveCapacity(totalCount)
+        for range in ranges {
+            result.append(contentsOf: source[range])
         }
+        return result
+    }
 
-        let allMonths = Set(resourcesByMonth.keys)
-            .union(assetsByMonth.keys)
-            .union(linksByMonth.keys)
+    private static func makeRangesByMonth<T>(
+        from items: [T],
+        month: (T) -> MonthKey
+    ) -> [MonthKey: [Range<Int>]] {
+        var result: [MonthKey: [Range<Int>]] = [:]
+        result.reserveCapacity(32)
+        guard !items.isEmpty else { return result }
 
-        var result: [MonthKey: MonthManifestStore.Seed] = [:]
-        result.reserveCapacity(allMonths.count)
-        for month in allMonths {
-            result[month] = MonthManifestStore.Seed(
-                resources: resourcesByMonth[month] ?? [],
-                assets: assetsByMonth[month] ?? [],
-                assetResourceLinks: linksByMonth[month] ?? []
-            )
+        var start = 0
+        var currentMonth = month(items[0])
+
+        for index in 1 ..< items.count {
+            let nextMonth = month(items[index])
+            if nextMonth != currentMonth {
+                result[currentMonth, default: []].append(start ..< index)
+                start = index
+                currentMonth = nextMonth
+            }
         }
+        result[currentMonth, default: []].append(start ..< items.count)
         return result
     }
 }

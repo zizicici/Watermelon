@@ -479,22 +479,26 @@ final class AssetProcessor: Sendable {
 
         if monthStore.existingFileNames().contains(targetFileName) {
             let existingManifestResource = monthStore.findByFileName(targetFileName)
+            let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteEntry(named: targetFileName)?.size
             if localFileSize < Self.smallFileThresholdBytes {
-                try cancellationController?.throwIfCancelled()
-                try Task.checkCancellation()
-                let remoteHash = try await downloadAndHashRemoteFile(
-                    profile: profile,
-                    client: client,
-                    monthStore: monthStore,
-                    fileName: targetFileName,
-                    cancellationController: cancellationController
-                )
-                if remoteHash == localHash {
-                    skipReason = "name_same_hash"
+                if let knownRemoteSize, knownRemoteSize != localFileSize {
+                    // Different size means definitely not the same file; avoid remote download+hash.
+                } else {
+                    try cancellationController?.throwIfCancelled()
+                    try Task.checkCancellation()
+                    let remoteHash = try await downloadAndHashRemoteFile(
+                        profile: profile,
+                        client: client,
+                        monthStore: monthStore,
+                        fileName: targetFileName,
+                        cancellationController: cancellationController
+                    )
+                    if remoteHash == localHash {
+                        skipReason = "name_same_hash"
+                    }
                 }
             } else if existingManifestResource == nil {
-                let remoteSize = monthStore.remoteEntry(named: targetFileName)?.size
-                if remoteSize == localFileSize {
+                if knownRemoteSize == localFileSize {
                     skipReason = "name_same_size"
                 }
             }

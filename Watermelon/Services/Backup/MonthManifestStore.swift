@@ -66,7 +66,7 @@ final class MonthManifestStore {
     }
 
     deinit {
-        try? FileManager.default.removeItem(at: localManifestURL)
+        Self.closeAndRemoveLocalManifest(at: localManifestURL, queue: dbQueue)
     }
 
     static func loadOrCreate(
@@ -123,15 +123,17 @@ final class MonthManifestStore {
             }
         }
 
-        var dbQueue: DatabaseQueue
+        var dbQueue: DatabaseQueue?
         do {
-            dbQueue = try DatabaseQueue(path: localURL.path)
-            try Self.migrate(dbQueue)
-            _ = try await dbQueue.read { db in
+            let queue = try DatabaseQueue(path: localURL.path)
+            dbQueue = queue
+            try Self.migrate(queue)
+            _ = try await queue.read { db in
                 try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
             }
         } catch {
-            try? FileManager.default.removeItem(at: localURL)
+            Self.closeAndRemoveLocalManifest(at: localURL, queue: dbQueue)
+            dbQueue = nil
             if manifestExists {
                 throw NSError(
                     domain: "MonthManifestStore",
@@ -142,8 +144,17 @@ final class MonthManifestStore {
                     ]
                 )
             }
-            dbQueue = try DatabaseQueue(path: localURL.path)
-            try Self.migrate(dbQueue)
+            let queue = try DatabaseQueue(path: localURL.path)
+            try Self.migrate(queue)
+            dbQueue = queue
+        }
+
+        guard let dbQueue else {
+            throw NSError(
+                domain: "MonthManifestStore",
+                code: -33,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to initialize month manifest database queue."]
+            )
         }
 
         let store = MonthManifestStore(
@@ -257,15 +268,21 @@ final class MonthManifestStore {
             return nil
         }
 
-        let dbQueue: DatabaseQueue
+        var dbQueue: DatabaseQueue?
         do {
-            dbQueue = try DatabaseQueue(path: localURL.path)
-            try Self.migrate(dbQueue)
-            _ = try await dbQueue.read { db in
+            let queue = try DatabaseQueue(path: localURL.path)
+            dbQueue = queue
+            try Self.migrate(queue)
+            _ = try await queue.read { db in
                 try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
             }
         } catch {
-            try? FileManager.default.removeItem(at: localURL)
+            Self.closeAndRemoveLocalManifest(at: localURL, queue: dbQueue)
+            return nil
+        }
+
+        guard let dbQueue else {
+            Self.closeAndRemoveLocalManifest(at: localURL, queue: nil)
             return nil
         }
 
@@ -316,15 +333,21 @@ final class MonthManifestStore {
             return nil
         }
 
-        let dbQueue: DatabaseQueue
+        var dbQueue: DatabaseQueue?
         do {
-            dbQueue = try DatabaseQueue(path: localURL.path)
-            try Self.migrate(dbQueue)
-            _ = try await dbQueue.read { db in
+            let queue = try DatabaseQueue(path: localURL.path)
+            dbQueue = queue
+            try Self.migrate(queue)
+            _ = try await queue.read { db in
                 try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
             }
         } catch {
-            try? FileManager.default.removeItem(at: localURL)
+            Self.closeAndRemoveLocalManifest(at: localURL, queue: dbQueue)
+            return nil
+        }
+
+        guard let dbQueue else {
+            Self.closeAndRemoveLocalManifest(at: localURL, queue: nil)
             return nil
         }
 
@@ -686,6 +709,13 @@ final class MonthManifestStore {
         try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_resources_contentHash ON resources(contentHash)")
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_asset_resources_asset ON asset_resources(assetFingerprint)")
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_asset_resources_hash ON asset_resources(resourceHash)")
+    }
+
+    private static func closeAndRemoveLocalManifest(at localURL: URL, queue: DatabaseQueue?) {
+        if let queue {
+            try? queue.close()
+        }
+        try? FileManager.default.removeItem(at: localURL)
     }
 
     private static func dateFromEpochNs(_ ns: Int64?) -> Date? {
