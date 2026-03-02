@@ -123,8 +123,6 @@ final class HomeViewController: UIViewController {
     private var discoveredServers: [DiscoveredSMBServer] = []
     private var didAttemptAutoConnect = false
     private var isConnecting = false
-    private var storageCapacityByProfileKey: [String: RemoteStorageCapacity] = [:]
-    private var capacityRefreshTask: Task<Void, Never>?
 
     private var sections: [AlbumSection] = []
 
@@ -170,7 +168,6 @@ final class HomeViewController: UIViewController {
 
     deinit {
         reloadTask?.cancel()
-        capacityRefreshTask?.cancel()
         discoveryService.stop()
         for task in prefetchTasks.values {
             task.cancel()
@@ -366,9 +363,6 @@ final class HomeViewController: UIViewController {
     private func loadSavedProfiles() {
         savedProfiles = (try? dependencies.databaseManager.fetchServerProfiles()) ?? []
         activeProfileID = try? dependencies.databaseManager.activeServerProfileID()
-        let validKeys = Set(savedProfiles.map(\.storageProfile.identityKey))
-        storageCapacityByProfileKey = storageCapacityByProfileKey.filter { validKeys.contains($0.key) }
-        refreshStorageCapacities()
     }
 
     private func attemptAutoConnectIfNeeded() {
@@ -426,10 +420,7 @@ final class HomeViewController: UIViewController {
             savedServerActions = savedProfiles.map { profile in
                 let storageProfile = profile.storageProfile
                 let title = storageProfile.displayTitle
-                let subtitle = subtitleWithCapacityPrefix(
-                    for: profile,
-                    baseSubtitle: storageProfile.displaySubtitle
-                )
+                let subtitle = storageProfile.displaySubtitle
                 let symbolName: String
                 switch profile.resolvedStorageType {
                 case .smb:
@@ -550,110 +541,11 @@ final class HomeViewController: UIViewController {
             )
         }
 
-        if let subtitle, !subtitle.isEmpty {
-            return UIAction(title: "\(title) · \(subtitle)", image: image, state: state, handler: handler)
+        if let subtitle, !subtitle.isEmpty, image == nil {
+            return UIAction(title: "\(title) · \(subtitle)", state: state, handler: handler)
         }
         return UIAction(title: title, image: image, state: state, handler: handler)
     }
-
-    private func refreshStorageCapacities() {
-        let profiles = savedProfiles
-        capacityRefreshTask?.cancel()
-        guard !profiles.isEmpty else { return }
-
-        capacityRefreshTask = Task { [weak self] in
-            guard let self else { return }
-            var fetched: [String: RemoteStorageCapacity] = [:]
-            fetched.reserveCapacity(profiles.count)
-
-            for profile in profiles {
-                if Task.isCancelled { return }
-                guard let password = await MainActor.run(body: { self.passwordForCapacityQuery(profile) }) else {
-                    continue
-                }
-
-                do {
-                    let client = try self.dependencies.storageClientFactory.makeClient(profile: profile, password: password)
-                    try await client.connect()
-                    defer {
-                        Task.detached(priority: .utility) { [client] in
-                            await client.disconnect()
-                        }
-                    }
-                    if let capacity = try await client.storageCapacity() {
-                        fetched[profile.storageProfile.identityKey] = capacity
-                    }
-                } catch {
-                    continue
-                }
-            }
-
-            if Task.isCancelled { return }
-            await MainActor.run {
-                self.storageCapacityByProfileKey.merge(fetched) { _, new in new }
-                self.updateConnectionMenu()
-            }
-        }
-    }
-
-    private func passwordForCapacityQuery(_ profile: ServerProfileRecord) -> String? {
-        guard profile.storageProfile.requiresPassword else {
-            return ""
-        }
-
-        if dependencies.appSession.activeProfile?.id == profile.id,
-           let activePassword = dependencies.appSession.activePassword,
-           !activePassword.isEmpty {
-            return activePassword
-        }
-
-        guard let saved = try? dependencies.keychainService.readPassword(account: profile.credentialRef),
-              !saved.isEmpty else {
-            return nil
-        }
-        return saved
-    }
-
-    private func subtitleWithCapacityPrefix(for profile: ServerProfileRecord, baseSubtitle: String) -> String {
-        let key = profile.storageProfile.identityKey
-        guard let capacity = storageCapacityByProfileKey[key],
-              let capacityText = Self.capacitySubtitleText(for: capacity) else {
-            return baseSubtitle
-        }
-        guard !baseSubtitle.isEmpty else {
-            return capacityText
-        }
-        return "\(capacityText) · \(baseSubtitle)"
-    }
-
-    private static func capacitySubtitleText(for capacity: RemoteStorageCapacity) -> String? {
-        let available = capacity.availableBytes
-        let total = capacity.totalBytes
-
-        if let available, let total {
-            return "可用 \(formattedByteCount(available)) / \(formattedByteCount(total))"
-        }
-        if let available {
-            return "可用 \(formattedByteCount(available))"
-        }
-        if let total {
-            return "总量 \(formattedByteCount(total))"
-        }
-        return nil
-    }
-
-    private static func formattedByteCount(_ bytes: Int64) -> String {
-        byteCountFormatter.string(fromByteCount: max(bytes, 0))
-    }
-
-    private static let byteCountFormatter: ByteCountFormatter = {
-        let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
-        formatter.countStyle = .file
-        formatter.includesUnit = true
-        formatter.isAdaptive = true
-        return formatter
-    }()
 
     private func disconnectRemote() {
         if backupSessionController.state == .running {
@@ -794,7 +686,10 @@ final class HomeViewController: UIViewController {
 
     @objc
     private func openBackupTapped() {
-        let backupVC = BackupViewController(sessionController: backupSessionController)
+        let backupVC = BackupViewController(
+            sessionController: backupSessionController,
+            dependencies: dependencies
+        )
         let nav = UINavigationController(rootViewController: backupVC)
         nav.modalPresentationStyle = .pageSheet
         present(nav, animated: true)

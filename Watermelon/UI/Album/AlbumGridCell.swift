@@ -13,6 +13,8 @@ final class AlbumGridCell: UICollectionViewCell {
     private let topLeftBadgeLabel = UILabel()
     private let topRightBadgeLabel = UILabel()
     private let bottomRightBadgeLabel = UILabel()
+    private let selectionOverlayView = UIView()
+    private let selectionCheckmarkView = UIImageView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -43,7 +45,23 @@ final class AlbumGridCell: UICollectionViewCell {
         configureBottomMetaLabel(bottomRightBadgeLabel)
         bottomRightBadgeLabel.isHidden = true
 
+        selectionOverlayView.backgroundColor = UIColor.white.withAlphaComponent(0.28)
+        selectionOverlayView.isHidden = true
+        selectionOverlayView.isUserInteractionEnabled = false
+
+        selectionCheckmarkView.contentMode = .center
+        selectionCheckmarkView.image = selectionIcon()
+        selectionCheckmarkView.layer.cornerRadius = 9
+        selectionCheckmarkView.layer.masksToBounds = true
+        selectionCheckmarkView.backgroundColor = .systemGreen
+        selectionCheckmarkView.layer.borderColor = UIColor.white.cgColor
+        selectionCheckmarkView.layer.borderWidth = 1.5
+        selectionCheckmarkView.tintColor = .white
+        selectionCheckmarkView.isHidden = true
+
         contentView.addSubview(imageView)
+        imageView.addSubview(selectionOverlayView)
+        imageView.addSubview(selectionCheckmarkView)
         imageView.addSubview(topLeftBadgeLabel)
         imageView.addSubview(topRightBadgeLabel)
         imageView.addSubview(bottomRightBadgeLabel)
@@ -69,6 +87,15 @@ final class AlbumGridCell: UICollectionViewCell {
             make.leading.bottom.equalToSuperview().inset(6)
             make.trailing.lessThanOrEqualTo(bottomRightBadgeLabel.snp.leading).offset(-6)
         }
+
+        selectionOverlayView.snp.makeConstraints { make in
+            make.edges.equalToSuperview()
+        }
+
+        selectionCheckmarkView.snp.makeConstraints { make in
+            make.top.trailing.equalToSuperview().inset(6)
+            make.size.equalTo(CGSize(width: 18, height: 18))
+        }
     }
 
     @available(*, unavailable)
@@ -87,6 +114,7 @@ final class AlbumGridCell: UICollectionViewCell {
         clearBadges()
         clearBottomBadges()
         setTopRightBadge(nil)
+        setSelectionMarked(false, editable: true)
         layer.borderWidth = 0
         layer.borderColor = nil
     }
@@ -117,6 +145,16 @@ final class AlbumGridCell: UICollectionViewCell {
         guard !text.isEmpty else { return }
         bottomRightBadgeLabel.text = text
         bottomRightBadgeLabel.isHidden = false
+    }
+
+    func setSelectionMarked(_ selected: Bool, editable: Bool) {
+        selectionOverlayView.isHidden = !selected
+        selectionCheckmarkView.isHidden = !selected
+        selectionCheckmarkView.image = selectionIcon()
+        selectionCheckmarkView.backgroundColor = editable ? .systemGreen : .systemGray2
+        selectionCheckmarkView.tintColor = .white
+        selectionCheckmarkView.layer.borderWidth = editable ? 1.5 : 0
+        selectionOverlayView.alpha = editable ? 1 : 0.7
     }
 
     private func clearBadges() {
@@ -150,5 +188,10 @@ final class AlbumGridCell: UICollectionViewCell {
         label.text = " \(text) "
         label.backgroundColor = color
         label.isHidden = false
+    }
+
+    private func selectionIcon() -> UIImage? {
+        let config = UIImage.SymbolConfiguration(pointSize: 10, weight: .bold)
+        return UIImage(systemName: "checkmark", withConfiguration: config)
     }
 }

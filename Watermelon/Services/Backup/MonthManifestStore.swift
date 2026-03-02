@@ -395,18 +395,21 @@ final class MonthManifestStore {
                     assetFingerprint,
                     creationDateNs,
                     backedUpAtNs,
-                    resourceCount
-                ) VALUES (?, ?, ?, ?)
+                    resourceCount,
+                    totalFileSizeBytes
+                ) VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(assetFingerprint) DO UPDATE SET
                     creationDateNs = excluded.creationDateNs,
                     backedUpAtNs = excluded.backedUpAtNs,
-                    resourceCount = excluded.resourceCount
+                    resourceCount = excluded.resourceCount,
+                    totalFileSizeBytes = excluded.totalFileSizeBytes
                 """,
                 arguments: [
                     asset.assetFingerprint,
                     asset.creationDateNs,
                     asset.backedUpAtNs,
-                    asset.resourceCount
+                    asset.resourceCount,
+                    asset.totalFileSizeBytes
                 ]
             )
 
@@ -567,11 +570,13 @@ final class MonthManifestStore {
 
     private static func migrate(_ queue: DatabaseQueue) throws {
         var migrator = DatabaseMigrator()
-        // Remote manifests are user data on NAS: migrations must stay incremental/non-destructive.
-        migrator.registerMigration("month_manifest_v2_reset_schema") { db in
-            try ensureSchemaBaseline(db)
-        }
-        migrator.registerMigration("month_manifest_v2_schema_baseline") { db in
+        migrator.registerMigration("month_manifest_v3_dev_schema_reset") { db in
+            try db.execute(sql: "DROP INDEX IF EXISTS idx_asset_resources_hash")
+            try db.execute(sql: "DROP INDEX IF EXISTS idx_asset_resources_asset")
+            try db.execute(sql: "DROP INDEX IF EXISTS idx_resources_contentHash")
+            try db.execute(sql: "DROP TABLE IF EXISTS asset_resources")
+            try db.execute(sql: "DROP TABLE IF EXISTS assets")
+            try db.execute(sql: "DROP TABLE IF EXISTS resources")
             try ensureSchemaBaseline(db)
         }
         try migrator.migrate(queue)
@@ -596,7 +601,8 @@ final class MonthManifestStore {
               assetFingerprint BLOB PRIMARY KEY NOT NULL,
               creationDateNs INTEGER,
               backedUpAtNs INTEGER NOT NULL,
-              resourceCount INTEGER NOT NULL
+              resourceCount INTEGER NOT NULL,
+              totalFileSizeBytes INTEGER NOT NULL
             )
             """
         )
@@ -651,7 +657,7 @@ final class MonthManifestStore {
             try Row.fetchAll(
                 db,
                 sql: """
-                SELECT assetFingerprint, creationDateNs, backedUpAtNs, resourceCount
+                SELECT assetFingerprint, creationDateNs, backedUpAtNs, resourceCount, totalFileSizeBytes
                 FROM assets
                 """
             )
@@ -668,7 +674,8 @@ final class MonthManifestStore {
                 assetFingerprint: fingerprint,
                 creationDateNs: row["creationDateNs"],
                 backedUpAtNs: row["backedUpAtNs"],
-                resourceCount: Int(row["resourceCount"] as Int64)
+                resourceCount: Int(row["resourceCount"] as Int64),
+                totalFileSizeBytes: row["totalFileSizeBytes"]
             )
             assetsByFingerprint[fingerprint] = asset
         }

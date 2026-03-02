@@ -6,13 +6,15 @@ protocol ContentHashIndexRepositoryProtocol: Sendable {
         assetLocalIdentifier: String,
         role: Int,
         slot: Int,
-        contentHash: Data
+        contentHash: Data,
+        fileSize: Int64
     ) throws
 
     func upsertAssetFingerprint(
         assetLocalIdentifier: String,
         assetFingerprint: Data,
-        resourceCount: Int
+        resourceCount: Int,
+        totalFileSizeBytes: Int64
     ) throws
 
     func fetchHashMapByAsset() throws -> [String: [Data]]

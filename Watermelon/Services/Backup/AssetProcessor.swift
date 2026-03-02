@@ -147,7 +147,8 @@ final class AssetProcessor: Sendable {
                 assetLocalIdentifier: local.assetLocalIdentifier,
                 role: local.resourceRole,
                 slot: local.resourceSlot,
-                contentHash: localHash
+                contentHash: localHash,
+                fileSize: localFileSize
             )
 
             preparedResources.append(
@@ -224,6 +225,9 @@ final class AssetProcessor: Sendable {
         let failedResults = uploadResults.filter { $0.status == .failed }
         let skippedResults = uploadResults.filter { $0.status == .skipped }
         let successResults = uploadResults.filter { $0.status == .success }
+        let totalFileSizeBytes = preparedResources.reduce(Int64(0)) { partial, prepared in
+            partial + max(prepared.fileSize, 0)
+        }
 
         if !failedResults.isEmpty {
             let firstError = failedResults.first?.reason ?? "resource_failed"
@@ -245,7 +249,8 @@ final class AssetProcessor: Sendable {
             assetFingerprint: assetFingerprint,
             creationDateNs: Self.nanosecondsSinceEpoch(context.asset.creationDate),
             backedUpAtNs: Self.nanosecondsSinceEpoch(Date()) ?? 0,
-            resourceCount: links.count
+            resourceCount: links.count,
+            totalFileSizeBytes: totalFileSizeBytes
         )
 
         try context.monthStore.upsertAsset(manifestAsset, links: links)
@@ -254,7 +259,8 @@ final class AssetProcessor: Sendable {
         try hashIndexRepository.upsertAssetFingerprint(
             assetLocalIdentifier: context.asset.localIdentifier,
             assetFingerprint: assetFingerprint,
-            resourceCount: preparedResources.count
+            resourceCount: preparedResources.count,
+            totalFileSizeBytes: totalFileSizeBytes
         )
 
         if successResults.isEmpty {
@@ -307,10 +313,12 @@ final class AssetProcessor: Sendable {
         }
 
         if context.monthStore.containsAssetFingerprint(cachedFingerprint) {
+            let totalFileSizeBytes = Self.totalSizeBytes(of: context.selectedResources)
             try hashIndexRepository.upsertAssetFingerprint(
                 assetLocalIdentifier: context.asset.localIdentifier,
                 assetFingerprint: cachedFingerprint,
-                resourceCount: context.selectedResources.count
+                resourceCount: context.selectedResources.count,
+                totalFileSizeBytes: totalFileSizeBytes
             )
             return AssetProcessResult(
                 status: .skipped,
@@ -338,13 +346,18 @@ final class AssetProcessor: Sendable {
             return nil
         }
 
+        let totalFileSizeBytes = links.reduce(Int64(0)) { partial, link in
+            partial + max(context.monthStore.findResourceByHash(link.resourceHash)?.fileSize ?? 0, 0)
+        }
+
         let manifestAsset = RemoteManifestAsset(
             year: context.monthStore.year,
             month: context.monthStore.month,
             assetFingerprint: cachedFingerprint,
             creationDateNs: Self.nanosecondsSinceEpoch(context.asset.creationDate),
             backedUpAtNs: Self.nanosecondsSinceEpoch(Date()) ?? 0,
-            resourceCount: links.count
+            resourceCount: links.count,
+            totalFileSizeBytes: totalFileSizeBytes
         )
         try context.monthStore.upsertAsset(manifestAsset, links: links)
         remoteIndexService.upsertCachedAsset(manifestAsset, links: links)
@@ -352,7 +365,8 @@ final class AssetProcessor: Sendable {
         try hashIndexRepository.upsertAssetFingerprint(
             assetLocalIdentifier: context.asset.localIdentifier,
             assetFingerprint: cachedFingerprint,
-            resourceCount: context.selectedResources.count
+            resourceCount: context.selectedResources.count,
+            totalFileSizeBytes: totalFileSizeBytes
         )
 
         return AssetProcessResult(
@@ -742,6 +756,12 @@ final class AssetProcessor: Sendable {
     private static func nanosecondsSinceEpoch(_ date: Date?) -> Int64? {
         guard let date else { return nil }
         return Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded())
+    }
+
+    private static func totalSizeBytes(of selectedResources: [BackupSelectedResource]) -> Int64 {
+        selectedResources.reduce(Int64(0)) { partial, selected in
+            partial + max(PhotoLibraryService.resourceFileSize(selected.resource), 0)
+        }
     }
 
     private static func makeTransferState(

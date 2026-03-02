@@ -13,16 +13,12 @@ final class DatabaseManager {
 
     private var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
-        migrator.registerMigration("v3_dev_reset_schema") { db in
-            let candidateTables = [
-                ServerProfileRecord.databaseTableName,
-                SyncStateRecord.databaseTableName,
-                LocalAssetRecord.databaseTableName,
-                LocalAssetResourceRecord.databaseTableName
-            ]
-            for tableName in candidateTables where try db.tableExists(tableName) {
-                try db.drop(table: tableName)
-            }
+        migrator.registerMigration("v7_dev_schema_reset") { db in
+            try db.execute(sql: "DROP INDEX IF EXISTS idx_server_profiles_unique_smb")
+            try db.execute(sql: "DROP TABLE IF EXISTS \(LocalAssetResourceRecord.databaseTableName)")
+            try db.execute(sql: "DROP TABLE IF EXISTS \(LocalAssetRecord.databaseTableName)")
+            try db.execute(sql: "DROP TABLE IF EXISTS \(SyncStateRecord.databaseTableName)")
+            try db.execute(sql: "DROP TABLE IF EXISTS \(ServerProfileRecord.databaseTableName)")
 
             try db.create(table: ServerProfileRecord.databaseTableName) { table in
                 table.autoIncrementedPrimaryKey("id")
@@ -40,7 +36,13 @@ final class DatabaseManager {
                 table.column("createdAt", .datetime).notNull()
                 table.column("updatedAt", .datetime).notNull()
             }
-            try Self.createSMBOnlyProfileUniqueIndex(db: db, tableName: ServerProfileRecord.databaseTableName)
+            try db.execute(
+                sql: """
+                CREATE UNIQUE INDEX idx_server_profiles_unique_smb
+                ON \(ServerProfileRecord.databaseTableName)(host, shareName, basePath, username)
+                WHERE storageType = 'smb'
+                """
+            )
 
             try db.create(table: SyncStateRecord.databaseTableName) { table in
                 table.column("stateKey", .text).notNull().primaryKey()
@@ -52,6 +54,7 @@ final class DatabaseManager {
                 table.column("assetLocalIdentifier", .text).notNull()
                 table.column("assetFingerprint", .blob).notNull()
                 table.column("resourceCount", .integer).notNull()
+                table.column("totalFileSizeBytes", .integer).notNull().defaults(to: 0)
                 table.column("updatedAt", .datetime).notNull()
                 table.primaryKey(["assetLocalIdentifier"])
             }
@@ -62,135 +65,10 @@ final class DatabaseManager {
                 table.column("role", .integer).notNull()
                 table.column("slot", .integer).notNull()
                 table.column("contentHash", .blob).notNull()
+                table.column("fileSize", .integer).notNull().defaults(to: 0)
                 table.primaryKey(["assetLocalIdentifier", "role", "slot"])
             }
             try db.create(index: "idx_local_asset_resources_hash", on: LocalAssetResourceRecord.databaseTableName, columns: ["contentHash"])
-        }
-
-        migrator.registerMigration("v4_server_profiles_storage_type") { db in
-            guard try db.tableExists(ServerProfileRecord.databaseTableName) else { return }
-
-            let existingColumns = try Self.tableColumnNames(
-                db: db,
-                tableName: ServerProfileRecord.databaseTableName
-            )
-
-            if !existingColumns.contains("storageType") {
-                try db.execute(
-                    sql: """
-                    ALTER TABLE \(ServerProfileRecord.databaseTableName)
-                    ADD COLUMN storageType TEXT NOT NULL DEFAULT 'smb'
-                    """
-                )
-            }
-
-            if !existingColumns.contains("connectionParams") {
-                try db.execute(
-                    sql: """
-                    ALTER TABLE \(ServerProfileRecord.databaseTableName)
-                    ADD COLUMN connectionParams BLOB
-                    """
-                )
-            }
-        }
-
-        migrator.registerMigration("v5_server_profiles_sort_order") { db in
-            guard try db.tableExists(ServerProfileRecord.databaseTableName) else { return }
-
-            let existingColumns = try Self.tableColumnNames(
-                db: db,
-                tableName: ServerProfileRecord.databaseTableName
-            )
-
-            if !existingColumns.contains("sortOrder") {
-                try db.execute(
-                    sql: """
-                    ALTER TABLE \(ServerProfileRecord.databaseTableName)
-                    ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0
-                    """
-                )
-            }
-
-            let ids = try Int64.fetchAll(
-                db,
-                sql: """
-                SELECT id
-                FROM \(ServerProfileRecord.databaseTableName)
-                ORDER BY updatedAt DESC, id DESC
-                """
-            )
-            for (index, id) in ids.enumerated() {
-                try db.execute(
-                    sql: """
-                    UPDATE \(ServerProfileRecord.databaseTableName)
-                    SET sortOrder = ?
-                    WHERE id = ?
-                    """,
-                    arguments: [index, id]
-                )
-            }
-        }
-
-        migrator.registerMigration("v6_server_profiles_partial_unique_smb") { db in
-            let tableName = ServerProfileRecord.databaseTableName
-            guard try db.tableExists(tableName) else { return }
-
-            if try !Self.hasLegacyServerProfileUniqueConstraint(
-                db: db,
-                tableName: tableName
-            ) {
-                try Self.createSMBOnlyProfileUniqueIndex(db: db, tableName: tableName)
-                return
-            }
-
-            let rebuiltTableName = "\(tableName)_v6_rebuild"
-            if try db.tableExists(rebuiltTableName) {
-                try db.drop(table: rebuiltTableName)
-            }
-
-            try db.create(table: rebuiltTableName) { table in
-                table.autoIncrementedPrimaryKey("id")
-                table.column("name", .text).notNull()
-                table.column("storageType", .text).notNull().defaults(to: StorageType.smb.rawValue)
-                table.column("connectionParams", .blob)
-                table.column("sortOrder", .integer).notNull().defaults(to: 0)
-                table.column("host", .text).notNull()
-                table.column("port", .integer).notNull()
-                table.column("shareName", .text).notNull()
-                table.column("basePath", .text).notNull()
-                table.column("username", .text).notNull()
-                table.column("domain", .text)
-                table.column("credentialRef", .text).notNull()
-                table.column("createdAt", .datetime).notNull()
-                table.column("updatedAt", .datetime).notNull()
-            }
-
-            try db.execute(
-                sql: """
-                INSERT INTO \(rebuiltTableName)
-                (id, name, storageType, connectionParams, sortOrder, host, port, shareName, basePath, username, domain, credentialRef, createdAt, updatedAt)
-                SELECT id, name, storageType, connectionParams, sortOrder, host, port, shareName, basePath, username, domain, credentialRef, createdAt, updatedAt
-                FROM \(tableName)
-                """
-            )
-
-            // Keep one row per SMB endpoint before creating partial unique index.
-            try db.execute(
-                sql: """
-                DELETE FROM \(rebuiltTableName)
-                WHERE storageType = 'smb'
-                  AND id NOT IN (
-                      SELECT MAX(id)
-                      FROM \(rebuiltTableName)
-                      WHERE storageType = 'smb'
-                      GROUP BY host, shareName, basePath, username
-                  )
-                """
-            )
-
-            try db.drop(table: tableName)
-            try db.rename(table: rebuiltTableName, to: tableName)
-            try Self.createSMBOnlyProfileUniqueIndex(db: db, tableName: tableName)
         }
 
         return migrator
@@ -311,36 +189,5 @@ final class DatabaseManager {
     static func defaultDatabaseURL() -> URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return support.appendingPathComponent("Watermelon/database.sqlite")
-    }
-
-    private static func tableColumnNames(db: Database, tableName: String) throws -> Set<String> {
-        let rows = try Row.fetchAll(db, sql: "PRAGMA table_info(\(tableName))")
-        var result = Set<String>()
-        result.reserveCapacity(rows.count)
-        for row in rows {
-            if let name: String = row["name"] {
-                result.insert(name)
-            }
-        }
-        return result
-    }
-
-    private static func hasLegacyServerProfileUniqueConstraint(db: Database, tableName: String) throws -> Bool {
-        let rows = try Row.fetchAll(db, sql: "PRAGMA index_list(\(tableName))")
-        return rows.contains { row in
-            let isUnique = (row["unique"] as Int?) == 1
-            let origin = row["origin"] as String?
-            return isUnique && origin == "u"
-        }
-    }
-
-    private static func createSMBOnlyProfileUniqueIndex(db: Database, tableName: String) throws {
-        try db.execute(
-            sql: """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_server_profiles_unique_smb
-            ON \(tableName)(host, shareName, basePath, username)
-            WHERE storageType = 'smb'
-            """
-        )
     }
 }

@@ -1,15 +1,8 @@
 import Foundation
 
-final class RemoteIndexSyncService: @unchecked Sendable {
-    private struct SyncContext {
-        let profileKey: String
-        let previousDigests: [LibraryMonthKey: RemoteMonthManifestDigest]
-        let didResetSnapshot: Bool
-    }
-
+final class RemoteIndexSyncService: Sendable {
     private let scanner: RemoteManifestIndexScannerProtocol
     private let snapshotCache: RemoteLibrarySnapshotCache
-    private let stateLock = NSLock()
     private var activeRemoteProfileKey: String?
     private var remoteManifestDigests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
 
@@ -24,20 +17,16 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     func syncIndex(
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
-        eventStream: BackupEventStream? = nil,
-        cancellationController: BackupCancellationController? = nil
+        eventStream: BackupEventStream? = nil
     ) async throws -> RemoteLibrarySnapshot {
-        let context = beginSyncContext(for: profile)
-        if context.didResetSnapshot {
-            snapshotCache.reset()
-        }
+        ensureRemoteContext(for: profile)
 
         let remoteDigests = try await scanner.scanManifestDigests(
             client: client,
             basePath: profile.basePath,
-            cancellationController: cancellationController
+            cancellationController: nil
         )
-        let previousDigests = context.previousDigests
+        let previousDigests = remoteManifestDigests
 
         let previousMonths = Set(previousDigests.keys)
         let remoteMonths = Set(remoteDigests.keys)
@@ -55,7 +44,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
         if changedMonths.isEmpty, removedMonths.isEmpty {
             let snapshot = snapshotCache.current()
-            eventStream?.emit(.log("Remote index unchanged. Month digests matched (\(remoteMonths.count) month(s))."))
+            await eventStream?.emit(.log("Remote index unchanged. Month digests matched (\(remoteMonths.count) month(s))."))
             return snapshot
         }
 
@@ -89,16 +78,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         var appliedChangedMonths = 0
         var appliedRemovedMonths = 0
 
-        guard isCurrentContext(profileKey: context.profileKey) else {
-            eventStream?.emit(.log("Remote index context switched. Ignored stale sync result."))
-            return snapshotCache.current()
-        }
-
         for month in changedMonths.sorted() {
-            guard isCurrentContext(profileKey: context.profileKey) else {
-                eventStream?.emit(.log("Remote index context switched. Ignored stale sync result."))
-                return snapshotCache.current()
-            }
             guard let monthDelta = monthDeltas[month] else { continue }
             if snapshotCache.replaceMonth(
                 month,
@@ -111,22 +91,15 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
 
         for month in removedMonths.sorted() {
-            guard isCurrentContext(profileKey: context.profileKey) else {
-                eventStream?.emit(.log("Remote index context switched. Ignored stale sync result."))
-                return snapshotCache.current()
-            }
             if snapshotCache.removeMonth(month) {
                 appliedRemovedMonths += 1
             }
         }
 
-        guard commitRemoteDigests(remoteDigests, profileKey: context.profileKey) else {
-            eventStream?.emit(.log("Remote index context switched. Ignored stale sync result."))
-            return snapshotCache.current()
-        }
+        remoteManifestDigests = remoteDigests
 
         let snapshot = snapshotCache.current()
-        eventStream?.emit(.remoteIndexSynced(RemoteIndexSyncEvent(
+        await eventStream?.emit(.remoteIndexSynced(RemoteIndexSyncEvent(
             resourceCount: snapshot.totalResourceCount,
             assetCount: snapshot.totalCount,
             changedMonths: appliedChangedMonths,
@@ -153,47 +126,18 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func reset() {
-        stateLock.lock()
         activeRemoteProfileKey = nil
         remoteManifestDigests.removeAll()
-        stateLock.unlock()
         snapshotCache.reset()
     }
 
-    private func beginSyncContext(for profile: ServerProfileRecord) -> SyncContext {
+    private func ensureRemoteContext(for profile: ServerProfileRecord) {
         let profileKey = Self.remoteProfileKey(profile)
-        stateLock.lock()
-        let didSwitch = activeRemoteProfileKey != profileKey
-        if didSwitch {
-            activeRemoteProfileKey = profileKey
-            remoteManifestDigests.removeAll()
-        }
-        let previousDigests = remoteManifestDigests
-        stateLock.unlock()
-        return SyncContext(
-            profileKey: profileKey,
-            previousDigests: previousDigests,
-            didResetSnapshot: didSwitch
-        )
-    }
+        guard activeRemoteProfileKey != profileKey else { return }
 
-    private func commitRemoteDigests(
-        _ digests: [LibraryMonthKey: RemoteMonthManifestDigest],
-        profileKey: String
-    ) -> Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        guard activeRemoteProfileKey == profileKey else {
-            return false
-        }
-        remoteManifestDigests = digests
-        return true
-    }
-
-    private func isCurrentContext(profileKey: String) -> Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return activeRemoteProfileKey == profileKey
+        activeRemoteProfileKey = profileKey
+        remoteManifestDigests.removeAll()
+        snapshotCache.reset()
     }
 
     private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {

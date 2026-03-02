@@ -7,6 +7,7 @@ struct RemoteManifestAsset: Hashable, Identifiable {
     let creationDateNs: Int64?
     let backedUpAtNs: Int64
     let resourceCount: Int
+    let totalFileSizeBytes: Int64
 
     var id: String {
         monthKey + "/" + assetFingerprintHex

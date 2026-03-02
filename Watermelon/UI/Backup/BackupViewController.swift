@@ -23,7 +23,13 @@ final class BackupViewController: UIViewController {
     }
 
     private let sessionController: BackupSessionController
+    private let dependencies: DependencyContainer
 
+    private let scopeCardView = UIView()
+    private let scopeTitleLabel = UILabel()
+    private let scopeSummaryLabel = UILabel()
+    private let scopeDetailLabel = UILabel()
+    private let scopeAdjustButton = UIButton(type: .system)
     private let statusCardView = UIView()
     private let statusThumbnailContainer = UIView()
     private let statusThumbnailImageView = UIImageView()
@@ -69,6 +75,7 @@ final class BackupViewController: UIViewController {
     private var statusThumbnailAssetID: String?
     private var statusThumbnailRequestID: PHImageRequestID?
     private var thumbnailRequestIDs: [String: PHImageRequestID] = [:]
+    private var pendingOpenScopeSelectorAfterStop = false
 
     private static let resourceDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -76,8 +83,21 @@ final class BackupViewController: UIViewController {
         return formatter
     }()
 
-    init(sessionController: BackupSessionController) {
+    private static let byteCountFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
+        formatter.countStyle = .file
+        formatter.includesUnit = true
+        formatter.isAdaptive = true
+        return formatter
+    }()
+
+    init(
+        sessionController: BackupSessionController,
+        dependencies: DependencyContainer
+    ) {
         self.sessionController = sessionController
+        self.dependencies = dependencies
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -104,6 +124,11 @@ final class BackupViewController: UIViewController {
 
         buildUI()
 
+        Task { [weak self] in
+            guard let self else { return }
+            await self.sessionController.ensureDefaultScopeSummaryLoaded()
+        }
+
         observerID = sessionController.addObserver { [weak self] snapshot in
             self?.render(snapshot: snapshot)
         }
@@ -120,6 +145,27 @@ final class BackupViewController: UIViewController {
     }
 
     private func buildUI() {
+        scopeCardView.backgroundColor = .secondarySystemBackground
+        scopeCardView.layer.cornerRadius = 12
+        scopeCardView.layer.masksToBounds = true
+
+        scopeTitleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        scopeTitleLabel.textColor = .label
+        scopeTitleLabel.text = "备份范围"
+
+        scopeSummaryLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        scopeSummaryLabel.textColor = .secondaryLabel
+        scopeSummaryLabel.text = "全选"
+
+        scopeDetailLabel.font = .systemFont(ofSize: 12, weight: .regular)
+        scopeDetailLabel.textColor = .secondaryLabel
+        scopeDetailLabel.numberOfLines = 2
+        scopeDetailLabel.text = "总计 0 张 · 0 KB"
+
+        scopeAdjustButton.setTitle("调整", for: .normal)
+        scopeAdjustButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+        scopeAdjustButton.addTarget(self, action: #selector(scopeAdjustTapped), for: .touchUpInside)
+
         statusCardView.backgroundColor = .secondarySystemBackground
         statusCardView.layer.cornerRadius = 12
         statusCardView.layer.masksToBounds = true
@@ -198,6 +244,12 @@ final class BackupViewController: UIViewController {
         logTextView.textContainerInset = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         logTextView.isHidden = true
 
+        view.addSubview(scopeCardView)
+        scopeCardView.addSubview(scopeTitleLabel)
+        scopeCardView.addSubview(scopeSummaryLabel)
+        scopeCardView.addSubview(scopeDetailLabel)
+        scopeCardView.addSubview(scopeAdjustButton)
+
         view.addSubview(statusCardView)
         statusCardView.addSubview(statusThumbnailContainer)
         statusThumbnailContainer.addSubview(statusThumbnailImageView)
@@ -214,8 +266,37 @@ final class BackupViewController: UIViewController {
         view.addSubview(tableView)
         view.addSubview(logTextView)
 
-        statusCardView.snp.makeConstraints { make in
+        scopeCardView.snp.makeConstraints { make in
             make.top.equalTo(view.safeAreaLayoutGuide).offset(8)
+            make.leading.trailing.equalToSuperview().inset(12)
+            make.height.greaterThanOrEqualTo(78)
+        }
+
+        scopeTitleLabel.snp.makeConstraints { make in
+            make.leading.top.equalToSuperview().inset(12)
+            make.trailing.lessThanOrEqualTo(scopeAdjustButton.snp.leading).offset(-8)
+        }
+
+        scopeAdjustButton.snp.makeConstraints { make in
+            make.trailing.equalToSuperview().inset(10)
+            make.centerY.equalTo(scopeTitleLabel)
+        }
+
+        scopeSummaryLabel.snp.makeConstraints { make in
+            make.leading.equalTo(scopeTitleLabel)
+            make.top.equalTo(scopeTitleLabel.snp.bottom).offset(2)
+            make.trailing.equalToSuperview().inset(12)
+        }
+
+        scopeDetailLabel.snp.makeConstraints { make in
+            make.leading.equalTo(scopeTitleLabel)
+            make.top.equalTo(scopeSummaryLabel.snp.bottom).offset(2)
+            make.trailing.equalToSuperview().inset(12)
+            make.bottom.equalToSuperview().inset(10)
+        }
+
+        statusCardView.snp.makeConstraints { make in
+            make.top.equalTo(scopeCardView.snp.bottom).offset(8)
             make.leading.trailing.equalToSuperview().inset(12)
             make.height.greaterThanOrEqualTo(120)
         }
@@ -279,6 +360,7 @@ final class BackupViewController: UIViewController {
     private func render(snapshot: BackupSessionController.Snapshot) {
         let previousSnapshot = latestSnapshot
         latestSnapshot = snapshot
+        updateScopeCard(using: snapshot)
         updateStatusCard(using: snapshot)
         updateFilterTitles(using: snapshot)
         updateLogContent(snapshot.logs)
@@ -315,6 +397,13 @@ final class BackupViewController: UIViewController {
             pauseBarButtonItem.isEnabled = false
             stopBarButtonItem.isEnabled = false
         }
+
+        if pendingOpenScopeSelectorAfterStop,
+           snapshot.canAdjustScope,
+           !snapshot.controlsLocked {
+            pendingOpenScopeSelectorAfterStop = false
+            presentScopeSelector(readOnly: false)
+        }
     }
 
     private func shouldRefreshProcessedItems(
@@ -325,6 +414,39 @@ final class BackupViewController: UIViewController {
         let previousEventTime = previous.latestItemEvent?.updatedAt
         let nextEventTime = next.latestItemEvent?.updatedAt
         return previousEventTime != nextEventTime || previous.processedItems.count != next.processedItems.count
+    }
+
+    private func updateScopeCard(using snapshot: BackupSessionController.Snapshot) {
+        let summary = snapshot.scopeSummary
+        let modeText: String
+        switch summary.mode {
+        case .all:
+            modeText = "全选"
+        case .partial:
+            modeText = "部分选择"
+        case .empty:
+            modeText = "未选择"
+        }
+        scopeSummaryLabel.text = modeText
+
+        if summary.mode == .all {
+            if let totalBytes = summary.totalEstimatedBytes {
+                let totalText = Self.byteCountFormatter.string(fromByteCount: totalBytes)
+                scopeDetailLabel.text = "总计 \(summary.totalAssetCount) 张 · \(totalText)"
+            } else {
+                scopeDetailLabel.text = "总计 \(summary.totalAssetCount) 张 · 容量待统计"
+            }
+        } else if let selectedBytes = summary.selectedEstimatedBytes,
+                  let totalBytes = summary.totalEstimatedBytes {
+            let selectedText = Self.byteCountFormatter.string(fromByteCount: selectedBytes)
+            let totalText = Self.byteCountFormatter.string(fromByteCount: totalBytes)
+            scopeDetailLabel.text = "已选 \(summary.selectedAssetCount)/\(summary.totalAssetCount) 张 · \(selectedText) / \(totalText)"
+        } else {
+            scopeDetailLabel.text = "已选 \(summary.selectedAssetCount)/\(summary.totalAssetCount) 张 · 容量待统计"
+        }
+
+        scopeAdjustButton.isEnabled = !snapshot.controlsLocked
+        scopeAdjustButton.alpha = snapshot.controlsLocked ? 0.5 : 1
     }
 
     private func updateStatusCard(using snapshot: BackupSessionController.Snapshot) {
@@ -527,6 +649,50 @@ final class BackupViewController: UIViewController {
     private func filterChanged() {
         guard let snapshot = latestSnapshot else { return }
         applyFilter(using: snapshot, forceReload: true)
+    }
+
+    @objc
+    private func scopeAdjustTapped() {
+        guard let snapshot = latestSnapshot else { return }
+        if snapshot.canAdjustScope {
+            presentScopeSelector(readOnly: false)
+            return
+        }
+
+        if snapshot.state == .running || snapshot.state == .paused {
+            let alert = UIAlertController(
+                title: "当前任务进行中",
+                message: "可先仅查看当前范围；如需修改范围，需要先停止当前任务。",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "仅查看", style: .default, handler: { [weak self] _ in
+                self?.presentScopeSelector(readOnly: true)
+            }))
+            alert.addAction(UIAlertAction(title: "停止并调整", style: .destructive, handler: { [weak self] _ in
+                guard let self else { return }
+                self.pendingOpenScopeSelectorAfterStop = true
+                self.sessionController.stopBackup()
+            }))
+            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+            present(alert, animated: true)
+            return
+        }
+
+        presentScopeSelector(readOnly: true)
+    }
+
+    private func presentScopeSelector(readOnly: Bool) {
+        let selector = BackupRangeSelectorViewController(
+            dependencies: dependencies,
+            initialSelection: sessionController.currentScopeSelection(),
+            readOnly: readOnly
+        ) { [weak self] selection in
+            guard let self else { return }
+            _ = self.sessionController.updateScopeSelection(selection)
+        }
+        let nav = UINavigationController(rootViewController: selector)
+        nav.modalPresentationStyle = .pageSheet
+        present(nav, animated: true)
     }
 
     @objc

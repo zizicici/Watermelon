@@ -3,6 +3,7 @@ import Photos
 
 enum BackupRunMode: Sendable {
     case full
+    case scoped(assetIDs: Set<String>)
     case retry(assetIDs: Set<String>)
 
     var isRetry: Bool {
@@ -12,20 +13,40 @@ enum BackupRunMode: Sendable {
         return false
     }
 
-    var retryCount: Int {
+    var isScoped: Bool {
+        if case .scoped = self {
+            return true
+        }
+        return false
+    }
+
+    var targetCount: Int {
         switch self {
         case .full:
             return 0
-        case .retry(let assetIDs):
+        case .scoped(let assetIDs), .retry(let assetIDs):
             return assetIDs.count
         }
     }
 
-    var retryAssetIdentifiers: Set<String>? {
+    var displayModeText: String {
+        switch self {
+        case .full:
+            return "全量"
+        case .scoped:
+            return "范围"
+        case .retry:
+            return "重试"
+        }
+    }
+
+    var targetAssetIdentifiers: Set<String>? {
         switch self {
         case .full:
             return nil
         case .retry(let assetIDs):
+            return assetIDs
+        case .scoped(let assetIDs):
             return assetIDs
         }
     }
@@ -73,9 +94,6 @@ actor BackupRunCommandActor {
     private var queuedIntent: BackupTerminationIntent = .none
     private var isPreparingResume = false
     private var preparationIntent: BackupTerminationIntent = .none
-
-    private var activeCancellationController: BackupCancellationController?
-    private var activeEventStream: BackupEventStream?
 
     private var signalContinuations: [UUID: AsyncStream<BackupEngineSignal>.Continuation] = [:]
 
@@ -127,6 +145,9 @@ actor BackupRunCommandActor {
         case .retry(let assetIDs):
             try throwIfResumePreparationInterrupted()
             pendingAssetIDs = assetIDs.subtracting(completedAssetIDs)
+        case .scoped(let assetIDs):
+            try throwIfResumePreparationInterrupted()
+            pendingAssetIDs = assetIDs.subtracting(completedAssetIDs)
         case .full:
             pendingAssetIDs = try await computePendingAssetIDsForFullRun(excluding: completedAssetIDs)
         }
@@ -143,10 +164,11 @@ actor BackupRunCommandActor {
         // Resume preparation has completed; hand over to normal run-start path.
         isPreparingResume = false
 
+        let resumedMode: BackupRunMode = pausedMode.isRetry ? .retry(assetIDs: pendingAssetIDs) : .scoped(assetIDs: pendingAssetIDs)
         guard let runToken = startRunInternal(
             profile: profile,
             password: password,
-            mode: .retry(assetIDs: pendingAssetIDs)
+            mode: resumedMode
         ) else {
             return .busy
         }
@@ -169,7 +191,6 @@ actor BackupRunCommandActor {
     private func applyIntent(_ intent: BackupTerminationIntent) {
         if runTask != nil {
             terminationIntent = intent
-            activeCancellationController?.cancel()
             runTask?.cancel()
             return
         }
@@ -194,17 +215,12 @@ actor BackupRunCommandActor {
         activeRunToken &+= 1
         let runToken = activeRunToken
 
-        let eventStream = BackupEventStream()
-        let cancellationController = BackupCancellationController()
-        activeEventStream = eventStream
-        activeCancellationController = cancellationController
-
         terminationIntent = queuedIntent
         queuedIntent = .none
 
         eventListenerTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
-            for await event in eventStream.stream {
+            for await event in self.backupCoordinator.eventStream {
                 let shouldStop = await self.handleRunEvent(
                     event,
                     runToken: runToken,
@@ -216,20 +232,13 @@ actor BackupRunCommandActor {
             }
         }
 
-        runTask = Task.detached(priority: .userInitiated) { [weak self, eventStream] in
-            defer {
-                eventStream.finish()
-            }
+        runTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
                 _ = try await self.backupCoordinator.runBackup(
                     profile: profile,
                     password: password,
-                    onlyAssetLocalIdentifiers: mode.retryAssetIdentifiers,
-                    context: BackupRunContext(
-                        cancellationController: cancellationController,
-                        eventSink: eventStream
-                    )
+                    onlyAssetLocalIdentifiers: mode.targetAssetIdentifiers
                 )
             } catch {
                 await self.handleRunError(
@@ -242,7 +251,6 @@ actor BackupRunCommandActor {
         }
 
         if terminationIntent != .none {
-            cancellationController.cancel()
             runTask?.cancel()
         }
 
@@ -295,9 +303,6 @@ actor BackupRunCommandActor {
         runTask = nil
         eventListenerTask?.cancel()
         eventListenerTask = nil
-        activeCancellationController = nil
-        activeEventStream?.finish()
-        activeEventStream = nil
         if resetIntent {
             terminationIntent = .none
         }

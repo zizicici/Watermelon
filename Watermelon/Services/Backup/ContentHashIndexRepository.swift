@@ -9,8 +9,17 @@ struct AssetResourceRoleSlot: Hashable {
 struct LocalAssetHashCache {
     let assetFingerprint: Data
     let resourceCount: Int
+    let totalFileSizeBytes: Int64
     let updatedAt: Date
     var hashesByRoleSlot: [AssetResourceRoleSlot: Data]
+}
+
+struct LocalHashIndexStats: Sendable {
+    let assetCount: Int
+    let resourceCount: Int
+    let totalFileSizeBytes: Int64
+    let oldestUpdatedAt: Date?
+    let newestUpdatedAt: Date?
 }
 
 final class ContentHashIndexRepository: @unchecked Sendable {
@@ -24,7 +33,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         assetLocalIdentifier: String,
         role: Int,
         slot: Int,
-        contentHash: Data
+        contentHash: Data,
+        fileSize: Int64
     ) throws {
         try databaseManager.write { db in
             try db.execute(
@@ -33,12 +43,14 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                     assetLocalIdentifier,
                     role,
                     slot,
-                    contentHash
-                ) VALUES (?, ?, ?, ?)
+                    contentHash,
+                    fileSize
+                ) VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(assetLocalIdentifier, role, slot) DO UPDATE SET
-                    contentHash = excluded.contentHash
+                    contentHash = excluded.contentHash,
+                    fileSize = excluded.fileSize
                 """,
-                arguments: [assetLocalIdentifier, role, slot, contentHash]
+                arguments: [assetLocalIdentifier, role, slot, contentHash, fileSize]
             )
         }
     }
@@ -46,7 +58,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
     func upsertAssetFingerprint(
         assetLocalIdentifier: String,
         assetFingerprint: Data,
-        resourceCount: Int
+        resourceCount: Int,
+        totalFileSizeBytes: Int64
     ) throws {
         try databaseManager.write { db in
             try db.execute(
@@ -55,17 +68,20 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                     assetLocalIdentifier,
                     assetFingerprint,
                     resourceCount,
+                    totalFileSizeBytes,
                     updatedAt
-                ) VALUES (?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(assetLocalIdentifier) DO UPDATE SET
                     assetFingerprint = excluded.assetFingerprint,
                     resourceCount = excluded.resourceCount,
+                    totalFileSizeBytes = excluded.totalFileSizeBytes,
                     updatedAt = excluded.updatedAt
                 """,
                 arguments: [
                     assetLocalIdentifier,
                     assetFingerprint,
                     resourceCount,
+                    totalFileSizeBytes,
                     Date()
                 ]
             )
@@ -171,7 +187,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             let assetRows = try Row.fetchAll(
                 db,
                 sql: """
-                SELECT assetLocalIdentifier, assetFingerprint, resourceCount, updatedAt
+                SELECT assetLocalIdentifier, assetFingerprint, resourceCount, totalFileSizeBytes, updatedAt
                 FROM local_assets
                 """
             )
@@ -183,6 +199,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 result[assetID] = LocalAssetHashCache(
                     assetFingerprint: row["assetFingerprint"],
                     resourceCount: Int(row["resourceCount"] as Int64),
+                    totalFileSizeBytes: row["totalFileSizeBytes"],
                     updatedAt: row["updatedAt"],
                     hashesByRoleSlot: [:]
                 )
@@ -207,6 +224,73 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             }
 
             return result
+        }
+    }
+
+    func fetchLocalHashIndexStats() throws -> LocalHashIndexStats {
+        try databaseManager.read { db in
+            let assetCount = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM local_assets"
+            ) ?? 0
+            let resourceCount = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM local_asset_resources"
+            ) ?? 0
+            let oldest = try Date.fetchOne(
+                db,
+                sql: "SELECT MIN(updatedAt) FROM local_assets"
+            )
+            let newest = try Date.fetchOne(
+                db,
+                sql: "SELECT MAX(updatedAt) FROM local_assets"
+            )
+            let totalFileSizeBytes = try Int64.fetchOne(
+                db,
+                sql: "SELECT COALESCE(SUM(totalFileSizeBytes), 0) FROM local_assets"
+            ) ?? 0
+            return LocalHashIndexStats(
+                assetCount: assetCount,
+                resourceCount: resourceCount,
+                totalFileSizeBytes: totalFileSizeBytes,
+                oldestUpdatedAt: oldest,
+                newestUpdatedAt: newest
+            )
+        }
+    }
+
+    func clearLocalHashIndex() throws {
+        try databaseManager.write { db in
+            try db.execute(sql: "DELETE FROM local_asset_resources")
+            try db.execute(sql: "DELETE FROM local_assets")
+        }
+    }
+
+    func fetchIndexedAssetIDs() throws -> [String] {
+        try databaseManager.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT assetLocalIdentifier FROM local_assets"
+            )
+        }
+    }
+
+    func deleteIndexEntries(assetIDs: [String]) throws {
+        guard !assetIDs.isEmpty else { return }
+        let chunkSize = 400
+        try databaseManager.write { db in
+            for chunkStart in stride(from: 0, to: assetIDs.count, by: chunkSize) {
+                let chunk = Array(assetIDs[chunkStart ..< min(chunkStart + chunkSize, assetIDs.count)])
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                try db.execute(
+                    sql: "DELETE FROM local_asset_resources WHERE assetLocalIdentifier IN (\(placeholders))",
+                    arguments: StatementArguments(chunk)
+                )
+                try db.execute(
+                    sql: "DELETE FROM local_assets WHERE assetLocalIdentifier IN (\(placeholders))",
+                    arguments: StatementArguments(chunk)
+                )
+            }
         }
     }
 }

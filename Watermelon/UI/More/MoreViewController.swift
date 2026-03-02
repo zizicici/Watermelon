@@ -16,8 +16,12 @@ class MoreViewController: UIViewController {
 
     private var tableView: UITableView!
     private var dataSource: DataSource!
+    private let dependencies: DependencyContainer?
+    private let onProfilesChanged: (() -> Void)?
     
     enum Section: Hashable {
+        case remoteStorage
+        case localData
         case general
         case dataSource
         case notification
@@ -29,6 +33,10 @@ class MoreViewController: UIViewController {
         
         var header: String? {
             switch self {
+            case .remoteStorage:
+                return "远端存储"
+            case .localData:
+                return "本地数据"
             case .general:
                 return String(localized: "more.section.general")
             case .dataSource:
@@ -54,6 +62,28 @@ class MoreViewController: UIViewController {
     }
     
     enum Item: Hashable {
+        enum StorageItem: Hashable {
+            case manageProfiles
+
+            var title: String {
+                switch self {
+                case .manageProfiles:
+                    return "管理存储"
+                }
+            }
+        }
+
+        enum LocalDataItem: Hashable {
+            case hashIndex
+
+            var title: String {
+                switch self {
+                case .hashIndex:
+                    return "本地 Hash 索引"
+                }
+            }
+        }
+
         enum GeneralItem: Hashable {
             case language
             case tutorial(TutorialEntranceType)
@@ -160,6 +190,8 @@ class MoreViewController: UIViewController {
         }
         
         case settings(GeneralItem)
+        case storage(StorageItem)
+        case localData(LocalDataItem)
         case contact(ContactItem)
         case appjun(AppJunItem)
         case about(AboutItem)
@@ -167,6 +199,10 @@ class MoreViewController: UIViewController {
         var title: String {
             switch self {
             case .settings(let item):
+                return item.title
+            case .storage(let item):
+                return item.title
+            case .localData(let item):
                 return item.title
             case .contact(let item):
                 return item.title
@@ -190,8 +226,13 @@ class MoreViewController: UIViewController {
         }
     }
     
-    override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
-        super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
+    init(
+        dependencies: DependencyContainer? = nil,
+        onProfilesChanged: (() -> Void)? = nil
+    ) {
+        self.dependencies = dependencies
+        self.onProfilesChanged = onProfilesChanged
+        super.init(nibName: nil, bundle: nil)
         
         title = String(localized: "controller.more.title")
         tabBarItem = UITabBarItem(title: String(localized: "controller.more.title"), image: UIImage(systemName: "ellipsis"), tag: 2)
@@ -251,6 +292,26 @@ class MoreViewController: UIViewController {
                 content.secondaryText = item.value
                 cell.contentConfiguration = content
                 return cell
+            case .storage:
+                let cell = tableView.dequeueReusableCell(withIdentifier: "reuseIdentifier", for: indexPath)
+                cell.accessoryType = .disclosureIndicator
+                var content = UIListContentConfiguration.valueCell()
+                content.text = identifier.title
+                content.textProperties.color = .label
+                content.secondaryText = nil
+                content.image = UIImage(systemName: "externaldrive")
+                cell.contentConfiguration = content
+                return cell
+            case .localData:
+                let cell = tableView.dequeueReusableCell(withIdentifier: "reuseIdentifier", for: indexPath)
+                cell.accessoryType = .disclosureIndicator
+                var content = UIListContentConfiguration.valueCell()
+                content.text = identifier.title
+                content.textProperties.color = .label
+                content.secondaryText = nil
+                content.image = UIImage(systemName: "internaldrive")
+                cell.contentConfiguration = content
+                return cell
             case .contact(let item):
                 let cell = tableView.dequeueReusableCell(withIdentifier: "reuseIdentifier", for: indexPath)
                 cell.accessoryType = .disclosureIndicator
@@ -295,6 +356,14 @@ class MoreViewController: UIViewController {
     @objc
     func reloadData() {
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
+        if dependencies != nil {
+            snapshot.appendSections([.remoteStorage])
+            snapshot.appendItems([.storage(.manageProfiles)], toSection: .remoteStorage)
+
+            snapshot.appendSections([.localData])
+            snapshot.appendItems([.localData(.hashIndex)], toSection: .localData)
+        }
+
         snapshot.appendSections([.general])
         snapshot.appendItems([.settings(.language), .settings(.tutorial(TutorialEntranceType.getValue()))], toSection: .general)
         
@@ -330,6 +399,22 @@ extension MoreViewController: UITableViewDelegate {
                     jumpToSettings()
                 case .tutorial:
                     enterSettings(TutorialEntranceType.self)
+                }
+            case .storage(let item):
+                switch item {
+                case .manageProfiles:
+                    guard let dependencies else { return }
+                    let vc = ManageStorageProfilesViewController(dependencies: dependencies) { [weak self] in
+                        self?.onProfilesChanged?()
+                    }
+                    navigationController?.pushViewController(vc, animated: ConsideringUser.pushAnimated)
+                }
+            case .localData(let item):
+                switch item {
+                case .hashIndex:
+                    guard let dependencies else { return }
+                    let vc = LocalHashIndexManagerViewController(dependencies: dependencies)
+                    navigationController?.pushViewController(vc, animated: ConsideringUser.pushAnimated)
                 }
             case .contact(let item):
                 handle(contactItem: item)

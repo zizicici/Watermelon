@@ -56,6 +56,8 @@ final class BackupSessionController {
         let state: State
         let primaryActionTitle: String
         let controlsLocked: Bool
+        let canAdjustScope: Bool
+        let scopeSummary: BackupScopeSummary
         let statusText: String
         let succeeded: Int
         let failed: Int
@@ -71,16 +73,26 @@ final class BackupSessionController {
     private let appSession: AppSession
     private let databaseManager: DatabaseManager
     private let photoLibraryService: PhotoLibraryServiceProtocol
-    private let backupEngine: BackupRunCommandActor
+    private let runCommandActor: BackupRunCommandActor
 
     private var observers: [UUID: (Snapshot) -> Void] = [:]
     private var commandSignalTask: Task<Void, Never>?
     private var startCommandTask: Task<Void, Never>?
+    private var resumePreparationTask: Task<Void, Never>?
     private var notifyThrottleTask: Task<Void, Never>?
     private var hasPendingObserverNotification = false
+    private var pendingControlIntent: BackupTerminationIntent = .none
     private var currentRunMode: BackupRunMode = .full
     private var lastPausedRunMode: BackupRunMode?
+    private var isStartCommandInFlight = false
     private var activeCommandRunToken: UInt64?
+    private var backupScopeSelection = BackupScopeSelection(
+        selectedAssetIDs: nil,
+        selectedAssetCount: 0,
+        selectedEstimatedBytes: nil,
+        totalAssetCount: 0,
+        totalEstimatedBytes: nil
+    )
 
     private(set) var state: State = .idle
     private(set) var statusText: String = "未开始"
@@ -92,9 +104,6 @@ final class BackupSessionController {
     private var processedItemsByAssetID: [String: ProcessedItem] = [:]
     private var processedItemsQueue: [ProcessedItem] = []
     private var processedItemQueueIndexByAssetID: [String: Int] = [:]
-    private var processedItemsInvalidIndexes: Set<Int> = []
-    private var processedItemsSnapshotCache: [ProcessedItem] = []
-    private var processedItemsSnapshotDirty = false
     private(set) var latestItemEvent: BackupItemEvent?
     private(set) var transferState: BackupTransferState?
     private var retryCountByAssetID: [String: Int] = [:]
@@ -110,12 +119,12 @@ final class BackupSessionController {
         self.appSession = appSession
         self.databaseManager = databaseManager
         self.photoLibraryService = photoLibraryService
-        backupEngine = BackupRunCommandActor(
+        runCommandActor = BackupRunCommandActor(
             backupCoordinator: backupCoordinator,
             photoLibraryService: photoLibraryService
         )
 
-        let commandActor = backupEngine
+        let commandActor = runCommandActor
         commandSignalTask = Task { [weak self] in
             let signalStream = await commandActor.makeSignalStream()
             for await signal in signalStream {
@@ -137,6 +146,7 @@ final class BackupSessionController {
     deinit {
         commandSignalTask?.cancel()
         startCommandTask?.cancel()
+        resumePreparationTask?.cancel()
         notifyThrottleTask?.cancel()
     }
 
@@ -145,6 +155,8 @@ final class BackupSessionController {
             state: state,
             primaryActionTitle: primaryActionTitle(for: state),
             controlsLocked: controlsLocked(),
+            canAdjustScope: canAdjustScope(),
+            scopeSummary: currentScopeSummary(),
             statusText: statusText,
             succeeded: succeeded,
             failed: failed,
@@ -159,22 +171,7 @@ final class BackupSessionController {
     }
 
     private func processedItemsSnapshot() -> [ProcessedItem] {
-        if !processedItemsSnapshotDirty {
-            return processedItemsSnapshotCache
-        }
-
-        if processedItemsInvalidIndexes.isEmpty {
-            processedItemsSnapshotCache = processedItemsQueue
-        } else {
-            var items: [ProcessedItem] = []
-            items.reserveCapacity(processedItemsByAssetID.count)
-            for (index, item) in processedItemsQueue.enumerated() where !processedItemsInvalidIndexes.contains(index) {
-                items.append(item)
-            }
-            processedItemsSnapshotCache = items
-        }
-        processedItemsSnapshotDirty = false
-        return processedItemsSnapshotCache
+        return processedItemsQueue
     }
 
     @discardableResult
@@ -194,7 +191,35 @@ final class BackupSessionController {
         if state == .paused {
             return resumeFromPause()
         }
+        if let selectedAssetIDs = backupScopeSelection.selectedAssetIDs {
+            return startBackup(mode: .scoped(assetIDs: selectedAssetIDs))
+        }
         return startBackup(mode: .full)
+    }
+
+    func currentScopeSelection() -> BackupScopeSelection {
+        backupScopeSelection
+    }
+
+    @discardableResult
+    func updateScopeSelection(_ selection: BackupScopeSelection) -> Bool {
+        guard canAdjustScope() else { return false }
+        backupScopeSelection = selection
+        notifyObserversNow()
+        return true
+    }
+
+    func ensureDefaultScopeSummaryLoaded() async {
+        guard backupScopeSelection.totalAssetCount == 0 else { return }
+        let totalCount = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true).count
+        backupScopeSelection = BackupScopeSelection(
+            selectedAssetIDs: nil,
+            selectedAssetCount: totalCount,
+            selectedEstimatedBytes: nil,
+            totalAssetCount: totalCount,
+            totalEstimatedBytes: nil
+        )
+        notifyObserversNow()
     }
 
     @discardableResult
@@ -247,7 +272,7 @@ final class BackupSessionController {
 
     @discardableResult
     private func startBackup(mode: BackupRunMode) -> Bool {
-        guard state != .running, startCommandTask == nil else {
+        guard state != .running, !isStartCommandInFlight, resumePreparationTask == nil else {
             appendLog("已有备份任务正在执行")
             notifyObserversNow()
             return false
@@ -274,6 +299,7 @@ final class BackupSessionController {
             password = appSession.activePassword ?? ""
         }
 
+        pendingControlIntent = .none
         currentRunMode = mode
         lastPausedRunMode = nil
 
@@ -299,9 +325,10 @@ final class BackupSessionController {
         failed = 0
         skipped = 0
         total = 0
-        appendLog(mode.isRetry ? "开始重试失败 Asset（\(mode.retryCount)）" : "开始备份任务（按 Asset 计数）")
+        appendLog(mode.isRetry ? "开始重试失败 Asset（\(mode.targetCount)）" : "开始备份任务（按 Asset 计数）")
         notifyObserversNow()
 
+        isStartCommandInFlight = true
         activeCommandRunToken = nil
         startCommandTask?.cancel()
         startCommandTask = Task { [weak self] in
@@ -310,7 +337,7 @@ final class BackupSessionController {
                 self.startCommandTask = nil
                 return
             }
-            let startedRunToken = await backupEngine.startRun(
+            let startedRunToken = await runCommandActor.startRun(
                 profile: profile,
                 password: password,
                 mode: mode
@@ -321,10 +348,12 @@ final class BackupSessionController {
             }
 
             guard let startedRunToken else {
+                self.isStartCommandInFlight = false
+                self.pendingControlIntent = .none
                 self.currentRunMode = .full
-                self.transferState = nil
                 self.state = .failed
                 self.statusText = "已有备份任务运行中"
+                self.transferState = nil
                 self.appendLog("错误: 已有备份任务运行中")
                 self.notifyObserversNow()
                 return
@@ -336,16 +365,26 @@ final class BackupSessionController {
     }
 
     func pauseBackup() {
-        if startCommandTask != nil {
-            statusText = "正在暂停..."
+        pendingControlIntent = .pause
+        if isStartCommandInFlight {
+            startCommandTask?.cancel()
+            startCommandTask = nil
+            isStartCommandInFlight = false
+            pendingControlIntent = .none
+            state = .paused
+            statusText = "备份已暂停"
             transferState = nil
-            Task { [backupEngine] in
-                await backupEngine.requestPause()
+            Task { [runCommandActor] in
+                await runCommandActor.cancelActive()
             }
             notifyObserversNow()
             return
         }
         if state != .running {
+            Task { [runCommandActor] in
+                await runCommandActor.requestPause()
+            }
+            pendingControlIntent = .none
             state = .paused
             statusText = "备份已暂停"
             transferState = nil
@@ -355,23 +394,34 @@ final class BackupSessionController {
 
         statusText = "正在暂停..."
         transferState = nil
-        Task { [backupEngine] in
-            await backupEngine.requestPause()
+        resumePreparationTask?.cancel()
+        Task { [runCommandActor] in
+            await runCommandActor.requestPause()
         }
         notifyObserversNow()
     }
 
     func stopBackup() {
-        if startCommandTask != nil {
-            statusText = "正在停止..."
+        pendingControlIntent = .stop
+        if isStartCommandInFlight {
+            startCommandTask?.cancel()
+            startCommandTask = nil
+            isStartCommandInFlight = false
+            pendingControlIntent = .none
+            state = .stopped
+            statusText = "备份已停止"
             transferState = nil
-            Task { [backupEngine] in
-                await backupEngine.requestStop()
+            Task { [runCommandActor] in
+                await runCommandActor.cancelActive()
             }
             notifyObserversNow()
             return
         }
         if state != .running {
+            Task { [runCommandActor] in
+                await runCommandActor.requestStop()
+            }
+            pendingControlIntent = .none
             state = .stopped
             statusText = "备份已停止"
             transferState = nil
@@ -381,8 +431,9 @@ final class BackupSessionController {
 
         statusText = "正在停止..."
         transferState = nil
-        Task { [backupEngine] in
-            await backupEngine.requestStop()
+        resumePreparationTask?.cancel()
+        Task { [runCommandActor] in
+            await runCommandActor.requestStop()
         }
         notifyObserversNow()
     }
@@ -400,12 +451,18 @@ final class BackupSessionController {
 
     private func handleRunFailure(_ failure: BackupRunFailureContext) {
         activeCommandRunToken = nil
+        isStartCommandInFlight = false
         currentRunMode = .full
 
-        let effectiveIntent: BackupTerminationIntent =
-            failure.intent != .none ? failure.intent : ((failure.error is CancellationError) ? .pause : .none)
+        let effectiveIntent: BackupTerminationIntent
+        if failure.intent == .none, failure.error is CancellationError {
+            effectiveIntent = pendingControlIntent
+        } else {
+            effectiveIntent = failure.intent
+        }
 
         if effectiveIntent != .none || failure.error is CancellationError {
+            pendingControlIntent = .none
             if effectiveIntent == .stop {
                 lastPausedRunMode = nil
             } else {
@@ -428,6 +485,7 @@ final class BackupSessionController {
             try? databaseManager.setActiveServerProfileID(nil)
             appSession.clear()
         }
+        pendingControlIntent = .none
         state = .failed
         statusText = externalUnavailable ? "外接存储已断开" : "备份失败"
         transferState = nil
@@ -441,6 +499,8 @@ final class BackupSessionController {
         runMode: BackupRunMode,
         terminalIntent: BackupTerminationIntent
     ) async -> Bool {
+        isStartCommandInFlight = false
+
         switch event {
         case .progress(let progress):
             succeeded = progress.succeeded
@@ -460,6 +520,40 @@ final class BackupSessionController {
 
         case .transferState(let state):
             transferState = state
+            scheduleObserverNotification()
+
+        case .assetCompleted(let completion):
+            if isDuplicateAssetCompletion(completion) {
+                break
+            }
+
+            let updatedAt = Date()
+            let item = ProcessedItem(
+                assetLocalIdentifier: completion.assetLocalIdentifier,
+                displayName: completion.displayName,
+                status: completion.status,
+                reason: completion.reason,
+                resourceSummary: completion.resourceSummary,
+                updatedAt: updatedAt
+            )
+            processedItemsByAssetID[completion.assetLocalIdentifier] = item
+            upsertProcessedItemInQueue(item)
+
+            if completion.status == .failed {
+                retryCountByAssetID[completion.assetLocalIdentifier, default: 0] += 1
+                let retryCount = retryCountByAssetID[completion.assetLocalIdentifier, default: 0]
+                failedItemsByAssetID[completion.assetLocalIdentifier] = FailedItem(
+                    jobID: 0,
+                    assetLocalIdentifier: completion.assetLocalIdentifier,
+                    displayName: completion.displayName,
+                    errorMessage: completion.reason ?? "未知错误",
+                    retryCount: retryCount,
+                    updatedAt: updatedAt
+                )
+            } else {
+                failedItemsByAssetID[completion.assetLocalIdentifier] = nil
+            }
+            rebuildFailedItems()
             scheduleObserverNotification()
 
         case .monthChanged(let change):
@@ -498,6 +592,8 @@ final class BackupSessionController {
         terminalIntent: BackupTerminationIntent
     ) {
         activeCommandRunToken = nil
+        isStartCommandInFlight = false
+        pendingControlIntent = .none
         currentRunMode = .full
 
         succeeded = result.succeeded
@@ -570,7 +666,36 @@ final class BackupSessionController {
     }
 
     private func controlsLocked() -> Bool {
-        startCommandTask != nil
+        isStartCommandInFlight || resumePreparationTask != nil || pendingControlIntent != .none
+    }
+
+    private func canAdjustScope() -> Bool {
+        if controlsLocked() { return false }
+        switch state {
+        case .running, .paused:
+            return false
+        default:
+            return true
+        }
+    }
+
+    private func currentScopeSummary() -> BackupScopeSummary {
+        let selection = backupScopeSelection
+        let mode: BackupScopeSummary.Mode
+        if selection.selectedAssetCount <= 0 || selection.totalAssetCount <= 0 {
+            mode = .empty
+        } else if selection.selectedAssetIDs == nil || selection.selectedAssetCount >= selection.totalAssetCount {
+            mode = .all
+        } else {
+            mode = .partial
+        }
+        return BackupScopeSummary(
+            mode: mode,
+            selectedAssetCount: selection.selectedAssetCount,
+            selectedEstimatedBytes: selection.selectedEstimatedBytes,
+            totalAssetCount: selection.totalAssetCount,
+            totalEstimatedBytes: selection.totalEstimatedBytes
+        )
     }
 
     private func appendLog(_ line: String) {
@@ -612,54 +737,44 @@ final class BackupSessionController {
         rebuildFailedItems()
     }
 
+    private func isDuplicateAssetCompletion(_ completion: AssetCompletionEvent) -> Bool {
+        guard let latest = latestItemEvent else { return false }
+        return latest.assetLocalIdentifier == completion.assetLocalIdentifier &&
+            latest.assetFingerprint == completion.assetFingerprint &&
+            latest.displayName == completion.displayName &&
+            latest.status == completion.status &&
+            latest.reason == completion.reason &&
+            latest.resourceSummary == completion.resourceSummary
+    }
+
     private func clearProcessedItems() {
         processedItemsByAssetID.removeAll()
         processedItemsQueue.removeAll()
         processedItemQueueIndexByAssetID.removeAll()
-        processedItemsInvalidIndexes.removeAll()
-        processedItemsSnapshotCache.removeAll()
-        processedItemsSnapshotDirty = false
     }
 
     private func upsertProcessedItemInQueue(_ item: ProcessedItem) {
         let assetID = item.assetLocalIdentifier
 
         if let oldIndex = processedItemQueueIndexByAssetID[assetID] {
-            processedItemsInvalidIndexes.insert(oldIndex)
+            processedItemsQueue.remove(at: oldIndex)
+            reindexProcessedItemsQueue(from: oldIndex)
         }
 
         processedItemsQueue.append(item)
         processedItemQueueIndexByAssetID[assetID] = processedItemsQueue.count - 1
-        processedItemsSnapshotDirty = true
-        compactProcessedItemsQueueIfNeeded()
     }
 
-    private func compactProcessedItemsQueueIfNeeded() {
-        guard !processedItemsInvalidIndexes.isEmpty else { return }
-        let invalidCount = processedItemsInvalidIndexes.count
-        let queueCount = processedItemsQueue.count
-        let shouldCompact = invalidCount >= 512 || invalidCount * 4 >= max(queueCount, 1)
-        guard shouldCompact else { return }
-
-        var compacted: [ProcessedItem] = []
-        compacted.reserveCapacity(processedItemsByAssetID.count)
-        var newIndexByAssetID: [String: Int] = [:]
-        newIndexByAssetID.reserveCapacity(processedItemsByAssetID.count)
-
-        for (index, item) in processedItemsQueue.enumerated() where !processedItemsInvalidIndexes.contains(index) {
-            compacted.append(item)
-            newIndexByAssetID[item.assetLocalIdentifier] = compacted.count - 1
+    private func reindexProcessedItemsQueue(from start: Int) {
+        guard start < processedItemsQueue.count else { return }
+        for index in start ..< processedItemsQueue.count {
+            processedItemQueueIndexByAssetID[processedItemsQueue[index].assetLocalIdentifier] = index
         }
-
-        processedItemsQueue = compacted
-        processedItemQueueIndexByAssetID = newIndexByAssetID
-        processedItemsInvalidIndexes.removeAll()
-        processedItemsSnapshotDirty = true
     }
 
     @discardableResult
     private func resumeFromPause() -> Bool {
-        guard state != .running, startCommandTask == nil else {
+        guard state != .running, !isStartCommandInFlight, resumePreparationTask == nil else {
             appendLog("已有备份任务正在执行")
             notifyObserversNow()
             return false
@@ -680,64 +795,56 @@ final class BackupSessionController {
             return false
         }
 
+        pendingControlIntent = .none
         state = .running
         statusText = "正在准备继续..."
         appendLog("计算剩余备份 Asset...")
         notifyObserversNow()
 
         let pausedMode = lastPausedRunMode ?? .full
-        let completedIDs = completedAssetIDs()
-        startCommandTask?.cancel()
-        startCommandTask = Task { [weak self] in
+        resumePreparationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let outcome = try await self.backupEngine.resumeRun(
-                    profile: profile,
-                    password: appSession.activePassword ?? "",
-                    pausedMode: pausedMode,
-                    completedAssetIDs: completedIDs
-                )
-
-                self.startCommandTask = nil
-                if Task.isCancelled {
-                    return
+                let pendingAssetIDs: Set<String>
+                switch pausedMode {
+                case .retry(let assetIDs):
+                    pendingAssetIDs = assetIDs.subtracting(self.completedAssetIDs())
+                case .scoped(let assetIDs):
+                    pendingAssetIDs = assetIDs.subtracting(self.completedAssetIDs())
+                case .full:
+                    pendingAssetIDs = try await self.computePendingAssetIDsForFullRun()
                 }
 
-                switch outcome {
-                case .started(let runToken, let pendingCount):
-                    self.activeCommandRunToken = runToken
-                    self.appendLog("继续备份剩余 \(pendingCount) 个 Asset")
-                    self.notifyObserversNow()
+                self.resumePreparationTask = nil
 
-                case .noPending:
+                guard self.state == .running else { return }
+                guard !pendingAssetIDs.isEmpty else {
                     self.lastPausedRunMode = nil
-                    self.currentRunMode = .full
                     self.state = .completed
                     self.statusText = "备份完成"
                     self.transferState = nil
                     self.appendLog("无剩余 Asset，已完成")
                     self.rebuildFailedItems()
                     self.notifyObserversNow()
-
-                case .interrupted(let intent):
-                    self.currentRunMode = .full
-                    self.state = intent == .stop ? .stopped : .paused
-                    self.statusText = intent == .stop ? "备份已停止" : "备份已暂停"
-                    self.transferState = nil
-                    self.appendLog(intent == .stop ? "任务已停止" : "任务已暂停")
-                    self.rebuildFailedItems()
-                    self.notifyObserversNow()
-
-                case .busy:
-                    self.currentRunMode = .full
-                    self.state = .failed
-                    self.statusText = "已有备份任务运行中"
-                    self.transferState = nil
-                    self.appendLog("错误: 已有备份任务运行中")
-                    self.notifyObserversNow()
+                    return
                 }
+
+                self.appendLog("继续备份剩余 \(pendingAssetIDs.count) 个 Asset")
+                _ = self.startBackup(mode: .retry(assetIDs: pendingAssetIDs))
+            } catch is CancellationError {
+                self.resumePreparationTask = nil
+                let intent = self.pendingControlIntent
+                self.pendingControlIntent = .none
+                self.currentRunMode = .full
+                self.state = intent == .stop ? .stopped : .paused
+                self.statusText = intent == .stop ? "备份已停止" : "备份已暂停"
+                self.transferState = nil
+                self.appendLog(intent == .stop ? "任务已停止" : "任务已暂停")
+                self.rebuildFailedItems()
+                self.notifyObserversNow()
             } catch {
-                self.startCommandTask = nil
+                self.resumePreparationTask = nil
+                self.pendingControlIntent = .none
                 self.currentRunMode = .full
                 self.state = .failed
                 self.statusText = "继续备份失败"
@@ -759,6 +866,34 @@ final class BackupSessionController {
                 }
                 .map(\.assetLocalIdentifier)
         )
+    }
+
+    private func computePendingAssetIDsForFullRun() async throws -> Set<String> {
+        let status = photoLibraryService.authorizationStatus()
+        let authorized: Bool
+        if status == .authorized || status == .limited {
+            authorized = true
+        } else {
+            let requested = await photoLibraryService.requestAuthorization()
+            authorized = (requested == .authorized || requested == .limited)
+        }
+        guard authorized else {
+            throw BackupError.photoPermissionDenied
+        }
+
+        let completed = completedAssetIDs()
+        let assets = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
+        var pending = Set<String>()
+
+        for index in 0 ..< assets.count {
+            try Task.checkCancellation()
+            let asset = assets.object(at: index)
+            if !completed.contains(asset.localIdentifier) {
+                pending.insert(asset.localIdentifier)
+            }
+        }
+
+        return pending
     }
 
     private func primaryActionTitle(for state: State) -> String {

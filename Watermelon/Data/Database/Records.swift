@@ -48,6 +48,7 @@ struct LocalAssetRecord: Codable, FetchableRecord, MutablePersistableRecord {
     var assetLocalIdentifier: String
     var assetFingerprint: Data
     var resourceCount: Int
+    var totalFileSizeBytes: Int64
     var updatedAt: Date
 }
 
@@ -58,4 +59,5 @@ struct LocalAssetResourceRecord: Codable, FetchableRecord, MutablePersistableRec
     var role: Int
     var slot: Int
     var contentHash: Data
+    var fileSize: Int64
 }
