@@ -163,6 +163,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
 
             var activeMonth: MonthKey?
             var activeStore: MonthManifestStore?
+            var stageTimingWindow = StageTimingWindow()
 
             let loopCount = retryMode ? retryAssets.count : (assetsResult?.count ?? 0)
             for loopIndex in 0 ..< loopCount {
@@ -261,6 +262,13 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                         position: currentPosition,
                         asset: asset
                     )
+                    stageTimingWindow.record(result)
+                    if let stageTimingSummary = stageTimingWindow.takeSummaryIfNeeded(
+                        processed: state.processed,
+                        total: state.total
+                    ) {
+                        eventStream.emit(.log(stageTimingSummary))
+                    }
                 } catch {
                     if error is CancellationError {
                         state.paused = true
@@ -287,7 +295,22 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                         errorMessage: errorMessage,
                         position: currentPosition
                     )
+                    stageTimingWindow.record(nil)
+                    if let stageTimingSummary = stageTimingWindow.takeSummaryIfNeeded(
+                        processed: state.processed,
+                        total: state.total
+                    ) {
+                        eventStream.emit(.log(stageTimingSummary))
+                    }
                 }
+            }
+
+            if let finalStageTimingSummary = stageTimingWindow.takeSummaryIfNeeded(
+                processed: state.processed,
+                total: state.total,
+                force: true
+            ) {
+                eventStream.emit(.log(finalStageTimingSummary))
             }
 
             if let activeStore {
@@ -548,5 +571,90 @@ private struct MonthSeedLookup {
         }
         result[currentMonth, default: []].append(start ..< items.count)
         return result
+    }
+}
+
+private struct StageTimingWindow {
+    private static let batchSize = 200
+
+    private var processedCount = 0
+    private var timedCount = 0
+    private var exportHashSeconds: TimeInterval = 0
+    private var collisionCheckSeconds: TimeInterval = 0
+    private var uploadBodySeconds: TimeInterval = 0
+    private var setModificationDateSeconds: TimeInterval = 0
+    private var databaseSeconds: TimeInterval = 0
+    private var totalFileSizeBytes: Int64 = 0
+    private var uploadedFileSizeBytes: Int64 = 0
+
+    mutating func record(_ result: AssetProcessResult?) {
+        processedCount += 1
+        guard let result else { return }
+        timedCount += 1
+        exportHashSeconds += result.timing.exportHashSeconds
+        collisionCheckSeconds += result.timing.collisionCheckSeconds
+        uploadBodySeconds += result.timing.uploadBodySeconds
+        setModificationDateSeconds += result.timing.setModificationDateSeconds
+        databaseSeconds += result.timing.databaseSeconds
+        totalFileSizeBytes += max(result.totalFileSizeBytes, 0)
+        uploadedFileSizeBytes += max(result.uploadedFileSizeBytes, 0)
+    }
+
+    mutating func takeSummaryIfNeeded(
+        processed: Int,
+        total: Int,
+        force: Bool = false
+    ) -> String? {
+        guard processedCount > 0 else { return nil }
+        guard force || processedCount >= Self.batchSize else { return nil }
+
+        let perAssetDivisor = max(Double(timedCount), 1)
+        let uploadRateBytesPerSecond = uploadBodySeconds > 0 ? Double(uploadedFileSizeBytes) / uploadBodySeconds : 0
+        let prefix = force && processedCount < Self.batchSize
+            ? "阶段耗时(最后\(processedCount)项"
+            : "阶段耗时(最近\(processedCount)项"
+        let summary = String(
+            format: "%@, 进度%lld/%lld): size total=%@ uploaded=%@ bodyRate=%@/s, export/hash %.2fs (avg %.1fms), collision %.2fs (avg %.1fms), uploadBody %.2fs (avg %.1fms), setMtime %.2fs (avg %.1fms), db %.2fs (avg %.1fms), timedAssets=%lld",
+            prefix,
+            Int64(processed),
+            Int64(max(total, 1)),
+            Self.formatBytes(totalFileSizeBytes),
+            Self.formatBytes(uploadedFileSizeBytes),
+            Self.formatBytes(Int64(uploadRateBytesPerSecond.rounded())),
+            exportHashSeconds,
+            exportHashSeconds * 1_000 / perAssetDivisor,
+            collisionCheckSeconds,
+            collisionCheckSeconds * 1_000 / perAssetDivisor,
+            uploadBodySeconds,
+            uploadBodySeconds * 1_000 / perAssetDivisor,
+            setModificationDateSeconds,
+            setModificationDateSeconds * 1_000 / perAssetDivisor,
+            databaseSeconds,
+            databaseSeconds * 1_000 / perAssetDivisor,
+            Int64(timedCount)
+        )
+        reset()
+        return summary
+    }
+
+    private mutating func reset() {
+        processedCount = 0
+        timedCount = 0
+        exportHashSeconds = 0
+        collisionCheckSeconds = 0
+        uploadBodySeconds = 0
+        setModificationDateSeconds = 0
+        databaseSeconds = 0
+        totalFileSizeBytes = 0
+        uploadedFileSizeBytes = 0
+    }
+
+    private static func formatBytes(_ value: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
+        formatter.countStyle = .file
+        formatter.includesUnit = true
+        formatter.isAdaptive = true
+        return formatter.string(fromByteCount: max(0, value))
     }
 }

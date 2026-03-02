@@ -2,6 +2,13 @@ import Foundation
 import Photos
 
 protocol ContentHashIndexRepositoryProtocol: Sendable {
+    func upsertAssetHashSnapshot(
+        assetLocalIdentifier: String,
+        assetFingerprint: Data,
+        resources: [LocalAssetResourceHashRecord],
+        totalFileSizeBytes: Int64
+    ) throws
+
     func upsertAssetResource(
         assetLocalIdentifier: String,
         role: Int,
@@ -25,6 +32,13 @@ protocol ContentHashIndexRepositoryProtocol: Sendable {
     func fetchAssetHashCaches(assetIDs: Set<String>) throws -> [String: LocalAssetHashCache]
 }
 
+struct LocalAssetResourceHashRecord: Sendable {
+    let role: Int
+    let slot: Int
+    let contentHash: Data
+    let fileSize: Int64
+}
+
 protocol RemoteManifestIndexScannerProtocol: Sendable {
     func scanManifestDigests(
         client: RemoteStorageClientProtocol,
@@ -37,10 +51,20 @@ protocol PhotoLibraryServiceProtocol: Sendable {
     func authorizationStatus() -> PHAuthorizationStatus
     func requestAuthorization() async -> PHAuthorizationStatus
     func fetchAssetsResult(ascendingByCreationDate: Bool) -> PHFetchResult<PHAsset>
+    func exportResourceToTempFileAndDigest(
+        _ resource: PHAssetResource,
+        cancellationController: BackupCancellationController?
+    ) async throws -> ExportedResourceFile
     func exportResourceToTempFile(
         _ resource: PHAssetResource,
         cancellationController: BackupCancellationController?
     ) async throws -> URL
+}
+
+struct ExportedResourceFile: Sendable {
+    let fileURL: URL
+    let contentHash: Data
+    let fileSize: Int64
 }
 
 protocol RemoteLibrarySnapshotCacheProtocol: AnyObject, Sendable {

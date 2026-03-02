@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Photos
 import UIKit
@@ -94,6 +95,17 @@ final class PhotoLibraryService: @unchecked Sendable {
         _ resource: PHAssetResource,
         cancellationController: BackupCancellationController? = nil
     ) async throws -> URL {
+        let exported = try await exportResourceToTempFileAndDigest(
+            resource,
+            cancellationController: cancellationController
+        )
+        return exported.fileURL
+    }
+
+    func exportResourceToTempFileAndDigest(
+        _ resource: PHAssetResource,
+        cancellationController: BackupCancellationController? = nil
+    ) async throws -> ExportedResourceFile {
         let ext = (resource.originalFilename as NSString).pathExtension
         let temp = FileManager.default.temporaryDirectory
         let filename = UUID().uuidString + (ext.isEmpty ? "" : ".\(ext)")
@@ -111,6 +123,7 @@ final class PhotoLibraryService: @unchecked Sendable {
         defer {
             try? fileHandle.close()
         }
+        let digestState = ExportDigestState()
 
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
@@ -138,6 +151,7 @@ final class PhotoLibraryService: @unchecked Sendable {
                                 guard !data.isEmpty else { return }
                                 do {
                                     try fileHandle.write(contentsOf: data)
+                                    digestState.update(with: data)
                                 } catch {
                                     state.cancelRequest(using: resourceManager)
                                     state.complete(.failure(error))
@@ -170,7 +184,13 @@ final class PhotoLibraryService: @unchecked Sendable {
             throw error
         }
 
-        return url
+        let fileSizeFromDisk = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?
+            .int64Value ?? 0
+        return ExportedResourceFile(
+            fileURL: url,
+            contentHash: digestState.finalizeDigest(),
+            fileSize: max(digestState.totalBytes, fileSizeFromDisk)
+        )
     }
 
     func requestThumbnail(for asset: PHAsset, targetSize: CGSize, completion: @escaping (UIImage?) -> Void) {
@@ -309,6 +329,26 @@ final class PhotoLibraryService: @unchecked Sendable {
         default:
             return "unknown"
         }
+    }
+}
+
+private final class ExportDigestState {
+    private let lock = NSLock()
+    private var hasher = SHA256()
+    private(set) var totalBytes: Int64 = 0
+
+    func update(with data: Data) {
+        lock.lock()
+        hasher.update(data: data)
+        totalBytes += Int64(data.count)
+        lock.unlock()
+    }
+
+    func finalizeDigest() -> Data {
+        lock.lock()
+        let digest = Data(hasher.finalize())
+        lock.unlock()
+        return digest
     }
 }
 

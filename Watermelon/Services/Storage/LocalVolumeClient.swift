@@ -18,6 +18,8 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         .fileSizeKey,
         .nameKey
     ]
+    private static let uploadBufferSize = 8 * 1024 * 1024
+    private static let uploadProgressStepBytes: Int64 = 8 * 1024 * 1024
 
     private var config: Config
     private let bookmarkStore: SecurityScopedBookmarkStore
@@ -145,6 +147,19 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
                 try FileManager.default.removeItem(at: destinationURL)
             }
 
+            // Fast path: prefer system copy path regardless of progress callback.
+            // For security-scoped external volumes this is generally much faster than manual chunk copy.
+            do {
+                try FileManager.default.copyItem(at: localURL, to: destinationURL)
+                if respectTaskCancellation {
+                    try Task.checkCancellation()
+                }
+                onProgress?(1)
+                return
+            } catch {
+                // Some providers may fail optimized copy unexpectedly; fall back to chunked copy path.
+            }
+
             guard FileManager.default.createFile(atPath: destinationURL.path, contents: nil) else {
                 throw NSError(
                     domain: NSCocoaErrorDomain,
@@ -161,22 +176,26 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             }
 
             let fileSize = ((try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size]) as? NSNumber)?.int64Value ?? 0
-            let bufferSize = 1024 * 1024
             var bytesWritten: Int64 = 0
+            var lastReportedBytes: Int64 = 0
 
             while true {
                 if respectTaskCancellation {
                     try Task.checkCancellation()
                 }
-                let chunk = try sourceHandle.read(upToCount: bufferSize) ?? Data()
+                let chunk = try sourceHandle.read(upToCount: Self.uploadBufferSize) ?? Data()
                 if chunk.isEmpty {
                     break
                 }
                 try destinationHandle.write(contentsOf: chunk)
                 bytesWritten += Int64(chunk.count)
                 if fileSize > 0 {
-                    let progress = min(max(Double(bytesWritten) / Double(fileSize), 0), 1)
-                    onProgress?(progress)
+                    let shouldReportProgress = (bytesWritten - lastReportedBytes) >= Self.uploadProgressStepBytes || bytesWritten == fileSize
+                    if shouldReportProgress {
+                        let progress = min(max(Double(bytesWritten) / Double(fileSize), 0), 1)
+                        onProgress?(progress)
+                        lastReportedBytes = bytesWritten
+                    }
                 }
             }
 

@@ -18,6 +18,17 @@ struct AssetProcessResult: Sendable {
     let displayName: String
     let resourceSummary: String
     let assetFingerprint: Data?
+    let timing: AssetProcessTiming
+    let totalFileSizeBytes: Int64
+    let uploadedFileSizeBytes: Int64
+}
+
+struct AssetProcessTiming: Sendable {
+    var exportHashSeconds: TimeInterval = 0
+    var collisionCheckSeconds: TimeInterval = 0
+    var uploadBodySeconds: TimeInterval = 0
+    var setModificationDateSeconds: TimeInterval = 0
+    var databaseSeconds: TimeInterval = 0
 }
 
 struct PreparedResource: Sendable {
@@ -83,6 +94,8 @@ final class AssetProcessor: Sendable {
     ) async throws -> AssetProcessResult {
         var preparedResources: [PreparedResource] = []
         preparedResources.reserveCapacity(context.selectedResources.count)
+        var timing = AssetProcessTiming()
+        let emitTransferState = true
 
         defer {
             for prepared in preparedResources {
@@ -108,48 +121,45 @@ final class AssetProcessor: Sendable {
             try Task.checkCancellation()
 
             let local = makeLocalResource(asset: context.asset, selected: selected)
-            eventStream.emit(.transferState(
-                Self.makeTransferState(
-                    assetLocalIdentifier: context.asset.localIdentifier,
-                    assetDisplayName: displayName,
-                    resourceDate: local.asset.creationDate ?? local.resourceModificationDate,
-                    assetPosition: context.assetPosition,
-                    totalAssets: context.totalAssets,
-                    resourceDisplayName: local.originalFilename,
-                    resourcePosition: resourcePosition + 1,
-                    totalResources: context.selectedResources.count,
-                    resourceFraction: 0,
-                    stageDescription: "准备资源"
-                )
-            ))
+            if emitTransferState {
+                eventStream.emit(.transferState(
+                    Self.makeTransferState(
+                        assetLocalIdentifier: context.asset.localIdentifier,
+                        assetDisplayName: displayName,
+                        resourceDate: local.asset.creationDate ?? local.resourceModificationDate,
+                        assetPosition: context.assetPosition,
+                        totalAssets: context.totalAssets,
+                        resourceDisplayName: local.originalFilename,
+                        resourcePosition: resourcePosition + 1,
+                        totalResources: context.selectedResources.count,
+                        resourceFraction: 0,
+                        stageDescription: "准备资源"
+                    )
+                ))
+            }
 
-            let tempFileURL = try await photoLibraryService.exportResourceToTempFile(
+            let exportHashStart = CFAbsoluteTimeGetCurrent()
+            let exportedResource = try await photoLibraryService.exportResourceToTempFileAndDigest(
                 local.resource,
                 cancellationController: cancellationController
             )
+            timing.exportHashSeconds += Self.elapsedSeconds(since: exportHashStart)
+            let tempFileURL = exportedResource.fileURL
             var shouldRemoveTempFile = true
             defer {
                 if shouldRemoveTempFile {
                     try? FileManager.default.removeItem(at: tempFileURL)
                 }
             }
-            let localHash = try Self.contentHash(of: tempFileURL, cancellationController: cancellationController)
+            let localHash = exportedResource.contentHash
             let localFileSize = max(
                 local.fileSize,
-                (try? FileManager.default.attributesOfItem(atPath: tempFileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+                exportedResource.fileSize
             )
             let shotDate = local.asset.creationDate ?? local.resourceModificationDate
             if let shotDate {
                 try? FileManager.default.setAttributes([.modificationDate: shotDate], ofItemAtPath: tempFileURL.path)
             }
-
-            try hashIndexRepository.upsertAssetResource(
-                assetLocalIdentifier: local.assetLocalIdentifier,
-                role: local.resourceRole,
-                slot: local.resourceSlot,
-                contentHash: localHash,
-                fileSize: localFileSize
-            )
 
             preparedResources.append(
                 PreparedResource(
@@ -189,24 +199,28 @@ final class AssetProcessor: Sendable {
                 totalAssets: context.totalAssets,
                 displayName: displayName,
                 eventStream: eventStream,
+                emitTransferState: emitTransferState,
+                assetTiming: &timing,
                 cancellationController: cancellationController
             )
             uploadResults.append(uploadResult)
 
-            eventStream.emit(.transferState(
-                Self.makeTransferState(
-                    assetLocalIdentifier: prepared.local.assetLocalIdentifier,
-                    assetDisplayName: displayName,
-                    resourceDate: prepared.shotDate,
-                    assetPosition: context.assetPosition,
-                    totalAssets: context.totalAssets,
-                    resourceDisplayName: prepared.local.originalFilename,
-                    resourcePosition: resourcePosition + 1,
-                    totalResources: preparedResources.count,
-                    resourceFraction: 1,
-                    stageDescription: "上传完成"
-                )
-            ))
+            if emitTransferState {
+                eventStream.emit(.transferState(
+                    Self.makeTransferState(
+                        assetLocalIdentifier: prepared.local.assetLocalIdentifier,
+                        assetDisplayName: displayName,
+                        resourceDate: prepared.shotDate,
+                        assetPosition: context.assetPosition,
+                        totalAssets: context.totalAssets,
+                        resourceDisplayName: prepared.local.originalFilename,
+                        resourcePosition: resourcePosition + 1,
+                        totalResources: preparedResources.count,
+                        resourceFraction: 1,
+                        stageDescription: "上传完成"
+                    )
+                ))
+            }
 
             if uploadResult.status != .failed {
                 links.append(
@@ -228,6 +242,9 @@ final class AssetProcessor: Sendable {
         let totalFileSizeBytes = preparedResources.reduce(Int64(0)) { partial, prepared in
             partial + max(prepared.fileSize, 0)
         }
+        let uploadedFileSizeBytes = zip(preparedResources, uploadResults).reduce(Int64(0)) { partial, pair in
+            pair.1.status == .success ? (partial + max(pair.0.fileSize, 0)) : partial
+        }
 
         if !failedResults.isEmpty {
             let firstError = failedResults.first?.reason ?? "resource_failed"
@@ -239,7 +256,10 @@ final class AssetProcessor: Sendable {
                 reason: firstError,
                 displayName: displayName,
                 resourceSummary: "资源\(preparedResources.count) 上传\(successResults.count) 跳过\(skippedResults.count) 失败\(failedResults.count)",
-                assetFingerprint: assetFingerprint
+                assetFingerprint: assetFingerprint,
+                timing: timing,
+                totalFileSizeBytes: totalFileSizeBytes,
+                uploadedFileSizeBytes: uploadedFileSizeBytes
             )
         }
 
@@ -253,15 +273,26 @@ final class AssetProcessor: Sendable {
             totalFileSizeBytes: totalFileSizeBytes
         )
 
+        let manifestWriteStart = CFAbsoluteTimeGetCurrent()
         try context.monthStore.upsertAsset(manifestAsset, links: links)
+        timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
         remoteIndexService.upsertCachedAsset(manifestAsset, links: links)
 
-        try hashIndexRepository.upsertAssetFingerprint(
+        let snapshotWriteStart = CFAbsoluteTimeGetCurrent()
+        try hashIndexRepository.upsertAssetHashSnapshot(
             assetLocalIdentifier: context.asset.localIdentifier,
             assetFingerprint: assetFingerprint,
-            resourceCount: preparedResources.count,
+            resources: preparedResources.map {
+                LocalAssetResourceHashRecord(
+                    role: $0.local.resourceRole,
+                    slot: $0.local.resourceSlot,
+                    contentHash: $0.contentHash,
+                    fileSize: $0.fileSize
+                )
+            },
             totalFileSizeBytes: totalFileSizeBytes
         )
+        timing.databaseSeconds += Self.elapsedSeconds(since: snapshotWriteStart)
 
         if successResults.isEmpty {
             return AssetProcessResult(
@@ -269,7 +300,10 @@ final class AssetProcessor: Sendable {
                 reason: "resources_reused",
                 displayName: displayName,
                 resourceSummary: "资源\(preparedResources.count) 上传0 跳过\(skippedResults.count) 失败0",
-                assetFingerprint: assetFingerprint
+                assetFingerprint: assetFingerprint,
+                timing: timing,
+                totalFileSizeBytes: totalFileSizeBytes,
+                uploadedFileSizeBytes: uploadedFileSizeBytes
             )
         }
 
@@ -278,7 +312,10 @@ final class AssetProcessor: Sendable {
             reason: nil,
             displayName: displayName,
             resourceSummary: "资源\(preparedResources.count) 上传\(successResults.count) 跳过\(skippedResults.count) 失败0",
-            assetFingerprint: assetFingerprint
+            assetFingerprint: assetFingerprint,
+            timing: timing,
+            totalFileSizeBytes: totalFileSizeBytes,
+            uploadedFileSizeBytes: uploadedFileSizeBytes
         )
     }
 
@@ -287,6 +324,7 @@ final class AssetProcessor: Sendable {
         displayName: String,
         cancellationController: BackupCancellationController?
     ) throws -> AssetProcessResult? {
+        var timing = AssetProcessTiming()
         try cancellationController?.throwIfCancelled()
         try Task.checkCancellation()
         guard let cachedLocalHash = context.cachedLocalHash else { return nil }
@@ -314,18 +352,23 @@ final class AssetProcessor: Sendable {
 
         if context.monthStore.containsAssetFingerprint(cachedFingerprint) {
             let totalFileSizeBytes = Self.totalSizeBytes(of: context.selectedResources)
+            let dbStart = CFAbsoluteTimeGetCurrent()
             try hashIndexRepository.upsertAssetFingerprint(
                 assetLocalIdentifier: context.asset.localIdentifier,
                 assetFingerprint: cachedFingerprint,
                 resourceCount: context.selectedResources.count,
                 totalFileSizeBytes: totalFileSizeBytes
             )
+            timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
             return AssetProcessResult(
                 status: .skipped,
                 reason: "asset_exists_cached",
                 displayName: displayName,
                 resourceSummary: "资源\(context.selectedResources.count) 已存在（缓存命中）",
-                assetFingerprint: cachedFingerprint
+                assetFingerprint: cachedFingerprint,
+                timing: timing,
+                totalFileSizeBytes: totalFileSizeBytes,
+                uploadedFileSizeBytes: 0
             )
         }
 
@@ -359,22 +402,29 @@ final class AssetProcessor: Sendable {
             resourceCount: links.count,
             totalFileSizeBytes: totalFileSizeBytes
         )
+        let manifestWriteStart = CFAbsoluteTimeGetCurrent()
         try context.monthStore.upsertAsset(manifestAsset, links: links)
+        timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
         remoteIndexService.upsertCachedAsset(manifestAsset, links: links)
 
+        let dbStart = CFAbsoluteTimeGetCurrent()
         try hashIndexRepository.upsertAssetFingerprint(
             assetLocalIdentifier: context.asset.localIdentifier,
             assetFingerprint: cachedFingerprint,
             resourceCount: context.selectedResources.count,
             totalFileSizeBytes: totalFileSizeBytes
         )
+        timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
 
         return AssetProcessResult(
             status: .skipped,
             reason: "resources_reused_cached",
             displayName: displayName,
             resourceSummary: "资源\(context.selectedResources.count) 上传0 跳过\(context.selectedResources.count) 失败0（缓存命中）",
-            assetFingerprint: cachedFingerprint
+            assetFingerprint: cachedFingerprint,
+            timing: timing,
+            totalFileSizeBytes: totalFileSizeBytes,
+            uploadedFileSizeBytes: 0
         )
     }
 
@@ -407,6 +457,8 @@ final class AssetProcessor: Sendable {
         totalAssets: Int,
         displayName: String,
         eventStream: BackupEventStream,
+        emitTransferState: Bool,
+        assetTiming: inout AssetProcessTiming,
         cancellationController: BackupCancellationController?
     ) async throws -> ResourceUploadResult {
         let localHash = prepared.contentHash
@@ -415,6 +467,7 @@ final class AssetProcessor: Sendable {
             return ResourceUploadResult(status: .skipped, reason: "hash_exists")
         }
 
+        let collisionStart = CFAbsoluteTimeGetCurrent()
         var preparation = try await prepareUpload(
             prepared: prepared,
             monthStore: monthStore,
@@ -422,13 +475,16 @@ final class AssetProcessor: Sendable {
             client: client,
             cancellationController: cancellationController
         )
+        assetTiming.collisionCheckSeconds += Self.elapsedSeconds(since: collisionStart)
 
         if let skipReason = preparation.skipReason {
+            let dbStart = CFAbsoluteTimeGetCurrent()
             try recordSkippedResource(
                 prepared: prepared,
                 monthStore: monthStore,
                 targetFileName: preparation.targetFileName
             )
+            assetTiming.databaseSeconds += Self.elapsedSeconds(since: dbStart)
             return ResourceUploadResult(status: .skipped, reason: skipReason)
         }
 
@@ -444,6 +500,8 @@ final class AssetProcessor: Sendable {
             totalAssets: totalAssets,
             displayName: displayName,
             eventStream: eventStream,
+            emitTransferState: emitTransferState,
+            assetTiming: &assetTiming,
             cancellationController: cancellationController
         )
 
@@ -454,11 +512,13 @@ final class AssetProcessor: Sendable {
             )
         }
 
+        let dbStart = CFAbsoluteTimeGetCurrent()
         try recordUploadedResource(
             prepared: prepared,
             monthStore: monthStore,
             targetFileName: uploadedFileName
         )
+        assetTiming.databaseSeconds += Self.elapsedSeconds(since: dbStart)
         return ResourceUploadResult(status: .success, reason: nil)
     }
 
@@ -565,6 +625,8 @@ final class AssetProcessor: Sendable {
         totalAssets: Int,
         displayName: String,
         eventStream: BackupEventStream,
+        emitTransferState: Bool,
+        assetTiming: inout AssetProcessTiming,
         cancellationController: BackupCancellationController?
     ) async throws -> UploadRetryOutcome {
         let local = prepared.local
@@ -578,11 +640,10 @@ final class AssetProcessor: Sendable {
             do {
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
-                try await client.upload(
-                    localURL: prepared.tempFileURL,
-                    remotePath: uploadPreparation.remoteAbsolutePath,
-                    respectTaskCancellation: true,
-                    onProgress: { fraction in
+                let uploadBodyStart = CFAbsoluteTimeGetCurrent()
+                let onProgress: ((Double) -> Void)?
+                if emitTransferState {
+                    onProgress = { fraction in
                         let clamped = max(0, min(1, fraction))
                         let now = Date()
                         let shouldEmit: Bool
@@ -618,11 +679,31 @@ final class AssetProcessor: Sendable {
                             )
                         ))
                     }
-                )
+                } else {
+                    onProgress = nil
+                }
+                do {
+                    try await client.upload(
+                        localURL: prepared.tempFileURL,
+                        remotePath: uploadPreparation.remoteAbsolutePath,
+                        respectTaskCancellation: true,
+                        onProgress: onProgress
+                    )
+                } catch {
+                    assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
+                    throw error
+                }
+                assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
                 if let shotDate = prepared.shotDate {
-                    try? await client.setModificationDate(shotDate, forPath: uploadPreparation.remoteAbsolutePath)
+                    let setDateStart = CFAbsoluteTimeGetCurrent()
+                    do {
+                        try await client.setModificationDate(shotDate, forPath: uploadPreparation.remoteAbsolutePath)
+                    } catch {
+                        // keep upload success even if metadata write failed
+                    }
+                    assetTiming.setModificationDateSeconds += Self.elapsedSeconds(since: setDateStart)
                 }
                 return UploadRetryOutcome(fileName: uploadPreparation.targetFileName, lastError: nil)
             } catch {
@@ -755,6 +836,10 @@ final class AssetProcessor: Sendable {
         }
 
         return Data(hasher.finalize())
+    }
+
+    private static func elapsedSeconds(since start: CFAbsoluteTime) -> TimeInterval {
+        max(CFAbsoluteTimeGetCurrent() - start, 0)
     }
 
     private static func nanosecondsSinceEpoch(_ date: Date?) -> Int64? {

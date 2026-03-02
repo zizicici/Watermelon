@@ -1,4 +1,3 @@
-import CryptoKit
 import Photos
 import SnapKit
 import UIKit
@@ -444,39 +443,47 @@ final class LocalHashIndexManagerViewController: UIViewController {
                 continue
             }
 
-            var roleSlotHashes: [(role: Int, slot: Int, contentHash: Data)] = []
+            var roleSlotHashes: [(role: Int, slot: Int, contentHash: Data, fileSize: Int64)] = []
             roleSlotHashes.reserveCapacity(selectedResources.count)
             var totalFileSizeBytes: Int64 = 0
 
             for selected in selectedResources {
                 try cancellationController.throwIfCancelled()
                 try Task.checkCancellation()
-                let tempURL = try await dependencies.photoLibraryService.exportResourceToTempFile(
+                let exported = try await dependencies.photoLibraryService.exportResourceToTempFileAndDigest(
                     selected.resource,
                     cancellationController: cancellationController
                 )
-                defer { try? FileManager.default.removeItem(at: tempURL) }
-                let hash = try Self.contentHash(of: tempURL, cancellationController: cancellationController)
+                defer { try? FileManager.default.removeItem(at: exported.fileURL) }
                 let localFileSize = max(
                     PhotoLibraryService.resourceFileSize(selected.resource),
-                    (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+                    exported.fileSize
                 )
                 totalFileSizeBytes += max(localFileSize, 0)
-                try repository.upsertAssetResource(
-                    assetLocalIdentifier: assetID,
+                roleSlotHashes.append((
                     role: selected.role,
                     slot: selected.slot,
-                    contentHash: hash,
+                    contentHash: exported.contentHash,
                     fileSize: localFileSize
-                )
-                roleSlotHashes.append((role: selected.role, slot: selected.slot, contentHash: hash))
+                ))
             }
 
-            let fingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: roleSlotHashes)
-            try repository.upsertAssetFingerprint(
+            let fingerprint = BackupAssetResourcePlanner.assetFingerprint(
+                resourceRoleSlotHashes: roleSlotHashes.map { item in
+                    (role: item.role, slot: item.slot, contentHash: item.contentHash)
+                }
+            )
+            try repository.upsertAssetHashSnapshot(
                 assetLocalIdentifier: assetID,
                 assetFingerprint: fingerprint,
-                resourceCount: selectedResources.count,
+                resources: roleSlotHashes.map { item in
+                    LocalAssetResourceHashRecord(
+                        role: item.role,
+                        slot: item.slot,
+                        contentHash: item.contentHash,
+                        fileSize: item.fileSize
+                    )
+                },
                 totalFileSizeBytes: totalFileSizeBytes
             )
 
@@ -505,24 +512,6 @@ final class LocalHashIndexManagerViewController: UIViewController {
         progressView.progress = progress
         progressTitleLabel.text = assetDisplayName
         progressDetailLabel.text = "\(processedCount)/\(totalCount)"
-    }
-
-    private static func contentHash(
-        of fileURL: URL,
-        cancellationController: BackupCancellationController
-    ) throws -> Data {
-        let fileHandle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? fileHandle.close() }
-
-        var hasher = SHA256()
-        while true {
-            try cancellationController.throwIfCancelled()
-            try Task.checkCancellation()
-            let chunk = try fileHandle.read(upToCount: 64 * 1024) ?? Data()
-            if chunk.isEmpty { break }
-            hasher.update(data: chunk)
-        }
-        return Data(hasher.finalize())
     }
 
     private static let dateFormatter: DateFormatter = {

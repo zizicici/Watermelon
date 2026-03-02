@@ -29,6 +29,65 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         self.databaseManager = databaseManager
     }
 
+    func upsertAssetHashSnapshot(
+        assetLocalIdentifier: String,
+        assetFingerprint: Data,
+        resources: [LocalAssetResourceHashRecord],
+        totalFileSizeBytes: Int64
+    ) throws {
+        try databaseManager.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO local_assets (
+                    assetLocalIdentifier,
+                    assetFingerprint,
+                    resourceCount,
+                    totalFileSizeBytes,
+                    updatedAt
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(assetLocalIdentifier) DO UPDATE SET
+                    assetFingerprint = excluded.assetFingerprint,
+                    resourceCount = excluded.resourceCount,
+                    totalFileSizeBytes = excluded.totalFileSizeBytes,
+                    updatedAt = excluded.updatedAt
+                """,
+                arguments: [
+                    assetLocalIdentifier,
+                    assetFingerprint,
+                    resources.count,
+                    totalFileSizeBytes,
+                    Date()
+                ]
+            )
+
+            try db.execute(
+                sql: "DELETE FROM local_asset_resources WHERE assetLocalIdentifier = ?",
+                arguments: [assetLocalIdentifier]
+            )
+
+            for resource in resources {
+                try db.execute(
+                    sql: """
+                    INSERT INTO local_asset_resources (
+                        assetLocalIdentifier,
+                        role,
+                        slot,
+                        contentHash,
+                        fileSize
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        assetLocalIdentifier,
+                        resource.role,
+                        resource.slot,
+                        resource.contentHash,
+                        resource.fileSize
+                    ]
+                )
+            }
+        }
+    }
+
     func upsertAssetResource(
         assetLocalIdentifier: String,
         role: Int,
