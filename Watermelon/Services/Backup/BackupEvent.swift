@@ -41,38 +41,43 @@ struct RemoteIndexSyncEvent: Sendable {
 
 final class BackupEventStream: @unchecked Sendable {
     let stream: AsyncStream<BackupEvent>
-    private let continuation: AsyncStream<BackupEvent>.Continuation
+
     private let lock = NSLock()
+    private var continuation: AsyncStream<BackupEvent>.Continuation?
     private var finished = false
 
     init() {
         var captured: AsyncStream<BackupEvent>.Continuation?
-        let stream = AsyncStream<BackupEvent> { continuation in
+        stream = AsyncStream { continuation in
             captured = continuation
         }
-        guard let continuation = captured else {
-            preconditionFailure("BackupEventStream continuation was not initialized.")
-        }
-        self.stream = stream
-        self.continuation = continuation
+        precondition(captured != nil, "BackupEventStream continuation was not initialized.")
+        continuation = captured
     }
 
     func emit(_ event: BackupEvent) {
+        let target: AsyncStream<BackupEvent>.Continuation?
         lock.lock()
-        let isFinished = finished
+        if finished {
+            target = nil
+        } else {
+            target = continuation
+        }
         lock.unlock()
-        guard !isFinished else { return }
-        continuation.yield(event)
+        target?.yield(event)
     }
 
     func finish() {
+        let target: AsyncStream<BackupEvent>.Continuation?
         lock.lock()
-        guard !finished else {
-            lock.unlock()
-            return
+        if finished {
+            target = nil
+        } else {
+            finished = true
+            target = continuation
+            continuation = nil
         }
-        finished = true
         lock.unlock()
-        continuation.finish()
+        target?.finish()
     }
 }

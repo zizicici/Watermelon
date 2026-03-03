@@ -3,6 +3,7 @@ import Foundation
 import Photos
 
 struct AssetProcessContext {
+    let workerID: Int
     let asset: PHAsset
     let selectedResources: [BackupSelectedResource]
     let cachedLocalHash: LocalAssetHashCache?
@@ -124,6 +125,7 @@ final class AssetProcessor: Sendable {
             if emitTransferState {
                 eventStream.emit(.transferState(
                     Self.makeTransferState(
+                        workerID: context.workerID,
                         assetLocalIdentifier: context.asset.localIdentifier,
                         assetDisplayName: displayName,
                         resourceDate: local.asset.creationDate ?? local.resourceModificationDate,
@@ -193,6 +195,7 @@ final class AssetProcessor: Sendable {
                 monthStore: context.monthStore,
                 profile: context.profile,
                 client: client,
+                workerID: context.workerID,
                 resourcePosition: resourcePosition + 1,
                 totalResources: preparedResources.count,
                 assetPosition: context.assetPosition,
@@ -208,6 +211,7 @@ final class AssetProcessor: Sendable {
             if emitTransferState {
                 eventStream.emit(.transferState(
                     Self.makeTransferState(
+                        workerID: context.workerID,
                         assetLocalIdentifier: prepared.local.assetLocalIdentifier,
                         assetDisplayName: displayName,
                         resourceDate: prepared.shotDate,
@@ -451,6 +455,7 @@ final class AssetProcessor: Sendable {
         monthStore: MonthManifestStore,
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
+        workerID: Int,
         resourcePosition: Int,
         totalResources: Int,
         assetPosition: Int,
@@ -494,6 +499,7 @@ final class AssetProcessor: Sendable {
             profile: profile,
             client: client,
             uploadPreparation: &preparation,
+            workerID: workerID,
             resourcePosition: resourcePosition,
             totalResources: totalResources,
             assetPosition: assetPosition,
@@ -557,12 +563,7 @@ final class AssetProcessor: Sendable {
                         skipReason = "name_same_hash"
                     }
                 }
-            } else if existingManifestResource == nil {
-                if knownRemoteSize == localFileSize {
-                    skipReason = "name_same_size"
-                }
             }
-
             if skipReason == nil {
                 targetFileName = RemoteNameCollisionResolver.resolveNextAvailableName(
                     baseName: targetFileName,
@@ -619,6 +620,7 @@ final class AssetProcessor: Sendable {
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
         uploadPreparation: inout UploadPreparation,
+        workerID: Int,
         resourcePosition: Int,
         totalResources: Int,
         assetPosition: Int,
@@ -666,6 +668,7 @@ final class AssetProcessor: Sendable {
                         guard shouldEmit else { return }
                         eventStream.emit(.transferState(
                             Self.makeTransferState(
+                                workerID: workerID,
                                 assetLocalIdentifier: local.assetLocalIdentifier,
                                 assetDisplayName: displayName,
                                 resourceDate: prepared.shotDate,
@@ -854,6 +857,7 @@ final class AssetProcessor: Sendable {
     }
 
     private static func makeTransferState(
+        workerID: Int,
         assetLocalIdentifier: String,
         assetDisplayName: String,
         resourceDate: Date?,
@@ -866,6 +870,7 @@ final class AssetProcessor: Sendable {
         stageDescription: String
     ) -> BackupTransferState {
         BackupTransferState(
+            workerID: max(1, workerID),
             assetLocalIdentifier: assetLocalIdentifier,
             assetDisplayName: assetDisplayName,
             resourceDate: resourceDate,

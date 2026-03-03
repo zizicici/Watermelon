@@ -30,13 +30,10 @@ protocol ContentHashIndexRepositoryProtocol: Sendable {
     func fetchAssetFingerprintsByAsset(assetIDs: Set<String>) throws -> [String: Data]
     func fetchAssetHashCaches() throws -> [String: LocalAssetHashCache]
     func fetchAssetHashCaches(assetIDs: Set<String>) throws -> [String: LocalAssetHashCache]
-}
-
-struct LocalAssetResourceHashRecord: Sendable {
-    let role: Int
-    let slot: Int
-    let contentHash: Data
-    let fileSize: Int64
+    func fetchLocalHashIndexStats() throws -> LocalHashIndexStats
+    func clearLocalHashIndex() throws
+    func fetchIndexedAssetIDs() throws -> [String]
+    func deleteIndexEntries(assetIDs: [String]) throws
 }
 
 protocol RemoteManifestIndexScannerProtocol: Sendable {
@@ -51,20 +48,14 @@ protocol PhotoLibraryServiceProtocol: Sendable {
     func authorizationStatus() -> PHAuthorizationStatus
     func requestAuthorization() async -> PHAuthorizationStatus
     func fetchAssetsResult(ascendingByCreationDate: Bool) -> PHFetchResult<PHAsset>
-    func exportResourceToTempFileAndDigest(
-        _ resource: PHAssetResource,
-        cancellationController: BackupCancellationController?
-    ) async throws -> ExportedResourceFile
     func exportResourceToTempFile(
         _ resource: PHAssetResource,
         cancellationController: BackupCancellationController?
     ) async throws -> URL
-}
-
-struct ExportedResourceFile: Sendable {
-    let fileURL: URL
-    let contentHash: Data
-    let fileSize: Int64
+    func exportResourceToTempFileAndDigest(
+        _ resource: PHAssetResource,
+        cancellationController: BackupCancellationController?
+    ) async throws -> ExportedResourceFile
 }
 
 protocol RemoteLibrarySnapshotCacheProtocol: AnyObject, Sendable {
@@ -80,4 +71,17 @@ protocol RemoteLibrarySnapshotCacheProtocol: AnyObject, Sendable {
     ) -> Bool
     func removeMonth(_ month: LibraryMonthKey) -> Bool
     func reset()
+}
+
+extension RemoteManifestIndexScannerProtocol {
+    func scanManifestDigests(
+        client: RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> [LibraryMonthKey: RemoteMonthManifestDigest] {
+        try await scanManifestDigests(
+            client: client,
+            basePath: basePath,
+            cancellationController: nil
+        )
+    }
 }

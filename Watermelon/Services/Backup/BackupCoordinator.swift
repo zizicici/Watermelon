@@ -13,6 +13,11 @@ struct BackupRunState: Sendable {
     }
 }
 
+enum ManifestFlushFailurePolicy: Sendable {
+    case failRun
+    case logAndContinue
+}
+
 protocol BackupCoordinatorProtocol: Sendable {
     func runBackup(request: BackupRunRequest, eventStream: BackupEventStream) async throws -> BackupExecutionResult
 
@@ -38,12 +43,14 @@ extension BackupCoordinatorProtocol {
     func runBackup(
         profile: ServerProfileRecord,
         password: String,
-        onlyAssetLocalIdentifiers: Set<String>? = nil
+        onlyAssetLocalIdentifiers: Set<String>? = nil,
+        workerCountOverride: Int? = nil
     ) async throws -> BackupExecutionResult {
         try await runBackup(request: BackupRunRequest(
             profile: profile,
             password: password,
-            onlyAssetLocalIdentifiers: onlyAssetLocalIdentifiers
+            onlyAssetLocalIdentifiers: onlyAssetLocalIdentifiers,
+            workerCountOverride: workerCountOverride
         ))
     }
 
@@ -61,13 +68,15 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
     private let hashIndexRepository: ContentHashIndexRepositoryProtocol
     private let remoteIndexService: RemoteIndexSyncService
     private let assetProcessor: AssetProcessor
+    private let manifestFlushFailurePolicy: ManifestFlushFailurePolicy
 
     init(
         photoLibraryService: PhotoLibraryServiceProtocol,
         storageClientFactory: StorageClientFactoryProtocol,
         hashIndexRepository: ContentHashIndexRepositoryProtocol,
         remoteIndexService: RemoteIndexSyncService? = nil,
-        assetProcessor: AssetProcessor? = nil
+        assetProcessor: AssetProcessor? = nil,
+        manifestFlushFailurePolicy: ManifestFlushFailurePolicy = .failRun
     ) {
         self.photoLibraryService = photoLibraryService
         self.storageClientFactory = storageClientFactory
@@ -78,6 +87,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
             hashIndexRepository: hashIndexRepository,
             remoteIndexService: self.remoteIndexService
         )
+        self.manifestFlushFailurePolicy = manifestFlushFailurePolicy
     }
 
     func runBackup(request: BackupRunRequest, eventStream: BackupEventStream) async throws -> BackupExecutionResult {
@@ -89,6 +99,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
 
         let client = try makeStorageClient(profile: profile, password: password)
         try await client.connect()
+        var initialClientManagedByPool = false
 
         do {
             try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
@@ -161,178 +172,93 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                 eventStream.emit(.log("Local hash cache load warning: \(error.localizedDescription)"))
             }
 
-            var activeMonth: MonthKey?
-            var activeStore: MonthManifestStore?
-            var stageTimingWindow = StageTimingWindow()
-
-            let loopCount = retryMode ? retryAssets.count : (assetsResult?.count ?? 0)
-            for loopIndex in 0 ..< loopCount {
-                if Task.isCancelled {
-                    state.paused = true
-                    break
+            let allAssets: [PHAsset]
+            if retryMode {
+                allAssets = retryAssets
+            } else if let assetsResult {
+                var fetchedAssets: [PHAsset] = []
+                fetchedAssets.reserveCapacity(assetsResult.count)
+                for index in 0 ..< assetsResult.count {
+                    fetchedAssets.append(assetsResult.object(at: index))
                 }
+                allAssets = fetchedAssets
+            } else {
+                allAssets = []
+            }
 
-                let asset: PHAsset
-                if retryMode {
-                    asset = retryAssets[loopIndex]
-                } else if let assetsResult {
-                    asset = assetsResult.object(at: loopIndex)
-                } else {
-                    continue
+            state.total = allAssets.count
+            if state.total == 0 {
+                let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
+                eventStream.emit(.finished(result))
+                await disconnectClient(client)
+                return result
+            }
+
+            let monthPlans = Self.buildMonthPlans(
+                assets: allAssets,
+                localHashCacheByAssetID: localHashCacheByAssetID
+            )
+            let workerCount = Self.resolveWorkerCount(
+                profile: profile,
+                monthCount: monthPlans.count,
+                override: request.workerCountOverride
+            )
+            let connectionPoolSize = Self.resolveConnectionPoolSize(
+                profile: profile,
+                workerCount: workerCount
+            )
+            let monthQueue = MonthWorkQueue(months: monthPlans)
+            let workerCountSource = request.workerCountOverride == nil ? "protocol-default" : "user-override"
+            eventStream.emit(.log(
+                "Parallel month scheduler: month(s)=\(monthPlans.count), worker(s)=\(workerCount), connectionPool=\(connectionPoolSize), strategy=dynamic-pull, source=\(workerCountSource), storage=\(profile.resolvedStorageType.rawValue)."
+            ))
+
+            let aggregator = ParallelBackupProgressAggregator(total: state.total)
+            let clientPool = StorageClientPool(
+                maxConnections: connectionPoolSize,
+                makeClient: { [self, profile, password] in
+                    try makeStorageClient(profile: profile, password: password)
                 }
-                let selectedResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
-                    from: PHAssetResource.assetResources(for: asset)
-                )
-                if selectedResources.isEmpty {
-                    state.total = max(state.total - 1, 0)
-                    continue
-                }
+            )
+            await clientPool.seedConnectedClient(client)
+            initialClientManagedByPool = true
 
-                let currentPosition = state.processed + 1
-                let monthKey = AssetProcessor.monthKey(for: asset.creationDate)
-
-                if activeMonth != monthKey {
-                    if let activeStore {
-                        do {
-                            _ = try await activeStore.flushToRemote()
-                            eventStream.emit(.monthChanged(MonthChangeEvent(
-                                year: activeMonth?.year ?? 0,
-                                month: activeMonth?.month ?? 0,
-                                action: .flushed
-                            )))
-                        } catch {
-                            eventStream.emit(.monthChanged(MonthChangeEvent(
-                                year: activeMonth?.year ?? 0,
-                                month: activeMonth?.month ?? 0,
-                                action: .flushFailed(error.localizedDescription)
-                            )))
+            do {
+                try await withThrowingTaskGroup(of: WorkerRunState.self) { group in
+                    for workerID in 0 ..< workerCount {
+                        group.addTask { [self] in
+                            try await runParallelMonthWorker(
+                                workerID: workerID,
+                                monthQueue: monthQueue,
+                                profile: profile,
+                                snapshotSeedLookup: snapshotSeedLookup,
+                                localHashCacheByAssetID: localHashCacheByAssetID,
+                                eventStream: eventStream,
+                                aggregator: aggregator,
+                                clientPool: clientPool
+                            )
                         }
                     }
 
-                    activeMonth = monthKey
-                    activeStore = try await MonthManifestStore.loadOrCreate(
-                        client: client,
-                        basePath: profile.basePath,
-                        year: monthKey.year,
-                        month: monthKey.month,
-                        seed: snapshotSeedLookup?.seed(for: monthKey)
-                    )
-                    eventStream.emit(.monthChanged(MonthChangeEvent(
-                        year: monthKey.year,
-                        month: monthKey.month,
-                        action: .started
-                    )))
-                }
-
-                guard let monthStore = activeStore else {
-                    continue
-                }
-
-                do {
-                    let context = AssetProcessContext(
-                        asset: asset,
-                        selectedResources: selectedResources,
-                        cachedLocalHash: localHashCacheByAssetID[asset.localIdentifier],
-                        monthStore: monthStore,
-                        profile: profile,
-                        assetPosition: currentPosition,
-                        totalAssets: state.total
-                    )
-
-                    let result = try await assetProcessor.process(
-                        context: context,
-                        client: client,
-                        eventStream: eventStream,
-                        cancellationController: nil
-                    )
-
-                    switch result.status {
-                    case .success:
-                        state.succeeded += 1
-                    case .failed:
-                        state.failed += 1
-                    case .skipped:
-                        state.skipped += 1
-                    }
-
-                    emitProgress(
-                        eventStream: eventStream,
-                        state: state,
-                        result: result,
-                        position: currentPosition,
-                        asset: asset
-                    )
-                    stageTimingWindow.record(result)
-                    if let stageTimingSummary = stageTimingWindow.takeSummaryIfNeeded(
-                        processed: state.processed,
-                        total: state.total
-                    ) {
-                        eventStream.emit(.log(stageTimingSummary))
-                    }
-                } catch {
-                    if error is CancellationError {
-                        state.paused = true
-                        break
-                    }
-                    if profile.isExternalStorageUnavailableError(error) {
-                        eventStream.emit(.log("External storage unavailable. Stop backup immediately."))
-                        throw error
-                    }
-
-                    state.failed += 1
-
-                    let displayName = BackupAssetResourcePlanner.assetDisplayName(
-                        asset: asset,
-                        selectedResources: selectedResources
-                    )
-                    let errorMessage = profile.userFacingStorageErrorMessage(error)
-                    eventStream.emit(.log("Failed asset: \(displayName) - \(errorMessage)"))
-                    emitFailureProgress(
-                        eventStream: eventStream,
-                        state: state,
-                        asset: asset,
-                        displayName: displayName,
-                        errorMessage: errorMessage,
-                        position: currentPosition
-                    )
-                    stageTimingWindow.record(nil)
-                    if let stageTimingSummary = stageTimingWindow.takeSummaryIfNeeded(
-                        processed: state.processed,
-                        total: state.total
-                    ) {
-                        eventStream.emit(.log(stageTimingSummary))
+                    for try await workerState in group where workerState.paused {
+                        await aggregator.markPaused()
                     }
                 }
+            } catch {
+                await clientPool.shutdown()
+                if profile.isExternalStorageUnavailableError(error) {
+                    eventStream.emit(.log("External storage unavailable. Stop backup immediately."))
+                    throw error
+                }
+                throw error
             }
 
-            if let finalStageTimingSummary = stageTimingWindow.takeSummaryIfNeeded(
-                processed: state.processed,
-                total: state.total,
-                force: true
-            ) {
+            await clientPool.shutdown()
+
+            if let finalStageTimingSummary = await aggregator.finalTimingSummary() {
                 eventStream.emit(.log(finalStageTimingSummary))
             }
-
-            if let activeStore {
-                let shouldForceFlushOnTermination = state.paused && activeStore.dirty
-                do {
-                    _ = try await activeStore.flushToRemote(ignoreCancellation: shouldForceFlushOnTermination)
-                    eventStream.emit(.monthChanged(MonthChangeEvent(
-                        year: activeMonth?.year ?? 0,
-                        month: activeMonth?.month ?? 0,
-                        action: .flushed
-                    )))
-                    if shouldForceFlushOnTermination {
-                        eventStream.emit(.log("Cancellation requested. Current month manifest flushed before exit."))
-                    }
-                } catch {
-                    eventStream.emit(.monthChanged(MonthChangeEvent(
-                        year: activeMonth?.year ?? 0,
-                        month: activeMonth?.month ?? 0,
-                        action: .flushFailed(error.localizedDescription)
-                    )))
-                }
-            }
+            state = await aggregator.snapshot()
 
             let result = BackupExecutionResult(
                 total: state.total,
@@ -342,10 +268,11 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                 paused: state.paused
             )
             eventStream.emit(.finished(result))
-            await disconnectClient(client)
             return result
         } catch {
-            await disconnectClient(client)
+            if !initialClientManagedByPool {
+                await disconnectClient(client)
+            }
             throw error
         }
     }
@@ -487,9 +414,346 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
         await client.disconnect()
     }
 
+    private static func buildMonthPlans(
+        assets: [PHAsset],
+        localHashCacheByAssetID: [String: LocalAssetHashCache]
+    ) -> [MonthWorkItem] {
+        var assetsByMonth: [MonthKey: [PHAsset]] = [:]
+        assetsByMonth.reserveCapacity(32)
+
+        var estimatedBytesByMonth: [MonthKey: Int64] = [:]
+        estimatedBytesByMonth.reserveCapacity(32)
+
+        for asset in assets {
+            let monthKey = AssetProcessor.monthKey(for: asset.creationDate)
+            assetsByMonth[monthKey, default: []].append(asset)
+
+            if let cache = localHashCacheByAssetID[asset.localIdentifier] {
+                estimatedBytesByMonth[monthKey, default: 0] += max(cache.totalFileSizeBytes, 0)
+            }
+        }
+
+        var plans: [MonthWorkItem] = []
+        plans.reserveCapacity(assetsByMonth.count)
+        for (month, monthAssets) in assetsByMonth {
+            plans.append(MonthWorkItem(
+                month: month,
+                assets: monthAssets,
+                estimatedBytes: estimatedBytesByMonth[month] ?? 0
+            ))
+        }
+
+        plans.sort { lhs, rhs in
+            if lhs.estimatedBytes != rhs.estimatedBytes {
+                return lhs.estimatedBytes > rhs.estimatedBytes
+            }
+            if lhs.assets.count != rhs.assets.count {
+                return lhs.assets.count > rhs.assets.count
+            }
+            return lhs.month < rhs.month
+        }
+
+        return plans
+    }
+
+    private static func resolveWorkerCount(
+        profile: ServerProfileRecord,
+        monthCount: Int,
+        override: Int?
+    ) -> Int {
+        let lowerBound = 1
+        let upperBound = 4
+        let protocolDefault: Int
+        switch profile.resolvedStorageType {
+        case .smb:
+            protocolDefault = 2
+        case .webdav:
+            protocolDefault = 2
+        case .externalVolume:
+            protocolDefault = 3
+        }
+
+        let requested = override ?? protocolDefault
+        let clampedByPolicy = max(lowerBound, min(upperBound, requested))
+        let clampedByWorkload = max(lowerBound, min(clampedByPolicy, max(monthCount, 1)))
+        return clampedByWorkload
+    }
+
+    private static func resolveConnectionPoolSize(
+        profile: ServerProfileRecord,
+        workerCount: Int
+    ) -> Int {
+        switch profile.resolvedStorageType {
+        case .smb, .webdav:
+            // Avoid opening too many network sessions when users force a high worker count.
+            return max(1, min(workerCount, 2))
+        case .externalVolume:
+            return max(1, workerCount)
+        }
+    }
+
+    private func runParallelMonthWorker(
+        workerID: Int,
+        monthQueue: MonthWorkQueue,
+        profile: ServerProfileRecord,
+        snapshotSeedLookup: MonthSeedLookup?,
+        localHashCacheByAssetID: [String: LocalAssetHashCache],
+        eventStream: BackupEventStream,
+        aggregator: ParallelBackupProgressAggregator,
+        clientPool: StorageClientPool
+    ) async throws -> WorkerRunState {
+        var workerState = WorkerRunState()
+        let client = try await clientPool.acquire()
+        var clientReusable = true
+        do {
+            while let monthPlan = await monthQueue.next() {
+                if Task.isCancelled {
+                    workerState.paused = true
+                    break
+                }
+
+                let monthKey = monthPlan.month
+                let monthStore: MonthManifestStore
+                do {
+                    monthStore = try await MonthManifestStore.loadOrCreate(
+                        client: client,
+                        basePath: profile.basePath,
+                        year: monthKey.year,
+                        month: monthKey.month,
+                        seed: snapshotSeedLookup?.seed(for: monthKey)
+                    )
+                } catch {
+                    if error is CancellationError {
+                        workerState.paused = true
+                        break
+                    }
+                    throw error
+                }
+
+                eventStream.emit(.log(
+                    "Worker\(workerID + 1) claimed month \(monthKey.text), assets=\(monthPlan.assets.count), est=\(StageTimingWindow.formatBytes(monthPlan.estimatedBytes))."
+                ))
+                eventStream.emit(.monthChanged(MonthChangeEvent(
+                    year: monthKey.year,
+                    month: monthKey.month,
+                    action: .started
+                )))
+
+                var monthFatalError: Error?
+
+                for asset in monthPlan.assets {
+                    if Task.isCancelled {
+                        workerState.paused = true
+                        break
+                    }
+
+                    let selectedResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
+                        from: PHAssetResource.assetResources(for: asset)
+                    )
+                    if selectedResources.isEmpty {
+                        await aggregator.reduceTotalForEmptyAsset()
+                        continue
+                    }
+
+                    let dispatch = await aggregator.allocateDispatchSlot()
+
+                    do {
+                        let context = AssetProcessContext(
+                            workerID: workerID + 1,
+                            asset: asset,
+                            selectedResources: selectedResources,
+                            cachedLocalHash: localHashCacheByAssetID[asset.localIdentifier],
+                            monthStore: monthStore,
+                            profile: profile,
+                            assetPosition: dispatch.position,
+                            totalAssets: dispatch.total
+                        )
+
+                        let result = try await assetProcessor.process(
+                            context: context,
+                            client: client,
+                            eventStream: eventStream,
+                            cancellationController: nil
+                        )
+                        let progressState = await aggregator.record(result: result)
+
+                        emitProgress(
+                            eventStream: eventStream,
+                            state: progressState.state,
+                            result: result,
+                            position: progressState.position,
+                            asset: asset
+                        )
+                        if let timingSummary = progressState.timingSummary {
+                            eventStream.emit(.log(timingSummary))
+                        }
+                    } catch {
+                        if error is CancellationError {
+                            workerState.paused = true
+                            break
+                        }
+                        if profile.isExternalStorageUnavailableError(error) {
+                            clientReusable = false
+                            monthFatalError = error
+                            break
+                        }
+
+                        let displayName = BackupAssetResourcePlanner.assetDisplayName(
+                            asset: asset,
+                            selectedResources: selectedResources
+                        )
+                        let errorMessage = profile.userFacingStorageErrorMessage(error)
+                        eventStream.emit(.log("Failed asset: \(displayName) - \(errorMessage)"))
+
+                        let progressState = await aggregator.recordFailure()
+                        emitFailureProgress(
+                            eventStream: eventStream,
+                            state: progressState.state,
+                            asset: asset,
+                            displayName: displayName,
+                            errorMessage: errorMessage,
+                            position: progressState.position
+                        )
+                        if let timingSummary = progressState.timingSummary {
+                            eventStream.emit(.log(timingSummary))
+                        }
+                    }
+                }
+
+                let shouldForceFlush = workerState.paused && monthStore.dirty
+                do {
+                    _ = try await monthStore.flushToRemote(ignoreCancellation: shouldForceFlush)
+                    eventStream.emit(.monthChanged(MonthChangeEvent(
+                        year: monthKey.year,
+                        month: monthKey.month,
+                        action: .flushed
+                    )))
+                    if shouldForceFlush {
+                        eventStream.emit(.log(
+                            "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) manifest flushed before exit."
+                        ))
+                    }
+                } catch {
+                    eventStream.emit(.monthChanged(MonthChangeEvent(
+                        year: monthKey.year,
+                        month: monthKey.month,
+                        action: .flushFailed(error.localizedDescription)
+                    )))
+                    if manifestFlushFailurePolicy == .failRun {
+                        throw error
+                    }
+                }
+
+                if let monthFatalError {
+                    throw monthFatalError
+                }
+
+                if workerState.paused {
+                    break
+                }
+            }
+
+            await clientPool.release(client, reusable: clientReusable)
+            return workerState
+        } catch {
+            if profile.isExternalStorageUnavailableError(error) {
+                clientReusable = false
+            }
+            await clientPool.release(client, reusable: clientReusable)
+            throw error
+        }
+    }
+
     private func makeMonthSeedLookup(from snapshot: RemoteLibrarySnapshot) -> MonthSeedLookup? {
         let lookup = MonthSeedLookup(snapshot: snapshot)
         return lookup.isEmpty ? nil : lookup
+    }
+}
+
+private actor StorageClientPool {
+    private let maxConnections: Int
+    private let makeClient: @Sendable () throws -> any RemoteStorageClientProtocol
+    private var createdConnections = 0
+    private var idleClients: [any RemoteStorageClientProtocol] = []
+    private var waiters: [CheckedContinuation<any RemoteStorageClientProtocol, Error>] = []
+
+    init(
+        maxConnections: Int,
+        makeClient: @escaping @Sendable () throws -> any RemoteStorageClientProtocol
+    ) {
+        self.maxConnections = max(1, maxConnections)
+        self.makeClient = makeClient
+    }
+
+    func seedConnectedClient(_ client: any RemoteStorageClientProtocol) {
+        guard createdConnections < maxConnections else { return }
+        createdConnections += 1
+        if !waiters.isEmpty {
+            let waiter = waiters.removeFirst()
+            waiter.resume(returning: client)
+        } else {
+            idleClients.append(client)
+        }
+    }
+
+    func acquire() async throws -> any RemoteStorageClientProtocol {
+        if let client = idleClients.popLast() {
+            return client
+        }
+        if createdConnections < maxConnections {
+            createdConnections += 1
+            do {
+                let client = try makeClient()
+                try await client.connect()
+                return client
+            } catch {
+                createdConnections = max(createdConnections - 1, 0)
+                throw error
+            }
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release(_ client: any RemoteStorageClientProtocol, reusable: Bool) async {
+        if reusable {
+            if !waiters.isEmpty {
+                let waiter = waiters.removeFirst()
+                waiter.resume(returning: client)
+            } else {
+                idleClients.append(client)
+            }
+            return
+        }
+
+        createdConnections = max(createdConnections - 1, 0)
+        await client.disconnect()
+        guard !waiters.isEmpty else { return }
+        let waiter = waiters.removeFirst()
+        do {
+            let replacement = try makeClient()
+            try await replacement.connect()
+            createdConnections += 1
+            waiter.resume(returning: replacement)
+        } catch {
+            waiter.resume(throwing: error)
+        }
+    }
+
+    func shutdown() async {
+        let clients = idleClients
+        idleClients.removeAll()
+        let pendingWaiters = waiters
+        waiters.removeAll()
+        createdConnections = 0
+
+        for waiter in pendingWaiters {
+            waiter.resume(throwing: CancellationError())
+        }
+        for client in clients {
+            await client.disconnect()
+        }
     }
 }
 
@@ -574,6 +838,114 @@ private struct MonthSeedLookup {
     }
 }
 
+private struct MonthWorkItem: @unchecked Sendable {
+    let month: MonthKey
+    let assets: [PHAsset]
+    let estimatedBytes: Int64
+}
+
+private struct WorkerRunState: Sendable {
+    var paused: Bool = false
+}
+
+private struct AggregatedProgressState: Sendable {
+    let state: BackupRunState
+    let position: Int
+    let timingSummary: String?
+}
+
+private struct DispatchSlot: Sendable {
+    let position: Int
+    let total: Int
+}
+
+private actor MonthWorkQueue {
+    private let months: [MonthWorkItem]
+    private var nextIndex: Int = 0
+
+    init(months: [MonthWorkItem]) {
+        self.months = months
+    }
+
+    func next() -> MonthWorkItem? {
+        guard nextIndex < months.count else { return nil }
+        let month = months[nextIndex]
+        nextIndex += 1
+        return month
+    }
+}
+
+private actor ParallelBackupProgressAggregator {
+    private var state: BackupRunState
+    private var stageTimingWindow = StageTimingWindow()
+    private var scheduledCount = 0
+
+    init(total: Int) {
+        state = BackupRunState(total: total)
+    }
+
+    func allocateDispatchSlot() -> DispatchSlot {
+        scheduledCount += 1
+        return DispatchSlot(position: max(scheduledCount, 1), total: max(state.total, 1))
+    }
+
+    func reduceTotalForEmptyAsset() {
+        state.total = max(state.total - 1, 0)
+    }
+
+    func record(result: AssetProcessResult) -> AggregatedProgressState {
+        switch result.status {
+        case .success:
+            state.succeeded += 1
+        case .failed:
+            state.failed += 1
+        case .skipped:
+            state.skipped += 1
+        }
+
+        stageTimingWindow.record(result)
+        let summary = stageTimingWindow.takeSummaryIfNeeded(
+            processed: state.processed,
+            total: state.total
+        )
+        return AggregatedProgressState(
+            state: state,
+            position: max(state.processed, 1),
+            timingSummary: summary
+        )
+    }
+
+    func recordFailure() -> AggregatedProgressState {
+        state.failed += 1
+        stageTimingWindow.record(nil)
+        let summary = stageTimingWindow.takeSummaryIfNeeded(
+            processed: state.processed,
+            total: state.total
+        )
+        return AggregatedProgressState(
+            state: state,
+            position: max(state.processed, 1),
+            timingSummary: summary
+        )
+    }
+
+    func markPaused() {
+        state.paused = true
+    }
+
+    func finalTimingSummary() -> String? {
+        stageTimingWindow.takeSummaryIfNeeded(
+            processed: state.processed,
+            total: state.total,
+            force: true
+        )
+    }
+
+    func snapshot() -> BackupRunState {
+        state
+    }
+}
+
 private struct StageTimingWindow {
     private static let batchSize = 200
 
@@ -586,8 +958,18 @@ private struct StageTimingWindow {
     private var databaseSeconds: TimeInterval = 0
     private var totalFileSizeBytes: Int64 = 0
     private var uploadedFileSizeBytes: Int64 = 0
+    private var firstRecordAt: CFAbsoluteTime?
+    private var lastRecordAt: CFAbsoluteTime?
+    private var firstUploadRecordAt: CFAbsoluteTime?
+    private var lastUploadRecordAt: CFAbsoluteTime?
 
     mutating func record(_ result: AssetProcessResult?) {
+        let now = CFAbsoluteTimeGetCurrent()
+        if firstRecordAt == nil {
+            firstRecordAt = now
+        }
+        lastRecordAt = now
+
         processedCount += 1
         guard let result else { return }
         timedCount += 1
@@ -598,6 +980,13 @@ private struct StageTimingWindow {
         databaseSeconds += result.timing.databaseSeconds
         totalFileSizeBytes += max(result.totalFileSizeBytes, 0)
         uploadedFileSizeBytes += max(result.uploadedFileSizeBytes, 0)
+
+        if result.uploadedFileSizeBytes > 0 {
+            if firstUploadRecordAt == nil {
+                firstUploadRecordAt = now
+            }
+            lastUploadRecordAt = now
+        }
     }
 
     mutating func takeSummaryIfNeeded(
@@ -609,18 +998,34 @@ private struct StageTimingWindow {
         guard force || processedCount >= Self.batchSize else { return nil }
 
         let perAssetDivisor = max(Double(timedCount), 1)
-        let uploadRateBytesPerSecond = uploadBodySeconds > 0 ? Double(uploadedFileSizeBytes) / uploadBodySeconds : 0
+        let uploadWallSeconds: TimeInterval = {
+            guard let start = firstUploadRecordAt ?? firstRecordAt else { return 0 }
+            guard let end = lastUploadRecordAt ?? lastRecordAt else { return 0 }
+            return max(end - start, 0)
+        }()
+        let wallRateBytesPerSecond: Double = {
+            guard uploadedFileSizeBytes > 0 else { return 0 }
+            guard uploadWallSeconds > 0 else { return 0 }
+            return Double(uploadedFileSizeBytes) / uploadWallSeconds
+        }()
+        let summedBodyRateBytesPerSecond: Double = {
+            guard uploadedFileSizeBytes > 0 else { return 0 }
+            guard uploadBodySeconds > 0 else { return 0 }
+            return Double(uploadedFileSizeBytes) / uploadBodySeconds
+        }()
         let prefix = force && processedCount < Self.batchSize
             ? "阶段耗时(最后\(processedCount)项"
             : "阶段耗时(最近\(processedCount)项"
         let summary = String(
-            format: "%@, 进度%lld/%lld): size total=%@ uploaded=%@ bodyRate=%@/s, export/hash %.2fs (avg %.1fms), collision %.2fs (avg %.1fms), uploadBody %.2fs (avg %.1fms), setMtime %.2fs (avg %.1fms), db %.2fs (avg %.1fms), timedAssets=%lld",
+            format: "%@, 进度%lld/%lld): size total=%@ uploaded=%@ rate=%@/s bodyRate=%@/s (wall %.2fs), export/hash %.2fs (avg %.1fms), collision %.2fs (avg %.1fms), uploadBody %.2fs (avg %.1fms), setMtime %.2fs (avg %.1fms), db %.2fs (avg %.1fms), timedAssets=%lld",
             prefix,
             Int64(processed),
             Int64(max(total, 1)),
             Self.formatBytes(totalFileSizeBytes),
             Self.formatBytes(uploadedFileSizeBytes),
-            Self.formatBytes(Int64(uploadRateBytesPerSecond.rounded())),
+            Self.formatBytes(Int64(wallRateBytesPerSecond.rounded())),
+            Self.formatBytes(Int64(summedBodyRateBytesPerSecond.rounded())),
+            uploadWallSeconds,
             exportHashSeconds,
             exportHashSeconds * 1_000 / perAssetDivisor,
             collisionCheckSeconds,
@@ -647,9 +1052,13 @@ private struct StageTimingWindow {
         databaseSeconds = 0
         totalFileSizeBytes = 0
         uploadedFileSizeBytes = 0
+        firstRecordAt = nil
+        lastRecordAt = nil
+        firstUploadRecordAt = nil
+        lastUploadRecordAt = nil
     }
 
-    private static func formatBytes(_ value: Int64) -> String {
+    static func formatBytes(_ value: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
         formatter.countStyle = .file

@@ -1,6 +1,6 @@
 import Foundation
 
-final class RemoteLibrarySnapshotCache {
+final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     private struct LinkKey: Hashable {
         let month: LibraryMonthKey
         let assetFingerprint: Data

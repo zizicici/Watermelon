@@ -1,17 +1,108 @@
 # Watermelon Photo Backup
 
-仓库名是 `PhotoBackup`，实际 App/Target 名称是 `Watermelon`。
+仓库名是 `PhotoBackup`，实际 iOS App/Target 名称是 `Watermelon`。
 
-当前主链路：
+## 项目现状（按当前代码）
 
-1. 启动直接进入 `HomeViewController`。
-2. 远端存储支持 `SMB`、`WebDAV` 与 `外接存储目录`（iOS security-scoped bookmark）。
-3. 备份按 `Asset` 粒度执行，远端按月写入 `.watermelon_manifest.sqlite`。
-4. 月 manifest 使用三表结构：`resources`、`assets`、`asset_resources`。
-5. 本地索引使用两张表：`local_assets`、`local_asset_resources`。
-6. 备份控制统一由 `BackupEngineActor` 处理，执行由 `BackupCoordinator` 负责。
+`Watermelon` 是一个以 iOS 相册为数据源、将资源备份到远端存储的应用，当前支持：
 
-建议先读 `docs/`：
+- 存储类型：`SMB`、`WebDAV`、`外接存储目录（security-scoped bookmark）`
+- 备份模式：`全量`、`范围备份（scoped）`、`失败重试（retry）`
+- 运行控制：`开始 / 暂停 / 继续 / 停止`
+- 并发上传：按“月份”分桶后由多个 worker 动态领取任务（可在设置中手动覆盖 worker 数）
+- 远端索引：按月维护 `.watermelon_manifest.sqlite`，并做增量同步
+- 本地索引：维护本地 hash 索引（含资源大小），用于跳过已存在资源和提升二次备份速度
+
+## 启动与主流程
+
+- App 启动入口：`AppCoordinator.start()` -> `HomeViewController`
+- Home 负责：连接存储、展示本地/远端汇总、进入备份页与“更多”页
+- More 负责：远端存储管理、本地 Hash 索引管理、上传并发设置
+- 备份控制面：`BackupSessionController` + `BackupRunCommandActor`
+- 备份执行面：`BackupCoordinator` + `AssetProcessor` + `MonthManifestStore`
+
+## 备份架构（当前实现）
+
+1. `BackupRunCommandActor` 管理运行状态与控制命令（start/pause/stop/resume）。
+2. `BackupCoordinator` 接收 `BackupRunRequest`，完成权限检查、远端索引同步、月份级调度与 worker 执行。
+3. `AssetProcessor` 处理单个 asset：导出资源、计算 hash、碰名处理、上传、写入月 manifest、本地索引回写。
+4. `MonthManifestStore` 在每个月目录维护 manifest 三表（见下文），并在合适时机 flush 到远端。
+5. `RemoteIndexSyncService` 扫描远端 manifest，构建快照供首页和备份流程复用。
+
+## 存储抽象
+
+统一通过 `RemoteStorageClientProtocol` 访问远端，核心接口包括：
+
+- `connect / disconnect`
+- `list / metadata / exists`
+- `upload / download / move / delete / createDirectory`
+- `setModificationDate`
+- `storageCapacity`
+
+当前实现：
+
+- `AMSMB2Client`
+- `WebDAVClient`
+- `LocalVolumeClient`
+
+构造入口：`StorageClientFactory.makeClient(profile:password:)`。
+
+## 数据模型
+
+### App 本地数据库（GRDB）
+
+- `server_profiles`：连接配置（含 `storageType` 与 `connectionParams`）
+- `sync_state`：通用状态（如 active profile）
+- `local_assets`：本地资产指纹与聚合统计
+- `local_asset_resources`：本地资产下资源级 hash 与 size
+
+### 远端月 manifest（SQLite）
+
+每个月目录下维护 `.watermelon_manifest.sqlite`，包含：
+
+- `resources`
+- `assets`
+- `asset_resources`
+
+## 备份范围选择
+
+`BackupRangeSelectorViewController` 提供范围选择能力：
+
+- 按月份分组展示
+- 支持月内展开并勾选到 asset 粒度
+- 支持全选/全不选
+- 选择结果回写为 `BackupScopeSelection`
+- 任务运行中可查看范围，修改范围需先停止任务
+
+## 本地 Hash 索引管理
+
+`LocalHashIndexManagerViewController` 支持：
+
+- 查看索引覆盖与统计
+- 创建 / 更新索引
+- 运行中暂停 / 停止
+- 重置索引
+- 可选“移除本地已不存在条目”
+
+## 依赖
+
+Swift Package 依赖：
+
+- `AMSMB2`
+- `GRDB`
+- `Kingfisher`
+- `SnapKit`
+- `AppInfo`
+
+## 本地开发
+
+1. 使用 Xcode 打开 `Watermelon.xcodeproj`
+2. 选择 `Watermelon` scheme
+3. 在模拟器或真机运行
+
+> 注意：项目当前包含大量开发期重构代码与文档，建议结合 `docs/` 一起阅读。
+
+## 文档导航
 
 - `docs/00-LLM-HANDOVER.md`：快速接手说明
 - `docs/01-Architecture.md`：模块结构与依赖关系

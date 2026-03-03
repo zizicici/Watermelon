@@ -505,20 +505,15 @@ final class HomeViewController: UIViewController {
         let addActionsSection = UIMenu(title: "", options: .displayInline, children: [addSMB, addWebDAV, addExternal])
         let addStorageMenu = UIMenu(title: "添加存储", image: UIImage(systemName: "plus"), children: [discoveredSection, addActionsSection])
 
-        let manageStorageAction: UIMenuElement
-        if savedProfiles.isEmpty {
-            manageStorageAction = UIAction(title: "管理存储", attributes: [.disabled]) { _ in }
-        } else {
-            manageStorageAction = UIAction(
-                title: "管理存储",
-                image: UIImage(systemName: "slider.horizontal.3")
-            ) { [weak self] _ in
-                self?.openManageStorageFlow()
-            }
+        let moreAction = UIAction(
+            title: "更多",
+            image: UIImage(systemName: "ellipsis.circle")
+        ) { [weak self] _ in
+            self?.openMoreFlow()
         }
-        let manageSection = UIMenu(title: "", options: .displayInline, children: [manageStorageAction])
+        let moreSection = UIMenu(title: "", options: .displayInline, children: [moreAction])
 
-        return UIMenu(children: [currentMenu, addStorageMenu, manageSection])
+        return UIMenu(children: [currentMenu, addStorageMenu, moreSection])
     }
 
     private func makeMenuAction(
@@ -674,14 +669,14 @@ final class HomeViewController: UIViewController {
         navigationController?.pushViewController(addVC, animated: true)
     }
 
-    private func openManageStorageFlow() {
-        let manageVC = ManageStorageProfilesViewController(dependencies: dependencies) { [weak self] in
+    private func openMoreFlow() {
+        let moreVC = MoreViewController(dependencies: dependencies) { [weak self] in
             guard let self else { return }
             self.loadSavedProfiles()
             self.updateConnectionIndicator()
             self.updateConnectionMenu()
         }
-        navigationController?.pushViewController(manageVC, animated: true)
+        navigationController?.pushViewController(moreVC, animated: true)
     }
 
     @objc

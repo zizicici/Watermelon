@@ -1,18 +1,14 @@
-# 架构与关键组件
+# 架构与关键组件（当前）
 
-## 1. 应用入口
+## 1. App 入口
 
-入口：`SceneDelegate -> AppCoordinator.start()`。
+1. `SceneDelegate` -> `AppCoordinator.start()`
+2. `AppCoordinator` 当前只路由到 `HomeViewController`
+3. 非 TabBar 结构，根是单 `UINavigationController`
 
-当前只有一个主入口路由：
+## 2. DependencyContainer
 
-1. `showHome()` -> `HomeViewController`
-
-不使用 TabBar。
-
-## 2. 依赖注入（DependencyContainer）
-
-`DependencyContainer` 当前持有：
+`DependencyContainer` 提供：
 
 1. `DatabaseManager`
 2. `KeychainService`
@@ -20,91 +16,117 @@
 4. `StorageClientFactory`
 5. `PhotoLibraryService`
 6. `MetadataService`
-7. `BackupCoordinator`
-8. `RestoreService`
+7. `ContentHashIndexRepositoryProtocol`（实际实现 `ContentHashIndexRepository`）
+8. `BackupCoordinatorProtocol`（实际实现 `BackupCoordinator`）
+9. `RestoreService`
 
-`AppSession` 保存当前活跃 `ServerProfileRecord` 和内存态密码（SMB/WebDAV 需要，外接存储为空串）。
+说明：
 
-## 3. Services 分工
+1. `AppSession` 保存当前激活的 profile 与内存态密码。
+2. SMB/WebDAV 需要密码；外接存储不需要密码（bookmark 在 `connectionParams`）。
 
-### Storage / 连接协议层
+## 3. 存储协议层
 
-1. `RemoteStorageClientProtocol`：统一远端文件系统接口（SMB/WebDAV/外接存储共用）。
-2. `StorageClientFactory`：按 `ServerProfileRecord.storageType` 构建具体 client。
-3. `AMSMB2Client`：SMB client 实现。
-4. `WebDAVClient`：WebDAV client 实现。
-5. `LocalVolumeClient`：外接存储目录实现（security-scoped bookmark）。
-6. `SMBSetupService`：添加/编辑 SMB 时枚举 share 与路径。
-7. `SMBDiscoveryService`：Bonjour 发现 `_smb._tcp`。
-8. `RemoteThumbnailService`：远端文件下载 + 本地下采样（actor 限流）。
+统一接口：`RemoteStorageClientProtocol`
+
+核心方法：
+
+1. `connect / disconnect`
+2. `storageCapacity`
+3. `list / metadata / exists`
+4. `upload / download / move / delete / createDirectory`
+5. `setModificationDate`
+
+实现：
+
+1. `AMSMB2Client`（SMB）
+2. `WebDAVClient`（WebDAV）
+3. `LocalVolumeClient`（外接存储目录）
+
+创建入口：
+
+1. `StorageClientFactory.makeClient(profile:password:)`
+
+## 4. 备份控制面
+
+### `BackupSessionController`（`@MainActor`）
+
+职责：
+
+1. 管理 UI 状态（idle/running/paused/stopped/failed/completed）
+2. 聚合日志、进度、失败项、最近处理项
+3. 管理范围选择状态 `BackupScopeSelection`
+4. 对外暴露观察快照 `Snapshot`
+
+### `BackupRunCommandActor`
+
+职责：
+
+1. 接收 `startRun / resumeRun / requestPause / requestStop`
+2. 管理单 run 生命周期（run token、active task、intent）
+3. 为每次 run 创建独立 `BackupEventStream`
+4. 监听事件并回传 `BackupEngineSignal` 给 `BackupSessionController`
+5. 处理“等待前一 run 清理完成后再启动新 run”的串行化逻辑
+
+## 5. 备份执行面
+
+### `BackupCoordinator`
+
+职责：
+
+1. 权限检查与连接建立
+2. `RemoteIndexSyncService.syncIndex` 远端索引同步
+3. 加载本地 hash 缓存
+4. 按月份分桶、排序并并发调度 worker
+5. 通过 `StorageClientPool` 管理并发连接
+6. 聚合进度与阶段耗时日志
+
+### `AssetProcessor`
+
+职责：
+
+1. 单 Asset 资源导出 + hash
+2. 本地缓存命中快速跳过
+3. 资源上传与碰名处理
+4. 写月 manifest 与本地 hash 索引
+5. 推送远端快照缓存增量
+
+### `MonthManifestStore`
+
+职责：
+
+1. 管理月级 sqlite（resources/assets/asset_resources）
+2. 维护内存索引与远端文件名集合
+3. flush 到远端（临时文件 + move/replace）
+
+### `RemoteIndexSyncService`
+
+职责：
+
+1. 基于 `RemoteManifestIndexScanner` 扫描摘要
+2. 比较上次 digest，增量替换/移除月份
+3. 驱动 `RemoteLibrarySnapshotCache` 更新
+
+实现说明：
+
+1. 当前是 `final class`，内部可变状态下沉到私有 actor `MutableState`。
+
+## 6. Home / More / Backup UI 层
+
+### Home
+
+1. 连接菜单：当前连接 + 添加存储 + 更多
+2. 内容区：本地/远端匹配结果按年月 section
+3. 运行中节流刷新远端 section；run 结束后触发一次全量刷新
+
+### More
+
+1. `远端存储`：进入 `ManageStorageProfilesViewController`
+2. `本地数据`：进入 `LocalHashIndexManagerViewController`
+3. `备份`：设置上传并发（automatic/1/2/3/4）
 
 ### Backup
 
-1. `BackupCoordinator`：无全局运行状态的备份执行器（按 Asset 主循环）。
-2. `BackupCancellationController`：run 级别取消控制器。
-3. `AssetProcessor`：单 Asset 资源导出、hash、上传、重试、manifest 写入。
-4. `BackupAssetResourcePlanner`：资源排序、role/slot 分配、assetFingerprint 计算。
-5. `MonthManifestStore`：月 manifest sqlite 读写 + flush。
-6. `RemoteManifestIndexScanner`：只读扫描 `YYYY/MM` 下 manifest 摘要。
-7. `RemoteIndexSyncService`：按月摘要增量刷新远端快照。
-8. `RemoteLibrarySnapshotCache`：内存快照缓存。
-9. `ContentHashIndexRepository`：本地 `local_assets` / `local_asset_resources` 读写。
-10. `RemoteNameCollisionResolver`：文件名冲突 `_n` 递增。
-
-### Photo / Restore / Metadata
-
-1. `PhotoLibraryService`：照片权限、`PHAsset` 查询、`PHAssetResource` 导出。
-2. `RestoreService`：远端文件下载后写回系统相册。
-3. `MetadataService`：文件元信息辅助。
-
-## 4. Backup 控制面与执行面
-
-### 控制面（UI/Backup）
-
-1. `BackupEngineActor`（定义在 `BackupRunCommandActor.swift`）：
-2. 唯一负责 `start/pause/stop/resume` 命令编排。
-3. 每次 run 独立创建 `BackupEventStream + BackupCancellationController`。
-4. 维护 run token，避免跨 run 事件污染。
-5. `BackupSessionController`：仅负责 UI 状态聚合与展示，不直接驱动底层执行细节。
-
-### 执行面（Services/Backup）
-
-1. `BackupCoordinator.runBackup(..., context: BackupRunContext)` 接收 run 级上下文执行备份。
-2. `BackupRunContext` 包含 `eventSink` 与 `cancellationController`。
-3. `BackupCoordinator` 不再暴露全局 `eventStream` / `cancelActiveBackup()`。
-
-## 5. UI 结构
-
-### 主页面
-
-1. `HomeViewController`：统一展示本地与远端匹配结果。
-2. 远端匹配算法在 `HomeAlbumMatching`（与视图解耦）。
-3. `AlbumGridCell`、`AlbumSectionHeaderView` 为 Home 网格子组件。
-
-### 备份状态
-
-1. `BackupSessionController`：状态机、日志/进度聚合、失败项重试入口。
-2. `BackupViewController`：开始/暂停/停止、结果筛选、日志展示。
-
-### 存储配置与管理
-
-1. `AddSMBServerLoginViewController`
-2. `SMBSharePathPickerViewController`
-3. `AddSMBServerViewController`
-4. `AddWebDAVStorageViewController`
-5. `AddExternalStorageViewController`
-6. `ManageStorageProfilesViewController`
-
-这些链路由 Home 右上角连接菜单触发。
-
-## 6. 当前主链路文件建议
-
-后续改动优先集中：
-
-1. `Watermelon/Home/HomeViewController.swift`
-2. `Watermelon/UI/Backup/BackupRunCommandActor.swift`
-3. `Watermelon/UI/Backup/BackupSessionController.swift`
-4. `Watermelon/Services/Backup/BackupCoordinator.swift`
-5. `Watermelon/Services/Backup/AssetProcessor.swift`
-6. `Watermelon/Services/Backup/MonthManifestStore.swift`
-7. `Watermelon/Services/Backup/RemoteIndexSyncService.swift`
+1. 顶部范围卡片 + 调整按钮
+2. 状态卡片支持多 worker 切换查看
+3. 列表过滤（全部/成功/失败/跳过/日志）

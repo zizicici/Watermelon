@@ -3,6 +3,11 @@ import GRDB
 
 final class MonthManifestStore {
     static let manifestFileName = ".watermelon_manifest.sqlite"
+    private static let tempFilePrefix = "month_manifest_"
+    private static let tempFileExtension = "sqlite"
+    private static let staleTempFileAge: TimeInterval = 24 * 60 * 60
+    private static let staleTempCleanupLock = NSLock()
+    private static var hasPurgedStaleTempFiles = false
 
     struct Seed {
         let resources: [RemoteManifestResource]
@@ -98,9 +103,7 @@ final class MonthManifestStore {
                 .map { ($0.name, $0) }
         )
 
-        let localURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("month_manifest_\(year)_\(month)_\(UUID().uuidString).sqlite")
-        try? FileManager.default.removeItem(at: localURL)
+        let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
         let manifestAbsolutePath = RemotePathBuilder.absolutePath(
             basePath: basePath,
@@ -184,9 +187,7 @@ final class MonthManifestStore {
         month: Int,
         seed: Seed
     ) throws -> MonthManifestStore {
-        let localURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("month_manifest_\(year)_\(month)_\(UUID().uuidString).sqlite")
-        try? FileManager.default.removeItem(at: localURL)
+        let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
         let dbQueue = try DatabaseQueue(path: localURL.path)
         try Self.migrate(dbQueue)
@@ -252,9 +253,7 @@ final class MonthManifestStore {
                 .map { ($0.name, $0) }
         )
 
-        let localURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("month_manifest_\(year)_\(month)_\(UUID().uuidString).sqlite")
-        try? FileManager.default.removeItem(at: localURL)
+        let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
         let manifestAbsolutePath = RemotePathBuilder.absolutePath(
             basePath: basePath,
@@ -322,9 +321,7 @@ final class MonthManifestStore {
             return nil
         }
 
-        let localURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("month_manifest_\(year)_\(month)_\(UUID().uuidString).sqlite")
-        try? FileManager.default.removeItem(at: localURL)
+        let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
         do {
             try await client.download(remotePath: manifestAbsolutePath, localURL: localURL)
@@ -713,9 +710,56 @@ final class MonthManifestStore {
 
     private static func closeAndRemoveLocalManifest(at localURL: URL, queue: DatabaseQueue?) {
         if let queue {
-            try? queue.close()
+            do {
+                try queue.close()
+            } catch {
+                NSLog("MonthManifestStore: failed to close local manifest db before cleanup: \(error.localizedDescription)")
+                return
+            }
         }
         try? FileManager.default.removeItem(at: localURL)
+    }
+
+    private static func makeLocalManifestURL(year: Int, month: Int) -> URL {
+        purgeStaleTempFilesIfNeeded()
+        let fileName = "\(tempFilePrefix)\(year)_\(month)_\(UUID().uuidString).\(tempFileExtension)"
+        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        try? FileManager.default.removeItem(at: localURL)
+        return localURL
+    }
+
+    private static func purgeStaleTempFilesIfNeeded() {
+        staleTempCleanupLock.lock()
+        if hasPurgedStaleTempFiles {
+            staleTempCleanupLock.unlock()
+            return
+        }
+        hasPurgedStaleTempFiles = true
+        staleTempCleanupLock.unlock()
+
+        let tmpURL = FileManager.default.temporaryDirectory
+        guard let fileURLs = try? FileManager.default.contentsOfDirectory(
+            at: tmpURL,
+            includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        let now = Date()
+        for fileURL in fileURLs {
+            guard fileURL.pathExtension == tempFileExtension else { continue }
+            guard fileURL.lastPathComponent.hasPrefix(tempFilePrefix) else { continue }
+            guard let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey, .isRegularFileKey]),
+                  values.isRegularFile == true else {
+                continue
+            }
+            let referenceDate = values.contentModificationDate ?? values.creationDate ?? now
+            guard now.timeIntervalSince(referenceDate) >= staleTempFileAge else {
+                continue
+            }
+            try? FileManager.default.removeItem(at: fileURL)
+        }
     }
 
     private static func dateFromEpochNs(_ ns: Int64?) -> Date? {

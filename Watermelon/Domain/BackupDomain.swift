@@ -27,6 +27,7 @@ struct BackupItemEvent {
 }
 
 struct BackupTransferState {
+    let workerID: Int
     let assetLocalIdentifier: String
     let assetDisplayName: String
     let resourceDate: Date?

@@ -1,81 +1,91 @@
-# 备份核心 V2（当前实现）
+# 备份核心流程（当前实现）
 
-## 1. 入口
+## 1. 执行入口
 
-`BackupSessionController.startBackup()/retryFailedItems()/resumeFromPause()` 最终调用：
+调用链：
 
-`BackupEngineActor.startRun/resumeRun` -> `BackupCoordinator.runBackup(..., context: BackupRunContext)`
+1. `BackupSessionController.startBackup()/retryFailedItems()/resumeFromPause()`
+2. `BackupRunCommandActor.startRun()/resumeRun()`
+3. `BackupCoordinator.runBackup(request:eventStream:)`
 
-## 2. 主流程（按当前代码）
+说明：
 
-1. 校验/请求照片权限。
-2. 通过 `StorageClientFactory` 建立远端连接（SMB / WebDAV / 外接存储），确保 `basePath` 存在。
-3. `RemoteIndexSyncService` 基于 `RemoteManifestIndexScanner` 摘要扫描并增量刷新远端快照。
-4. 按 `creationDate ASC` 遍历 `PHAsset`。
-5. 每个 Asset 取 `PHAssetResource.assetResources(for:)`，经 `BackupAssetResourcePlanner` 生成有序资源列表（role + slot）。
-6. 月份变化时先 flush 上个月 manifest，再 `loadOrCreate` 当前月份 manifest。
-7. 处理完所有 Asset 后，flush 当前月份 manifest。
+1. 每个 run 使用独立 `BackupEventStream`。
+2. `BackupRunRequest` 包含 `profile/password/onlyAssetLocalIdentifiers/workerCountOverride`。
 
-## 3. 单 Asset 处理（`AssetProcessor.process`）
+## 2. run 主流程
 
-1. 逐资源导出到临时文件并计算 SHA-256。
-2. 每个资源 hash 写入本地 `local_asset_resources`（键：assetLocalIdentifier+role+slot）。
-3. 用 `(role|slot|hashHex)` 集合计算 `assetFingerprint`。
-4. 若当前月 manifest 已包含该 fingerprint：
-5. 记 Asset `skipped(asset_exists)`。
-6. 写本地 `local_assets`（assetFingerprint + resourceCount）。
-7. 若该 fingerprint 不存在：逐资源执行上传/复用逻辑。
-8. 只要有任意资源失败，整个 Asset 判定失败（不会写 `assets`/`asset_resources` 关系）。
-9. 全部资源非失败时写入：
-10. 月 manifest 的 `assets` + `asset_resources`。
-11. 本地 `local_assets`。
-12. 内存远端快照增量 upsert。
+`BackupCoordinator.runBackup` 执行步骤：
 
-## 4. 单资源处理（`uploadResource` 路径）
+1. 校验或申请相册权限。
+2. 创建并连接远端 client，确保 `basePath` 目录存在。
+3. `RemoteIndexSyncService.syncIndex` 同步远端快照，并生成月级 seed（用于 `MonthManifestStore.loadOrCreate(seed:)`）。
+4. 准备待处理资产：
+5. 全量：`fetchAssetsResult(ascendingByCreationDate: true)`
+6. 范围/重试：按 ID 拉取并按创建时间排序
+7. 加载本地 hash 缓存（全量或按指定资产）。
+8. 将资产按月份分桶，按“预计字节数优先、数量次之、月份次之”排序。
+9. 计算 worker 数（协议默认或用户覆盖）并创建 `StorageClientPool`。
+10. worker 动态从 `MonthWorkQueue` 领取月份任务。
+11. 每个月份处理完成后执行 manifest flush。
+12. 汇总结果并发出 `finished` 事件。
 
-1. 若当前月 manifest 已有相同 hash：`skipped(hash_exists)`。
-2. 否则准备目标文件名（sanitize）。
-3. 若同名冲突：
-4. 小文件（< 5 MiB）下载远端同名后比 hash，相同则 `skipped(name_same_hash)`。
-5. 大文件（>= 5 MiB）仅在该同名不在 manifest 时按 size 启发式比较，相同则 `skipped(name_same_size)`。
-6. 仍冲突则用 `RemoteNameCollisionResolver` 生成 `_n` 文件名。
-7. 上传最多 3 次重试（指数退避）。
-8. 若遇 `STATUS_OBJECT_NAME_COLLISION`，即时换名重试。
-9. 上传成功后 upsert `resources`，并写远端快照缓存。
+## 3. 并发与调度
 
-## 5. 月 manifest flush 策略
+1. worker 数上限策略：
+2. 协议默认：SMB/WebDAV = 2，外接存储 = 3
+3. 用户可在设置中覆盖（1~4）
+4. 最终会按月份数再裁剪
 
-1. `upsertResource/upsertAsset` 只改本地 sqlite，标记 `dirty = true`。
-2. `flushToRemote()` 触发时机：
-3. 切月时 flush 上个月。
-4. runBackup 结束时 flush 当前月。
-5. `loadOrCreate` 遇到远端该月 manifest 不存在时，会先上传一份初始 manifest。
-6. `flushToRemote(ignoreCancellation:)` 在暂停/停止收尾阶段允许忽略取消，尽量保证落盘。
+连接池策略：
 
-## 6. 远端扫描与内存快照
+1. SMB/WebDAV 连接池最多 2 条连接（防止会话过多）。
+2. 外接存储连接池按 worker 数。
+3. worker 释放 client 时支持不可复用连接替换。
 
-1. `RemoteManifestIndexScanner` 是只读扫描：只读取已有 manifest，不创建目录，不写远端。
-2. `RemoteIndexSyncService` 通过 digest 计算 changed/removed month，再按月替换 `RemoteLibrarySnapshotCache`。
-3. 备份过程中资源/资产写入后会增量 upsert 到缓存，Home 可实时读取。
+## 4. 单 Asset 处理（`AssetProcessor.process`）
 
-## 7. 暂停/停止/恢复语义
+1. 先尝试本地缓存快速命中（`processWithLocalCache`）。
+2. 命中且月 manifest 已有同 fingerprint 时可直接跳过。
+3. 未命中则逐资源导出到临时文件并计算 SHA-256。
+4. 计算 `assetFingerprint`（由 role/slot/hash 组合得到）。
+5. 逐资源上传（或跳过）并收集 link。
+6. 若任一资源失败，整个 asset 记失败，不写 `assets/asset_resources`。
+7. 全部非失败时写：
+8. 月 manifest 的 `assets/asset_resources`
+9. 本地 `local_assets/local_asset_resources`
+10. 远端内存快照缓存增量
 
-1. `pause/stop` 命令统一进入 `BackupEngineActor`。
-2. engine 同时触发：
-3. run 级 `BackupCancellationController.cancel()`。
-4. run task `Task.cancel()`。
-5. `BackupCoordinator` / `AssetProcessor` 通过 `throwIfCancelled + Task.checkCancellation` 协作退出。
-6. 取消不是强杀单次网络 I/O；当前步骤收尾后退出。
-7. `runBackup` 返回 `paused` 标记，Session 按 intent 决定落地为 paused 或 stopped。
-8. `resume` 的 pending 计算已下沉到 `BackupEngineActor.resumeRun`（`BackupSessionController` 不再自己维护恢复准备任务）。
+## 5. 单资源处理（`uploadResource`）
 
-## 8. Retry 模式
+1. 若 manifest 中已有同 hash，直接 `skipped(hash_exists)`。
+2. 同名冲突处理：
+3. 小文件（<5 MiB）且 size 未知或一致时，下载远端同名文件比 hash。
+4. hash 相同则 `skipped(name_same_hash)`。
+5. 否则用 `RemoteNameCollisionResolver` 生成 `_n` 新文件名。
+6. 上传重试最多 3 次（含碰名重试）。
+7. 上传成功后调用 `setModificationDate`（按各 client 实现；WebDAV 会尝试 PROPPATCH）。
+8. 写入 manifest `resources` 与远端快照缓存。
 
-1. `retryFailedItems` 以 Asset ID 集合调用 `startRun(mode: .retry(assetIDs:))`。
-2. `runBackup` 只处理被指定的 Asset（按创建时间排序后执行）。
+## 6. 月 manifest 与 flush 语义
 
-## 9. 关键常量
+1. `upsertResource/upsertAsset` 先写本地月 sqlite 并标记 `dirty`。
+2. 月末或任务收尾调用 `flushToRemote` 同步远端 manifest 文件。
+3. flush 失败行为由 `ManifestFlushFailurePolicy` 控制。
+4. 当前默认策略：`failRun`（flush 失败中断 run）。
+5. 暂停/停止收尾时会对当前月使用 `ignoreCancellation`，尽量完成 flush。
 
-1. 同名冲突“小文件”阈值：`5 * 1024 * 1024` bytes。
-2. 上传重试次数：3。
-3. hash 流式缓冲：64 KiB。
+## 7. 暂停 / 停止 / 恢复
+
+1. `BackupRunCommandActor` 统一处理控制命令与 intent。
+2. 暂停/停止通过协作取消实现（`Task.cancel` + 检查点退出）。
+3. 恢复 full run 时会重新扫描图库并减去已完成资产集合。
+4. 恢复 scoped/retry run 时直接用剩余 ID 集合。
+5. run 终态由 `BackupSessionController.finishRun/handleRunFailure` 映射到 UI 状态。
+
+## 8. 关键常量
+
+1. 小文件阈值：`5 * 1024 * 1024` bytes
+2. 上传重试次数：`3`
+3. hash 读取缓冲：`64 KiB`
+4. 阶段耗时日志窗口：每 `200` 项汇总一次

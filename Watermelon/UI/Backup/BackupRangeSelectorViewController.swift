@@ -73,6 +73,8 @@ final class BackupRangeSelectorViewController: UIViewController {
     private var totalBytes: Int64?
     private var thumbnailRequestIDs: [String: PHImageRequestID] = [:]
     private var loadingTask: Task<Void, Never>?
+    private var sizeResolveTasks: [String: Task<Void, Never>] = [:]
+    private let sizeResolveLimiter = AsyncPermitPool(limit: 2)
 
     private static let headerKind = UICollectionView.elementKindSectionHeader
 
@@ -104,6 +106,11 @@ final class BackupRangeSelectorViewController: UIViewController {
 
     deinit {
         loadingTask?.cancel()
+        for task in sizeResolveTasks.values {
+            task.cancel()
+        }
+        sizeResolveTasks.removeAll()
+        pendingSizeAssetIDs.removeAll()
         for requestID in thumbnailRequestIDs.values {
             imageManager.cancelImageRequest(requestID)
         }
@@ -134,6 +141,7 @@ final class BackupRangeSelectorViewController: UIViewController {
                 imageManager.cancelImageRequest(requestID)
             }
             thumbnailRequestIDs.removeAll()
+            cancelPendingSizeResolveTasks()
         }
     }
 
@@ -511,6 +519,40 @@ final class BackupRangeSelectorViewController: UIViewController {
     }
 }
 
+private actor AsyncPermitPool {
+    private var permits: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) {
+        permits = max(1, limit)
+    }
+
+    func withPermit<T>(_ operation: () async throws -> T) async rethrows -> T {
+        await acquire()
+        defer { release() }
+        return try await operation()
+    }
+
+    private func acquire() async {
+        if permits > 0 {
+            permits -= 1
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            permits += 1
+            return
+        }
+        let waiter = waiters.removeFirst()
+        waiter.resume()
+    }
+}
+
 extension BackupRangeSelectorViewController: UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
     func numberOfSections(in collectionView: UICollectionView) -> Int {
         months.count
@@ -859,6 +901,14 @@ private final class BackupRangeMonthHeaderView: UICollectionReusableView {
 }
 
 private extension BackupRangeSelectorViewController {
+    private func cancelPendingSizeResolveTasks() {
+        for task in sizeResolveTasks.values {
+            task.cancel()
+        }
+        sizeResolveTasks.removeAll()
+        pendingSizeAssetIDs.removeAll()
+    }
+
     private func resolveAssetSizeIfNeeded(for item: AssetNode) {
         if assetBytesByID[item.assetID] != nil { return }
         if pendingSizeAssetIDs.contains(item.assetID) { return }
@@ -866,51 +916,73 @@ private extension BackupRangeSelectorViewController {
         let assetID = item.assetID
         let asset = item.asset
         pendingSizeAssetIDs.insert(assetID)
-
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            var totalSize: Int64 = 0
-            let resources = PHAssetResource.assetResources(for: asset)
-            for resource in resources {
-                totalSize += max(PhotoLibraryService.resourceFileSize(resource), 0)
+        let limiter = sizeResolveLimiter
+        let task = Task.detached(priority: .utility) { [weak self, asset, assetID] in
+            do {
+                let totalSize = try await limiter.withPermit {
+                    try Task.checkCancellation()
+                    var total: Int64 = 0
+                    let resources = PHAssetResource.assetResources(for: asset)
+                    for (index, resource) in resources.enumerated() {
+                        if index % 8 == 0 {
+                            try Task.checkCancellation()
+                        }
+                        total += max(PhotoLibraryService.resourceFileSize(resource), 0)
+                    }
+                    try Task.checkCancellation()
+                    return total
+                }
+                await MainActor.run { [weak self] in
+                    self?.applyResolvedSize(totalSize, forAssetID: assetID)
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.finishSizeResolution(forAssetID: assetID)
+                }
             }
+        }
+        sizeResolveTasks[assetID] = task
+    }
 
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.pendingSizeAssetIDs.remove(assetID)
-                self.assetBytesByID[assetID] = totalSize
+    private func finishSizeResolution(forAssetID assetID: String) {
+        sizeResolveTasks[assetID] = nil
+        pendingSizeAssetIDs.remove(assetID)
+    }
 
-                var changedSection: Int?
-                var changedItemIndex: Int?
-                for sectionIndex in self.months.indices {
-                    if let itemIndex = self.months[sectionIndex].assets.firstIndex(where: { $0.assetID == assetID }) {
-                        self.months[sectionIndex].assets[itemIndex].bytes = totalSize
-                        changedSection = sectionIndex
-                        changedItemIndex = itemIndex
-                        break
-                    }
-                }
+    private func applyResolvedSize(_ totalSize: Int64, forAssetID assetID: String) {
+        finishSizeResolution(forAssetID: assetID)
+        assetBytesByID[assetID] = totalSize
 
-                guard let changedSection else { return }
-                self.updateTitleWithSelectedCapacity()
-                let headerIndexPath = IndexPath(item: 0, section: changedSection)
-                if let header = self.collectionView.supplementaryView(
-                    forElementKind: Self.headerKind,
-                    at: headerIndexPath
-                ) as? BackupRangeMonthHeaderView {
-                    let month = self.months[changedSection]
-                    header.apply(
-                        summary: self.monthSummary(for: month),
-                        state: self.monthSelectionState(month),
-                        expanded: month.expanded,
-                        editable: !self.readOnly
-                    )
-                }
-                if let changedItemIndex {
-                    let changedIndexPath = IndexPath(item: changedItemIndex, section: changedSection)
-                    if self.collectionView.indexPathsForVisibleItems.contains(changedIndexPath) {
-                        self.collectionView.reloadItems(at: [changedIndexPath])
-                    }
-                }
+        var changedSection: Int?
+        var changedItemIndex: Int?
+        for sectionIndex in months.indices {
+            if let itemIndex = months[sectionIndex].assets.firstIndex(where: { $0.assetID == assetID }) {
+                months[sectionIndex].assets[itemIndex].bytes = totalSize
+                changedSection = sectionIndex
+                changedItemIndex = itemIndex
+                break
+            }
+        }
+
+        guard let changedSection else { return }
+        updateTitleWithSelectedCapacity()
+        let headerIndexPath = IndexPath(item: 0, section: changedSection)
+        if let header = collectionView.supplementaryView(
+            forElementKind: Self.headerKind,
+            at: headerIndexPath
+        ) as? BackupRangeMonthHeaderView {
+            let month = months[changedSection]
+            header.apply(
+                summary: monthSummary(for: month),
+                state: monthSelectionState(month),
+                expanded: month.expanded,
+                editable: !readOnly
+            )
+        }
+        if let changedItemIndex {
+            let changedIndexPath = IndexPath(item: changedItemIndex, section: changedSection)
+            if collectionView.indexPathsForVisibleItems.contains(changedIndexPath) {
+                collectionView.reloadItems(at: [changedIndexPath])
             }
         }
     }

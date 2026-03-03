@@ -184,13 +184,30 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             ],
             body: Self.propfindBody
         )
-        let (_, response) = try await sendData(request)
+        let (data, response) = try await sendData(request)
         let status = response.statusCode
         guard status == 207 || (200 ... 299).contains(status) else {
             if status == 401 || status == 403 {
                 throw Self.authenticationError(status, url: request.url)
             }
             throw Self.statusError(status, method: "PROPFIND", url: request.url)
+        }
+
+        if status != 207 {
+            let hasDAVHeader = response.value(forHTTPHeaderField: "DAV") != nil
+            let parsedEntries = try? PropfindXMLParser().parse(data)
+            let looksLikeWebDAV = hasDAVHeader || ((parsedEntries?.isEmpty == false))
+            guard looksLikeWebDAV else {
+                throw RemoteStorageClientError.underlying(
+                    NSError(
+                        domain: "WebDAVClient",
+                        code: -1200,
+                        userInfo: [
+                            NSLocalizedDescriptionKey: "Endpoint responded but does not look like a WebDAV service. Verify URL/port/path."
+                        ]
+                    )
+                )
+            }
         }
         isConnected = true
     }
@@ -355,8 +372,33 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         onProgress?(1)
     }
 
-    func setModificationDate(_: Date, forPath _: String) async throws {
-        // WebDAV servers vary widely in writable mtime support; backup pipeline treats this as best-effort.
+    func setModificationDate(_ date: Date, forPath path: String) async throws {
+        try requireConnected()
+
+        let targetURL = try remoteURL(forRemotePath: path)
+        let davBody = Self.proppatchGetLastModifiedBody(date: date)
+        let msBody = Self.proppatchWin32LastModifiedBody(date: date)
+        let bodies = [davBody, msBody]
+
+        for body in bodies {
+            let request = makeRequest(
+                url: targetURL,
+                method: "PROPPATCH",
+                headers: ["Content-Type": "application/xml; charset=utf-8"],
+                body: body
+            )
+            let status = try await sendStatus(request)
+            if status == 207 || (200 ... 299).contains(status) {
+                return
+            }
+            if status == 401 || status == 403 {
+                throw Self.authenticationError(status, url: request.url)
+            }
+            if Self.isMtimeUnsupportedStatus(status) {
+                continue
+            }
+            throw Self.statusError(status, method: "PROPPATCH", url: request.url)
+        }
     }
 
     func download(remotePath: String, localURL: URL) async throws {
@@ -484,6 +526,42 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         </d:propfind>
         """.utf8
     )
+
+    private static func proppatchGetLastModifiedBody(date: Date) -> Data {
+        let value = rfc1123Formatter.string(from: date)
+        return Data(
+            """
+            <?xml version="1.0" encoding="utf-8" ?>
+            <d:propertyupdate xmlns:d="DAV:">
+              <d:set>
+                <d:prop>
+                  <d:getlastmodified>\(value)</d:getlastmodified>
+                </d:prop>
+              </d:set>
+            </d:propertyupdate>
+            """.utf8
+        )
+    }
+
+    private static func proppatchWin32LastModifiedBody(date: Date) -> Data {
+        let value = iso8601Formatter.string(from: date)
+        return Data(
+            """
+            <?xml version="1.0" encoding="utf-8" ?>
+            <d:propertyupdate xmlns:d="DAV:" xmlns:z="urn:schemas-microsoft-com:">
+              <d:set>
+                <d:prop>
+                  <z:Win32LastModifiedTime>\(value)</z:Win32LastModifiedTime>
+                </d:prop>
+              </d:set>
+            </d:propertyupdate>
+            """.utf8
+        )
+    }
+
+    private static func isMtimeUnsupportedStatus(_ status: Int) -> Bool {
+        [400, 404, 405, 409, 415, 422, 423, 501].contains(status)
+    }
 
     private func requireConnected() throws {
         guard isConnected else {
@@ -655,6 +733,9 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     }
 
     private static func statusError(_ statusCode: Int, method: String, url: URL?) -> RemoteStorageClientError {
+        if statusCode == 401 || statusCode == 403 {
+            return authenticationError(statusCode, url: url)
+        }
         let target = url?.absoluteString ?? "(unknown URL)"
         return .underlying(
             NSError(

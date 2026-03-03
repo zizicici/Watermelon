@@ -36,6 +36,7 @@ final class BackupViewController: UIViewController {
     private let statusTitleLabel = UILabel()
     private let statusRightStack = UIStackView()
     private let statusTopRowStack = UIStackView()
+    private let workerSelectorControl = UISegmentedControl()
     private let statusDateLabel = UILabel()
     private let resourcePercentLabel = UILabel()
     private let overallProgressLeadingLabel = UILabel()
@@ -75,6 +76,8 @@ final class BackupViewController: UIViewController {
     private var statusThumbnailAssetID: String?
     private var statusThumbnailRequestID: PHImageRequestID?
     private var thumbnailRequestIDs: [String: PHImageRequestID] = [:]
+    private var workerSegmentIDs: [Int] = []
+    private var selectedTransferWorkerID: Int?
     private var pendingOpenScopeSelectorAfterStop = false
 
     private static let resourceDateFormatter: DateFormatter = {
@@ -257,7 +260,20 @@ final class BackupViewController: UIViewController {
         statusRightStack.addArrangedSubview(statusTopRowStack)
         statusTopRowStack.addArrangedSubview(statusTitleLabel)
         statusTopRowStack.addArrangedSubview(statusDateLabel)
+        workerSelectorControl.isHidden = true
+        workerSelectorControl.selectedSegmentTintColor = .systemGreen
+        workerSelectorControl.backgroundColor = .tertiarySystemFill
+        workerSelectorControl.setTitleTextAttributes([
+            .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
+            .foregroundColor: UIColor.label
+        ], for: .normal)
+        workerSelectorControl.setTitleTextAttributes([
+            .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
+            .foregroundColor: UIColor.white
+        ], for: .selected)
+        workerSelectorControl.addTarget(self, action: #selector(workerSelectorChanged), for: .valueChanged)
         statusRightStack.addArrangedSubview(resourcePercentLabel)
+        statusRightStack.insertArrangedSubview(workerSelectorControl, at: 1)
         statusCardView.addSubview(overallProgressLeadingLabel)
         statusCardView.addSubview(overallProgressPercentLabel)
         statusCardView.addSubview(overallProgressView)
@@ -319,6 +335,10 @@ final class BackupViewController: UIViewController {
 
         statusDateLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         statusDateLabel.setContentHuggingPriority(.required, for: .horizontal)
+
+        workerSelectorControl.snp.makeConstraints { make in
+            make.height.equalTo(26)
+        }
 
         overallProgressLeadingLabel.snp.makeConstraints { make in
             make.top.equalTo(statusThumbnailContainer.snp.bottom).offset(10)
@@ -431,7 +451,14 @@ final class BackupViewController: UIViewController {
         overallProgressPercentLabel.text = "\(overallPercent)%"
         overallProgressView.progress = overallFraction
 
-        guard let transfer = snapshot.transferState else {
+        let workerStates = snapshot.transferStatesByWorkerID
+        let workerIDs = workerStates.keys.sorted()
+        updateWorkerSelector(workerIDs: workerIDs, preferredWorkerID: snapshot.transferState?.workerID)
+
+        guard let transfer = currentDisplayTransferState(
+            workerStates: workerStates,
+            preferredWorkerID: snapshot.transferState?.workerID
+        ) else {
             statusTitleLabel.text = snapshot.latestItemEvent?.displayName ?? "暂无上传项目"
             if let date = snapshot.latestItemEvent?.resourceDate {
                 statusDateLabel.text = Self.resourceDateFormatter.string(from: date)
@@ -443,16 +470,72 @@ final class BackupViewController: UIViewController {
             return
         }
 
+        let showWorkerPrefix = workerIDs.count > 1
         let clamped = transfer.clampedResourceFraction
         let resourcePercent = clamped >= 1 ? 100 : Int(floor(Double(clamped) * 100))
-        statusTitleLabel.text = transfer.assetDisplayName
+        statusTitleLabel.text = showWorkerPrefix ? "W\(transfer.workerID) · \(transfer.assetDisplayName)" : transfer.assetDisplayName
         if let resourceDate = transfer.resourceDate {
             statusDateLabel.text = Self.resourceDateFormatter.string(from: resourceDate)
         } else {
             statusDateLabel.text = "--"
         }
-        resourcePercentLabel.text = "\(resourcePercent)%"
+        resourcePercentLabel.text = "\(transfer.stageDescription) · \(resourcePercent)%"
         applyStatusThumbnail(assetLocalIdentifier: transfer.assetLocalIdentifier)
+    }
+
+    private func currentDisplayTransferState(
+        workerStates: [Int: BackupTransferState],
+        preferredWorkerID: Int?
+    ) -> BackupTransferState? {
+        guard !workerStates.isEmpty else { return nil }
+        if let selectedTransferWorkerID, let state = workerStates[selectedTransferWorkerID] {
+            return state
+        }
+        if let preferredWorkerID, let state = workerStates[preferredWorkerID] {
+            selectedTransferWorkerID = preferredWorkerID
+            return state
+        }
+        guard let fallbackWorkerID = workerStates.keys.sorted().first,
+              let fallbackState = workerStates[fallbackWorkerID] else {
+            return nil
+        }
+        selectedTransferWorkerID = fallbackWorkerID
+        return fallbackState
+    }
+
+    private func updateWorkerSelector(workerIDs: [Int], preferredWorkerID: Int?) {
+        let shouldShow = workerIDs.count > 1
+        workerSelectorControl.isHidden = !shouldShow
+        guard shouldShow else {
+            workerSegmentIDs = workerIDs
+            selectedTransferWorkerID = workerIDs.first
+            workerSelectorControl.removeAllSegments()
+            workerSelectorControl.selectedSegmentIndex = UISegmentedControl.noSegment
+            return
+        }
+
+        if workerSegmentIDs != workerIDs {
+            workerSelectorControl.removeAllSegments()
+            for (index, workerID) in workerIDs.enumerated() {
+                workerSelectorControl.insertSegment(withTitle: "W\(workerID)", at: index, animated: false)
+            }
+            workerSegmentIDs = workerIDs
+        }
+
+        if let selectedTransferWorkerID, workerIDs.contains(selectedTransferWorkerID) {
+            // keep manual selection
+        } else if let preferredWorkerID, workerIDs.contains(preferredWorkerID) {
+            selectedTransferWorkerID = preferredWorkerID
+        } else {
+            selectedTransferWorkerID = workerIDs.first
+        }
+
+        if let selectedTransferWorkerID,
+           let index = workerSegmentIDs.firstIndex(of: selectedTransferWorkerID) {
+            workerSelectorControl.selectedSegmentIndex = index
+        } else {
+            workerSelectorControl.selectedSegmentIndex = UISegmentedControl.noSegment
+        }
     }
 
     private func taskStateText(for snapshot: BackupSessionController.Snapshot) -> String {
@@ -576,7 +659,7 @@ final class BackupViewController: UIViewController {
         tableView.isHidden = false
         logTextView.isHidden = true
 
-        let displayOrderedItems = Array(snapshot.processedItems.reversed())
+        let displayOrderedItems = snapshot.processedItems
         let nextItems: [BackupSessionController.ProcessedItem]
         switch mode {
         case .all:
@@ -622,6 +705,18 @@ final class BackupViewController: UIViewController {
     private func filterChanged() {
         guard let snapshot = latestSnapshot else { return }
         applyFilter(using: snapshot, forceReload: true)
+    }
+
+    @objc
+    private func workerSelectorChanged() {
+        let index = workerSelectorControl.selectedSegmentIndex
+        guard index != UISegmentedControl.noSegment,
+              index < workerSegmentIDs.count else {
+            return
+        }
+        selectedTransferWorkerID = workerSegmentIDs[index]
+        guard let snapshot = latestSnapshot else { return }
+        updateStatusCard(using: snapshot)
     }
 
     @objc

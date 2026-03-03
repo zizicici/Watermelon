@@ -84,6 +84,24 @@ class MoreViewController: UIViewController {
             }
         }
 
+        enum BackupItem: Hashable {
+            case workerCount(BackupWorkerCountMode)
+
+            var title: String {
+                switch self {
+                case .workerCount:
+                    return "上传并发"
+                }
+            }
+
+            var value: String? {
+                switch self {
+                case .workerCount(let mode):
+                    return mode.getName()
+                }
+            }
+        }
+
         enum GeneralItem: Hashable {
             case language
             case tutorial(TutorialEntranceType)
@@ -192,6 +210,7 @@ class MoreViewController: UIViewController {
         case settings(GeneralItem)
         case storage(StorageItem)
         case localData(LocalDataItem)
+        case backup(BackupItem)
         case contact(ContactItem)
         case appjun(AppJunItem)
         case about(AboutItem)
@@ -203,6 +222,8 @@ class MoreViewController: UIViewController {
             case .storage(let item):
                 return item.title
             case .localData(let item):
+                return item.title
+            case .backup(let item):
                 return item.title
             case .contact(let item):
                 return item.title
@@ -312,6 +333,16 @@ class MoreViewController: UIViewController {
                 content.image = UIImage(systemName: "internaldrive")
                 cell.contentConfiguration = content
                 return cell
+            case .backup(let item):
+                let cell = tableView.dequeueReusableCell(withIdentifier: "reuseIdentifier", for: indexPath)
+                cell.accessoryType = .disclosureIndicator
+                var content = UIListContentConfiguration.valueCell()
+                content.text = identifier.title
+                content.textProperties.color = .label
+                content.secondaryText = item.value
+                content.image = UIImage(systemName: "speedometer")
+                cell.contentConfiguration = content
+                return cell
             case .contact(let item):
                 let cell = tableView.dequeueReusableCell(withIdentifier: "reuseIdentifier", for: indexPath)
                 cell.accessoryType = .disclosureIndicator
@@ -362,6 +393,9 @@ class MoreViewController: UIViewController {
 
             snapshot.appendSections([.localData])
             snapshot.appendItems([.localData(.hashIndex)], toSection: .localData)
+
+            snapshot.appendSections([.backup])
+            snapshot.appendItems([.backup(.workerCount(BackupWorkerCountMode.getValue()))], toSection: .backup)
         }
 
         snapshot.appendSections([.general])
@@ -415,6 +449,11 @@ extension MoreViewController: UITableViewDelegate {
                     guard let dependencies else { return }
                     let vc = LocalHashIndexManagerViewController(dependencies: dependencies)
                     navigationController?.pushViewController(vc, animated: ConsideringUser.pushAnimated)
+                }
+            case .backup(let item):
+                switch item {
+                case .workerCount:
+                    enterSettings(BackupWorkerCountMode.self)
                 }
             case .contact(let item):
                 handle(contactItem: item)

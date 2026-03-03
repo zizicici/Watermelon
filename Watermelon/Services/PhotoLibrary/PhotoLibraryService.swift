@@ -3,6 +3,12 @@ import Foundation
 import Photos
 import UIKit
 
+struct ExportedResourceFile: Sendable {
+    let fileURL: URL
+    let contentHash: Data
+    let fileSize: Int64
+}
+
 final class PhotoLibraryService: @unchecked Sendable {
     private let imageManager = PHCachingImageManager()
     private let resourceManager = PHAssetResourceManager.default()

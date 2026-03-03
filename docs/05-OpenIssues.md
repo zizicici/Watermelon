@@ -1,44 +1,43 @@
-# 当前风险点 / 技术债
+# 当前风险点 / 技术债（按当前实现）
 
-## 1. 备份性能与扫描成本
+## 1. 大图库扫描与恢复成本
 
-1. 每次 full backup 仍会遍历整库 `PHAsset` 并导出资源计算 hash，图库大时耗时明显。
-2. pause 后恢复 full run 时，`BackupEngineActor` 仍需再次遍历照片库计算 pending asset 集合（扫描逻辑已从 Session 下沉到 Engine，但成本仍在）。
-3. 资源导出到临时文件再 hash 的 I/O 开销较高。
+1. full backup 仍需遍历完整 `PHAsset` 集合。
+2. full run 暂停后恢复，需要再次扫描图库计算 pending 集。
+3. 图库规模很大时，开始与恢复阶段仍有明显耗时。
 
-## 2. flush 粒度与中断风险
+## 2. 资源处理 I/O 成本
 
-1. manifest flush 触发点是“切月 + 任务结束（含暂停/停止收尾）”。
-2. 如果应用在当前月大量变更后被系统强杀，最近变更仍可能尚未写回远端 manifest。
+1. 资源通常先导出到临时文件再 hash/上传，磁盘 I/O 较重。
+2. 多 worker 下临时文件峰值会增加（按 worker 并发叠加）。
 
-## 3. 远端缩略图成本
+## 3. 远端缩略图链路
 
-1. `RemoteThumbnailService` 依然是“下载原文件 -> 本地下采样”。
-2. 慢网或大文件下会带来网络与临时文件开销。
+1. `RemoteThumbnailService` 仍是“下载原文件 -> 本地下采样”。
+2. 大视频或慢网场景会增加网络与临时文件开销。
 
-## 4. 代码结构仍可继续收口
+## 4. 运行控制复杂度
 
-1. 控制面已统一到 `BackupEngineActor`，但 `BackupSessionController` 仍是较大的 UI 状态聚合类。
-2. `SettingsViewController`、`ServerSelectionViewController` 当前不在启动路由，属于未接线页面。
-3. `UI/Browser` 下部分调试/浏览页面未纳入主流程，维护时要避免误判为在线功能。
+1. `BackupSessionController + BackupRunCommandActor` 的状态组合较多（starting/resuming/pausing/stopping + run intent）。
+2. 已较过去稳定，但后续重构仍需谨慎验证快速切换场景（开始/暂停/停止交替）。
 
-## 5. 匹配策略准确性边界
+## 5. flush 与强杀窗口
 
-1. Home 本地/远端匹配依赖本地索引与远端快照，索引缺失时会退化为较弱匹配。
-2. 远端条目组装严格依赖 `asset_resources` 关系；若远端 manifest 异常缺链，会直接丢失对应 remote item 展示。
+1. 当前 flush 触发主要在“每月处理完成”与“任务收尾”。
+2. 若应用在当前月大量变更后被系统强杀，仍存在最后一批改动尚未 flush 的窗口。
 
-## 6. 并发与类型系统告警
+## 6. 并发策略仍为静态默认 + 手动覆盖
 
-1. `RemoteIndexSyncService` 当前仍有 Swift Sendable 相关 warning（在 Swift 6 模式会升级为错误）。
-2. 后续应考虑将该服务 actor 化，或显式锁保护并标注 `@unchecked Sendable`。
+1. 默认并发是按协议的固定值（SMB/WebDAV=2，本地=3）。
+2. 目前没有带宽/延迟驱动的自适应并发调节。
 
-## 7. 测试现状
+## 7. 自动化测试覆盖不足
 
-1. 仓库缺少成体系单测/集成测试。
-2. 关键链路仍以真机 + SMB/WebDAV 服务器 + 外接存储手工回归为主。
+1. 项目仍缺少成体系单测/集成测试。
+2. 关键链路主要依赖真机手工回归（SMB/WebDAV/外接存储）。
 
-## 8. 建议后续优先级
+## 8. 建议优先级
 
-1. 为 `BackupEngineActor` 增加状态机级单测（start/pause/stop/resume 快速切换）。
-2. 明确未接线页面去留（接回主链路或删除）。
-3. 若要提升恢复速度，可考虑持久化 pending 集而非每次暂停后重扫照片库。
+1. 优先补 `BackupRunCommandActor` 状态切换与取消语义测试。
+2. 评估持久化 pending 集，降低 full resume 重扫成本。
+3. 评估按文件/月份动态并发策略，减少手动调参成本。

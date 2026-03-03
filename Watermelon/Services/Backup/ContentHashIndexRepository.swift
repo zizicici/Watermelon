@@ -14,6 +14,13 @@ struct LocalAssetHashCache {
     var hashesByRoleSlot: [AssetResourceRoleSlot: Data]
 }
 
+struct LocalAssetResourceHashRecord: Sendable {
+    let role: Int
+    let slot: Int
+    let contentHash: Data
+    let fileSize: Int64
+}
+
 struct LocalHashIndexStats: Sendable {
     let assetCount: Int
     let resourceCount: Int

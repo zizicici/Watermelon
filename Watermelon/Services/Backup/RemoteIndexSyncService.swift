@@ -1,38 +1,34 @@
 import Foundation
 
-final class RemoteIndexSyncService: @unchecked Sendable {
-    private actor SyncGate {
-        private var busy = false
-        private var waiters: [CheckedContinuation<Void, Never>] = []
+final class RemoteIndexSyncService: Sendable {
+    private actor MutableState {
+        private var activeRemoteProfileKey: String?
+        private var remoteManifestDigests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
 
-        func withLock<T>(_ operation: @Sendable () async throws -> T) async rethrows -> T {
-            if busy {
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    waiters.append(continuation)
-                }
-            } else {
-                busy = true
-            }
+        func ensureRemoteContext(profileKey: String) -> Bool {
+            guard activeRemoteProfileKey != profileKey else { return false }
+            activeRemoteProfileKey = profileKey
+            remoteManifestDigests.removeAll()
+            return true
+        }
 
-            defer {
-                if waiters.isEmpty {
-                    busy = false
-                } else {
-                    let next = waiters.removeFirst()
-                    next.resume()
-                }
-            }
+        func currentRemoteManifestDigests() -> [LibraryMonthKey: RemoteMonthManifestDigest] {
+            remoteManifestDigests
+        }
 
-            return try await operation()
+        func updateRemoteManifestDigests(_ digests: [LibraryMonthKey: RemoteMonthManifestDigest]) {
+            remoteManifestDigests = digests
+        }
+
+        func reset() {
+            activeRemoteProfileKey = nil
+            remoteManifestDigests.removeAll()
         }
     }
 
     private let scanner: RemoteManifestIndexScannerProtocol
     private let snapshotCache: RemoteLibrarySnapshotCache
-    private let syncGate = SyncGate()
-    private let stateLock = NSLock()
-    private var activeRemoteProfileKey: String?
-    private var remoteManifestDigests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
+    private let state = MutableState()
 
     init(
         scanner: RemoteManifestIndexScannerProtocol = RemoteManifestIndexScanner(),
@@ -47,25 +43,16 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         profile: ServerProfileRecord,
         eventStream: BackupEventStream? = nil
     ) async throws -> RemoteLibrarySnapshot {
-        // `syncIndex` must run sequentially; single-flight gate avoids duplicate scans and cache churn.
-        try await syncGate.withLock { [self] in
-            try await syncIndexUnlocked(client: client, profile: profile, eventStream: eventStream)
+        let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: Self.remoteProfileKey(profile))
+        if shouldResetSnapshot {
+            snapshotCache.reset()
         }
-    }
-
-    private func syncIndexUnlocked(
-        client: RemoteStorageClientProtocol,
-        profile: ServerProfileRecord,
-        eventStream: BackupEventStream? = nil
-    ) async throws -> RemoteLibrarySnapshot {
-        ensureRemoteContext(for: profile)
 
         let remoteDigests = try await scanner.scanManifestDigests(
             client: client,
-            basePath: profile.basePath,
-            cancellationController: nil
+            basePath: profile.basePath
         )
-        let previousDigests = currentRemoteManifestDigests()
+        let previousDigests = await state.currentRemoteManifestDigests()
 
         let previousMonths = Set(previousDigests.keys)
         let remoteMonths = Set(remoteDigests.keys)
@@ -135,7 +122,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             }
         }
 
-        updateRemoteManifestDigests(remoteDigests)
+        await state.updateRemoteManifestDigests(remoteDigests)
 
         let snapshot = snapshotCache.current()
         eventStream?.emit(.remoteIndexSynced(RemoteIndexSyncEvent(
@@ -164,43 +151,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         snapshotCache.upsertAsset(asset, links: links)
     }
 
-    func reset() {
-        stateLock.lock()
-        activeRemoteProfileKey = nil
-        remoteManifestDigests.removeAll()
-        stateLock.unlock()
+    func reset() async {
+        await state.reset()
         snapshotCache.reset()
-    }
-
-    private func ensureRemoteContext(for profile: ServerProfileRecord) {
-        let profileKey = Self.remoteProfileKey(profile)
-        var shouldReset = false
-        stateLock.lock()
-        if activeRemoteProfileKey != profileKey {
-            activeRemoteProfileKey = profileKey
-            remoteManifestDigests.removeAll()
-            shouldReset = true
-        }
-        stateLock.unlock()
-        if shouldReset {
-            snapshotCache.reset()
-        }
     }
 
     private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {
         "\(profile.id ?? 0):\(profile.storageType):\(profile.host):\(profile.basePath)"
-    }
-
-    private func currentRemoteManifestDigests() -> [LibraryMonthKey: RemoteMonthManifestDigest] {
-        stateLock.lock()
-        let digests = remoteManifestDigests
-        stateLock.unlock()
-        return digests
-    }
-
-    private func updateRemoteManifestDigests(_ digests: [LibraryMonthKey: RemoteMonthManifestDigest]) {
-        stateLock.lock()
-        remoteManifestDigests = digests
-        stateLock.unlock()
     }
 }
