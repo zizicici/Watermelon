@@ -351,6 +351,33 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
+    func fetchTotalFileSizeBytes(assetIDs: Set<String>) throws -> Int64 {
+        guard !assetIDs.isEmpty else { return 0 }
+
+        return try databaseManager.read { db in
+            let sortedIDs = assetIDs.sorted()
+            let chunkSize = 400
+            var totalBytes: Int64 = 0
+
+            for chunkStart in stride(from: 0, to: sortedIDs.count, by: chunkSize) {
+                let chunk = Array(sortedIDs[chunkStart ..< min(chunkStart + chunkSize, sortedIDs.count)])
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+                let chunkBytes = try Int64.fetchOne(
+                    db,
+                    sql: """
+                    SELECT COALESCE(SUM(totalFileSizeBytes), 0)
+                    FROM local_assets
+                    WHERE assetLocalIdentifier IN (\(placeholders))
+                    """,
+                    arguments: StatementArguments(chunk)
+                ) ?? 0
+                totalBytes += max(chunkBytes, 0)
+            }
+
+            return totalBytes
+        }
+    }
+
     func fetchLocalHashIndexStats() throws -> LocalHashIndexStats {
         try databaseManager.read { db in
             let assetCount = try Int.fetchOne(

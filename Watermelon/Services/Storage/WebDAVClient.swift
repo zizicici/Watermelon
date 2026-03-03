@@ -399,6 +399,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             }
             throw Self.statusError(status, method: "PROPPATCH", url: request.url)
         }
+        // Best-effort metadata update: if all attempts are unsupported, keep backup success.
+        return
     }
 
     func download(remotePath: String, localURL: URL) async throws {

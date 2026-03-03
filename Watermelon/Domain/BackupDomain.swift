@@ -61,6 +61,7 @@ struct LocalPhotoResource {
     let resource: PHAssetResource
     let assetLocalIdentifier: String
     let resourceLocalIdentifier: String
+    let preferredRemoteFileName: String
     let resourceRole: Int
     let resourceSlot: Int
     let resourceType: String

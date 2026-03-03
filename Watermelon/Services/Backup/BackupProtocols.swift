@@ -30,6 +30,7 @@ protocol ContentHashIndexRepositoryProtocol: Sendable {
     func fetchAssetFingerprintsByAsset(assetIDs: Set<String>) throws -> [String: Data]
     func fetchAssetHashCaches() throws -> [String: LocalAssetHashCache]
     func fetchAssetHashCaches(assetIDs: Set<String>) throws -> [String: LocalAssetHashCache]
+    func fetchTotalFileSizeBytes(assetIDs: Set<String>) throws -> Int64
     func fetchLocalHashIndexStats() throws -> LocalHashIndexStats
     func clearLocalHashIndex() throws
     func fetchIndexedAssetIDs() throws -> [String]

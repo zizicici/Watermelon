@@ -117,11 +117,20 @@ final class AssetProcessor: Sendable {
             return cachedResult
         }
 
+        let preferredAssetNameStem = Self.preferredAssetNameStem(
+            asset: context.asset,
+            selectedResources: context.selectedResources
+        )
+
         for (resourcePosition, selected) in context.selectedResources.enumerated() {
             try cancellationController?.throwIfCancelled()
             try Task.checkCancellation()
 
-            let local = makeLocalResource(asset: context.asset, selected: selected)
+            let local = makeLocalResource(
+                asset: context.asset,
+                selected: selected,
+                preferredAssetNameStem: preferredAssetNameStem
+            )
             if emitTransferState {
                 eventStream.emit(.transferState(
                     Self.makeTransferState(
@@ -539,7 +548,7 @@ final class AssetProcessor: Sendable {
         let localHash = prepared.contentHash
         let localFileSize = prepared.fileSize
 
-        var targetFileName = RemotePathBuilder.sanitizeFilename(local.originalFilename)
+        var targetFileName = local.preferredRemoteFileName
         var skipReason: String?
         var attemptedFileNames: Set<String> = [targetFileName]
 
@@ -801,12 +810,20 @@ final class AssetProcessor: Sendable {
         return try Self.contentHash(of: tempURL, cancellationController: cancellationController)
     }
 
-    private func makeLocalResource(asset: PHAsset, selected: BackupSelectedResource) -> LocalPhotoResource {
+    private func makeLocalResource(
+        asset: PHAsset,
+        selected: BackupSelectedResource,
+        preferredAssetNameStem: String
+    ) -> LocalPhotoResource {
         LocalPhotoResource(
             asset: asset,
             resource: selected.resource,
             assetLocalIdentifier: asset.localIdentifier,
             resourceLocalIdentifier: "\(asset.localIdentifier)::\(selected.role)::\(selected.slot)",
+            preferredRemoteFileName: Self.preferredRemoteFileName(
+                preferredAssetNameStem: preferredAssetNameStem,
+                selected: selected
+            ),
             resourceRole: selected.role,
             resourceSlot: selected.slot,
             resourceType: PhotoLibraryService.resourceTypeName(selected.resource.type),
@@ -848,6 +865,118 @@ final class AssetProcessor: Sendable {
     private static func nanosecondsSinceEpoch(_ date: Date?) -> Int64? {
         guard let date else { return nil }
         return Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded())
+    }
+
+    private static func preferredAssetNameStem(
+        asset: PHAsset,
+        selectedResources: [BackupSelectedResource]
+    ) -> String {
+        let rolePriority = [
+            ResourceTypeCode.photo,
+            ResourceTypeCode.video,
+            ResourceTypeCode.fullSizePhoto,
+            ResourceTypeCode.fullSizeVideo,
+            ResourceTypeCode.alternatePhoto,
+            ResourceTypeCode.pairedVideo
+        ]
+
+        for role in rolePriority {
+            if let preferred = selectedResources.first(where: { $0.role == role && $0.slot == 0 }) {
+                let stem = sanitizedFileStem(from: preferred.resource.originalFilename)
+                if !stem.isEmpty {
+                    return stem
+                }
+            }
+        }
+
+        if let first = selectedResources.first {
+            let stem = sanitizedFileStem(from: first.resource.originalFilename)
+            if !stem.isEmpty {
+                return stem
+            }
+        }
+
+        return "asset_\(nanosecondsSinceEpoch(asset.creationDate) ?? 0)"
+    }
+
+    private static func preferredRemoteFileName(
+        preferredAssetNameStem: String,
+        selected: BackupSelectedResource
+    ) -> String {
+        let sanitizedOriginalName = RemotePathBuilder.sanitizeFilename(selected.resource.originalFilename)
+        let originalExt = (sanitizedOriginalName as NSString).pathExtension
+        let originalStem = sanitizedFileStem(from: selected.resource.originalFilename)
+
+        let baseStem: String = {
+            if !preferredAssetNameStem.isEmpty {
+                return preferredAssetNameStem
+            }
+            let fallback = sanitizedFileStem(from: selected.resource.originalFilename)
+            return fallback.isEmpty ? "resource" : fallback
+        }()
+
+        let isPrimary = selected.slot == 0 &&
+            (selected.role == ResourceTypeCode.photo ||
+                selected.role == ResourceTypeCode.video ||
+                selected.role == ResourceTypeCode.pairedVideo)
+        let stem: String
+        if isPrimary {
+            stem = baseStem
+        } else {
+            var detailStem = originalStem
+            if detailStem.isEmpty {
+                detailStem = fallbackResourceLabel(forRole: selected.role)
+            }
+
+            let baseLower = baseStem.lowercased()
+            let detailLower = detailStem.lowercased()
+
+            if detailLower == baseLower {
+                detailStem = fallbackResourceLabel(forRole: selected.role)
+            }
+
+            let updatedDetailLower = detailStem.lowercased()
+            if updatedDetailLower.hasPrefix(baseLower + "_") ||
+                updatedDetailLower.hasPrefix(baseLower + "-") ||
+                updatedDetailLower == baseLower {
+                stem = detailStem
+            } else {
+                stem = "\(baseStem)_\(detailStem)"
+            }
+        }
+
+        if originalExt.isEmpty {
+            return stem
+        }
+        return "\(stem).\(originalExt)"
+    }
+
+    private static func fallbackResourceLabel(forRole role: Int) -> String {
+        let raw = PhotoLibraryService.resourceTypeName(from: role)
+        let separatedCamel = raw.replacingOccurrences(
+            of: "([a-z0-9])([A-Z])",
+            with: "$1 $2",
+            options: .regularExpression
+        )
+        let normalized = separatedCamel.replacingOccurrences(
+            of: "[^A-Za-z0-9]+",
+            with: " ",
+            options: .regularExpression
+        )
+        let words = normalized
+            .split(separator: " ")
+            .map { token in
+                token.prefix(1).uppercased() + token.dropFirst()
+            }
+        if words.isEmpty {
+            return "Resource\(max(role, 0))"
+        }
+        return words.joined()
+    }
+
+    private static func sanitizedFileStem(from originalFilename: String) -> String {
+        let sanitized = RemotePathBuilder.sanitizeFilename(originalFilename)
+        return (sanitized as NSString).deletingPathExtension
     }
 
     private static func totalSizeBytes(of selectedResources: [BackupSelectedResource]) -> Int64 {

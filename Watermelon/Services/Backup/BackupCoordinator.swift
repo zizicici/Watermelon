@@ -160,33 +160,18 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                 return result
             }
 
-            let localHashCacheByAssetID: [String: LocalAssetHashCache]
-            do {
-                if let onlyAssetLocalIdentifiers {
-                    localHashCacheByAssetID = try hashIndexRepository.fetchAssetHashCaches(assetIDs: onlyAssetLocalIdentifiers)
-                } else {
-                    localHashCacheByAssetID = try hashIndexRepository.fetchAssetHashCaches()
-                }
-            } catch {
-                localHashCacheByAssetID = [:]
-                eventStream.emit(.log("Local hash cache load warning: \(error.localizedDescription)"))
-            }
-
-            let allAssets: [PHAsset]
+            let monthAssetIDsByMonth: [MonthKey: [String]]
             if retryMode {
-                allAssets = retryAssets
+                monthAssetIDsByMonth = Self.buildMonthAssetIDsByMonth(from: retryAssets)
             } else if let assetsResult {
-                var fetchedAssets: [PHAsset] = []
-                fetchedAssets.reserveCapacity(assetsResult.count)
-                for index in 0 ..< assetsResult.count {
-                    fetchedAssets.append(assetsResult.object(at: index))
-                }
-                allAssets = fetchedAssets
+                monthAssetIDsByMonth = Self.buildMonthAssetIDsByMonth(from: assetsResult)
             } else {
-                allAssets = []
+                monthAssetIDsByMonth = [:]
             }
 
-            state.total = allAssets.count
+            state.total = monthAssetIDsByMonth.values.reduce(0) { partial, ids in
+                partial + ids.count
+            }
             if state.total == 0 {
                 let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
                 eventStream.emit(.finished(result))
@@ -194,9 +179,13 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                 return result
             }
 
+            let estimatedBytesByMonth = fetchEstimatedBytesByMonth(
+                monthAssetIDsByMonth: monthAssetIDsByMonth,
+                eventStream: eventStream
+            )
             let monthPlans = Self.buildMonthPlans(
-                assets: allAssets,
-                localHashCacheByAssetID: localHashCacheByAssetID
+                assetLocalIdentifiersByMonth: monthAssetIDsByMonth,
+                estimatedBytesByMonth: estimatedBytesByMonth
             )
             let workerCount = Self.resolveWorkerCount(
                 profile: profile,
@@ -239,7 +228,6 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                                 monthQueue: monthQueue,
                                 profile: profile,
                                 snapshotSeedLookup: snapshotSeedLookup,
-                                localHashCacheByAssetID: localHashCacheByAssetID,
                                 eventStream: eventStream,
                                 aggregator: aggregator,
                                 clientPool: clientPool
@@ -421,31 +409,71 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
         await client.disconnect()
     }
 
-    private static func buildMonthPlans(
-        assets: [PHAsset],
-        localHashCacheByAssetID: [String: LocalAssetHashCache]
-    ) -> [MonthWorkItem] {
-        var assetsByMonth: [MonthKey: [PHAsset]] = [:]
+    private static func buildMonthAssetIDsByMonth(
+        from assetsResult: PHFetchResult<PHAsset>
+    ) -> [MonthKey: [String]] {
+        var assetsByMonth: [MonthKey: [String]] = [:]
         assetsByMonth.reserveCapacity(32)
 
-        var estimatedBytesByMonth: [MonthKey: Int64] = [:]
-        estimatedBytesByMonth.reserveCapacity(32)
+        for index in 0 ..< assetsResult.count {
+            let asset = assetsResult.object(at: index)
+            let monthKey = AssetProcessor.monthKey(for: asset.creationDate)
+            assetsByMonth[monthKey, default: []].append(asset.localIdentifier)
+        }
+        return assetsByMonth
+    }
+
+    private static func buildMonthAssetIDsByMonth(
+        from assets: [PHAsset]
+    ) -> [MonthKey: [String]] {
+        var assetsByMonth: [MonthKey: [String]] = [:]
+        assetsByMonth.reserveCapacity(32)
 
         for asset in assets {
             let monthKey = AssetProcessor.monthKey(for: asset.creationDate)
-            assetsByMonth[monthKey, default: []].append(asset)
+            assetsByMonth[monthKey, default: []].append(asset.localIdentifier)
+        }
+        return assetsByMonth
+    }
 
-            if let cache = localHashCacheByAssetID[asset.localIdentifier] {
-                estimatedBytesByMonth[monthKey, default: 0] += max(cache.totalFileSizeBytes, 0)
+    private func fetchEstimatedBytesByMonth(
+        monthAssetIDsByMonth: [MonthKey: [String]],
+        eventStream: BackupEventStream
+    ) -> [MonthKey: Int64] {
+        var estimatedBytesByMonth: [MonthKey: Int64] = [:]
+        estimatedBytesByMonth.reserveCapacity(monthAssetIDsByMonth.count)
+
+        for (month, assetIDs) in monthAssetIDsByMonth {
+            guard !assetIDs.isEmpty else {
+                estimatedBytesByMonth[month] = 0
+                continue
+            }
+            do {
+                estimatedBytesByMonth[month] = try hashIndexRepository.fetchTotalFileSizeBytes(
+                    assetIDs: Set(assetIDs)
+                )
+            } catch {
+                eventStream.emit(.log(
+                    "Local hash size estimate warning for month \(month.text): \(error.localizedDescription)"
+                ))
+                estimatedBytesByMonth[month] = 0
             }
         }
 
+        return estimatedBytesByMonth
+    }
+
+    private static func buildMonthPlans(
+        assetLocalIdentifiersByMonth: [MonthKey: [String]],
+        estimatedBytesByMonth: [MonthKey: Int64]
+    ) -> [MonthWorkItem] {
+
         var plans: [MonthWorkItem] = []
-        plans.reserveCapacity(assetsByMonth.count)
-        for (month, monthAssets) in assetsByMonth {
+        plans.reserveCapacity(assetLocalIdentifiersByMonth.count)
+        for (month, monthAssetIDs) in assetLocalIdentifiersByMonth {
             plans.append(MonthWorkItem(
                 month: month,
-                assets: monthAssets,
+                assetLocalIdentifiers: monthAssetIDs,
                 estimatedBytes: estimatedBytesByMonth[month] ?? 0
             ))
         }
@@ -454,8 +482,8 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
             if lhs.estimatedBytes != rhs.estimatedBytes {
                 return lhs.estimatedBytes > rhs.estimatedBytes
             }
-            if lhs.assets.count != rhs.assets.count {
-                return lhs.assets.count > rhs.assets.count
+            if lhs.assetLocalIdentifiers.count != rhs.assetLocalIdentifiers.count {
+                return lhs.assetLocalIdentifiers.count > rhs.assetLocalIdentifiers.count
             }
             return lhs.month < rhs.month
         }
@@ -507,7 +535,6 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
         monthQueue: MonthWorkQueue,
         profile: ServerProfileRecord,
         snapshotSeedLookup: MonthSeedLookup?,
-        localHashCacheByAssetID: [String: LocalAssetHashCache],
         eventStream: BackupEventStream,
         aggregator: ParallelBackupProgressAggregator,
         clientPool: StorageClientPool
@@ -541,7 +568,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                 }
 
                 eventStream.emit(.log(
-                    "Worker\(workerID + 1) claimed month \(monthKey.text), assets=\(monthPlan.assets.count), est=\(StageTimingWindow.formatBytes(monthPlan.estimatedBytes))."
+                    "Worker\(workerID + 1) claimed month \(monthKey.text), assets=\(monthPlan.assetLocalIdentifiers.count), est=\(StageTimingWindow.formatBytes(monthPlan.estimatedBytes))."
                 ))
                 eventStream.emit(.monthChanged(MonthChangeEvent(
                     year: monthKey.year,
@@ -550,84 +577,141 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                 )))
 
                 var monthFatalError: Error?
+                let monthAssetIDs = monthPlan.assetLocalIdentifiers
+                let fetchBatchSize = 500
+                var missingAssetCount = 0
+                var hasLoggedLocalHashCacheWarning = false
 
-                for asset in monthPlan.assets {
-                    if Task.isCancelled {
-                        workerState.paused = true
-                        break
-                    }
+                for batchStart in stride(from: 0, to: monthAssetIDs.count, by: fetchBatchSize) {
+                    let batchEnd = min(batchStart + fetchBatchSize, monthAssetIDs.count)
+                    let batchAssetIDs = Array(monthAssetIDs[batchStart ..< batchEnd])
+                    guard !batchAssetIDs.isEmpty else { continue }
 
-                    let selectedResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
-                        from: PHAssetResource.assetResources(for: asset)
-                    )
-                    if selectedResources.isEmpty {
-                        await aggregator.reduceTotalForEmptyAsset()
-                        continue
-                    }
-
-                    let dispatch = await aggregator.allocateDispatchSlot()
-
+                    var batchLocalHashCacheByAssetID: [String: LocalAssetHashCache]
                     do {
-                        let context = AssetProcessContext(
-                            workerID: workerID + 1,
-                            asset: asset,
-                            selectedResources: selectedResources,
-                            cachedLocalHash: localHashCacheByAssetID[asset.localIdentifier],
-                            monthStore: monthStore,
-                            profile: profile,
-                            assetPosition: dispatch.position,
-                            totalAssets: dispatch.total
+                        batchLocalHashCacheByAssetID = try hashIndexRepository.fetchAssetHashCaches(
+                            assetIDs: Set(batchAssetIDs)
                         )
-
-                        let result = try await assetProcessor.process(
-                            context: context,
-                            client: client,
-                            eventStream: eventStream,
-                            cancellationController: nil
-                        )
-                        let progressState = await aggregator.record(result: result)
-
-                        emitProgress(
-                            eventStream: eventStream,
-                            state: progressState.state,
-                            result: result,
-                            position: progressState.position,
-                            asset: asset
-                        )
-                        if let timingSummary = progressState.timingSummary {
-                            eventStream.emit(.log(timingSummary))
-                        }
                     } catch {
-                        if error is CancellationError {
+                        if !hasLoggedLocalHashCacheWarning {
+                            eventStream.emit(.log(
+                                "Worker\(workerID + 1) local hash cache warning for month \(monthKey.text): \(error.localizedDescription)"
+                            ))
+                            hasLoggedLocalHashCacheWarning = true
+                        }
+                        batchLocalHashCacheByAssetID = [:]
+                    }
+
+                    let batchAssetsResult = PHAsset.fetchAssets(
+                        withLocalIdentifiers: batchAssetIDs,
+                        options: nil
+                    )
+                    var batchAssetsByLocalIdentifier: [String: PHAsset] = [:]
+                    batchAssetsByLocalIdentifier.reserveCapacity(batchAssetsResult.count)
+                    for index in 0 ..< batchAssetsResult.count {
+                        let asset = batchAssetsResult.object(at: index)
+                        batchAssetsByLocalIdentifier[asset.localIdentifier] = asset
+                    }
+                    missingAssetCount += max(batchAssetIDs.count - batchAssetsByLocalIdentifier.count, 0)
+
+                    for assetID in batchAssetIDs {
+                        if Task.isCancelled {
                             workerState.paused = true
                             break
                         }
-                        if profile.isExternalStorageUnavailableError(error) {
-                            clientReusable = false
-                            monthFatalError = error
-                            break
+
+                        guard let asset = batchAssetsByLocalIdentifier.removeValue(forKey: assetID) else {
+                            await aggregator.reduceTotalForEmptyAsset()
+                            continue
                         }
 
-                        let displayName = BackupAssetResourcePlanner.assetDisplayName(
-                            asset: asset,
-                            selectedResources: selectedResources
+                        let selectedResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
+                            from: PHAssetResource.assetResources(for: asset)
                         )
-                        let errorMessage = profile.userFacingStorageErrorMessage(error)
-                        eventStream.emit(.log("Failed asset: \(displayName) - \(errorMessage)"))
+                        if selectedResources.isEmpty {
+                            await aggregator.reduceTotalForEmptyAsset()
+                            continue
+                        }
 
-                        let progressState = await aggregator.recordFailure()
-                        emitFailureProgress(
-                            eventStream: eventStream,
-                            state: progressState.state,
-                            asset: asset,
-                            displayName: displayName,
-                            errorMessage: errorMessage,
-                            position: progressState.position
-                        )
-                        if let timingSummary = progressState.timingSummary {
-                            eventStream.emit(.log(timingSummary))
+                        let dispatch = await aggregator.allocateDispatchSlot()
+                        let cachedLocalHash = batchLocalHashCacheByAssetID.removeValue(forKey: assetID)
+
+                        do {
+                            let context = AssetProcessContext(
+                                workerID: workerID + 1,
+                                asset: asset,
+                                selectedResources: selectedResources,
+                                cachedLocalHash: cachedLocalHash,
+                                monthStore: monthStore,
+                                profile: profile,
+                                assetPosition: dispatch.position,
+                                totalAssets: dispatch.total
+                            )
+
+                            let result = try await assetProcessor.process(
+                                context: context,
+                                client: client,
+                                eventStream: eventStream,
+                                cancellationController: nil
+                            )
+                            let progressState = await aggregator.record(result: result)
+
+                            emitProgress(
+                                eventStream: eventStream,
+                                state: progressState.state,
+                                result: result,
+                                position: progressState.position,
+                                asset: asset
+                            )
+                            if let timingSummary = progressState.timingSummary {
+                                eventStream.emit(.log(timingSummary))
+                            }
+                        } catch {
+                            if error is CancellationError {
+                                workerState.paused = true
+                                break
+                            }
+                            if profile.isExternalStorageUnavailableError(error) {
+                                clientReusable = false
+                                monthFatalError = error
+                                break
+                            }
+
+                            let displayName = BackupAssetResourcePlanner.assetDisplayName(
+                                asset: asset,
+                                selectedResources: selectedResources
+                            )
+                            let errorMessage = profile.userFacingStorageErrorMessage(error)
+                            eventStream.emit(.log("Failed asset: \(displayName) - \(errorMessage)"))
+
+                            let progressState = await aggregator.recordFailure()
+                            emitFailureProgress(
+                                eventStream: eventStream,
+                                state: progressState.state,
+                                asset: asset,
+                                displayName: displayName,
+                                errorMessage: errorMessage,
+                                position: progressState.position
+                            )
+                            if let timingSummary = progressState.timingSummary {
+                                eventStream.emit(.log(timingSummary))
+                            }
                         }
                     }
+
+                    if workerState.paused || monthFatalError != nil {
+                        break
+                    }
+
+                    // Release batch containers eagerly before next batch.
+                    batchAssetsByLocalIdentifier.removeAll(keepingCapacity: false)
+                    batchLocalHashCacheByAssetID.removeAll(keepingCapacity: false)
+                }
+
+                if missingAssetCount > 0 {
+                    eventStream.emit(.log(
+                        "Worker\(workerID + 1) month \(monthKey.text): \(missingAssetCount) asset(s) missing in photo library snapshot."
+                    ))
                 }
 
                 let shouldForceFlush = workerState.paused && monthStore.dirty
@@ -850,7 +934,7 @@ private struct MonthSeedLookup {
 
 private struct MonthWorkItem: @unchecked Sendable {
     let month: MonthKey
-    let assets: [PHAsset]
+    let assetLocalIdentifiers: [String]
     let estimatedBytes: Int64
 }
 

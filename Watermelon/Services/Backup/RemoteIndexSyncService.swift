@@ -1,6 +1,37 @@
 import Foundation
 
 final class RemoteIndexSyncService: Sendable {
+    private actor SyncGate {
+        private var isLocked = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        private func acquire() async {
+            if !isLocked {
+                isLocked = true
+                return
+            }
+            await withCheckedContinuation { continuation in
+                waiters.append(continuation)
+            }
+        }
+
+        private func release() {
+            if !waiters.isEmpty {
+                let next = waiters.removeFirst()
+                next.resume()
+            } else {
+                isLocked = false
+            }
+        }
+
+        func withLock<T>(_ operation: () async throws -> T) async throws -> T {
+            await acquire()
+            defer { release() }
+            try Task.checkCancellation()
+            return try await operation()
+        }
+    }
+
     private actor MutableState {
         private var activeRemoteProfileKey: String?
         private var remoteManifestDigests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
@@ -28,6 +59,7 @@ final class RemoteIndexSyncService: Sendable {
 
     private let scanner: RemoteManifestIndexScannerProtocol
     private let snapshotCache: RemoteLibrarySnapshotCache
+    private let syncGate = SyncGate()
     private let state = MutableState()
 
     init(
@@ -42,6 +74,20 @@ final class RemoteIndexSyncService: Sendable {
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream? = nil
+    ) async throws -> RemoteLibrarySnapshot {
+        try await syncGate.withLock {
+            try await syncIndexUnlocked(
+                client: client,
+                profile: profile,
+                eventStream: eventStream
+            )
+        }
+    }
+
+    private func syncIndexUnlocked(
+        client: RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        eventStream: BackupEventStream?
     ) async throws -> RemoteLibrarySnapshot {
         let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: Self.remoteProfileKey(profile))
         if shouldResetSnapshot {
