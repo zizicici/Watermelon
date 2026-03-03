@@ -111,7 +111,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                     profile: profile,
                     eventStream: eventStream
                 )
-                snapshotSeedLookup = makeMonthSeedLookup(from: snapshot)
+                snapshotSeedLookup = makeMonthSeedLookup(from: snapshot, eventStream: eventStream)
                 eventStream.emit(.log(
                     "Remote index synced. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s)."
                 ))
@@ -758,7 +758,19 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
         }
     }
 
-    private func makeMonthSeedLookup(from snapshot: RemoteLibrarySnapshot) -> MonthSeedLookup? {
+    private static let monthSeedLookupEntryThreshold = 120_000
+
+    private func makeMonthSeedLookup(
+        from snapshot: RemoteLibrarySnapshot,
+        eventStream: BackupEventStream
+    ) -> MonthSeedLookup? {
+        let totalEntries = snapshot.totalResourceCount + snapshot.totalCount + snapshot.assetResourceLinks.count
+        if totalEntries > Self.monthSeedLookupEntryThreshold {
+            eventStream.emit(.log(
+                "Remote snapshot is large (\(totalEntries) entries). Disable in-memory month seeding and load manifests on demand."
+            ))
+            return nil
+        }
         let lookup = MonthSeedLookup(snapshot: snapshot)
         return lookup.isEmpty ? nil : lookup
     }

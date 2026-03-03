@@ -18,20 +18,13 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     private var linksByMonth: [LibraryMonthKey: LinkMap] = [:]
     private var linkKeysByAssetID: [String: Set<LinkKey>] = [:]
 
-    private var snapshot = RemoteLibrarySnapshot(resources: [], assets: [], assetResourceLinks: [])
-    private var fullSnapshotDirty = false
-
     private var revision: UInt64 = 0
     private var monthLastChangedRevision: [LibraryMonthKey: UInt64] = [:]
 
     func current() -> RemoteLibrarySnapshot {
         lock.lock()
         defer { lock.unlock() }
-        if fullSnapshotDirty {
-            snapshot = rebuildFullSnapshotLocked()
-            fullSnapshotDirty = false
-        }
-        return snapshot
+        return rebuildFullSnapshotLocked()
     }
 
     func state(since baseRevision: UInt64?) -> RemoteLibrarySnapshotState {
@@ -86,9 +79,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         assetsByMonth = nextAssetsByMonth
         linksByMonth = nextLinksByMonth
         linkKeysByAssetID = nextLinkKeysByAssetID
-
-        self.snapshot = nextSnapshot
-        fullSnapshotDirty = false
         bumpRevisionLocked(changedMonths)
 
         lock.unlock()
@@ -100,8 +90,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         assetsByMonth.removeAll()
         linksByMonth.removeAll()
         linkKeysByAssetID.removeAll()
-        snapshot = RemoteLibrarySnapshot(resources: [], assets: [], assetResourceLinks: [])
-        fullSnapshotDirty = false
         revision = 0
         monthLastChangedRevision.removeAll()
         lock.unlock()
@@ -149,7 +137,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
 
         attachLinkKeysLocked(nextLinks)
 
-        fullSnapshotDirty = true
         bumpRevisionLocked([month])
         lock.unlock()
         return true
@@ -171,8 +158,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         if let previousLinks {
             detachLinkKeysLocked(previousLinks)
         }
-
-        fullSnapshotDirty = true
         bumpRevisionLocked([month])
         lock.unlock()
         return true
@@ -191,7 +176,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         monthResources[item.id] = item
         resourcesByMonth[month] = monthResources
 
-        fullSnapshotDirty = true
         bumpRevisionLocked([month])
         lock.unlock()
     }
@@ -206,11 +190,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         var monthAssets = assetsByMonth[month] ?? [:]
         if monthAssets[asset.id] != asset {
             monthAssets[asset.id] = asset
-            if monthAssets.isEmpty {
-                assetsByMonth[month] = nil
-            } else {
-                assetsByMonth[month] = monthAssets
-            }
+            assetsByMonth[month] = monthAssets
             hasChanged = true
         }
 
@@ -269,7 +249,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
 
         if hasChanged {
-            fullSnapshotDirty = true
             bumpRevisionLocked(changedMonths)
         }
 
@@ -342,18 +321,29 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         var resources: [RemoteManifestResource] = []
         var assets: [RemoteManifestAsset] = []
         var links: [RemoteAssetResourceLink] = []
+        var assetFingerprintSet = Set<Data>()
 
         resources.reserveCapacity(resourcesByMonth.values.reduce(0) { $0 + $1.count })
         assets.reserveCapacity(assetsByMonth.values.reduce(0) { $0 + $1.count })
         links.reserveCapacity(linksByMonth.values.reduce(0) { $0 + $1.count })
+        assetFingerprintSet.reserveCapacity(assetsByMonth.values.reduce(0) { $0 + $1.count })
 
         for month in sortedMonths {
             resources.append(contentsOf: sortedResourcesLocked(for: month))
-            assets.append(contentsOf: sortedAssetsLocked(for: month))
+            let monthAssets = sortedAssetsLocked(for: month)
+            assets.append(contentsOf: monthAssets)
+            for asset in monthAssets {
+                assetFingerprintSet.insert(asset.assetFingerprint)
+            }
             links.append(contentsOf: sortedLinksLocked(for: month))
         }
 
-        return RemoteLibrarySnapshot(resources: resources, assets: assets, assetResourceLinks: links)
+        return RemoteLibrarySnapshot(
+            resources: resources,
+            assets: assets,
+            assetResourceLinks: links,
+            assetFingerprintSet: assetFingerprintSet
+        )
     }
 
     private func sortedResourcesLocked(for month: LibraryMonthKey) -> [RemoteManifestResource] {

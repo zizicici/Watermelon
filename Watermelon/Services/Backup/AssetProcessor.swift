@@ -554,7 +554,7 @@ final class AssetProcessor: Sendable {
 
         if monthStore.existingFileNames().contains(targetFileName) {
             let existingManifestResource = monthStore.findByFileName(targetFileName)
-            let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteEntry(named: targetFileName)?.size
+            let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: targetFileName)
             if localFileSize < Self.smallFileThresholdBytes {
                 if let knownRemoteSize, knownRemoteSize != localFileSize {
                     // Different size means definitely not the same file; avoid remote download+hash.
@@ -620,7 +620,7 @@ final class AssetProcessor: Sendable {
             remoteIndexService.upsertCachedResource(inserted)
         }
 
-        monthStore.markRemoteFile(name: targetFileName, size: localFileSize, creationDate: local.asset.creationDate)
+        monthStore.markRemoteFile(name: targetFileName, size: localFileSize)
     }
 
     private func performUploadWithRetry(
@@ -783,7 +783,7 @@ final class AssetProcessor: Sendable {
             backedUpAtNs: backedUpAtNs
         )
         let inserted = try monthStore.upsertResource(manifestItem)
-        monthStore.markRemoteFile(name: targetFileName, size: localFileSize, creationDate: local.asset.creationDate)
+        monthStore.markRemoteFile(name: targetFileName, size: localFileSize)
         remoteIndexService.upsertCachedResource(inserted)
     }
 

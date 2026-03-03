@@ -117,6 +117,7 @@ final class BackupSessionController {
     private var processedItemsByAssetID: [String: ProcessedItem] = [:]
     private var processedAssetTimeline: [String] = []
     private var processedAssetTimelineHead = 0
+    private var completedAssetIDsForResume: Set<String> = []
     private(set) var latestItemEvent: BackupItemEvent?
     private(set) var transferState: BackupTransferState?
     private(set) var transferStatesByWorkerID: [Int: BackupTransferState] = [:]
@@ -354,6 +355,7 @@ final class BackupSessionController {
             state == .failed ||
             (state == .stopped && !mode.isRetry)
 
+        completedAssetIDsForResume.removeAll()
         if shouldResetSessionItems {
             clearProcessedItems()
             latestItemEvent = nil
@@ -760,6 +762,7 @@ final class BackupSessionController {
         appendProcessedAssetTimeline(event.assetLocalIdentifier)
 
         if event.status == .failed {
+            completedAssetIDsForResume.remove(event.assetLocalIdentifier)
             retryCountByAssetID[event.assetLocalIdentifier, default: 0] += 1
             let retryCount = retryCountByAssetID[event.assetLocalIdentifier, default: 0]
             failedItemsByAssetID[event.assetLocalIdentifier] = FailedItem(
@@ -771,6 +774,7 @@ final class BackupSessionController {
                 updatedAt: event.updatedAt
             )
         } else {
+            completedAssetIDsForResume.insert(event.assetLocalIdentifier)
             failedItemsByAssetID[event.assetLocalIdentifier] = nil
         }
 
@@ -791,6 +795,7 @@ final class BackupSessionController {
         processedItemsByAssetID.removeAll()
         processedAssetTimeline.removeAll()
         processedAssetTimelineHead = 0
+        completedAssetIDsForResume.removeAll()
     }
 
     private func appendProcessedAssetTimeline(_ assetID: String) {
@@ -804,6 +809,28 @@ final class BackupSessionController {
             processedAssetTimeline.removeFirst(processedAssetTimelineHead)
             processedAssetTimelineHead = 0
         }
+        pruneProcessedItemsIfNeeded()
+    }
+
+    private func pruneProcessedItemsIfNeeded() {
+        guard processedItemsByAssetID.count > Self.processedItemsMapSoftLimit else {
+            return
+        }
+        let start = processedAssetTimelineHead
+        guard start < processedAssetTimeline.count else {
+            processedItemsByAssetID.removeAll()
+            return
+        }
+
+        var liveAssetIDs = Set<String>()
+        liveAssetIDs.reserveCapacity(
+            min(Self.processedItemsTimelineCapacity, processedAssetTimeline.count - start)
+        )
+        for index in start ..< processedAssetTimeline.count {
+            liveAssetIDs.insert(processedAssetTimeline[index])
+        }
+
+        processedItemsByAssetID = processedItemsByAssetID.filter { liveAssetIDs.contains($0.key) }
     }
 
     @discardableResult
@@ -949,13 +976,7 @@ final class BackupSessionController {
     }
 
     private func completedAssetIDs() -> Set<String> {
-        Set(
-            processedItemsByAssetID.values
-                .filter { item in
-                    item.status == .success || item.status == .skipped
-                }
-                .map(\.assetLocalIdentifier)
-        )
+        completedAssetIDsForResume
     }
 
     private func primaryActionTitle(for state: State) -> String {
@@ -981,6 +1002,7 @@ final class BackupSessionController {
     private static let processedItemsTimelineCapacity = 8_000
     private static let processedItemsTimelineCompactionThreshold = 2_000
     private static let processedItemsSnapshotLimit = 2_000
+    private static let processedItemsMapSoftLimit = 12_000
 
     private func resolvePassword(for profile: ServerProfileRecord) -> String? {
         if profile.storageProfile.requiresPassword {

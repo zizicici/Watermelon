@@ -84,15 +84,18 @@ struct RemoteLibrarySnapshot {
     let resources: [RemoteManifestResource]
     let assets: [RemoteManifestAsset]
     let assetResourceLinks: [RemoteAssetResourceLink]
+    private let cachedAssetFingerprintSet: Set<Data>?
 
     init(
         resources: [RemoteManifestResource],
         assets: [RemoteManifestAsset],
-        assetResourceLinks: [RemoteAssetResourceLink] = []
+        assetResourceLinks: [RemoteAssetResourceLink] = [],
+        assetFingerprintSet: Set<Data>? = nil
     ) {
         self.resources = resources
         self.assets = assets
         self.assetResourceLinks = assetResourceLinks
+        cachedAssetFingerprintSet = assetFingerprintSet
     }
 
     var totalCount: Int {
@@ -104,7 +107,10 @@ struct RemoteLibrarySnapshot {
     }
 
     var assetFingerprintSet: Set<Data> {
-        Set(assets.map(\.assetFingerprint))
+        if let cachedAssetFingerprintSet {
+            return cachedAssetFingerprintSet
+        }
+        return Set(assets.map(\.assetFingerprint))
     }
 }
 

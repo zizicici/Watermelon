@@ -120,8 +120,8 @@ final class RemoteIndexSyncService: Sendable {
             return snapshot
         }
 
-        var monthDeltas: [LibraryMonthKey: RemoteLibraryMonthDelta] = [:]
-        monthDeltas.reserveCapacity(changedMonths.count)
+        var appliedChangedMonths = 0
+        var appliedRemovedMonths = 0
 
         for month in changedMonths.sorted() {
             guard let store = try await MonthManifestStore.loadManifestOnlyIfExists(
@@ -139,24 +139,11 @@ final class RemoteIndexSyncService: Sendable {
 
             let monthAssets = store.allAssets()
             let monthLinks = monthAssets.flatMap { store.links(forAssetFingerprint: $0.assetFingerprint) }
-            monthDeltas[month] = RemoteLibraryMonthDelta(
-                month: month,
+            if snapshotCache.replaceMonth(
+                month,
                 resources: store.allItems(),
                 assets: monthAssets,
                 assetResourceLinks: monthLinks
-            )
-        }
-
-        var appliedChangedMonths = 0
-        var appliedRemovedMonths = 0
-
-        for month in changedMonths.sorted() {
-            guard let monthDelta = monthDeltas[month] else { continue }
-            if snapshotCache.replaceMonth(
-                month,
-                resources: monthDelta.resources,
-                assets: monthDelta.assets,
-                assetResourceLinks: monthDelta.assetResourceLinks
             ) {
                 appliedChangedMonths += 1
             }

@@ -9,6 +9,10 @@ final class MonthManifestStore {
     private static let staleTempCleanupLock = NSLock()
     private static var hasPurgedStaleTempFiles = false
 
+    private struct RemoteFileMetadata {
+        let size: Int64
+    }
+
     struct Seed {
         let resources: [RemoteManifestResource]
         let assets: [RemoteManifestAsset]
@@ -40,12 +44,12 @@ final class MonthManifestStore {
     private let dbQueue: DatabaseQueue
 
     private(set) var itemsByFileName: [String: RemoteManifestResource] = [:]
-    private(set) var itemsByHash: [Data: RemoteManifestResource] = [:]
+    private(set) var itemsByHash: [Data: String] = [:]
 
     private(set) var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
     private(set) var assetLinksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
 
-    private(set) var remoteFilesByName: [String: RemoteStorageEntry] = [:]
+    private var remoteFilesByName: [String: RemoteFileMetadata] = [:]
     private(set) var existingFileNameSet: Set<String> = []
     private(set) var dirty: Bool = false
 
@@ -56,7 +60,7 @@ final class MonthManifestStore {
         month: Int,
         localManifestURL: URL,
         dbQueue: DatabaseQueue,
-        remoteFilesByName: [String: RemoteStorageEntry],
+        remoteFilesByName: [String: RemoteFileMetadata],
         dirty: Bool
     ) {
         self.client = client
@@ -100,7 +104,12 @@ final class MonthManifestStore {
         let remoteFilesByName = Dictionary(
             uniqueKeysWithValues: entries
                 .filter { !$0.isDirectory && $0.name != Self.manifestFileName }
-                .map { ($0.name, $0) }
+                .map {
+                    (
+                        $0.name,
+                        RemoteFileMetadata(size: $0.size)
+                    )
+                }
         )
 
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
@@ -192,23 +201,10 @@ final class MonthManifestStore {
         let dbQueue = try DatabaseQueue(path: localURL.path)
         try Self.migrate(dbQueue)
 
-        let monthRelativePath = String(format: "%04d/%02d", year, month)
-        let remoteFilesByName: [String: RemoteStorageEntry] = Dictionary(uniqueKeysWithValues: seed.resources.map { resource in
-            let remotePath = RemotePathBuilder.absolutePath(
-                basePath: basePath,
-                remoteRelativePath: monthRelativePath + "/" + resource.fileName
-            )
-            let createdAt = Self.dateFromEpochNs(resource.creationDateNs)
+        let remoteFilesByName: [String: RemoteFileMetadata] = Dictionary(uniqueKeysWithValues: seed.resources.map { resource in
             return (
                 resource.fileName,
-                RemoteStorageEntry(
-                    path: remotePath,
-                    name: resource.fileName,
-                    isDirectory: false,
-                    size: resource.fileSize,
-                    creationDate: createdAt,
-                    modificationDate: createdAt
-                )
+                RemoteFileMetadata(size: resource.fileSize)
             )
         })
 
@@ -250,7 +246,12 @@ final class MonthManifestStore {
         let remoteFilesByName = Dictionary(
             uniqueKeysWithValues: entries
                 .filter { !$0.isDirectory && $0.name != Self.manifestFileName }
-                .map { ($0.name, $0) }
+                .map {
+                    (
+                        $0.name,
+                        RemoteFileMetadata(size: $0.size)
+                    )
+                }
         )
 
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
@@ -376,15 +377,16 @@ final class MonthManifestStore {
     }
 
     func findResourceByHash(_ hash: Data) -> RemoteManifestResource? {
-        itemsByHash[hash]
+        guard let fileName = itemsByHash[hash] else { return nil }
+        return itemsByFileName[fileName]
     }
 
     func links(forAssetFingerprint fingerprint: Data) -> [RemoteAssetResourceLink] {
         assetLinksByFingerprint[fingerprint] ?? []
     }
 
-    func remoteEntry(named fileName: String) -> RemoteStorageEntry? {
-        remoteFilesByName[fileName]
+    func remoteFileSize(named fileName: String) -> Int64? {
+        remoteFilesByName[fileName]?.size
     }
 
     func existingFileNames() -> Set<String> {
@@ -411,7 +413,8 @@ final class MonthManifestStore {
 
     @discardableResult
     func upsertResource(_ item: RemoteManifestResource) throws -> RemoteManifestResource {
-        if let existing = itemsByHash[item.contentHash] {
+        if let existingFileName = itemsByHash[item.contentHash],
+           let existing = itemsByFileName[existingFileName] {
             return existing
         }
 
@@ -449,7 +452,7 @@ final class MonthManifestStore {
         }
 
         itemsByFileName[item.fileName] = item
-        itemsByHash[item.contentHash] = item
+        itemsByHash[item.contentHash] = item.fileName
         existingFileNameSet.insert(item.fileName)
         dirty = true
 
@@ -529,16 +532,8 @@ final class MonthManifestStore {
         dirty = true
     }
 
-    func markRemoteFile(name: String, size: Int64, creationDate: Date?) {
-        let path = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath + "/" + name)
-        remoteFilesByName[name] = RemoteStorageEntry(
-            path: path,
-            name: name,
-            isDirectory: false,
-            size: size,
-            creationDate: creationDate,
-            modificationDate: Date()
-        )
+    func markRemoteFile(name: String, size: Int64) {
+        remoteFilesByName[name] = RemoteFileMetadata(size: size)
         existingFileNameSet.insert(name)
     }
 
@@ -857,7 +852,7 @@ final class MonthManifestStore {
 
         var resourcesByName: [String: RemoteManifestResource] = [:]
         resourcesByName.reserveCapacity(resourceRows.count)
-        var resourcesByHash: [Data: RemoteManifestResource] = [:]
+        var resourcesByHash: [Data: String] = [:]
         resourcesByHash.reserveCapacity(resourceRows.count)
 
         for row in resourceRows {
@@ -872,7 +867,7 @@ final class MonthManifestStore {
                 backedUpAtNs: row["backedUpAtNs"]
             )
             resourcesByName[item.fileName] = item
-            resourcesByHash[item.contentHash] = item
+            resourcesByHash[item.contentHash] = item.fileName
         }
 
         let assetRows = try dbQueue.read { db in
