@@ -34,6 +34,10 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         self.bookmarkStore = bookmarkStore
     }
 
+    nonisolated func shouldSetModificationDate() -> Bool {
+        false
+    }
+
     deinit {
         if isAccessing {
             rootURL?.stopAccessingSecurityScopedResource()

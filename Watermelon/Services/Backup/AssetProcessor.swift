@@ -710,10 +710,12 @@ final class AssetProcessor: Sendable {
                 try Task.checkCancellation()
                 if let shotDate = prepared.shotDate {
                     let setDateStart = CFAbsoluteTimeGetCurrent()
-                    do {
-                        try await client.setModificationDate(shotDate, forPath: uploadPreparation.remoteAbsolutePath)
-                    } catch {
-                        // keep upload success even if metadata write failed
+                    if client.shouldSetModificationDate() {
+                        do {
+                            try await client.setModificationDate(shotDate, forPath: uploadPreparation.remoteAbsolutePath)
+                        } catch {
+                            // keep upload success even if metadata write failed
+                        }
                     }
                     assetTiming.setModificationDateSeconds += Self.elapsedSeconds(since: setDateStart)
                 }

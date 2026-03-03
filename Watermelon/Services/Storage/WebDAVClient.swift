@@ -20,6 +20,10 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         var isDirectory = false
     }
 
+    nonisolated func shouldSetModificationDate() -> Bool {
+        true
+    }
+
     private final class PropfindXMLParser: NSObject, XMLParserDelegate {
         private static let textElements: Set<String> = [
             "href",

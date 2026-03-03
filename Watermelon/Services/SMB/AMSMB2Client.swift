@@ -37,6 +37,10 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         #endif
     }
 
+    func shouldSetModificationDate() -> Bool {
+        true
+    }
+
     func connect() async throws {
         #if canImport(AMSMB2)
         try await manager.connectShare(name: config.shareName)
