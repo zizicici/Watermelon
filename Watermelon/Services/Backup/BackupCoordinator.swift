@@ -205,10 +205,17 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
             )
             let connectionPoolSize = Self.resolveConnectionPoolSize(
                 profile: profile,
-                workerCount: workerCount
+                workerCount: workerCount,
+                override: request.workerCountOverride
             )
             let monthQueue = MonthWorkQueue(months: monthPlans)
             let workerCountSource = request.workerCountOverride == nil ? "protocol-default" : "user-override"
+            if let requestedWorkers = request.workerCountOverride,
+               workerCount < requestedWorkers {
+                eventStream.emit(.log(
+                    "Worker override adjusted: requested=\(requestedWorkers), effective=\(workerCount), reason=month-count(\(monthPlans.count))."
+                ))
+            }
             eventStream.emit(.log(
                 "Parallel month scheduler: month(s)=\(monthPlans.count), worker(s)=\(workerCount), connectionPool=\(connectionPoolSize), strategy=dynamic-pull, source=\(workerCountSource), storage=\(profile.resolvedStorageType.rawValue)."
             ))
@@ -481,11 +488,14 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
 
     private static func resolveConnectionPoolSize(
         profile: ServerProfileRecord,
-        workerCount: Int
+        workerCount: Int,
+        override: Int?
     ) -> Int {
         switch profile.resolvedStorageType {
         case .smb, .webdav:
-            // Avoid opening too many network sessions when users force a high worker count.
+            if override != nil {
+                return max(1, workerCount)
+            }
             return max(1, min(workerCount, 2))
         case .externalVolume:
             return max(1, workerCount)
