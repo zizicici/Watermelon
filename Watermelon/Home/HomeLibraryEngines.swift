@@ -701,38 +701,12 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
 
     @discardableResult
     func ensureLocalIndexLoaded() async -> Bool {
-        if localIndex.hasLoadedIndex {
-            registerPhotoLibraryObserverIfNeeded()
-            return false
-        }
+        await loadLocalIndex(forceReload: false)
+    }
 
-        let status = photoLibraryService.authorizationStatus()
-        let authorized: Bool
-        if status == .authorized || status == .limited {
-            authorized = true
-        } else {
-            let requested = await photoLibraryService.requestAuthorization()
-            authorized = (requested == .authorized || requested == .limited)
-        }
-
-        guard authorized else {
-            unregisterPhotoLibraryObserverIfNeeded()
-            return reconcileIfNeeded(localIndex.clearIfNeeded())
-        }
-
-        let fetchResult = photoLibraryService.fetchAssetsResult()
-        let hashMapByAsset = (try? contentHashIndexRepository.fetchHashMapByAsset()) ?? [:]
-        let fingerprintByAsset = (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset()) ?? [:]
-
-        let changedMonths = localIndex.reloadAll(
-            fetchResult: fetchResult,
-            hashMapByAsset: hashMapByAsset,
-            fingerprintByAsset: fingerprintByAsset,
-            remoteFingerprintSet: remoteIndex.assetFingerprintSet
-        )
-
-        registerPhotoLibraryObserverIfNeeded()
-        return reconcileIfNeeded(changedMonths)
+    @discardableResult
+    func reloadLocalIndex() async -> Bool {
+        await loadLocalIndex(forceReload: true)
     }
 
     @discardableResult
@@ -839,6 +813,42 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
             remoteIndex: remoteIndex,
             hasActiveConnection: hasActiveConnection
         )
+    }
+
+    @discardableResult
+    private func loadLocalIndex(forceReload: Bool) async -> Bool {
+        if !forceReload, localIndex.hasLoadedIndex {
+            registerPhotoLibraryObserverIfNeeded()
+            return false
+        }
+
+        let status = photoLibraryService.authorizationStatus()
+        let authorized: Bool
+        if status == .authorized || status == .limited {
+            authorized = true
+        } else {
+            let requested = await photoLibraryService.requestAuthorization()
+            authorized = (requested == .authorized || requested == .limited)
+        }
+
+        guard authorized else {
+            unregisterPhotoLibraryObserverIfNeeded()
+            return reconcileIfNeeded(localIndex.clearIfNeeded())
+        }
+
+        let fetchResult = photoLibraryService.fetchAssetsResult()
+        let hashMapByAsset = (try? contentHashIndexRepository.fetchHashMapByAsset()) ?? [:]
+        let fingerprintByAsset = (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset()) ?? [:]
+
+        let changedMonths = localIndex.reloadAll(
+            fetchResult: fetchResult,
+            hashMapByAsset: hashMapByAsset,
+            fingerprintByAsset: fingerprintByAsset,
+            remoteFingerprintSet: remoteIndex.assetFingerprintSet
+        )
+
+        registerPhotoLibraryObserverIfNeeded()
+        return reconcileIfNeeded(changedMonths)
     }
 
     private func registerPhotoLibraryObserverIfNeeded() {

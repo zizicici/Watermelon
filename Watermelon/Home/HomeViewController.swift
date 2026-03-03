@@ -134,6 +134,7 @@ final class HomeViewController: UIViewController {
     private var reloadTask: Task<Void, Never>?
     private var pendingRemoteSectionRefresh = false
     private var lastRunningSectionRefreshAt: Date = .distantPast
+    private var needsFullLocalResyncAfterBackup = false
 
     private lazy var backupSessionController = BackupSessionController(dependencies: dependencies)
     private var backupSessionObserverID: UUID?
@@ -336,6 +337,7 @@ final class HomeViewController: UIViewController {
 
             self.lastObservedBackupState = snapshot.state
             if wasRunning && !isRunning {
+                self.needsFullLocalResyncAfterBackup = true
                 self.scheduleReloadAllData()
             }
         }
@@ -738,7 +740,13 @@ final class HomeViewController: UIViewController {
     }
 
     private func reloadAllData() async {
-        let localChanged = await homeDataManager.ensureLocalIndexLoaded()
+        let localChanged: Bool
+        if needsFullLocalResyncAfterBackup {
+            needsFullLocalResyncAfterBackup = false
+            localChanged = await homeDataManager.reloadLocalIndex()
+        } else {
+            localChanged = await homeDataManager.ensureLocalIndexLoaded()
+        }
         let remoteChanged = syncRemoteDataIfNeeded()
 
         if localChanged || remoteChanged || sections.isEmpty {
