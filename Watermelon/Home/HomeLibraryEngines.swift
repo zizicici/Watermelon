@@ -7,20 +7,14 @@ private struct HomeRemoteDelta {
 }
 
 private final class HomeLocalIndexEngine {
-    private struct LocalSignature: Equatable {
-        let creationDateNs: Int64
-        let isBackedUp: Bool
-        let mediaKind: AlbumMediaKind
-        let contentHashes: [Data]
-    }
-
     private struct LocalState {
         let asset: PHAsset
         let month: LibraryMonthKey
         let fingerprint: Data?
         let hashes: [Data]
-        let item: LocalAlbumItem
-        let signature: LocalSignature
+        let creationDateNs: Int64
+        let isBackedUp: Bool
+        let mediaKind: AlbumMediaKind
     }
 
     private let calendar = Calendar(identifier: .gregorian)
@@ -28,8 +22,6 @@ private final class HomeLocalIndexEngine {
     private(set) var localFetchResult: PHFetchResult<PHAsset>?
     private var localStatesByAssetID: [String: LocalState] = [:]
     private var localAssetIDsByMonth: [LibraryMonthKey: Set<String>] = [:]
-    private var localHashesByAssetID: [String: [Data]] = [:]
-    private var localFingerprintByAssetID: [String: Data] = [:]
     private var localAssetIDsByFingerprint: [Data: Set<String>] = [:]
 
     var hasLoadedIndex: Bool {
@@ -66,30 +58,16 @@ private final class HomeLocalIndexEngine {
             let month = monthKey(for: asset.creationDate)
             let isBackedUp = fingerprint.map { remoteFingerprintSet.contains($0) } ?? false
             let mediaKind = Self.mediaKind(for: asset)
-
-            let item = LocalAlbumItem(
-                id: assetID,
-                asset: asset,
-                creationDate: asset.creationDate ?? Date(timeIntervalSince1970: 0),
-                isBackedUp: isBackedUp,
-                mediaKind: mediaKind,
-                contentHashes: hashes
-            )
-
-            let signature = LocalSignature(
-                creationDateNs: item.creationDate.nanosecondsSinceEpoch,
-                isBackedUp: isBackedUp,
-                mediaKind: mediaKind,
-                contentHashes: hashes
-            )
+            let creationDate = asset.creationDate ?? Date(timeIntervalSince1970: 0)
 
             newStates[assetID] = LocalState(
                 asset: asset,
                 month: month,
                 fingerprint: fingerprint,
                 hashes: hashes,
-                item: item,
-                signature: signature
+                creationDateNs: creationDate.nanosecondsSinceEpoch,
+                isBackedUp: isBackedUp,
+                mediaKind: mediaKind
             )
             newAssetIDsByMonth[month, default: []].insert(assetID)
 
@@ -103,8 +81,6 @@ private final class HomeLocalIndexEngine {
         localFetchResult = fetchResult
         localStatesByAssetID = newStates
         localAssetIDsByMonth = newAssetIDsByMonth
-        localHashesByAssetID = hashMapByAsset
-        localFingerprintByAssetID = fingerprintByAsset
         localAssetIDsByFingerprint = newAssetIDsByFingerprint
 
         return changedMonths
@@ -120,8 +96,6 @@ private final class HomeLocalIndexEngine {
         localFetchResult = nil
         localStatesByAssetID.removeAll()
         localAssetIDsByMonth.removeAll()
-        localHashesByAssetID.removeAll()
-        localFingerprintByAssetID.removeAll()
         localAssetIDsByFingerprint.removeAll()
 
         return changedMonths
@@ -276,7 +250,17 @@ private final class HomeLocalIndexEngine {
 
     func localItems(for month: LibraryMonthKey) -> [LocalAlbumItem] {
         (localAssetIDsByMonth[month] ?? [])
-            .compactMap { localStatesByAssetID[$0]?.item }
+            .compactMap { assetID -> LocalAlbumItem? in
+                guard let state = localStatesByAssetID[assetID] else { return nil }
+                return LocalAlbumItem(
+                    id: assetID,
+                    asset: state.asset,
+                    creationDate: state.asset.creationDate ?? Date(timeIntervalSince1970: 0),
+                    isBackedUp: state.isBackedUp,
+                    mediaKind: state.mediaKind,
+                    contentHashes: state.hashes
+                )
+            }
             .sorted {
                 if $0.creationDate != $1.creationDate {
                     return $0.creationDate > $1.creationDate
@@ -300,9 +284,7 @@ private final class HomeLocalIndexEngine {
     private func removeLocalState(forAssetID assetID: String) -> LibraryMonthKey? {
         guard let previous = localStatesByAssetID.removeValue(forKey: assetID) else { return nil }
 
-        localHashesByAssetID[assetID] = nil
-
-        if let previousFingerprint = localFingerprintByAssetID.removeValue(forKey: assetID) {
+        if let previousFingerprint = previous.fingerprint {
             removeAssetID(assetID, fromFingerprint: previousFingerprint)
         }
 
@@ -329,39 +311,26 @@ private final class HomeLocalIndexEngine {
         let isBackedUp = fingerprint.map { remoteFingerprintSet.contains($0) } ?? false
         let mediaKind = Self.mediaKind(for: asset)
         let creationDate = asset.creationDate ?? Date(timeIntervalSince1970: 0)
+        let creationDateNs = creationDate.nanosecondsSinceEpoch
 
-        let item = LocalAlbumItem(
-            id: assetID,
-            asset: asset,
-            creationDate: creationDate,
-            isBackedUp: isBackedUp,
-            mediaKind: mediaKind,
-            contentHashes: hashes
-        )
-
-        let signature = LocalSignature(
-            creationDateNs: creationDate.nanosecondsSinceEpoch,
-            isBackedUp: isBackedUp,
-            mediaKind: mediaKind,
-            contentHashes: hashes
-        )
-
-        let previousFingerprint = localFingerprintByAssetID[assetID]
-        localHashesByAssetID[assetID] = hashes
-        localFingerprintByAssetID[assetID] = fingerprint
+        let previousFingerprint = localStatesByAssetID[assetID]?.fingerprint
         replaceAssetID(assetID, oldFingerprint: previousFingerprint, newFingerprint: fingerprint)
 
         if let previous = localStatesByAssetID[assetID],
            previous.month == month,
-           previous.signature == signature,
+           previous.creationDateNs == creationDateNs,
+           previous.isBackedUp == isBackedUp,
+           previous.mediaKind == mediaKind,
+           previous.hashes == hashes,
            previous.fingerprint == fingerprint {
             localStatesByAssetID[assetID] = LocalState(
                 asset: asset,
                 month: month,
                 fingerprint: fingerprint,
                 hashes: hashes,
-                item: item,
-                signature: signature
+                creationDateNs: creationDateNs,
+                isBackedUp: isBackedUp,
+                mediaKind: mediaKind
             )
             return []
         }
@@ -387,8 +356,9 @@ private final class HomeLocalIndexEngine {
             month: month,
             fingerprint: fingerprint,
             hashes: hashes,
-            item: item,
-            signature: signature
+            creationDateNs: creationDateNs,
+            isBackedUp: isBackedUp,
+            mediaKind: mediaKind
         )
 
         changedMonths.insert(month)
@@ -433,16 +403,8 @@ private final class HomeLocalIndexEngine {
 }
 
 private final class HomeRemoteIndexEngine {
-    private struct RemoteLinkKey: Hashable {
-        let assetFingerprint: Data
-        let role: Int
-        let slot: Int
-    }
-
-    private var remoteAssetsByMonth: [LibraryMonthKey: [String: RemoteManifestAsset]] = [:]
-    private var remoteResourcesByMonth: [LibraryMonthKey: [String: RemoteManifestResource]] = [:]
-    private var remoteLinksByMonth: [LibraryMonthKey: [RemoteLinkKey: RemoteAssetResourceLink]] = [:]
     private var remoteItemsByMonth: [LibraryMonthKey: [RemoteAlbumItem]] = [:]
+    private var remoteFingerprintsByMonth: [LibraryMonthKey: Set<Data>] = [:]
     private var remoteFingerprintRefCount: [Data: Int] = [:]
 
     private(set) var snapshotRevision: UInt64?
@@ -485,30 +447,24 @@ private final class HomeRemoteIndexEngine {
         for monthDelta in state.monthDeltas {
             let month = monthDelta.month
 
-            let previousAssetMap = remoteAssetsByMonth[month] ?? [:]
-            let previousResourceMap = remoteResourcesByMonth[month] ?? [:]
-            let previousLinkMap = remoteLinksByMonth[month] ?? [:]
+            let previousFingerprints = remoteFingerprintsByMonth[month] ?? []
             let previousItems = remoteItemsByMonth[month] ?? []
 
-            let nextAssetMap = Dictionary(uniqueKeysWithValues: monthDelta.assets.map { ($0.id, $0) })
-            let nextResourceMap = Dictionary(uniqueKeysWithValues: monthDelta.resources.map { ($0.id, $0) })
-            let nextLinkMap = Dictionary(uniqueKeysWithValues: monthDelta.assetResourceLinks.map { link in
-                (
-                    RemoteLinkKey(assetFingerprint: link.assetFingerprint, role: link.role, slot: link.slot),
-                    link
-                )
-            })
+            let nextFingerprints = Set(monthDelta.assets.map(\.assetFingerprint))
 
-            if previousAssetMap == nextAssetMap,
-               previousResourceMap == nextResourceMap,
-               previousLinkMap == nextLinkMap {
-                continue
-            }
+            let items = HomeAlbumMatching.buildRemoteItems(
+                assets: monthDelta.assets,
+                resources: monthDelta.resources,
+                links: monthDelta.assetResourceLinks
+            )
 
-            let previousFingerprints = Set(previousAssetMap.values.map(\.assetFingerprint))
-            let nextFingerprints = Set(nextAssetMap.values.map(\.assetFingerprint))
             let removedFingerprints = previousFingerprints.subtracting(nextFingerprints)
             let addedFingerprints = nextFingerprints.subtracting(previousFingerprints)
+
+            guard !removedFingerprints.isEmpty || !addedFingerprints.isEmpty
+                    || !Self.sameRemoteItems(lhs: previousItems, rhs: items) else {
+                continue
+            }
 
             for fingerprint in removedFingerprints {
                 let nextCount = max((remoteFingerprintRefCount[fingerprint] ?? 0) - 1, 0)
@@ -528,15 +484,7 @@ private final class HomeRemoteIndexEngine {
                 }
             }
 
-            remoteAssetsByMonth[month] = nextAssetMap.isEmpty ? nil : nextAssetMap
-            remoteResourcesByMonth[month] = nextResourceMap.isEmpty ? nil : nextResourceMap
-            remoteLinksByMonth[month] = nextLinkMap.isEmpty ? nil : nextLinkMap
-
-            let items = HomeAlbumMatching.buildRemoteItems(
-                assets: monthDelta.assets,
-                resources: monthDelta.resources,
-                links: monthDelta.assetResourceLinks
-            )
+            remoteFingerprintsByMonth[month] = nextFingerprints.isEmpty ? nil : nextFingerprints
             remoteItemsByMonth[month] = items.isEmpty ? nil : items
 
             if !Self.sameRemoteItems(lhs: previousItems, rhs: items) {
@@ -571,10 +519,8 @@ private final class HomeRemoteIndexEngine {
     }
 
     private func clearRemoteState() {
-        remoteAssetsByMonth.removeAll()
-        remoteResourcesByMonth.removeAll()
-        remoteLinksByMonth.removeAll()
         remoteItemsByMonth.removeAll()
+        remoteFingerprintsByMonth.removeAll()
         remoteFingerprintRefCount.removeAll()
     }
 

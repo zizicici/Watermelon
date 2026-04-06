@@ -590,7 +590,25 @@ final class MonthManifestStore {
             try Task.checkCancellation()
         }
         dirty = false
+        evictCaches()
         return true
+    }
+
+    func evictCaches() {
+        itemsByFileName.removeAll()
+        itemsByHash.removeAll()
+        assetsByFingerprint.removeAll()
+        assetLinksByFingerprint.removeAll()
+    }
+
+    private var cacheEvicted: Bool {
+        itemsByFileName.isEmpty && assetsByFingerprint.isEmpty
+    }
+
+    private func ensureCacheLoaded() throws {
+        if cacheEvicted {
+            try reloadCache()
+        }
     }
 
     private func moveReplacingExistingManifest(

@@ -667,6 +667,7 @@ final class BackupSessionController {
         lastPausedDisplayRunMode = nil
         currentRunMode = .full
         state = .completed
+        completedAssetIDsForResume.removeAll()
         let verb = runMode.isRetry ? "重试" : "备份"
         statusText = result.failed == 0 ? "\(verb)完成" : "\(verb)完成（部分失败）"
         clearTransferStates()
@@ -1005,10 +1006,10 @@ final class BackupSessionController {
     }()
 
     private static let observerNotificationIntervalNanos: UInt64 = 120_000_000
-    private static let processedItemsTimelineCapacity = 8_000
-    private static let processedItemsTimelineCompactionThreshold = 2_000
-    private static let processedItemsSnapshotLimit = 2_000
-    private static let processedItemsMapSoftLimit = 12_000
+    private static let processedItemsTimelineCapacity = 3_000
+    private static let processedItemsTimelineCompactionThreshold = 1_000
+    private static let processedItemsSnapshotLimit = 500
+    private static let processedItemsMapSoftLimit = 4_000
 
     private func resolvePassword(for profile: ServerProfileRecord) -> String? {
         if profile.storageProfile.requiresPassword {
