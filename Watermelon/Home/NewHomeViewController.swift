@@ -345,24 +345,17 @@ final class NewHomeViewController: UIViewController {
         leftDataSource.apply(Self.buildSnapshot(from: flat), animatingDifferences: false)
     }
 
-    private func reloadRemoteSummaries() {
-        guard hasActiveConnection else {
+    private func reloadRemoteSummaries(overrideActiveConnection: Bool? = nil) {
+        guard overrideActiveConnection ?? hasActiveConnection else {
             rightDataSource.apply(NSDiffableDataSourceSnapshot<Section, Item>(), animatingDifferences: false)
             emptyRemoteLabel.isHidden = false
             return
         }
 
-        let remoteSnapshot = dependencies.backupCoordinator.currentRemoteSnapshot()
-        var byMonth: [LibraryMonthKey: (count: Int, size: Int64)] = [:]
-        for asset in remoteSnapshot.assets {
-            let month = LibraryMonthKey(year: asset.year, month: asset.month)
-            var entry = byMonth[month] ?? (count: 0, size: 0)
-            entry.count += 1
-            entry.size += asset.totalFileSizeBytes
-            byMonth[month] = entry
+        let summaries = dependencies.backupCoordinator.remoteMonthSummaries()
+        let flat = summaries.map {
+            MonthSummary(month: $0.month, assetCount: $0.assetCount, totalSizeBytes: $0.totalSizeBytes)
         }
-        let flat = byMonth
-            .map { MonthSummary(month: $0.key, assetCount: $0.value.count, totalSizeBytes: $0.value.size) }
 
         emptyRemoteLabel.isHidden = true
         rightDataSource.apply(Self.buildSnapshot(from: flat), animatingDifferences: false)
@@ -459,7 +452,12 @@ final class NewHomeViewController: UIViewController {
             do {
                 _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
                     profile: profile,
-                    password: password
+                    password: password,
+                    onMonthSynced: { [weak self] in
+                        Task { @MainActor [weak self] in
+                            self?.reloadRemoteSummaries(overrideActiveConnection: true)
+                        }
+                    }
                 )
                 try self.dependencies.databaseManager.setActiveServerProfileID(profile.id)
                 self.dependencies.appSession.activate(profile: profile, password: password)
@@ -497,14 +495,28 @@ final class NewHomeViewController: UIViewController {
         return dependencies.appSession.activePassword ?? ""
     }
 
+    private func syncRemoteDataInBackground(overrideActiveConnection: Bool? = nil) async {
+        let active = overrideActiveConnection ?? hasActiveConnection
+        let revision = homeDataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
+        let backupCoordinator = dependencies.backupCoordinator
+        let snapshotState = await Task.detached {
+            backupCoordinator.currentRemoteSnapshotState(since: revision)
+        }.value
+        homeDataManager.syncRemoteSnapshot(
+            state: snapshotState,
+            hasActiveConnection: active
+        )
+    }
+
     @discardableResult
-    private func syncRemoteDataIfNeeded() -> Bool {
+    private func syncRemoteDataIfNeeded(overrideActiveConnection: Bool? = nil) -> Bool {
+        let active = overrideActiveConnection ?? hasActiveConnection
         let snapshotState = dependencies.backupCoordinator.currentRemoteSnapshotState(
-            since: homeDataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: hasActiveConnection)
+            since: homeDataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
         )
         return homeDataManager.syncRemoteSnapshot(
             state: snapshotState,
-            hasActiveConnection: hasActiveConnection
+            hasActiveConnection: active
         )
     }
 

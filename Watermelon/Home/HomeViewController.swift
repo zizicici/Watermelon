@@ -1,8 +1,11 @@
 import GRDB
 import Kingfisher
+import os.log
 import Photos
 import SnapKit
 import UIKit
+
+private let syncLog = Logger(subsystem: "com.zizicici.watermelon", category: "SyncTiming")
 
 final class HomeViewController: UIViewController {
     private enum GridLayout {
@@ -123,6 +126,7 @@ final class HomeViewController: UIViewController {
     private var prefetchTasks: [IndexPath: Task<Void, Never>] = [:]
     private var reloadTask: Task<Void, Never>?
     private var pendingRemoteSectionRefresh = false
+    private var pendingMonthSyncRefresh = false
     private var lastRunningSectionRefreshAt: Date = .distantPast
     private var needsFullLocalResyncAfterBackup = false
 
@@ -600,12 +604,28 @@ final class HomeViewController: UIViewController {
 
         Task { [weak self] in
             guard let self else { return }
+            let connectStart = CFAbsoluteTimeGetCurrent()
 
             do {
                 _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
                     profile: profile,
-                    password: password
+                    password: password,
+                    onMonthSynced: { [weak self] in
+                        let callbackTs = CFAbsoluteTimeGetCurrent() - connectStart
+                        Task { @MainActor [weak self] in
+                            guard let self, !self.pendingMonthSyncRefresh else { return }
+                            self.pendingMonthSyncRefresh = true
+                            let uiStart = CFAbsoluteTimeGetCurrent()
+                            await self.syncRemoteDataInBackground(overrideActiveConnection: true)
+                            self.applySections(reloadMode: .nonAnimatedDiff)
+                            self.pendingMonthSyncRefresh = false
+                            let uiElapsed = CFAbsoluteTimeGetCurrent() - uiStart
+                            syncLog.info("[SyncTiming] onMonthSynced callback: fired at +\(String(format: "%.3f", callbackTs))s, UI update: \(String(format: "%.3f", uiElapsed))s")
+                        }
+                    }
                 )
+                let reloadElapsed = CFAbsoluteTimeGetCurrent() - connectStart
+                syncLog.info("[SyncTiming] reloadRemoteIndex completed: \(String(format: "%.3f", reloadElapsed))s")
                 try self.dependencies.databaseManager.setActiveServerProfileID(profile.id)
                 self.dependencies.appSession.activate(profile: profile, password: password)
 
@@ -703,7 +723,15 @@ final class HomeViewController: UIViewController {
             do {
                 let snapshot = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
                     profile: profile,
-                    password: password
+                    password: password,
+                    onMonthSynced: { [weak self] in
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            if self.syncRemoteDataIfNeeded(overrideActiveConnection: true) {
+                                self.applySections(reloadMode: .nonAnimatedDiff)
+                            }
+                        }
+                    }
                 )
                 await MainActor.run {
                     self.scheduleReloadAllData()
@@ -744,14 +772,28 @@ final class HomeViewController: UIViewController {
         }
     }
 
+    private func syncRemoteDataInBackground(overrideActiveConnection: Bool? = nil) async {
+        let active = overrideActiveConnection ?? hasActiveConnection
+        let revision = homeDataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
+        let backupCoordinator = dependencies.backupCoordinator
+        let snapshotState = await Task.detached {
+            backupCoordinator.currentRemoteSnapshotState(since: revision)
+        }.value
+        homeDataManager.syncRemoteSnapshot(
+            state: snapshotState,
+            hasActiveConnection: active
+        )
+    }
+
     @discardableResult
-    private func syncRemoteDataIfNeeded() -> Bool {
+    private func syncRemoteDataIfNeeded(overrideActiveConnection: Bool? = nil) -> Bool {
+        let active = overrideActiveConnection ?? hasActiveConnection
         let snapshotState = dependencies.backupCoordinator.currentRemoteSnapshotState(
-            since: homeDataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: hasActiveConnection)
+            since: homeDataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
         )
         let changed = homeDataManager.syncRemoteSnapshot(
             state: snapshotState,
-            hasActiveConnection: hasActiveConnection
+            hasActiveConnection: active
         )
         return changed
     }

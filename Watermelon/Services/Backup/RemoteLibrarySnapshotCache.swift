@@ -298,6 +298,15 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
+    func monthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, totalSizeBytes: Int64)] {
+        lock.withLock {
+            assetsByMonth.map { (month, assetMap) in
+                let totalSize = assetMap.values.reduce(Int64(0)) { $0 + $1.totalFileSizeBytes }
+                return (month: month, assetCount: assetMap.count, totalSizeBytes: totalSize)
+            }
+        }
+    }
+
     private func rebuildFullSnapshotLocked() -> RemoteLibrarySnapshot {
         let sortedMonths = allKnownMonthsLocked().sorted()
 

@@ -24,11 +24,13 @@ protocol BackupCoordinatorProtocol: Sendable {
     func reloadRemoteIndex(
         profile: ServerProfileRecord,
         password: String,
-        eventStream: BackupEventStream?
+        eventStream: BackupEventStream?,
+        onMonthSynced: (@Sendable () -> Void)?
     ) async throws -> RemoteLibrarySnapshot
 
     func currentRemoteSnapshot() -> RemoteLibrarySnapshot
     func currentRemoteSnapshotState(since revision: UInt64?) -> RemoteLibrarySnapshotState
+    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, totalSizeBytes: Int64)]
 }
 
 extension BackupCoordinatorProtocol {
@@ -56,9 +58,10 @@ extension BackupCoordinatorProtocol {
 
     func reloadRemoteIndex(
         profile: ServerProfileRecord,
-        password: String
+        password: String,
+        onMonthSynced: (@Sendable () -> Void)? = nil
     ) async throws -> RemoteLibrarySnapshot {
-        try await reloadRemoteIndex(profile: profile, password: password, eventStream: nil)
+        try await reloadRemoteIndex(profile: profile, password: password, eventStream: nil, onMonthSynced: onMonthSynced)
     }
 }
 
@@ -275,7 +278,8 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
     func reloadRemoteIndex(
         profile: ServerProfileRecord,
         password: String,
-        eventStream: BackupEventStream? = nil
+        eventStream: BackupEventStream? = nil,
+        onMonthSynced: (@Sendable () -> Void)? = nil
     ) async throws -> RemoteLibrarySnapshot {
         let client = try makeStorageClient(profile: profile, password: password)
         try await client.connect()
@@ -284,7 +288,8 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
             let snapshot = try await remoteIndexService.syncIndex(
                 client: client,
                 profile: profile,
-                eventStream: eventStream
+                eventStream: eventStream,
+                onMonthSynced: onMonthSynced
             )
             eventStream?.emit(.log(
                 "Remote index reloaded. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s)."
@@ -299,6 +304,10 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
 
     func currentRemoteSnapshot() -> RemoteLibrarySnapshot {
         remoteIndexService.currentSnapshot()
+    }
+
+    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, totalSizeBytes: Int64)] {
+        remoteIndexService.remoteMonthSummaries()
     }
 
     func currentRemoteSnapshotState(since revision: UInt64?) -> RemoteLibrarySnapshotState {

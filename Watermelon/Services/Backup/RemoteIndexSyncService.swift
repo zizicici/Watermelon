@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let syncLog = Logger(subsystem: "com.zizicici.watermelon", category: "SyncTiming")
 
 final class RemoteIndexSyncService: Sendable {
     private actor SyncGate {
@@ -73,13 +76,15 @@ final class RemoteIndexSyncService: Sendable {
     func syncIndex(
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
-        eventStream: BackupEventStream? = nil
+        eventStream: BackupEventStream? = nil,
+        onMonthSynced: (@Sendable () -> Void)? = nil
     ) async throws -> RemoteLibrarySnapshot {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
                 client: client,
                 profile: profile,
-                eventStream: eventStream
+                eventStream: eventStream,
+                onMonthSynced: onMonthSynced
             )
         }
     }
@@ -87,17 +92,24 @@ final class RemoteIndexSyncService: Sendable {
     private func syncIndexUnlocked(
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
-        eventStream: BackupEventStream?
+        eventStream: BackupEventStream?,
+        onMonthSynced: (@Sendable () -> Void)?
     ) async throws -> RemoteLibrarySnapshot {
+        let syncStart = CFAbsoluteTimeGetCurrent()
+
         let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: Self.remoteProfileKey(profile))
         if shouldResetSnapshot {
             snapshotCache.reset()
         }
 
+        let scanStart = CFAbsoluteTimeGetCurrent()
         let remoteDigests = try await scanner.scanManifestDigests(
             client: client,
             basePath: profile.basePath
         )
+        let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
+        syncLog.info("[SyncTiming] scanManifestDigests: \(Self.ms(scanElapsed))s (\(remoteDigests.count) months)")
+
         let previousDigests = await state.currentRemoteManifestDigests()
 
         let previousMonths = Set(previousDigests.keys)
@@ -116,14 +128,19 @@ final class RemoteIndexSyncService: Sendable {
 
         if changedMonths.isEmpty, removedMonths.isEmpty {
             let snapshot = snapshotCache.current()
+            let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
+            syncLog.info("[SyncTiming] No changes. Total: \(Self.ms(totalElapsed))s")
             eventStream?.emit(.log("Remote index unchanged. Month digests matched (\(remoteMonths.count) month(s))."))
             return snapshot
         }
+
+        syncLog.info("[SyncTiming] changedMonths: \(changedMonths.count), removedMonths: \(removedMonths.count)")
 
         var appliedChangedMonths = 0
         var appliedRemovedMonths = 0
 
         for month in changedMonths.sorted() {
+            let monthStart = CFAbsoluteTimeGetCurrent()
             guard let store = try await MonthManifestStore.loadManifestOnlyIfExists(
                 client: client,
                 basePath: profile.basePath,
@@ -136,7 +153,9 @@ final class RemoteIndexSyncService: Sendable {
                     userInfo: [NSLocalizedDescriptionKey: "Month manifest is missing for \(month.text)."]
                 )
             }
+            let downloadElapsed = CFAbsoluteTimeGetCurrent() - monthStart
 
+            let processStart = CFAbsoluteTimeGetCurrent()
             let monthAssets = store.allAssets()
             let monthLinks = monthAssets.flatMap { store.links(forAssetFingerprint: $0.assetFingerprint) }
             if snapshotCache.replaceMonth(
@@ -146,18 +165,25 @@ final class RemoteIndexSyncService: Sendable {
                 assetResourceLinks: monthLinks
             ) {
                 appliedChangedMonths += 1
+                onMonthSynced?()
             }
+            let processElapsed = CFAbsoluteTimeGetCurrent() - processStart
+            syncLog.info("[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(monthAssets.count)")
         }
 
         for month in removedMonths.sorted() {
             if snapshotCache.removeMonth(month) {
                 appliedRemovedMonths += 1
+                onMonthSynced?()
             }
         }
 
         await state.updateRemoteManifestDigests(remoteDigests)
 
         let snapshot = snapshotCache.current()
+        let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
+        syncLog.info("[SyncTiming] Sync complete. Total: \(Self.ms(totalElapsed))s, changed: \(appliedChangedMonths), removed: \(appliedRemovedMonths)")
+
         eventStream?.emit(.remoteIndexSynced(RemoteIndexSyncEvent(
             resourceCount: snapshot.totalResourceCount,
             assetCount: snapshot.totalCount,
@@ -170,6 +196,10 @@ final class RemoteIndexSyncService: Sendable {
 
     func currentSnapshot() -> RemoteLibrarySnapshot {
         snapshotCache.current()
+    }
+
+    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, totalSizeBytes: Int64)] {
+        snapshotCache.monthSummaries()
     }
 
     func currentState(since revision: UInt64?) -> RemoteLibrarySnapshotState {
@@ -191,5 +221,9 @@ final class RemoteIndexSyncService: Sendable {
 
     private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {
         "\(profile.id ?? 0):\(profile.storageType):\(profile.host):\(profile.basePath)"
+    }
+
+    private static func ms(_ seconds: CFAbsoluteTime) -> String {
+        String(format: "%.3f", seconds)
     }
 }
