@@ -281,6 +281,16 @@ private final class HomeLocalIndexEngine {
         return result
     }
 
+    func localMonthAssetCounts() -> [(month: LibraryMonthKey, count: Int)] {
+        localAssetIDsByMonth
+            .map { (month: $0.key, count: $0.value.count) }
+            .sorted { $0.month > $1.month }
+    }
+
+    func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
+        localAssetIDsByMonth[month] ?? []
+    }
+
     private func removeLocalState(forAssetID assetID: String) -> LibraryMonthKey? {
         guard let previous = localStatesByAssetID.removeValue(forKey: assetID) else { return nil }
 
@@ -704,6 +714,15 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         }
 
         return reconcileIfNeeded(changedMonths)
+    }
+
+    func localMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, totalSizeBytes: Int64)] {
+        let monthCounts = localIndex.localMonthAssetCounts()
+        return monthCounts.map { entry in
+            let assetIDs = localIndex.localAssetIDs(for: entry.month)
+            let sizeBytes = (try? contentHashIndexRepository.fetchTotalFileSizeBytes(assetIDs: assetIDs)) ?? 0
+            return (month: entry.month, assetCount: entry.count, totalSizeBytes: sizeBytes)
+        }
     }
 
     func localItemsSnapshot() -> [LocalAlbumItem] {
