@@ -47,7 +47,7 @@ enum BackupAssetResourcePlanner {
     static func assetFingerprint(resourceRoleSlotHashes: [(role: Int, slot: Int, contentHash: Data)]) -> Data {
         let tokens = resourceRoleSlotHashes
             .map { token in
-                let hashHex = token.contentHash.map { String(format: "%02x", $0) }.joined()
+                let hashHex = token.contentHash.hexString
                 return "\(token.role)|\(token.slot)|\(hashHex)"
             }
             .sorted()
@@ -61,11 +61,6 @@ enum BackupAssetResourcePlanner {
         if let first = selectedResources.first {
             return first.resource.originalFilename
         }
-        return "asset_\(nanosecondsSinceEpoch(asset.creationDate) ?? 0)"
-    }
-
-    private static func nanosecondsSinceEpoch(_ date: Date?) -> Int64? {
-        guard let date else { return nil }
-        return Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded())
+        return "asset_\(asset.creationDate?.nanosecondsSinceEpoch ?? 0)"
     }
 }

@@ -761,6 +761,7 @@ final class BackupSessionController {
         processedItemsByAssetID[event.assetLocalIdentifier] = item
         appendProcessedAssetTimeline(event.assetLocalIdentifier)
 
+        var failedItemsChanged = false
         if event.status == .failed {
             completedAssetIDsForResume.remove(event.assetLocalIdentifier)
             retryCountByAssetID[event.assetLocalIdentifier, default: 0] += 1
@@ -773,12 +774,17 @@ final class BackupSessionController {
                 retryCount: retryCount,
                 updatedAt: event.updatedAt
             )
+            failedItemsChanged = true
         } else {
             completedAssetIDsForResume.insert(event.assetLocalIdentifier)
-            failedItemsByAssetID[event.assetLocalIdentifier] = nil
+            if failedItemsByAssetID.removeValue(forKey: event.assetLocalIdentifier) != nil {
+                failedItemsChanged = true
+            }
         }
 
-        rebuildFailedItems()
+        if failedItemsChanged {
+            rebuildFailedItems()
+        }
     }
 
     private func applyTransferState(_ state: BackupTransferState) {

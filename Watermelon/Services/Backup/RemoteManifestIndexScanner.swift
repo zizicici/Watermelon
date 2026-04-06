@@ -1,6 +1,6 @@
 import Foundation
 
-final class RemoteManifestIndexScanner: @unchecked Sendable {
+final class RemoteManifestIndexScanner: Sendable {
     func scanManifestDigests(
         client: RemoteStorageClientProtocol,
         basePath: String,
@@ -41,7 +41,7 @@ final class RemoteManifestIndexScanner: @unchecked Sendable {
                 }
 
                 let monthKey = LibraryMonthKey(year: year, month: month)
-                let modifiedNs = Self.nanosecondsSinceEpoch(manifestEntry.modificationDate)
+                let modifiedNs = manifestEntry.modificationDate?.nanosecondsSinceEpoch
                 digests[monthKey] = RemoteMonthManifestDigest(
                     month: monthKey,
                     manifestSize: manifestEntry.size,
@@ -63,10 +63,6 @@ final class RemoteManifestIndexScanner: @unchecked Sendable {
         return number
     }
 
-    private static func nanosecondsSinceEpoch(_ date: Date?) -> Int64? {
-        guard let date else { return nil }
-        return Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded())
-    }
 }
 
 extension RemoteManifestIndexScanner: RemoteManifestIndexScannerProtocol {}

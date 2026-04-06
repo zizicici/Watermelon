@@ -19,13 +19,13 @@ struct RemoteManifestAsset: Hashable, Identifiable {
 
     var creationDate: Date {
         if let creationDateNs {
-            return Date(timeIntervalSince1970: Double(creationDateNs) / 1_000_000_000)
+            return Date(nanosecondsSinceEpoch: creationDateNs)
         }
-        return Date(timeIntervalSince1970: Double(backedUpAtNs) / 1_000_000_000)
+        return Date(nanosecondsSinceEpoch: backedUpAtNs)
     }
 
     var assetFingerprintHex: String {
-        assetFingerprint.map { String(format: "%02x", $0) }.joined()
+        assetFingerprint.hexString
     }
 }
 
@@ -42,7 +42,7 @@ struct RemoteAssetResourceLink: Hashable {
     }
 
     var assetID: String {
-        monthKey + "/" + assetFingerprint.map { String(format: "%02x", $0) }.joined()
+        monthKey + "/" + assetFingerprint.hexString
     }
 }
 
@@ -70,13 +70,13 @@ struct RemoteManifestResource: Hashable, Identifiable {
 
     var creationDate: Date {
         if let creationDateNs {
-            return Date(timeIntervalSince1970: Double(creationDateNs) / 1_000_000_000)
+            return Date(nanosecondsSinceEpoch: creationDateNs)
         }
-        return Date(timeIntervalSince1970: Double(backedUpAtNs) / 1_000_000_000)
+        return Date(nanosecondsSinceEpoch: backedUpAtNs)
     }
 
     var contentHashHex: String {
-        contentHash.map { String(format: "%02x", $0) }.joined()
+        contentHash.hexString
     }
 }
 
@@ -114,7 +114,7 @@ struct RemoteLibrarySnapshot {
     }
 }
 
-struct LibraryMonthKey: Hashable, Comparable {
+struct LibraryMonthKey: Hashable, Comparable, Sendable {
     let year: Int
     let month: Int
 
@@ -127,6 +127,14 @@ struct LibraryMonthKey: Hashable, Comparable {
             return lhs.month < rhs.month
         }
         return lhs.year < rhs.year
+    }
+
+    private static let monthCalendar = Calendar(identifier: .gregorian)
+
+    static func from(date: Date?) -> LibraryMonthKey {
+        let date = date ?? Date(timeIntervalSince1970: 0)
+        let comps = monthCalendar.dateComponents([.year, .month], from: date)
+        return LibraryMonthKey(year: comps.year ?? 1970, month: comps.month ?? 1)
     }
 }
 

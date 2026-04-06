@@ -944,7 +944,7 @@ private struct MonthSeedLookup {
     }
 }
 
-private struct MonthWorkItem: @unchecked Sendable {
+private struct MonthWorkItem: Sendable {
     let month: MonthKey
     let assetLocalIdentifiers: [String]
     let estimatedBytes: Int64
@@ -1164,12 +1164,16 @@ private struct StageTimingWindow {
         lastUploadRecordAt = nil
     }
 
-    static func formatBytes(_ value: Int64) -> String {
+    private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useKB, .useMB, .useGB, .useTB]
         formatter.countStyle = .file
         formatter.includesUnit = true
         formatter.isAdaptive = true
-        return formatter.string(fromByteCount: max(0, value))
+        return formatter
+    }()
+
+    static func formatBytes(_ value: Int64) -> String {
+        byteFormatter.string(fromByteCount: max(0, value))
     }
 }

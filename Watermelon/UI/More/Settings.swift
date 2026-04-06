@@ -85,13 +85,6 @@ extension UserDefaults {
         return object(forKey: key) as? Int
     }
     
-    func getBool(forKey key: String) -> Bool? {
-        return object(forKey: key) as? Bool
-    }
-    
-    func getString(forKey key: String) -> String? {
-        return object(forKey: key) as? String
-    }
 }
 
 enum TutorialEntranceType: Int, CaseIterable, Codable {

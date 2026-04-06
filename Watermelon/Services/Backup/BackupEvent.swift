@@ -56,28 +56,20 @@ final class BackupEventStream: @unchecked Sendable {
     }
 
     func emit(_ event: BackupEvent) {
-        let target: AsyncStream<BackupEvent>.Continuation?
-        lock.lock()
-        if finished {
-            target = nil
-        } else {
-            target = continuation
+        let target: AsyncStream<BackupEvent>.Continuation? = lock.withLock {
+            finished ? nil : continuation
         }
-        lock.unlock()
         target?.yield(event)
     }
 
     func finish() {
-        let target: AsyncStream<BackupEvent>.Continuation?
-        lock.lock()
-        if finished {
-            target = nil
-        } else {
+        let target: AsyncStream<BackupEvent>.Continuation? = lock.withLock {
+            guard !finished else { return nil }
             finished = true
-            target = continuation
+            let c = continuation
             continuation = nil
+            return c
         }
-        lock.unlock()
         target?.finish()
     }
 }

@@ -77,14 +77,14 @@ final class RestoreService {
                 let creationDate = group
                     .compactMap(\.creationDateNs)
                     .min()
-                    .map { Date(timeIntervalSince1970: Double($0) / 1_000_000_000) }
+                    .map { Date(nanosecondsSinceEpoch: $0) }
                 result.append(RestoreGroup(creationDate: creationDate, resources: group))
                 continue
             }
 
             for resource in group {
                 let creationDate = resource.creationDateNs
-                    .map { Date(timeIntervalSince1970: Double($0) / 1_000_000_000) }
+                    .map { Date(nanosecondsSinceEpoch: $0) }
                 result.append(RestoreGroup(creationDate: creationDate, resources: [resource]))
             }
         }

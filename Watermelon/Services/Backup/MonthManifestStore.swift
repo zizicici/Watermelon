@@ -724,13 +724,12 @@ final class MonthManifestStore {
     }
 
     private static func purgeStaleTempFilesIfNeeded() {
-        staleTempCleanupLock.lock()
-        if hasPurgedStaleTempFiles {
-            staleTempCleanupLock.unlock()
-            return
+        let shouldPurge = staleTempCleanupLock.withLock { () -> Bool in
+            guard !hasPurgedStaleTempFiles else { return false }
+            hasPurgedStaleTempFiles = true
+            return true
         }
-        hasPurgedStaleTempFiles = true
-        staleTempCleanupLock.unlock()
+        guard shouldPurge else { return }
 
         let tmpURL = FileManager.default.temporaryDirectory
         guard let fileURLs = try? FileManager.default.contentsOfDirectory(
@@ -759,7 +758,7 @@ final class MonthManifestStore {
 
     private static func dateFromEpochNs(_ ns: Int64?) -> Date? {
         guard let ns else { return nil }
-        return Date(timeIntervalSince1970: Double(ns) / 1_000_000_000)
+        return Date(nanosecondsSinceEpoch: ns)
     }
 
     private func seedDatabase(_ seed: Seed) throws {

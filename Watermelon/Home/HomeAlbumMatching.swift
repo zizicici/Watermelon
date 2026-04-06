@@ -49,16 +49,6 @@ enum HomeAlbumMatching {
         let hash: Data
     }
 
-    static func makeHashToAssetIndex(_ hashMapByAsset: [String: [Data]]) -> [Data: [String]] {
-        var hashToAssetSet: [Data: Set<String>] = [:]
-        for (assetID, hashes) in hashMapByAsset {
-            for hash in Set(hashes) {
-                hashToAssetSet[hash, default: []].insert(assetID)
-            }
-        }
-        return hashToAssetSet.mapValues { Array($0).sorted() }
-    }
-
     static func buildRemoteItems(from snapshot: RemoteLibrarySnapshot) -> [RemoteAlbumItem] {
         buildRemoteItems(
             assets: snapshot.assets,

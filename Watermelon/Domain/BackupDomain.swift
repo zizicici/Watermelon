@@ -95,7 +95,6 @@ enum BackupError: LocalizedError {
     case missingServerProfile
     case missingCredentials
     case photoPermissionDenied
-    case smbUnavailable
     case restoreNoSelection
 
     var errorDescription: String? {
@@ -106,8 +105,6 @@ enum BackupError: LocalizedError {
             return "Missing server credentials."
         case .photoPermissionDenied:
             return "Photo library permission denied."
-        case .smbUnavailable:
-            return "SMB support is unavailable in this build."
         case .restoreNoSelection:
             return "No items selected for restore."
         }

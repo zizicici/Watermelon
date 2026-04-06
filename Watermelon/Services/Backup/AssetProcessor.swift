@@ -58,7 +58,6 @@ private struct UploadRetryOutcome {
 }
 
 final class AssetProcessor: Sendable {
-    private static let monthCalendar = Calendar(identifier: .gregorian)
     private static let smallFileThresholdBytes: Int64 = 5 * 1024 * 1024
     private static let hashBufferSize = 64 * 1024
     private static let transferProgressMinimumStep = 0.01
@@ -78,13 +77,8 @@ final class AssetProcessor: Sendable {
         self.remoteIndexService = remoteIndexService
     }
 
-    static func monthKey(for date: Date?) -> MonthKey {
-        let date = date ?? Date(timeIntervalSince1970: 0)
-        let comps = monthCalendar.dateComponents([.year, .month], from: date)
-        return MonthKey(
-            year: comps.year ?? 1970,
-            month: comps.month ?? 1
-        )
+    static func monthKey(for date: Date?) -> LibraryMonthKey {
+        LibraryMonthKey.from(date: date)
     }
 
     func process(
@@ -249,9 +243,17 @@ final class AssetProcessor: Sendable {
             }
         }
 
-        let failedResults = uploadResults.filter { $0.status == .failed }
-        let skippedResults = uploadResults.filter { $0.status == .skipped }
-        let successResults = uploadResults.filter { $0.status == .success }
+        var failedCount = 0, skippedCount = 0, successCount = 0
+        var firstFailedReason: String?
+        for result in uploadResults {
+            switch result.status {
+            case .failed:
+                failedCount += 1
+                if firstFailedReason == nil { firstFailedReason = result.reason }
+            case .skipped: skippedCount += 1
+            case .success: successCount += 1
+            }
+        }
         let totalFileSizeBytes = preparedResources.reduce(Int64(0)) { partial, prepared in
             partial + max(prepared.fileSize, 0)
         }
@@ -259,16 +261,16 @@ final class AssetProcessor: Sendable {
             pair.1.status == .success ? (partial + max(pair.0.fileSize, 0)) : partial
         }
 
-        if !failedResults.isEmpty {
-            let firstError = failedResults.first?.reason ?? "resource_failed"
+        if failedCount > 0 {
+            let firstError = firstFailedReason ?? "resource_failed"
             eventStream.emit(.log(
-                "Asset failed (partial): \(displayName). success=\(successResults.count), skipped=\(skippedResults.count), failed=\(failedResults.count)"
+                "Asset failed (partial): \(displayName). success=\(successCount), skipped=\(skippedCount), failed=\(failedCount)"
             ))
             return AssetProcessResult(
                 status: .failed,
                 reason: firstError,
                 displayName: displayName,
-                resourceSummary: "资源\(preparedResources.count) 上传\(successResults.count) 跳过\(skippedResults.count) 失败\(failedResults.count)",
+                resourceSummary: "资源\(preparedResources.count) 上传\(successCount) 跳过\(skippedCount) 失败\(failedCount)",
                 assetFingerprint: assetFingerprint,
                 timing: timing,
                 totalFileSizeBytes: totalFileSizeBytes,
@@ -280,8 +282,8 @@ final class AssetProcessor: Sendable {
             year: context.monthStore.year,
             month: context.monthStore.month,
             assetFingerprint: assetFingerprint,
-            creationDateNs: Self.nanosecondsSinceEpoch(context.asset.creationDate),
-            backedUpAtNs: Self.nanosecondsSinceEpoch(Date()) ?? 0,
+            creationDateNs: context.asset.creationDate?.nanosecondsSinceEpoch,
+            backedUpAtNs: Date().nanosecondsSinceEpoch,
             resourceCount: links.count,
             totalFileSizeBytes: totalFileSizeBytes
         )
@@ -307,12 +309,12 @@ final class AssetProcessor: Sendable {
         )
         timing.databaseSeconds += Self.elapsedSeconds(since: snapshotWriteStart)
 
-        if successResults.isEmpty {
+        if successCount == 0 {
             return AssetProcessResult(
                 status: .skipped,
                 reason: "resources_reused",
                 displayName: displayName,
-                resourceSummary: "资源\(preparedResources.count) 上传0 跳过\(skippedResults.count) 失败0",
+                resourceSummary: "资源\(preparedResources.count) 上传0 跳过\(skippedCount) 失败0",
                 assetFingerprint: assetFingerprint,
                 timing: timing,
                 totalFileSizeBytes: totalFileSizeBytes,
@@ -324,7 +326,7 @@ final class AssetProcessor: Sendable {
             status: .success,
             reason: nil,
             displayName: displayName,
-            resourceSummary: "资源\(preparedResources.count) 上传\(successResults.count) 跳过\(skippedResults.count) 失败0",
+            resourceSummary: "资源\(preparedResources.count) 上传\(successCount) 跳过\(skippedCount) 失败0",
             assetFingerprint: assetFingerprint,
             timing: timing,
             totalFileSizeBytes: totalFileSizeBytes,
@@ -410,8 +412,8 @@ final class AssetProcessor: Sendable {
             year: context.monthStore.year,
             month: context.monthStore.month,
             assetFingerprint: cachedFingerprint,
-            creationDateNs: Self.nanosecondsSinceEpoch(context.asset.creationDate),
-            backedUpAtNs: Self.nanosecondsSinceEpoch(Date()) ?? 0,
+            creationDateNs: context.asset.creationDate?.nanosecondsSinceEpoch,
+            backedUpAtNs: Date().nanosecondsSinceEpoch,
             resourceCount: links.count,
             totalFileSizeBytes: totalFileSizeBytes
         )
@@ -611,8 +613,8 @@ final class AssetProcessor: Sendable {
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
-            creationDateNs: Self.nanosecondsSinceEpoch(local.asset.creationDate),
-            backedUpAtNs: Self.nanosecondsSinceEpoch(Date()) ?? 0
+            creationDateNs: local.asset.creationDate?.nanosecondsSinceEpoch,
+            backedUpAtNs: Date().nanosecondsSinceEpoch
         )
 
         if monthStore.findResourceByHash(localHash) == nil {
@@ -657,22 +659,22 @@ final class AssetProcessor: Sendable {
                     onProgress = { fraction in
                         let clamped = max(0, min(1, fraction))
                         let now = Date()
-                        let shouldEmit: Bool
-                        progressEmitLock.lock()
-                        if clamped >= 1 {
-                            shouldEmit = true
-                            lastProgressFraction = clamped
-                            lastProgressEmitAt = now
-                        } else {
-                            let advancedEnough = (clamped - lastProgressFraction) >= Self.transferProgressMinimumStep
-                            let waitedEnough = now.timeIntervalSince(lastProgressEmitAt) >= Self.transferProgressMinimumInterval
-                            shouldEmit = advancedEnough || waitedEnough
-                            if shouldEmit {
+                        let shouldEmit: Bool = progressEmitLock.withLock {
+                            if clamped >= 1 {
                                 lastProgressFraction = clamped
                                 lastProgressEmitAt = now
+                                return true
+                            } else {
+                                let advancedEnough = (clamped - lastProgressFraction) >= Self.transferProgressMinimumStep
+                                let waitedEnough = now.timeIntervalSince(lastProgressEmitAt) >= Self.transferProgressMinimumInterval
+                                if advancedEnough || waitedEnough {
+                                    lastProgressFraction = clamped
+                                    lastProgressEmitAt = now
+                                    return true
+                                }
+                                return false
                             }
                         }
-                        progressEmitLock.unlock()
 
                         guard shouldEmit else { return }
                         eventStream.emit(.transferState(
@@ -773,7 +775,7 @@ final class AssetProcessor: Sendable {
         let local = prepared.local
         let localHash = prepared.contentHash
         let localFileSize = prepared.fileSize
-        let backedUpAtNs = Self.nanosecondsSinceEpoch(Date()) ?? 0
+        let backedUpAtNs = Date().nanosecondsSinceEpoch
         let manifestItem = RemoteManifestResource(
             year: monthStore.year,
             month: monthStore.month,
@@ -781,7 +783,7 @@ final class AssetProcessor: Sendable {
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
-            creationDateNs: Self.nanosecondsSinceEpoch(local.asset.creationDate),
+            creationDateNs: local.asset.creationDate?.nanosecondsSinceEpoch,
             backedUpAtNs: backedUpAtNs
         )
         let inserted = try monthStore.upsertResource(manifestItem)
@@ -864,10 +866,6 @@ final class AssetProcessor: Sendable {
         max(CFAbsoluteTimeGetCurrent() - start, 0)
     }
 
-    private static func nanosecondsSinceEpoch(_ date: Date?) -> Int64? {
-        guard let date else { return nil }
-        return Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded())
-    }
 
     private static func preferredAssetNameStem(
         asset: PHAsset,
@@ -898,7 +896,7 @@ final class AssetProcessor: Sendable {
             }
         }
 
-        return "asset_\(nanosecondsSinceEpoch(asset.creationDate) ?? 0)"
+        return "asset_\(asset.creationDate?.nanosecondsSinceEpoch ?? 0)"
     }
 
     private static func preferredRemoteFileName(
@@ -1016,18 +1014,4 @@ final class AssetProcessor: Sendable {
     }
 }
 
-struct MonthKey: Hashable, Comparable, Sendable {
-    let year: Int
-    let month: Int
-
-    var text: String {
-        String(format: "%04d-%02d", year, month)
-    }
-
-    static func < (lhs: MonthKey, rhs: MonthKey) -> Bool {
-        if lhs.year == rhs.year {
-            return lhs.month < rhs.month
-        }
-        return lhs.year < rhs.year
-    }
-}
+typealias MonthKey = LibraryMonthKey

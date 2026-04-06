@@ -125,9 +125,6 @@ final class AlbumGridCell: UICollectionViewCell {
         applyPillBadge(text: first.0, color: first.1, to: topLeftBadgeLabel)
     }
 
-    func setUnbacked(_ isUnbacked: Bool) {
-        // Intentionally no-op: "未备份" badge has been removed from UI.
-    }
 
     func setTopRightBadge(_ badge: (String, UIColor)?) {
         guard let badge else {

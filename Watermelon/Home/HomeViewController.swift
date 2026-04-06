@@ -77,17 +77,7 @@ final class HomeViewController: UIViewController {
         }
     }
 
-    private struct YearMonth: Hashable, Comparable {
-        let year: Int
-        let month: Int
-
-        static func < (lhs: YearMonth, rhs: YearMonth) -> Bool {
-            if lhs.year == rhs.year {
-                return lhs.month < rhs.month
-            }
-            return lhs.year < rhs.year
-        }
-    }
+    private typealias YearMonth = LibraryMonthKey
 
     private let dependencies: DependencyContainer
     private let homeDataManager: HomeIncrementalDataManager
@@ -976,7 +966,6 @@ final class HomeViewController: UIViewController {
         cell.setBadges(topLeftSourceBadges(for: item))
         cell.setTopRightBadge(topRightSourceBadge(for: item))
         cell.setBottomBadges(badges(for: item))
-        cell.setUnbacked(false)
 
         switch item.sourceTag {
         case .localOnly:
@@ -1220,7 +1209,7 @@ final class HomeViewController: UIViewController {
                 "mediaKind": self.mediaKindText(item.mediaKind),
                 "resourceCount": item.resources.count,
                 "representativePath": item.representative.remoteRelativePath,
-                "contentHashes": item.contentHashes.map(Self.hexString),
+                "contentHashes": item.contentHashes.map(\.hexString),
                 "resources": item.resources
                     .sorted { lhs, rhs in
                         if lhs.creationDate != rhs.creationDate {
@@ -1288,7 +1277,7 @@ final class HomeViewController: UIViewController {
                     "creationDate": Self.debugISO8601Formatter.string(from: item.creationDate),
                     "mediaKind": self.mediaKindText(item.mediaKind),
                     "isBackedUp": item.isBackedUp,
-                    "contentHashes": item.contentHashes.map(Self.hexString)
+                    "contentHashes": item.contentHashes.map(\.hexString)
                 ] as [String: Any]
             }
             report["localHashIndexRows"] = hashIndexRows
@@ -1310,7 +1299,7 @@ final class HomeViewController: UIViewController {
                     "creationDate": Self.debugISO8601Formatter.string(from: item.creationDate),
                     "mediaKind": self.mediaKindText(item.mediaKind),
                     "isBackedUp": item.isBackedUp,
-                    "contentHashes": item.contentHashes.map(Self.hexString)
+                    "contentHashes": item.contentHashes.map(\.hexString)
                 ] as [String: Any]
             }
             report["localOnlyHashIndexRows"] = hashIndexRows
@@ -1422,13 +1411,9 @@ final class HomeViewController: UIViewController {
     }
 
     nonisolated private static func yearMonth(for date: Date) -> YearMonth {
-        let components = Calendar(identifier: .gregorian).dateComponents([.year, .month], from: date)
-        return YearMonth(year: components.year ?? 1970, month: components.month ?? 1)
+        LibraryMonthKey.from(date: date)
     }
 
-    nonisolated private static func hexString(_ data: Data) -> String {
-        data.map { String(format: "%02x", $0) }.joined()
-    }
 
     private func presentAlert(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)

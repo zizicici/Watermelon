@@ -6,10 +6,7 @@ final class BackupCancellationController: @unchecked Sendable {
     private var handlers: [UUID: () -> Void] = [:]
 
     var isCancelled: Bool {
-        lock.lock()
-        let value = isCancelledFlag
-        lock.unlock()
-        return value
+        lock.withLock { isCancelledFlag }
     }
 
     func throwIfCancelled() throws {
@@ -22,36 +19,32 @@ final class BackupCancellationController: @unchecked Sendable {
     func addCancellationHandler(_ handler: @escaping () -> Void) -> UUID? {
         let id = UUID()
 
-        lock.lock()
-        if isCancelledFlag {
-            lock.unlock()
+        let alreadyCancelled = lock.withLock { () -> Bool in
+            if isCancelledFlag { return true }
+            handlers[id] = handler
+            return false
+        }
+
+        if alreadyCancelled {
             handler()
             return nil
         }
-        handlers[id] = handler
-        lock.unlock()
 
         return id
     }
 
     func removeCancellationHandler(_ id: UUID) {
-        lock.lock()
-        handlers[id] = nil
-        lock.unlock()
+        lock.withLock { handlers[id] = nil }
     }
 
     func cancel() {
-        let callbacks: [() -> Void]
-
-        lock.lock()
-        guard !isCancelledFlag else {
-            lock.unlock()
-            return
+        let callbacks: [() -> Void] = lock.withLock {
+            guard !isCancelledFlag else { return [] }
+            isCancelledFlag = true
+            let values = Array(handlers.values)
+            handlers.removeAll()
+            return values
         }
-        isCancelledFlag = true
-        callbacks = Array(handlers.values)
-        handlers.removeAll()
-        lock.unlock()
 
         for callback in callbacks {
             callback()

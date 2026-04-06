@@ -20,46 +20,38 @@ final class PhotoLibraryService: @unchecked Sendable {
         private var completed = false
 
         func bind(continuation: CheckedContinuation<Void, Error>, requestID: PHAssetResourceDataRequestID) -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            guard !completed else {
-                return false
+            lock.withLock {
+                guard !completed else { return false }
+                self.continuation = continuation
+                self.requestID = requestID
+                return true
             }
-            self.continuation = continuation
-            self.requestID = requestID
-            return true
         }
 
         func complete(_ result: Result<Void, Error>) {
-            let continuation: CheckedContinuation<Void, Error>?
-            lock.lock()
-            guard !completed else {
-                lock.unlock()
-                return
+            let captured: CheckedContinuation<Void, Error>? = lock.withLock {
+                guard !completed else { return nil }
+                completed = true
+                let c = self.continuation
+                self.continuation = nil
+                requestID = nil
+                return c
             }
-            completed = true
-            continuation = self.continuation
-            self.continuation = nil
-            requestID = nil
-            lock.unlock()
 
-            guard let continuation else { return }
+            guard let captured else { return }
             switch result {
             case .success:
-                continuation.resume(returning: ())
+                captured.resume(returning: ())
             case .failure(let error):
-                continuation.resume(throwing: error)
+                captured.resume(throwing: error)
             }
         }
 
         func cancelRequest(using manager: PHAssetResourceManager) {
-            let requestID: PHAssetResourceDataRequestID?
-            lock.lock()
-            requestID = self.requestID
-            lock.unlock()
+            let id: PHAssetResourceDataRequestID? = lock.withLock { self.requestID }
 
-            if let requestID {
-                manager.cancelDataRequest(requestID)
+            if let id {
+                manager.cancelDataRequest(id)
             }
         }
 
@@ -85,16 +77,6 @@ final class PhotoLibraryService: @unchecked Sendable {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: ascendingByCreationDate)]
         return PHAsset.fetchAssets(with: options)
-    }
-
-    func fetchAssets() -> [PHAsset] {
-        let fetchResult = fetchAssetsResult()
-        var result: [PHAsset] = []
-        result.reserveCapacity(fetchResult.count)
-        fetchResult.enumerateObjects { asset, _, _ in
-            result.append(asset)
-        }
-        return result
     }
 
     func exportResourceToTempFile(
@@ -344,17 +326,14 @@ private final class ExportDigestState {
     private(set) var totalBytes: Int64 = 0
 
     func update(with data: Data) {
-        lock.lock()
-        hasher.update(data: data)
-        totalBytes += Int64(data.count)
-        lock.unlock()
+        lock.withLock {
+            hasher.update(data: data)
+            totalBytes += Int64(data.count)
+        }
     }
 
     func finalizeDigest() -> Data {
-        lock.lock()
-        let digest = Data(hasher.finalize())
-        lock.unlock()
-        return digest
+        lock.withLock { Data(hasher.finalize()) }
     }
 }
 

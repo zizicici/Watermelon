@@ -77,7 +77,7 @@ private final class HomeLocalIndexEngine {
             )
 
             let signature = LocalSignature(
-                creationDateNs: Self.nanosecondsSinceEpoch(item.creationDate),
+                creationDateNs: item.creationDate.nanosecondsSinceEpoch,
                 isBackedUp: isBackedUp,
                 mediaKind: mediaKind,
                 contentHashes: hashes
@@ -340,7 +340,7 @@ private final class HomeLocalIndexEngine {
         )
 
         let signature = LocalSignature(
-            creationDateNs: Self.nanosecondsSinceEpoch(creationDate),
+            creationDateNs: creationDate.nanosecondsSinceEpoch,
             isBackedUp: isBackedUp,
             mediaKind: mediaKind,
             contentHashes: hashes
@@ -430,9 +430,6 @@ private final class HomeLocalIndexEngine {
         return .photo
     }
 
-    private static func nanosecondsSinceEpoch(_ date: Date) -> Int64 {
-        Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded())
-    }
 }
 
 private final class HomeRemoteIndexEngine {
