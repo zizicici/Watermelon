@@ -21,6 +21,12 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     private var revision: UInt64 = 0
     private var monthLastChangedRevision: [LibraryMonthKey: UInt64] = [:]
 
+    private struct MonthStats {
+        var assetCount: Int
+        var totalSizeBytes: Int64
+    }
+    private var monthStatsCache: [LibraryMonthKey: MonthStats] = [:]
+
     func current() -> RemoteLibrarySnapshot {
         lock.withLock { rebuildFullSnapshotLocked() }
     }
@@ -83,6 +89,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             assetsByMonth.removeAll()
             linksByMonth.removeAll()
             linkKeysByAssetID.removeAll()
+            monthStatsCache.removeAll()
             revision = 0
             monthLastChangedRevision.removeAll()
         }
@@ -126,6 +133,13 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             assetsByMonth[month] = nextAssets.isEmpty ? nil : nextAssets
             linksByMonth[month] = nextLinks.isEmpty ? nil : nextLinks
 
+            if nextAssets.isEmpty {
+                monthStatsCache[month] = nil
+            } else {
+                let totalSize = nextAssets.values.reduce(Int64(0)) { $0 + $1.totalFileSizeBytes }
+                monthStatsCache[month] = MonthStats(assetCount: nextAssets.count, totalSizeBytes: totalSize)
+            }
+
             attachLinkKeysLocked(nextLinks)
 
             bumpRevisionLocked([month])
@@ -147,6 +161,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             if let previousLinks {
                 detachLinkKeysLocked(previousLinks)
             }
+            monthStatsCache[month] = nil
             bumpRevisionLocked([month])
             monthLastChangedRevision[month] = nil
             return true
@@ -300,9 +315,8 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
 
     func monthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, totalSizeBytes: Int64)] {
         lock.withLock {
-            assetsByMonth.map { (month, assetMap) in
-                let totalSize = assetMap.values.reduce(Int64(0)) { $0 + $1.totalFileSizeBytes }
-                return (month: month, assetCount: assetMap.count, totalSizeBytes: totalSize)
+            monthStatsCache.map { (month, stats) in
+                (month: month, assetCount: stats.assetCount, totalSizeBytes: stats.totalSizeBytes)
             }
         }
     }

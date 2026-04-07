@@ -6,7 +6,8 @@ final class NewHomeViewController: UIViewController {
     private struct MonthSummary {
         let month: LibraryMonthKey
         let assetCount: Int
-        let totalSizeBytes: Int64
+        let backedUpCount: Int?
+        let totalSizeBytes: Int64?
 
         var monthTitle: String {
             String(format: "%02d月", month.month)
@@ -16,8 +17,19 @@ final class NewHomeViewController: UIViewController {
             "\(assetCount) 张"
         }
 
-        var sizeText: String {
-            ByteCountFormatter.string(fromByteCount: totalSizeBytes, countStyle: .file)
+        var sizeText: String? {
+            guard let bytes = totalSizeBytes else { return nil }
+            return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        }
+
+        var backedUpPercent: Double? {
+            guard let backed = backedUpCount, assetCount > 0 else { return nil }
+            return Double(backed) / Double(assetCount)
+        }
+
+        var backedUpText: String? {
+            guard let pct = backedUpPercent else { return nil }
+            return "\(Int(pct * 100))%"
         }
     }
 
@@ -27,6 +39,23 @@ final class NewHomeViewController: UIViewController {
 
         var title: String {
             "\(year)年"
+        }
+
+        var totalAssetCount: Int {
+            months.reduce(0) { $0 + $1.assetCount }
+        }
+
+        var totalSizeBytes: Int64? {
+            let sizes = months.compactMap(\.totalSizeBytes)
+            guard sizes.count == months.count else { return nil }
+            return sizes.reduce(0, +)
+        }
+
+        var backedUpPercent: Double? {
+            let totalBacked = months.compactMap(\.backedUpCount).reduce(0, +)
+            let total = totalAssetCount
+            guard total > 0, months.allSatisfy({ $0.backedUpCount != nil }) else { return nil }
+            return Double(totalBacked) / Double(total)
         }
     }
 
@@ -49,20 +78,32 @@ final class NewHomeViewController: UIViewController {
         }
     }
 
-    private final class DataSource: UITableViewDiffableDataSource<Section, Item> {
-        override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-            sectionIdentifier(for: section)?.header
-        }
-    }
-
     private enum Item: Hashable {
-        case month(LibraryMonthKey, assetCount: Int, totalSizeBytes: Int64)
+        case month(LibraryMonthKey, assetCount: Int, backedUpCount: Int?, totalSizeBytes: Int64?)
     }
 
-    private let leftTableView = UITableView(frame: .zero, style: .plain)
-    private let rightTableView = UITableView(frame: .zero, style: .plain)
+    private typealias DataSource = UICollectionViewDiffableDataSource<Section, Item>
+
+    private let leftCollectionView: UICollectionView = {
+        let cv = UICollectionView(frame: .zero, collectionViewLayout: createLayout())
+        cv.backgroundColor = .clear
+        cv.automaticallyAdjustsScrollIndicatorInsets = false
+        cv.verticalScrollIndicatorInsets = .zero
+        return cv
+    }()
+
+    private let rightCollectionView: UICollectionView = {
+        let cv = UICollectionView(frame: .zero, collectionViewLayout: createLayout())
+        cv.backgroundColor = .clear
+        cv.automaticallyAdjustsScrollIndicatorInsets = false
+        cv.verticalScrollIndicatorInsets = .zero
+        return cv
+    }()
+
     private var leftDataSource: DataSource!
     private var rightDataSource: DataSource!
+    private var leftYearSections: [YearSection] = []
+    private var rightYearSections: [YearSection] = []
     private let leftHeaderLabel = UILabel()
     private let rightHeaderButton = UIButton(type: .system)
     private let backupButton = UIButton(type: .system)
@@ -110,6 +151,27 @@ final class NewHomeViewController: UIViewController {
         scheduleReloadAllData()
     }
 
+    // MARK: - Layout
+
+    private static func createLayout() -> UICollectionViewCompositionalLayout {
+        UICollectionViewCompositionalLayout { _, _ in
+            let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .absolute(72))
+            let item = NSCollectionLayoutItem(layoutSize: itemSize)
+            let group = NSCollectionLayoutGroup.vertical(layoutSize: itemSize, subitems: [item])
+            let section = NSCollectionLayoutSection(group: group)
+
+            let headerSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .absolute(50))
+            let header = NSCollectionLayoutBoundarySupplementaryItem(
+                layoutSize: headerSize,
+                elementKind: UICollectionView.elementKindSectionHeader,
+                alignment: .top
+            )
+            header.pinToVisibleBounds = true
+            section.boundarySupplementaryItems = [header]
+            return section
+        }
+    }
+
     // MARK: - UI Construction
 
     private func buildUI() {
@@ -153,20 +215,20 @@ final class NewHomeViewController: UIViewController {
             make.height.equalTo(Self.headerAreaHeight)
         }
 
-        // Table views
-        configureTableView(leftTableView)
-        configureTableView(rightTableView)
+        // Collection views
+        leftCollectionView.delegate = self
+        rightCollectionView.delegate = self
 
-        view.addSubview(leftTableView)
-        view.addSubview(rightTableView)
+        view.addSubview(leftCollectionView)
+        view.addSubview(rightCollectionView)
 
-        leftTableView.snp.makeConstraints { make in
+        leftCollectionView.snp.makeConstraints { make in
             make.top.equalTo(leftHeaderBg.snp.bottom)
             make.leading.equalToSuperview()
             make.trailing.equalTo(view.snp.centerX).offset(-1)
             make.bottom.equalToSuperview()
         }
-        rightTableView.snp.makeConstraints { make in
+        rightCollectionView.snp.makeConstraints { make in
             make.top.equalTo(rightHeaderBg.snp.bottom)
             make.leading.equalTo(view.snp.centerX).offset(1)
             make.trailing.equalToSuperview()
@@ -200,7 +262,7 @@ final class NewHomeViewController: UIViewController {
 
         view.addSubview(backupButton)
         backupButton.snp.makeConstraints { make in
-            make.centerX.equalTo(leftTableView)
+            make.centerX.equalTo(leftCollectionView)
             make.bottom.equalTo(view.safeAreaLayoutGuide).offset(-16)
             make.height.equalTo(44)
         }
@@ -210,35 +272,52 @@ final class NewHomeViewController: UIViewController {
         backupButton.layer.shadowRadius = 6
     }
 
-    private func configureTableView(_ tableView: UITableView) {
-        tableView.delegate = self
-        tableView.register(MonthSummaryCell.self, forCellReuseIdentifier: MonthSummaryCell.reuseID)
-        tableView.separatorStyle = .none
-        tableView.backgroundColor = .clear
-        tableView.sectionHeaderTopPadding = 0
-        tableView.sectionHeaderHeight = 50
-        tableView.automaticallyAdjustsScrollIndicatorInsets = false
-        tableView.verticalScrollIndicatorInsets = .zero
-    }
+    // MARK: - Data Sources
 
     private func configureDataSources() {
-        let cellProvider: (UITableView, IndexPath, Item) -> UITableViewCell? = { tableView, indexPath, item in
-            let cell = tableView.dequeueReusableCell(withIdentifier: MonthSummaryCell.reuseID, for: indexPath) as! MonthSummaryCell
-            guard case .month(let month, let assetCount, let totalSizeBytes) = item else { return cell }
-            let summary = MonthSummary(month: month, assetCount: assetCount, totalSizeBytes: totalSizeBytes)
+        let cellRegistration = UICollectionView.CellRegistration<MonthSummaryCell, Item> { cell, _, item in
+            guard case .month(let month, let assetCount, let backedUpCount, let totalSizeBytes) = item else { return }
+            let summary = MonthSummary(month: month, assetCount: assetCount, backedUpCount: backedUpCount, totalSizeBytes: totalSizeBytes)
             let m = month.month
             cell.configure(
                 monthTitle: summary.monthTitle,
                 countText: summary.countText,
                 sizeText: summary.sizeText,
+                backedUpText: summary.backedUpText,
                 bgColor: Self.monthColor(month: m),
                 titleColor: Self.monthTextColor(month: m),
                 detailColor: Self.monthSecondaryTextColor(month: m)
             )
-            return cell
         }
-        leftDataSource = DataSource(tableView: leftTableView, cellProvider: cellProvider)
-        rightDataSource = DataSource(tableView: rightTableView, cellProvider: cellProvider)
+
+        leftDataSource = DataSource(collectionView: leftCollectionView) { collectionView, indexPath, item in
+            collectionView.dequeueConfiguredReusableCell(using: cellRegistration, for: indexPath, item: item)
+        }
+        rightDataSource = DataSource(collectionView: rightCollectionView) { collectionView, indexPath, item in
+            collectionView.dequeueConfiguredReusableCell(using: cellRegistration, for: indexPath, item: item)
+        }
+
+        let headerRegistration = UICollectionView.SupplementaryRegistration<SectionHeaderView>(
+            elementKind: UICollectionView.elementKindSectionHeader
+        ) { [weak self] supplementaryView, _, indexPath in
+            guard let self else { return }
+            let isLeft = supplementaryView.isDescendant(of: self.leftCollectionView)
+            let yearSections = isLeft ? self.leftYearSections : self.rightYearSections
+            guard indexPath.section < yearSections.count else { return }
+            let section = yearSections[indexPath.section]
+            supplementaryView.configure(
+                title: section.title,
+                countText: "\(section.totalAssetCount) 张",
+                sizeText: section.totalSizeBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) },
+                backedUpText: section.backedUpPercent.map { "\(Int($0 * 100))%" }
+            )
+        }
+
+        let supplementaryProvider: DataSource.SupplementaryViewProvider = { collectionView, kind, indexPath in
+            collectionView.dequeueConfiguredReusableSupplementary(using: headerRegistration, for: indexPath)
+        }
+        leftDataSource.supplementaryViewProvider = supplementaryProvider
+        rightDataSource.supplementaryViewProvider = supplementaryProvider
     }
 
     private func configureRightHeaderButton() {
@@ -310,13 +389,16 @@ final class NewHomeViewController: UIViewController {
             self.loadSavedProfiles()
             self.updateRightHeaderButton()
             self.syncRemoteDataIfNeeded()
-            self.reloadRemoteSummaries()
+            self.reloadAllSummaries()
         }
     }
 
     private func bindDataManager() {
         homeDataManager.onDataChanged = { [weak self] in
             self?.reloadAllSummaries()
+        }
+        homeDataManager.onFileSizesUpdated = { [weak self] in
+            self?.reloadLocalSummaries()
         }
     }
 
@@ -340,13 +422,16 @@ final class NewHomeViewController: UIViewController {
 
     private func reloadLocalSummaries() {
         let flat = homeDataManager.localMonthSummaries().map {
-            MonthSummary(month: $0.month, assetCount: $0.assetCount, totalSizeBytes: $0.totalSizeBytes)
+            MonthSummary(month: $0.month, assetCount: $0.assetCount, backedUpCount: $0.backedUpCount, totalSizeBytes: $0.totalSizeBytes)
         }
-        leftDataSource.apply(Self.buildSnapshot(from: flat), animatingDifferences: false)
+        leftYearSections = Self.groupByYear(flat)
+        leftDataSource.apply(Self.buildSnapshot(from: leftYearSections), animatingDifferences: false)
+        reconfigureHeaders(leftCollectionView, yearSections: leftYearSections)
     }
 
     private func reloadRemoteSummaries(overrideActiveConnection: Bool? = nil) {
         guard overrideActiveConnection ?? hasActiveConnection else {
+            rightYearSections = []
             rightDataSource.apply(NSDiffableDataSourceSnapshot<Section, Item>(), animatingDifferences: false)
             emptyRemoteLabel.isHidden = false
             return
@@ -354,20 +439,39 @@ final class NewHomeViewController: UIViewController {
 
         let summaries = dependencies.backupCoordinator.remoteMonthSummaries()
         let flat = summaries.map {
-            MonthSummary(month: $0.month, assetCount: $0.assetCount, totalSizeBytes: $0.totalSizeBytes)
+            MonthSummary(month: $0.month, assetCount: $0.assetCount, backedUpCount: nil, totalSizeBytes: $0.totalSizeBytes)
         }
 
+        rightYearSections = Self.groupByYear(flat)
         emptyRemoteLabel.isHidden = true
-        rightDataSource.apply(Self.buildSnapshot(from: flat), animatingDifferences: false)
+        rightDataSource.apply(Self.buildSnapshot(from: rightYearSections), animatingDifferences: false)
+        reconfigureHeaders(rightCollectionView, yearSections: rightYearSections)
     }
 
-    private static func buildSnapshot(from summaries: [MonthSummary]) -> NSDiffableDataSourceSnapshot<Section, Item> {
+    private func reconfigureHeaders(_ collectionView: UICollectionView, yearSections: [YearSection]) {
+        for section in 0 ..< collectionView.numberOfSections {
+            guard section < yearSections.count else { continue }
+            let indexPath = IndexPath(item: 0, section: section)
+            guard let header = collectionView.supplementaryView(
+                forElementKind: UICollectionView.elementKindSectionHeader,
+                at: indexPath
+            ) as? SectionHeaderView else { continue }
+            let ys = yearSections[section]
+            header.configure(
+                title: ys.title,
+                countText: "\(ys.totalAssetCount) 张",
+                sizeText: ys.totalSizeBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) },
+                backedUpText: ys.backedUpPercent.map { "\(Int($0 * 100))%" }
+            )
+        }
+    }
+
+    private static func buildSnapshot(from yearSections: [YearSection]) -> NSDiffableDataSourceSnapshot<Section, Item> {
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
-        let grouped = groupByYear(summaries)
-        for section in grouped {
+        for section in yearSections {
             snapshot.appendSections([.year(section.year)])
             snapshot.appendItems(section.months.map {
-                .month($0.month, assetCount: $0.assetCount, totalSizeBytes: $0.totalSizeBytes)
+                .month($0.month, assetCount: $0.assetCount, backedUpCount: $0.backedUpCount, totalSizeBytes: $0.totalSizeBytes)
             })
         }
         return snapshot
@@ -592,33 +696,91 @@ final class NewHomeViewController: UIViewController {
     }
 }
 
-// MARK: - UITableViewDelegate
+// MARK: - UICollectionViewDelegate
 
-extension NewHomeViewController: UITableViewDelegate {
-    func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
-        72
+extension NewHomeViewController: UICollectionViewDelegate {
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        collectionView.deselectItem(at: indexPath, animated: true)
+    }
+}
+
+// MARK: - Section Header View
+
+private final class SectionHeaderView: UICollectionReusableView {
+    private let titleLabel = UILabel()
+    private let countLabel = UILabel()
+    private let sizeLabel = UILabel()
+    private let backedUpLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+//        backgroundColor = .systemBackground
+
+        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        titleLabel.textColor = .secondaryLabel
+
+        countLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        countLabel.textColor = .tertiaryLabel
+
+        sizeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        sizeLabel.textColor = .tertiaryLabel
+        sizeLabel.textAlignment = .right
+
+        backedUpLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        backedUpLabel.textColor = .tertiaryLabel
+        backedUpLabel.textAlignment = .right
+
+        addSubview(titleLabel)
+        addSubview(countLabel)
+        addSubview(sizeLabel)
+        addSubview(backedUpLabel)
+
+        titleLabel.snp.makeConstraints { make in
+            make.leading.equalToSuperview().inset(16)
+            make.bottom.equalTo(snp.centerY).offset(-1)
+        }
+        countLabel.snp.makeConstraints { make in
+            make.top.equalTo(snp.centerY).offset(1)
+            make.leading.equalToSuperview().inset(16)
+        }
+        sizeLabel.snp.makeConstraints { make in
+            make.trailing.equalToSuperview().inset(16)
+            make.centerY.equalTo(titleLabel)
+        }
+        backedUpLabel.snp.makeConstraints { make in
+            make.trailing.equalToSuperview().inset(16)
+            make.centerY.equalTo(countLabel)
+        }
     }
 
-    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        tableView.deselectRow(at: indexPath, animated: true)
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(title: String, countText: String, sizeText: String?, backedUpText: String?) {
+        titleLabel.text = title
+        countLabel.text = countText
+        sizeLabel.text = sizeText
+        sizeLabel.isHidden = sizeText == nil
+        backedUpLabel.text = backedUpText
+        backedUpLabel.isHidden = backedUpText == nil
     }
 }
 
 // MARK: - Month Summary Cell
 
-private final class MonthSummaryCell: UITableViewCell {
-    static let reuseID = "MonthSummaryCell"
-
+private final class MonthSummaryCell: UICollectionViewCell {
     private let colorView = UIView()
     private let monthLabel = UILabel()
     private let countLabel = UILabel()
     private let sizeLabel = UILabel()
+    private let backedUpLabel = UILabel()
 
-    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
-        super.init(style: style, reuseIdentifier: reuseIdentifier)
+    override init(frame: CGRect) {
+        super.init(frame: frame)
         backgroundColor = .clear
         contentView.backgroundColor = .clear
-        selectionStyle = .none
 
         contentView.addSubview(colorView)
         colorView.snp.makeConstraints { make in
@@ -629,26 +791,33 @@ private final class MonthSummaryCell: UITableViewCell {
         monthLabel.font = .systemFont(ofSize: 15, weight: .medium)
 
         countLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
-        countLabel.textAlignment = .right
 
         sizeLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         sizeLabel.textAlignment = .right
 
-        let rightStack = UIStackView(arrangedSubviews: [countLabel, sizeLabel])
+        backedUpLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        backedUpLabel.textAlignment = .right
+
+        let leftStack = UIStackView(arrangedSubviews: [monthLabel, countLabel])
+        leftStack.axis = .vertical
+        leftStack.spacing = 2
+        leftStack.alignment = .leading
+
+        let rightStack = UIStackView(arrangedSubviews: [sizeLabel, backedUpLabel])
         rightStack.axis = .vertical
         rightStack.spacing = 2
         rightStack.alignment = .trailing
 
-        colorView.addSubview(monthLabel)
+        colorView.addSubview(leftStack)
         colorView.addSubview(rightStack)
-        monthLabel.snp.makeConstraints { make in
+        leftStack.snp.makeConstraints { make in
             make.leading.equalToSuperview().inset(16)
             make.centerY.equalToSuperview()
         }
         rightStack.snp.makeConstraints { make in
             make.trailing.equalToSuperview().inset(16)
             make.centerY.equalToSuperview()
-            make.leading.greaterThanOrEqualTo(monthLabel.snp.trailing).offset(8)
+            make.leading.greaterThanOrEqualTo(leftStack.snp.trailing).offset(8)
         }
     }
 
@@ -657,14 +826,18 @@ private final class MonthSummaryCell: UITableViewCell {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(monthTitle: String, countText: String, sizeText: String,
+    func configure(monthTitle: String, countText: String, sizeText: String?, backedUpText: String?,
                    bgColor: UIColor, titleColor: UIColor, detailColor: UIColor) {
         monthLabel.text = monthTitle
         countLabel.text = countText
         sizeLabel.text = sizeText
+        sizeLabel.isHidden = sizeText == nil
+        backedUpLabel.text = backedUpText
+        backedUpLabel.isHidden = backedUpText == nil
         colorView.backgroundColor = bgColor
         monthLabel.textColor = titleColor
         countLabel.textColor = detailColor
         sizeLabel.textColor = detailColor
+        backedUpLabel.textColor = detailColor
     }
 }

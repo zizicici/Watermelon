@@ -351,6 +351,22 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
+    func fetchFileSizeByAsset() throws -> [String: Int64] {
+        try databaseManager.read { db in
+            var result: [String: Int64] = [:]
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT assetLocalIdentifier, totalFileSizeBytes FROM local_assets WHERE totalFileSizeBytes > 0"
+            )
+            for row in rows {
+                let id: String = row["assetLocalIdentifier"]
+                let size: Int64 = row["totalFileSizeBytes"]
+                result[id] = size
+            }
+            return result
+        }
+    }
+
     func fetchTotalFileSizeBytes(assetIDs: Set<String>) throws -> Int64 {
         guard !assetIDs.isEmpty else { return 0 }
 
