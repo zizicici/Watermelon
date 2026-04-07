@@ -89,9 +89,30 @@ final class NewHomeViewController: UIViewController {
         case year(Int)
     }
 
-    private enum Item: Hashable {
-        case local(LibraryMonthKey)
-        case remote(LibraryMonthKey)
+    fileprivate enum SelectionState {
+        case none, partial, all
+    }
+
+    fileprivate enum ArrowDirection {
+        case toRemote      // arrow.right
+        case toLocal       // arrow.left
+        case sync          // arrow.left.arrow.right
+    }
+
+    private struct Item: Hashable {
+        enum Side { case local, remote }
+        let side: Side
+        let month: LibraryMonthKey
+        var arrowDirection: ArrowDirection?
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(side)
+            hasher.combine(month)
+        }
+
+        static func == (lhs: Item, rhs: Item) -> Bool {
+            lhs.side == rhs.side && lhs.month == rhs.month
+        }
     }
 
     private typealias DataSource = UICollectionViewDiffableDataSource<Section, Item>
@@ -172,10 +193,19 @@ final class NewHomeViewController: UIViewController {
 
     private static func createLayout() -> UICollectionViewCompositionalLayout {
         UICollectionViewCompositionalLayout { _, _ in
+            let arrowBadgeSize = NSCollectionLayoutSize(widthDimension: .absolute(20), heightDimension: .absolute(20))
+            let arrowBadge = NSCollectionLayoutSupplementaryItem(
+                layoutSize: arrowBadgeSize,
+                elementKind: directionArrowElementKind,
+                containerAnchor: NSCollectionLayoutAnchor(edges: [.trailing], absoluteOffset: CGPoint(x: 11, y: 0))
+            )
+            arrowBadge.zIndex = 10
+
             let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(0.5), heightDimension: .absolute(72))
-            let item = NSCollectionLayoutItem(layoutSize: itemSize)
+            let leftItem = NSCollectionLayoutItem(layoutSize: itemSize, supplementaryItems: [arrowBadge])
+            let rightItem = NSCollectionLayoutItem(layoutSize: itemSize)
             let groupSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .absolute(72))
-            let group = NSCollectionLayoutGroup.horizontal(layoutSize: groupSize, subitems: [item, item])
+            let group = NSCollectionLayoutGroup.horizontal(layoutSize: groupSize, subitems: [leftItem, rightItem])
             group.interItemSpacing = .fixed(2)
             let section = NSCollectionLayoutSection(group: group)
 
@@ -305,24 +335,21 @@ final class NewHomeViewController: UIViewController {
     private func configureDataSource() {
         let cellRegistration = UICollectionView.CellRegistration<MonthCell, Item> { [weak self] cell, _, item in
             guard let self else { return }
-            let month: LibraryMonthKey
             let summary: MonthSummary
             let isSelected: Bool?
 
-            switch item {
-            case .local(let key):
-                month = key
-                summary = self.rowLookup[key]?.local
-                    ?? MonthSummary(month: key, assetCount: 0, backedUpCount: nil, totalSizeBytes: 0)
-                isSelected = self.selectedLocalMonths.contains(key)
-            case .remote(let key):
-                month = key
-                summary = self.rowLookup[key]?.remote
-                    ?? MonthSummary(month: key, assetCount: 0, backedUpCount: nil, totalSizeBytes: 0)
-                isSelected = self.selectedRemoteMonths.contains(key)
+            switch item.side {
+            case .local:
+                summary = self.rowLookup[item.month]?.local
+                    ?? MonthSummary(month: item.month, assetCount: 0, backedUpCount: nil, totalSizeBytes: 0)
+                isSelected = self.selectedLocalMonths.contains(item.month)
+            case .remote:
+                summary = self.rowLookup[item.month]?.remote
+                    ?? MonthSummary(month: item.month, assetCount: 0, backedUpCount: nil, totalSizeBytes: 0)
+                isSelected = self.selectedRemoteMonths.contains(item.month)
             }
 
-            let m = month.month
+            let m = item.month.month
             cell.configure(
                 monthTitle: summary.monthTitle, countText: summary.countText,
                 sizeText: summary.sizeText, backedUpText: summary.backedUpText,
@@ -343,11 +370,11 @@ final class NewHomeViewController: UIViewController {
             guard let self, indexPath.section < self.mergedSections.count else { return }
             let section = self.mergedSections[indexPath.section]
             let allMonths = Set(section.rows.map(\.month))
-            let leftAllSelected = !allMonths.isEmpty && allMonths.isSubset(of: self.selectedLocalMonths)
-            let rightAllSelected = !allMonths.isEmpty && allMonths.isSubset(of: self.selectedRemoteMonths)
+            let leftState = self.selectionState(for: allMonths, in: self.selectedLocalMonths)
+            let rightState = self.selectionState(for: allMonths, in: self.selectedRemoteMonths)
             let accentColor = self.leftHeaderLabel.textColor ?? .secondaryLabel
             supplementaryView.configure(section: section,
-                                        leftSelected: leftAllSelected, rightSelected: rightAllSelected,
+                                        leftState: leftState, rightState: rightState,
                                         selectedColor: accentColor, deselectedColor: UIColor.tertiaryLabel)
             supplementaryView.onLeftTap = { [weak self] in
                 self?.toggleYearSelection(section: indexPath.section, side: .local)
@@ -357,8 +384,23 @@ final class NewHomeViewController: UIViewController {
             }
         }
 
+        let arrowRegistration = UICollectionView.SupplementaryRegistration<DirectionArrowView>(
+            elementKind: directionArrowElementKind
+        ) { [weak self] arrowView, _, indexPath in
+            guard let self else { return }
+            // Badge supplementary indexPaths are sequential (0,1,2...),
+            // but items alternate local/remote in the snapshot.
+            // Badge N corresponds to the local item at index N*2.
+            let itemIndexPath = IndexPath(item: indexPath.item * 2, section: indexPath.section)
+            guard let item = self.dataSource.itemIdentifier(for: itemIndexPath) else { return }
+            arrowView.configure(direction: item.arrowDirection)
+        }
+
         dataSource.supplementaryViewProvider = { collectionView, kind, indexPath in
-            collectionView.dequeueConfiguredReusableSupplementary(using: headerRegistration, for: indexPath)
+            if kind == directionArrowElementKind {
+                return collectionView.dequeueConfiguredReusableSupplementary(using: arrowRegistration, for: indexPath)
+            }
+            return collectionView.dequeueConfiguredReusableSupplementary(using: headerRegistration, for: indexPath)
         }
     }
 
@@ -524,13 +566,34 @@ final class NewHomeViewController: UIViewController {
             var items: [Item] = []
             items.reserveCapacity(section.rows.count * 2)
             for row in section.rows {
-                items.append(.local(row.month))
-                items.append(.remote(row.month))
+                items.append(Item(side: .local, month: row.month, arrowDirection: arrowDirection(for: row.month)))
+                items.append(Item(side: .remote, month: row.month))
             }
             snapshot.appendItems(items)
         }
         dataSource.applySnapshotUsingReloadData(snapshot)
         reconfigureVisibleHeaders()
+    }
+
+    private func arrowDirection(for month: LibraryMonthKey) -> ArrowDirection? {
+        let l = selectedLocalMonths.contains(month)
+        let r = selectedRemoteMonths.contains(month)
+        var result: ArrowDirection? = nil
+        switch (l, r) {
+        case (true, false):  result = .toRemote
+        case (false, true):  result = .toLocal
+        case (true, true):   result = .sync
+        case (false, false): result = nil
+        }
+        
+        return result
+    }
+
+    private func selectionState(for months: Set<LibraryMonthKey>, in selected: Set<LibraryMonthKey>) -> SelectionState {
+        guard !months.isEmpty else { return .none }
+        if months.isSubset(of: selected) { return .all }
+        if !months.isDisjoint(with: selected) { return .partial }
+        return .none
     }
 
     private func reconfigureVisibleHeaders() {
@@ -544,9 +607,9 @@ final class NewHomeViewController: UIViewController {
             ) as? MergedSectionHeaderView else { continue }
             let ms = mergedSections[section]
             let allMonths = Set(ms.rows.map(\.month))
-            let leftAll = !allMonths.isEmpty && allMonths.isSubset(of: selectedLocalMonths)
-            let rightAll = !allMonths.isEmpty && allMonths.isSubset(of: selectedRemoteMonths)
-            header.configure(section: ms, leftSelected: leftAll, rightSelected: rightAll,
+            let leftState = selectionState(for: allMonths, in: selectedLocalMonths)
+            let rightState = selectionState(for: allMonths, in: selectedRemoteMonths)
+            header.configure(section: ms, leftState: leftState, rightState: rightState,
                              selectedColor: accentColor, deselectedColor: UIColor.tertiaryLabel)
         }
     }
@@ -709,17 +772,18 @@ final class NewHomeViewController: UIViewController {
     }
 
     private func refreshSelectionState() {
-        for cell in collectionView.visibleCells {
-            guard let monthCell = cell as? MonthCell,
-                  let indexPath = collectionView.indexPath(for: cell),
-                  let item = dataSource.itemIdentifier(for: indexPath) else { continue }
-            switch item {
-            case .local(let month):
-                monthCell.setSelected(selectedLocalMonths.contains(month))
-            case .remote(let month):
-                monthCell.setSelected(selectedRemoteMonths.contains(month))
+        var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
+        for section in mergedSections {
+            snapshot.appendSections([.year(section.year)])
+            var items: [Item] = []
+            items.reserveCapacity(section.rows.count * 2)
+            for row in section.rows {
+                items.append(Item(side: .local, month: row.month, arrowDirection: arrowDirection(for: row.month)))
+                items.append(Item(side: .remote, month: row.month))
             }
+            snapshot.appendItems(items)
         }
+        dataSource.applySnapshotUsingReloadData(snapshot)
         reconfigureVisibleHeaders()
         updateTopHeaderToggles()
     }
@@ -736,11 +800,25 @@ final class NewHomeViewController: UIViewController {
         let allMonths = Set(mergedSections.flatMap { $0.rows.map(\.month) })
         let headerColor = leftHeaderLabel.textColor ?? .secondaryLabel
         let config = UIImage.SymbolConfiguration(pointSize: 14)
-        let leftAll = !allMonths.isEmpty && allMonths.isSubset(of: selectedLocalMonths)
-        leftToggle.setImage(UIImage(systemName: leftAll ? "checkmark.circle.fill" : "circle", withConfiguration: config), for: .normal)
+
+        let leftState = selectionState(for: allMonths, in: selectedLocalMonths)
+        let leftIcon: String
+        switch leftState {
+        case .all:     leftIcon = "checkmark.circle.fill"
+        case .partial: leftIcon = "minus.circle.fill"
+        case .none:    leftIcon = "circle"
+        }
+        leftToggle.setImage(UIImage(systemName: leftIcon, withConfiguration: config), for: .normal)
         leftToggle.tintColor = headerColor
-        let rightAll = !allMonths.isEmpty && allMonths.isSubset(of: selectedRemoteMonths)
-        rightToggle.setImage(UIImage(systemName: rightAll ? "checkmark.circle.fill" : "circle", withConfiguration: config), for: .normal)
+
+        let rightState = selectionState(for: allMonths, in: selectedRemoteMonths)
+        let rightIcon: String
+        switch rightState {
+        case .all:     rightIcon = "checkmark.circle.fill"
+        case .partial: rightIcon = "minus.circle.fill"
+        case .none:    rightIcon = "circle"
+        }
+        rightToggle.setImage(UIImage(systemName: rightIcon, withConfiguration: config), for: .normal)
         rightToggle.tintColor = headerColor
     }
 
@@ -833,11 +911,11 @@ extension NewHomeViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
         guard let item = dataSource.itemIdentifier(for: indexPath) else { return }
-        switch item {
-        case .local(let month):
-            toggleMonthSelection(month, side: .local)
-        case .remote(let month):
-            toggleMonthSelection(month, side: .remote)
+        switch item.side {
+        case .local:
+            toggleMonthSelection(item.month, side: .local)
+        case .remote:
+            toggleMonthSelection(item.month, side: .remote)
         }
     }
 }
@@ -885,14 +963,15 @@ private final class MergedSectionHeaderView: UICollectionReusableView {
     @objc private func rightTapped() { onRightTap?() }
 
     func configure(section: NewHomeViewController.MergedYearSection,
-                   leftSelected: Bool, rightSelected: Bool,
+                   leftState: NewHomeViewController.SelectionState,
+                   rightState: NewHomeViewController.SelectionState,
                    selectedColor: UIColor, deselectedColor: UIColor) {
         leftHalf.configure(
             title: section.title,
             countText: "\(section.localAssetCount) 张",
             sizeText: section.localSizeBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) },
             backedUpText: section.backedUpPercent.map { "\(Int($0 * 100))%" },
-            isSelected: leftSelected,
+            selectionState: leftState,
             selectedColor: selectedColor,
             deselectedColor: deselectedColor
         )
@@ -901,7 +980,7 @@ private final class MergedSectionHeaderView: UICollectionReusableView {
             countText: section.remoteAssetCount > 0 ? "\(section.remoteAssetCount) 张" : nil,
             sizeText: section.remoteSizeBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) },
             backedUpText: nil,
-            isSelected: rightSelected,
+            selectionState: rightState,
             selectedColor: selectedColor,
             deselectedColor: deselectedColor
         )
@@ -971,7 +1050,8 @@ private final class HalfHeaderView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(title: String?, countText: String?, sizeText: String?, backedUpText: String?,
-                   isSelected: Bool?, selectedColor: UIColor?, deselectedColor: UIColor?) {
+                   selectionState: NewHomeViewController.SelectionState,
+                   selectedColor: UIColor?, deselectedColor: UIColor?) {
         titleLabel.text = title
         countLabel.text = countText
         sizeLabel.text = sizeText
@@ -979,25 +1059,79 @@ private final class HalfHeaderView: UIView {
         backedUpLabel.text = backedUpText
         backedUpLabel.isHidden = backedUpText == nil
 
-        if let selected = isSelected {
-            checkmark.isHidden = false
-            checkmark.image = UIImage(systemName: selected ? "checkmark.circle.fill" : "circle")
-            checkmark.tintColor = selected ? (selectedColor ?? .secondaryLabel) : (deselectedColor ?? .tertiaryLabel)
-            titleLabel.snp.updateConstraints { make in
-                make.leading.equalToSuperview().inset(42)
-            }
-            countLabel.snp.updateConstraints { make in
-                make.leading.equalToSuperview().inset(42)
-            }
-        } else {
-            checkmark.isHidden = true
-            titleLabel.snp.updateConstraints { make in
-                make.leading.equalToSuperview().inset(16)
-            }
-            countLabel.snp.updateConstraints { make in
-                make.leading.equalToSuperview().inset(16)
-            }
+        checkmark.isHidden = false
+        switch selectionState {
+        case .all:
+            checkmark.image = UIImage(systemName: "checkmark.circle.fill")
+            checkmark.tintColor = selectedColor ?? .secondaryLabel
+        case .partial:
+            checkmark.image = UIImage(systemName: "minus.circle.fill")
+            checkmark.tintColor = selectedColor ?? .secondaryLabel
+        case .none:
+            checkmark.image = UIImage(systemName: "circle")
+            checkmark.tintColor = deselectedColor ?? .tertiaryLabel
         }
+        titleLabel.snp.updateConstraints { make in
+            make.leading.equalToSuperview().inset(42)
+        }
+        countLabel.snp.updateConstraints { make in
+            make.leading.equalToSuperview().inset(42)
+        }
+    }
+}
+
+// MARK: - Direction Arrow Badge
+
+private let directionArrowElementKind = "direction-arrow"
+
+private final class DirectionArrowView: UICollectionReusableView {
+    private let imageView = UIImageView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        imageView.contentMode = .scaleAspectFit
+        addSubview(imageView)
+        imageView.snp.makeConstraints { make in
+            make.edges.equalToSuperview()
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        imageView.image = nil
+        isHidden = true
+    }
+
+    func configure(direction: NewHomeViewController.ArrowDirection?) {
+        guard let direction else {
+            imageView.image = nil
+            isHidden = true
+            return
+        }
+
+        let symbolName: String
+        let iconColor: UIColor
+        switch direction {
+        case .toRemote:
+            symbolName = "arrow.right"
+            iconColor = UIColor { $0.userInterfaceStyle == .dark ? .Material.Cyan._200 : .Material.Cyan._700 }
+        case .toLocal:
+            symbolName = "arrow.left"
+            iconColor = UIColor { $0.userInterfaceStyle == .dark ? .Material.Orange._200 : .Material.Orange._700 }
+        case .sync:
+            symbolName = "arrow.left.arrow.right"
+            iconColor = UIColor { $0.userInterfaceStyle == .dark ? .Material.Purple._200 : .Material.Purple._700 }
+        }
+
+        let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
+        imageView.image = UIImage(systemName: symbolName, withConfiguration: config)
+        imageView.tintColor = iconColor
+        isHidden = false
     }
 }
 
