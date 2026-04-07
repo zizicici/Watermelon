@@ -14,6 +14,7 @@
 		1487710E2F540EF800A21B69 /* AppInfo in Frameworks */ = {isa = PBXBuildFile; productRef = 1487710D2F540EF800A21B69 /* AppInfo */; };
 		14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; };
 		14B0C0A42F4F000100111111 /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		14C5C5692F84CEF200939535 /* MarqueeLabel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C5C5682F84CEF200939535 /* MarqueeLabel */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -63,6 +64,7 @@
 				1487710E2F540EF800A21B69 /* AppInfo in Frameworks */,
 				144234A72F4EAFE800293274 /* GRDB in Frameworks */,
 				144234AA2F4EAFF500293274 /* SnapKit in Frameworks */,
+				14C5C5692F84CEF200939535 /* MarqueeLabel in Frameworks */,
 				144234A42F4EAFC200293274 /* Kingfisher in Frameworks */,
 				144234A12F4EAFB600293274 /* JXPhotoBrowser in Frameworks */,
 				14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */,
@@ -115,6 +117,7 @@
 				144234A92F4EAFF500293274 /* SnapKit */,
 				14B0C0A32F4F000100111111 /* AMSMB2 */,
 				1487710D2F540EF800A21B69 /* AppInfo */,
+				14C5C5682F84CEF200939535 /* MarqueeLabel */,
 			);
 			productName = PhotoBackup;
 			productReference = 148EF9522F4EABFE0025F409 /* Watermelon.app */;
@@ -152,6 +155,7 @@
 				144234A82F4EAFF500293274 /* XCRemoteSwiftPackageReference "SnapKit" */,
 				14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */,
 				1487710C2F540EF800A21B69 /* XCRemoteSwiftPackageReference "AppInfo" */,
+				14C5C5672F84CEF200939535 /* XCRemoteSwiftPackageReference "MarqueeLabel" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 148EF9532F4EABFE0025F409 /* Products */;
@@ -455,6 +459,14 @@
 				minimumVersion = 4.0.3;
 			};
 		};
+		14C5C5672F84CEF200939535 /* XCRemoteSwiftPackageReference "MarqueeLabel" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/cbpowell/MarqueeLabel";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.5.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -487,6 +499,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */;
 			productName = AMSMB2;
+		};
+		14C5C5682F84CEF200939535 /* MarqueeLabel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 14C5C5672F84CEF200939535 /* XCRemoteSwiftPackageReference "MarqueeLabel" */;
+			productName = MarqueeLabel;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
