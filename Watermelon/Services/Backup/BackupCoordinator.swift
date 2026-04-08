@@ -30,7 +30,7 @@ protocol BackupCoordinatorProtocol: Sendable {
 
     func currentRemoteSnapshot() -> RemoteLibrarySnapshot
     func currentRemoteSnapshotState(since revision: UInt64?) -> RemoteLibrarySnapshotState
-    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, totalSizeBytes: Int64)]
+    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)]
 }
 
 extension BackupCoordinatorProtocol {
@@ -306,7 +306,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
         remoteIndexService.currentSnapshot()
     }
 
-    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, totalSizeBytes: Int64)] {
+    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
         remoteIndexService.remoteMonthSummaries()
     }
 

@@ -24,8 +24,10 @@ struct LocalAlbumItem {
 
 struct RemoteAlbumItem {
     let id: String
+    let assetFingerprint: Data
     let creationDate: Date
     let resources: [RemoteManifestResource]
+    let resourceLinks: [RemoteAssetResourceLink]
     let representative: RemoteManifestResource
     let mediaKind: AlbumMediaKind
     let pixelWidth: Int?
@@ -113,8 +115,10 @@ enum HomeAlbumMatching {
             result.append(
                 RemoteAlbumItem(
                     id: asset.id,
+                    assetFingerprint: asset.assetFingerprint,
                     creationDate: asset.creationDate,
                     resources: groupedResources,
+                    resourceLinks: sortedLinks,
                     representative: representative,
                     mediaKind: detectMediaKind(from: groupedResources),
                     pixelWidth: nil,

@@ -831,7 +831,7 @@ final class AssetProcessor: Sendable {
             resourceRole: selected.role,
             resourceSlot: selected.slot,
             resourceType: PhotoLibraryService.resourceTypeName(selected.resource.type),
-            resourceTypeCode: PhotoLibraryService.resourceTypeCode(selected.resource.type),
+            resourceTypeCode: selected.role,
             uti: selected.resource.uniformTypeIdentifier,
             originalFilename: selected.resource.originalFilename,
             fileSize: PhotoLibraryService.resourceFileSize(selected.resource),

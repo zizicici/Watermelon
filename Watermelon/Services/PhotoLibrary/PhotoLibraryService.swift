@@ -258,6 +258,12 @@ final class PhotoLibraryService: @unchecked Sendable {
             return "adjustmentData"
         case .adjustmentBasePhoto:
             return "adjustmentBasePhoto"
+        case .fullSizePairedVideo:
+            return "fullSizePairedVideo"
+        case .adjustmentBasePairedVideo:
+            return "adjustmentBasePairedVideo"
+        case .adjustmentBaseVideo:
+            return "adjustmentBaseVideo"
         case .photoProxy:
             return "photoProxy"
         default:
@@ -266,30 +272,7 @@ final class PhotoLibraryService: @unchecked Sendable {
     }
 
     static func resourceTypeCode(_ type: PHAssetResourceType) -> Int {
-        switch type {
-        case .photo:
-            return ResourceTypeCode.photo
-        case .video:
-            return ResourceTypeCode.video
-        case .audio:
-            return ResourceTypeCode.audio
-        case .alternatePhoto:
-            return ResourceTypeCode.alternatePhoto
-        case .fullSizePhoto:
-            return ResourceTypeCode.fullSizePhoto
-        case .fullSizeVideo:
-            return ResourceTypeCode.fullSizeVideo
-        case .pairedVideo:
-            return ResourceTypeCode.pairedVideo
-        case .adjustmentData:
-            return ResourceTypeCode.adjustmentData
-        case .adjustmentBasePhoto:
-            return ResourceTypeCode.adjustmentBasePhoto
-        case .photoProxy:
-            return ResourceTypeCode.photoProxy
-        default:
-            return ResourceTypeCode.unknown
-        }
+        type.rawValue
     }
 
     static func resourceTypeName(from code: Int) -> String {
@@ -312,6 +295,12 @@ final class PhotoLibraryService: @unchecked Sendable {
             return "adjustmentData"
         case ResourceTypeCode.adjustmentBasePhoto:
             return "adjustmentBasePhoto"
+        case ResourceTypeCode.fullSizePairedVideo:
+            return "fullSizePairedVideo"
+        case ResourceTypeCode.adjustmentBasePairedVideo:
+            return "adjustmentBasePairedVideo"
+        case ResourceTypeCode.adjustmentBaseVideo:
+            return "adjustmentBaseVideo"
         case ResourceTypeCode.photoProxy:
             return "photoProxy"
         default:

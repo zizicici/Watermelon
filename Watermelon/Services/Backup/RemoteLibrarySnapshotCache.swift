@@ -23,9 +23,30 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
 
     private struct MonthStats {
         var assetCount: Int
+        var photoCount: Int
+        var videoCount: Int
         var totalSizeBytes: Int64
     }
     private var monthStatsCache: [LibraryMonthKey: MonthStats] = [:]
+
+    private func computeMonthStatsLocked(for month: LibraryMonthKey) -> MonthStats? {
+        guard let monthAssets = assetsByMonth[month], !monthAssets.isEmpty else { return nil }
+        let totalSize = monthAssets.values.reduce(Int64(0)) { $0 + $1.totalFileSizeBytes }
+        let monthLinks = linksByMonth[month] ?? [:]
+
+        // An asset is a photo if it has any photo-like resource (includes Live Photos).
+        // An asset is a video only if it has no photo-like resource.
+        var assetHasPhoto = Set<String>()
+        for (_, link) in monthLinks {
+            if ResourceTypeCode.isPhotoLike(link.role) {
+                assetHasPhoto.insert(link.assetID)
+            }
+        }
+        let photoCount = assetHasPhoto.count
+        let videoCount = monthAssets.count - photoCount
+
+        return MonthStats(assetCount: monthAssets.count, photoCount: photoCount, videoCount: videoCount, totalSizeBytes: totalSize)
+    }
 
     func current() -> RemoteLibrarySnapshot {
         lock.withLock { rebuildFullSnapshotLocked() }
@@ -133,12 +154,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             assetsByMonth[month] = nextAssets.isEmpty ? nil : nextAssets
             linksByMonth[month] = nextLinks.isEmpty ? nil : nextLinks
 
-            if nextAssets.isEmpty {
-                monthStatsCache[month] = nil
-            } else {
-                let totalSize = nextAssets.values.reduce(Int64(0)) { $0 + $1.totalFileSizeBytes }
-                monthStatsCache[month] = MonthStats(assetCount: nextAssets.count, totalSizeBytes: totalSize)
-            }
+            monthStatsCache[month] = computeMonthStatsLocked(for: month)
 
             attachLinkKeysLocked(nextLinks)
 
@@ -248,6 +264,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             }
 
             if hasChanged {
+                for changedMonth in changedMonths {
+                    monthStatsCache[changedMonth] = computeMonthStatsLocked(for: changedMonth)
+                }
                 bumpRevisionLocked(changedMonths)
             }
         }
@@ -313,10 +332,10 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
-    func monthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, totalSizeBytes: Int64)] {
+    func monthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
         lock.withLock {
             monthStatsCache.map { (month, stats) in
-                (month: month, assetCount: stats.assetCount, totalSizeBytes: stats.totalSizeBytes)
+                (month: month, assetCount: stats.assetCount, photoCount: stats.photoCount, videoCount: stats.videoCount, totalSizeBytes: stats.totalSizeBytes)
             }
         }
     }

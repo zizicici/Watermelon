@@ -198,7 +198,7 @@ final class RemoteIndexSyncService: Sendable {
         snapshotCache.current()
     }
 
-    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, totalSizeBytes: Int64)] {
+    func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
         snapshotCache.monthSummaries()
     }
 

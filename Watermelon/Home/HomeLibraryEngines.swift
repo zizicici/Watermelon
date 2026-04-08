@@ -288,6 +288,22 @@ private final class HomeLocalIndexEngine {
             .sorted { $0.month > $1.month }
     }
 
+    func localMonthMediaCounts() -> [LibraryMonthKey: (photoCount: Int, videoCount: Int)] {
+        var result: [LibraryMonthKey: (photoCount: Int, videoCount: Int)] = [:]
+        for (month, assetIDs) in localAssetIDsByMonth {
+            var photos = 0, videos = 0
+            for id in assetIDs {
+                guard let state = localStatesByAssetID[id] else { continue }
+                switch state.mediaKind {
+                case .photo, .livePhoto: photos += 1
+                case .video: videos += 1
+                }
+            }
+            result[month] = (photoCount: photos, videoCount: videos)
+        }
+        return result
+    }
+
     func localMonthBackedUpCounts() -> [LibraryMonthKey: Int] {
         var result: [LibraryMonthKey: Int] = [:]
         for (month, assetIDs) in localAssetIDsByMonth {
@@ -635,6 +651,14 @@ private final class HomeReconcileEngine {
         }
     }
 
+    func remoteOnlyItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
+        guard let items = mergedByMonth[month] else { return [] }
+        return items
+            .filter { $0.sourceTag == .remoteOnly }
+            .compactMap(\.remoteItem)
+            .reversed()
+    }
+
     private static func localHashIndex(from localItems: [LocalAlbumItem]) -> [Data: [String]] {
         var hashToAssetSet: [Data: Set<String>] = [:]
 
@@ -757,13 +781,23 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         return reconcileIfNeeded(changedMonths)
     }
 
-    func localMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, backedUpCount: Int?, totalSizeBytes: Int64?)] {
+    func localMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, backedUpCount: Int?, totalSizeBytes: Int64?)] {
         let monthCounts = localIndex.localMonthAssetCounts()
+        let mediaCounts = localIndex.localMonthMediaCounts()
         let backedUpCounts: [LibraryMonthKey: Int]? = hasActiveConnection ? localIndex.localMonthBackedUpCounts() : nil
         let fileSizes = localIndex.monthFileSizes
         return monthCounts.map { entry in
-            return (month: entry.month, assetCount: entry.count, backedUpCount: backedUpCounts?[entry.month], totalSizeBytes: fileSizes[entry.month])
+            let media = mediaCounts[entry.month]
+            return (month: entry.month, assetCount: entry.count, photoCount: media?.photoCount ?? 0, videoCount: media?.videoCount ?? 0, backedUpCount: backedUpCounts?[entry.month], totalSizeBytes: fileSizes[entry.month])
         }
+    }
+
+    func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
+        localIndex.localAssetIDs(for: month)
+    }
+
+    func remoteOnlyItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
+        reconcileIndex.remoteOnlyItems(for: month)
     }
 
     func localItemsSnapshot() -> [LocalAlbumItem] {

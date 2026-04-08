@@ -11,12 +11,18 @@ final class RestoreService {
         self.storageClientFactory = storageClientFactory
     }
 
+    struct RestoredAsset {
+        let localIdentifier: String
+        let resources: [RemoteManifestResource]
+    }
+
     func restore(
         resources: [RemoteManifestResource],
         profile: ServerProfileRecord,
         password: String,
-        onLog: @escaping @MainActor (String) -> Void
-    ) async throws {
+        onLog: @escaping @MainActor (String) -> Void,
+        onProgress: (@MainActor (Int, Int) -> Void)? = nil
+    ) async throws -> [RestoredAsset] {
         guard !resources.isEmpty else {
             throw BackupError.restoreNoSelection
         }
@@ -28,30 +34,101 @@ final class RestoreService {
             Task { await storageClient.disconnect() }
         }
 
+        var restoredAssets: [RestoredAsset] = []
         let restoreGroups = Self.groupResourcesForRestore(resources)
-        for group in restoreGroups {
-            var downloaded: [(RemoteManifestResource, URL)] = []
-            for resource in group.resources {
-                let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-                    "restore_\(UUID().uuidString)_\(resource.fileName)"
-                )
-                try? FileManager.default.removeItem(at: tempURL)
+        for (groupIndex, group) in restoreGroups.enumerated() {
+            let result = try await restoreGroup(group, profile: profile, storageClient: storageClient)
+            if let result { restoredAssets.append(result) }
+            await onLog("Restored group with \(group.resources.count) resource(s).")
+            await onProgress?(groupIndex + 1, restoreGroups.count)
+        }
+        return restoredAssets
+    }
 
-                let remotePath = RemotePathBuilder.absolutePath(
-                    basePath: profile.basePath,
-                    remoteRelativePath: resource.remoteRelativePath
-                )
-                try await storageClient.download(remotePath: remotePath, localURL: tempURL)
-                downloaded.append((resource, tempURL))
+    struct IndexedRestoredAsset {
+        let itemIndex: Int
+        let asset: RestoredAsset
+    }
+
+    /// Restore pre-grouped items with a single connection. Each inner array is one asset's resources.
+    /// Returns results with `itemIndex` matching the input `items` array index.
+    func restoreItems(
+        items: [[RemoteManifestResource]],
+        profile: ServerProfileRecord,
+        password: String,
+        onItemCompleted: @MainActor (Int, Int) -> Void
+    ) async throws -> [IndexedRestoredAsset] {
+        guard !items.isEmpty else { return [] }
+
+        let storageClient = try storageClientFactory.makeClient(profile: profile, password: password)
+
+        try await storageClient.connect()
+        defer {
+            Task { await storageClient.disconnect() }
+        }
+
+        var results: [IndexedRestoredAsset] = []
+        for (index, resources) in items.enumerated() {
+            let creationDate = resources
+                .compactMap(\.creationDateNs)
+                .min()
+                .map { Date(nanosecondsSinceEpoch: $0) }
+            let group = RestoreGroup(creationDate: creationDate, resources: resources)
+            if let asset = try await restoreGroup(group, profile: profile, storageClient: storageClient) {
+                results.append(IndexedRestoredAsset(itemIndex: index, asset: asset))
             }
+            await onItemCompleted(index + 1, items.count)
+        }
+        return results
+    }
 
-            try await saveToPhotoLibrary(downloaded: downloaded, creationDate: group.creationDate)
+    private func restoreGroup(
+        _ group: RestoreGroup,
+        profile: ServerProfileRecord,
+        storageClient: RemoteStorageClientProtocol
+    ) async throws -> RestoredAsset? {
+        let resourceDesc = group.resources.map { r in
+            let mapped = Self.mapResourceType(code: r.resourceType)
+            let typeStr = mapped.map { String($0.rawValue) } ?? "skip"
+            return "\(r.fileName) (type=\(r.resourceType)→\(typeStr), size=\(r.fileSize), hash=\(r.contentHashHex.prefix(8)))"
+        }.joined(separator: ", ")
+        print("[RestoreService] restoreGroup: \(group.resources.count) resource(s), creationDate=\(group.creationDate?.description ?? "nil") — [\(resourceDesc)]")
+
+        var downloaded: [(RemoteManifestResource, URL)] = []
+        for resource in group.resources {
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "restore_\(UUID().uuidString)_\(resource.fileName)"
+            )
+            try? FileManager.default.removeItem(at: tempURL)
+
+            let remotePath = RemotePathBuilder.absolutePath(
+                basePath: profile.basePath,
+                remoteRelativePath: resource.remoteRelativePath
+            )
+            try await storageClient.download(remotePath: remotePath, localURL: tempURL)
+
+            let fileSize = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? -1
+            let fileExists = FileManager.default.fileExists(atPath: tempURL.path)
+            print("[RestoreService]   downloaded: \(resource.fileName) → \(tempURL.lastPathComponent), exists=\(fileExists), localSize=\(fileSize), expectedSize=\(resource.fileSize)")
+            downloaded.append((resource, tempURL))
+        }
+
+        do {
+            let localID = try await saveToPhotoLibrary(downloaded: downloaded, creationDate: group.creationDate)
+            print("[RestoreService]   saveToPhotoLibrary succeeded, localID=\(localID ?? "nil")")
 
             for (_, url) in downloaded {
                 try? FileManager.default.removeItem(at: url)
             }
 
-            await onLog("Restored group with \(group.resources.count) resource(s).")
+            guard let localID else { return nil }
+            return RestoredAsset(localIdentifier: localID, resources: group.resources)
+        } catch {
+            print("[RestoreService]   saveToPhotoLibrary FAILED: \(error)")
+            for (_, url) in downloaded {
+                try? FileManager.default.removeItem(at: url)
+            }
+            throw error
         }
     }
 
@@ -94,14 +171,16 @@ final class RestoreService {
         }
     }
 
-    private func saveToPhotoLibrary(downloaded: [(RemoteManifestResource, URL)], creationDate: Date?) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+    private func saveToPhotoLibrary(downloaded: [(RemoteManifestResource, URL)], creationDate: Date?) async throws -> String? {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String?, Error>) in
+            var placeholderID: String?
             PHPhotoLibrary.shared().performChanges {
                 let request = PHAssetCreationRequest.forAsset()
                 request.creationDate = creationDate
+                placeholderID = request.placeholderForCreatedAsset?.localIdentifier
 
                 for (resource, url) in downloaded {
-                    let type = Self.mapResourceType(code: resource.resourceType)
+                    guard let type = Self.mapResourceType(code: resource.resourceType) else { continue }
                     let options = PHAssetResourceCreationOptions()
                     options.originalFilename = resource.fileName
                     request.addResource(with: type, fileURL: url, options: options)
@@ -110,7 +189,7 @@ final class RestoreService {
                 if let error {
                     continuation.resume(throwing: error)
                 } else if success {
-                    continuation.resume(returning: ())
+                    continuation.resume(returning: placeholderID)
                 } else {
                     continuation.resume(throwing: NSError(
                         domain: "RestoreService",
@@ -122,23 +201,9 @@ final class RestoreService {
         }
     }
 
-    private static func mapResourceType(code: Int) -> PHAssetResourceType {
-        switch code {
-        case ResourceTypeCode.pairedVideo:
-            return .pairedVideo
-        case ResourceTypeCode.video, ResourceTypeCode.fullSizeVideo:
-            return .video
-        case ResourceTypeCode.audio:
-            return .audio
-        case ResourceTypeCode.alternatePhoto:
-            return .alternatePhoto
-        case ResourceTypeCode.adjustmentData:
-            return .adjustmentData
-        case ResourceTypeCode.photoProxy:
-            return .photoProxy
-        default:
-            return .photo
-        }
+    private static func mapResourceType(code: Int) -> PHAssetResourceType? {
+        guard code > 0 else { return nil }
+        return PHAssetResourceType(rawValue: code)
     }
 
 }

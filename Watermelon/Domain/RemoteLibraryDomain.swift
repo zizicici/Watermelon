@@ -159,22 +159,25 @@ struct RemoteLibrarySnapshotState {
 
 enum ResourceTypeCode {
     static let unknown = 0
-    static let photo = 1
-    static let video = 2
-    static let audio = 3
-    static let alternatePhoto = 4
-    static let fullSizePhoto = 5
-    static let fullSizeVideo = 6
-    static let pairedVideo = 7
-    static let adjustmentData = 8
-    static let adjustmentBasePhoto = 9
-    static let photoProxy = 10
+    static let photo = 1              // PHAssetResourceType.photo
+    static let video = 2              // .video
+    static let audio = 3              // .audio
+    static let alternatePhoto = 4     // .alternatePhoto
+    static let fullSizePhoto = 5      // .fullSizePhoto
+    static let fullSizeVideo = 6      // .fullSizeVideo
+    static let adjustmentData = 7     // .adjustmentData
+    static let adjustmentBasePhoto = 8 // .adjustmentBasePhoto
+    static let pairedVideo = 9        // .pairedVideo
+    static let fullSizePairedVideo = 10 // .fullSizePairedVideo
+    static let adjustmentBasePairedVideo = 11 // .adjustmentBasePairedVideo
+    static let adjustmentBaseVideo = 12 // .adjustmentBaseVideo
+    static let photoProxy = 19        // .photoProxy
 
     static func isPhotoLike(_ code: Int) -> Bool {
         code == photo || code == alternatePhoto || code == fullSizePhoto || code == adjustmentBasePhoto || code == photoProxy
     }
 
     static func isVideoLike(_ code: Int) -> Bool {
-        code == video || code == fullSizeVideo || code == pairedVideo
+        code == video || code == fullSizeVideo || code == pairedVideo || code == fullSizePairedVideo || code == adjustmentBasePairedVideo || code == adjustmentBaseVideo
     }
 }

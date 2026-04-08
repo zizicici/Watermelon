@@ -80,6 +80,10 @@ final class BackupSessionController {
         let latestItemEvent: BackupItemEvent?
         let transferState: BackupTransferState?
         let transferStatesByWorkerID: [Int: BackupTransferState]
+        let currentProcessingMonth: LibraryMonthKey?
+        let startedMonths: Set<LibraryMonthKey>
+        let flushedMonths: Set<LibraryMonthKey>
+        let processedCountByMonth: [LibraryMonthKey: Int]
     }
 
     private let appSession: AppSession
@@ -124,6 +128,10 @@ final class BackupSessionController {
     private var retryCountByAssetID: [String: Int] = [:]
     private var failedItemsByAssetID: [String: FailedItem] = [:]
     private(set) var failedItems: [FailedItem] = []
+    private(set) var currentProcessingMonth: LibraryMonthKey?
+    private(set) var startedMonths = Set<LibraryMonthKey>()
+    private(set) var flushedMonths = Set<LibraryMonthKey>()
+    private(set) var processedCountByMonth: [LibraryMonthKey: Int] = [:]
 
     init(
         backupCoordinator: BackupCoordinatorProtocol,
@@ -186,7 +194,11 @@ final class BackupSessionController {
             failedItems: failedItems,
             latestItemEvent: latestItemEvent,
             transferState: transferState,
-            transferStatesByWorkerID: transferStatesByWorkerID
+            transferStatesByWorkerID: transferStatesByWorkerID,
+            currentProcessingMonth: currentProcessingMonth,
+            startedMonths: startedMonths,
+            flushedMonths: flushedMonths,
+            processedCountByMonth: processedCountByMonth
         )
     }
 
@@ -364,6 +376,10 @@ final class BackupSessionController {
             failedItemsByAssetID.removeAll()
             failedItems.removeAll()
             logs.removeAll()
+            currentProcessingMonth = nil
+            startedMonths.removeAll()
+            flushedMonths.removeAll()
+            processedCountByMonth.removeAll()
         }
 
         state = .running
@@ -588,11 +604,15 @@ final class BackupSessionController {
             scheduleObserverNotification()
 
         case .monthChanged(let change):
+            let monthKey = LibraryMonthKey(year: change.year, month: change.month)
             let monthText = String(format: "%04d年%02d月", change.year, change.month)
             switch change.action {
             case .started:
+                currentProcessingMonth = monthKey
+                startedMonths.insert(monthKey)
                 appendLog("Processing month \(monthText).")
             case .flushed:
+                flushedMonths.insert(monthKey)
                 appendLog("Month \(monthText) manifest flushed.")
             case .flushFailed(let error):
                 appendLog("Month \(monthText) manifest flush failed: \(error)")
@@ -631,6 +651,7 @@ final class BackupSessionController {
         activeCommandRunToken = nil
         isStartCommandInFlight = false
         controlPhase = .idle
+        currentProcessingMonth = nil
 
         succeeded = result.succeeded
         failed = result.failed
@@ -751,6 +772,9 @@ final class BackupSessionController {
 
     private func applyProgressEvent(_ event: BackupItemEvent) {
         latestItemEvent = event
+        let monthKey = LibraryMonthKey.from(date: event.resourceDate)
+        processedCountByMonth[monthKey, default: 0] += 1
+
         let item = ProcessedItem(
             assetLocalIdentifier: event.assetLocalIdentifier,
             displayName: event.displayName,
