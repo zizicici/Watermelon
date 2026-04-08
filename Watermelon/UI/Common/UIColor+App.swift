@@ -6,6 +6,52 @@ extension UIColor {
     static let appBackground = UIColor(named: "BackgroundColor")!
 }
 
+// MARK: - Material Adaptive Colors
+//
+// Naming follows M3 color roles. Tone values in M2 shade ≈ M3 tone:
+//   _900≈10  _800≈20  _700≈30  _600≈40  _400≈60  _200≈80  _100≈90  _50≈95
+//
+// M3 baseline:
+//   Light — primary: tone40(_600), onPrimary: white, container: tone90(_100), onContainer: tone10(_900)
+//   Dark  — primary: tone80(_200), onPrimary: tone20(_800), container: tone30(_700), onContainer: tone90(_100)
+
+extension UIColor {
+    /// M3 adaptive color: returns `light` in light mode, `dark` in dark mode.
+    static func materialAdaptive(light: UIColor, dark: UIColor) -> UIColor {
+        UIColor { $0.userInterfaceStyle == .dark ? dark : light }
+    }
+
+    /// Primary role — used for icons, labels, accent elements.
+    /// M3: light tone40(`_600`), dark tone80(`_200`).
+    static func materialPrimary(light: UIColor, dark: UIColor) -> UIColor {
+        materialAdaptive(light: light, dark: dark)
+    }
+
+    /// onPrimary role — text/icon on primary-colored background.
+    /// M3: light white, dark tone20(`_800`).
+    static func materialOnPrimary(lightColor: UIColor = .white, dark: UIColor) -> UIColor {
+        materialAdaptive(light: lightColor, dark: dark)
+    }
+
+    /// onPrimaryContainer role — prominent text on a tinted surface.
+    /// M3: light tone10(`_900`), dark tone90(`_100`).
+    static func materialOnContainer(light: UIColor, dark: UIColor) -> UIColor {
+        materialAdaptive(light: light, dark: dark)
+    }
+
+    /// onSurfaceVariant role — secondary/detail text on a surface.
+    /// M3: light tone30(`_700`), dark tone80(`_200`).
+    static func materialOnSurfaceVariant(light: UIColor, dark: UIColor) -> UIColor {
+        materialAdaptive(light: light, dark: dark)
+    }
+
+    /// Tinted surface / container background.
+    /// M3: light tone90-95(`_50`/`_100`), dark tinted surface.
+    static func materialSurface(light: UIColor, darkTint: UIColor, darkAlpha: CGFloat = 0.08) -> UIColor {
+        UIColor { $0.userInterfaceStyle == .dark ? .materialDarkSurface(tint: darkTint, alpha: darkAlpha) : light }
+    }
+}
+
 // MARK: - Material Design Colors
 
 extension UIColor {

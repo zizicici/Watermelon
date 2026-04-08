@@ -128,6 +128,8 @@ final class NewHomeViewController: UIViewController {
     private var dataSource: DataSource!
     private var mergedSections: [MergedYearSection] = []
     private var rowLookup: [LibraryMonthKey: MonthRow] = [:]
+    private var panelShownConstraint: Constraint?
+    private var panelHiddenConstraint: Constraint?
     private let leftHeaderLabel: MarqueeLabel = {
         let label = MarqueeLabel(frame: .zero, rate: 30, fadeLength: 8)
         label.animationDelay = 2
@@ -142,7 +144,7 @@ final class NewHomeViewController: UIViewController {
     private let rightHeaderMenuOverlay = UIButton(type: .system)
     private let rightHeaderButton = UIButton(type: .system)
     private let rightToggle = UIButton(type: .system)
-    private let backupButton = UIButton(type: .system)
+    private let actionPanel = SelectionActionPanel()
 
     private var localSummaries: [MonthSummary] = []
     private var remoteSummaries: [MonthSummary] = []
@@ -225,9 +227,9 @@ final class NewHomeViewController: UIViewController {
 
     private func buildUI() {
         let leftHeaderBg = UIView()
-        leftHeaderBg.backgroundColor = UIColor { $0.userInterfaceStyle == .dark ? .materialDarkSurface(tint: .Material.Green._200, alpha: 0.16) : .Material.Green._100 }
+        leftHeaderBg.backgroundColor = .materialSurface(light: .Material.Green._100, darkTint: .Material.Green._200, darkAlpha: 0.16)
         let rightHeaderBg = UIView()
-        rightHeaderBg.backgroundColor = UIColor { $0.userInterfaceStyle == .dark ? .materialDarkSurface(tint: .Material.Green._200, alpha: 0.16) : .Material.Green._100 }
+        rightHeaderBg.backgroundColor = .materialSurface(light: .Material.Green._100, darkTint: .Material.Green._200, darkAlpha: 0.16)
 
         view.addSubview(leftHeaderBg)
         view.addSubview(rightHeaderBg)
@@ -243,7 +245,7 @@ final class NewHomeViewController: UIViewController {
             make.bottom.equalTo(view.safeAreaLayoutGuide.snp.top).offset(Self.headerAreaHeight)
         }
 
-        let headerTextColor = UIColor { $0.userInterfaceStyle == .dark ? .Material.Green._200 : .Material.Green._900 }
+        let headerTextColor = UIColor.materialOnContainer(light: .Material.Green._900, dark: .Material.Green._100)
 
         let symbolConfig = UIImage.SymbolConfiguration(pointSize: 14)
 
@@ -300,34 +302,22 @@ final class NewHomeViewController: UIViewController {
             make.top.bottom.equalTo(rightHeaderStack)
         }
 
+        actionPanel.onExecuteTapped = { [weak self] in self?.backupTapped() }
+        view.addSubview(actionPanel)
+        actionPanel.snp.makeConstraints { make in
+            make.leading.trailing.equalToSuperview()
+            self.panelShownConstraint = make.bottom.equalToSuperview().constraint
+            self.panelHiddenConstraint = make.top.equalTo(view.snp.bottom).constraint
+        }
+        panelShownConstraint?.deactivate()
+
         collectionView.delegate = self
         view.addSubview(collectionView)
         collectionView.snp.makeConstraints { make in
             make.top.equalTo(leftHeaderBg.snp.bottom)
-            make.leading.trailing.bottom.equalToSuperview()
+            make.leading.trailing.equalToSuperview()
+            make.bottom.equalTo(actionPanel.snp.top)
         }
-
-        var btnConfig = UIButton.Configuration.filled()
-        btnConfig.title = "一键备份"
-        btnConfig.image = UIImage(systemName: "arrow.up.circle.fill")
-        btnConfig.imagePadding = 6
-        btnConfig.cornerStyle = .capsule
-        btnConfig.baseBackgroundColor = .systemBlue
-        btnConfig.baseForegroundColor = .white
-        backupButton.configuration = btnConfig
-        backupButton.addTarget(self, action: #selector(backupTapped), for: .touchUpInside)
-        backupButton.isHidden = true
-
-        view.addSubview(backupButton)
-        backupButton.snp.makeConstraints { make in
-            make.centerX.equalToSuperview()
-            make.bottom.equalTo(view.safeAreaLayoutGuide).offset(-16)
-            make.height.equalTo(44)
-        }
-        backupButton.layer.shadowColor = UIColor.black.cgColor
-        backupButton.layer.shadowOpacity = 0.15
-        backupButton.layer.shadowOffset = CGSize(width: 0, height: 2)
-        backupButton.layer.shadowRadius = 6
     }
 
     // MARK: - Data Source
@@ -405,7 +395,7 @@ final class NewHomeViewController: UIViewController {
     }
 
     private func configureRightHeaderButton() {
-        let headerTextColor = UIColor { $0.userInterfaceStyle == .dark ? .Material.Green._200 : .Material.Green._900 }
+        let headerTextColor = UIColor.materialOnContainer(light: .Material.Green._900, dark: .Material.Green._100)
         rightHeaderLabel.text = "远端存储"
         rightHeaderLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         rightHeaderLabel.textColor = headerTextColor
@@ -573,6 +563,7 @@ final class NewHomeViewController: UIViewController {
         }
         dataSource.applySnapshotUsingReloadData(snapshot)
         reconfigureVisibleHeaders()
+        updateActionPanel()
     }
 
     private func arrowDirection(for month: LibraryMonthKey) -> ArrowDirection? {
@@ -786,6 +777,7 @@ final class NewHomeViewController: UIViewController {
         dataSource.applySnapshotUsingReloadData(snapshot)
         reconfigureVisibleHeaders()
         updateTopHeaderToggles()
+        updateActionPanel()
     }
 
     @objc private func leftToggleTapped() {
@@ -820,6 +812,48 @@ final class NewHomeViewController: UIViewController {
         }
         rightToggle.setImage(UIImage(systemName: rightIcon, withConfiguration: config), for: .normal)
         rightToggle.tintColor = headerColor
+    }
+
+    private func selectionCounts() -> (backup: Int, download: Int, sync: Int) {
+        let allSelectedMonths = selectedLocalMonths.union(selectedRemoteMonths)
+        var backup = 0, download = 0, sync = 0
+        for month in allSelectedMonths {
+            switch arrowDirection(for: month) {
+            case .toRemote: backup += 1
+            case .toLocal:  download += 1
+            case .sync:     sync += 1
+            case nil:       break
+            }
+        }
+        return (backup, download, sync)
+    }
+
+    private var isPanelShown = false
+
+    private func updateActionPanel() {
+        let counts = selectionCounts()
+        actionPanel.configure(backupCount: counts.backup, downloadCount: counts.download, syncCount: counts.sync)
+        actionPanel.backupCategoryButton.menu = buildCategoryMenu(for: .toRemote)
+        actionPanel.downloadCategoryButton.menu = buildCategoryMenu(for: .toLocal)
+        actionPanel.syncCategoryButton.menu = buildCategoryMenu(for: .sync)
+
+        let shouldShow = !selectedLocalMonths.isEmpty || !selectedRemoteMonths.isEmpty
+
+        if shouldShow && !isPanelShown {
+            isPanelShown = true
+            panelHiddenConstraint?.deactivate()
+            panelShownConstraint?.activate()
+            UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseOut) {
+                self.view.layoutIfNeeded()
+            }
+        } else if !shouldShow && isPanelShown {
+            isPanelShown = false
+            panelShownConstraint?.deactivate()
+            panelHiddenConstraint?.activate()
+            UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseIn) {
+                self.view.layoutIfNeeded()
+            }
+        }
     }
 
     private func syncRemoteDataInBackground(overrideActiveConnection: Bool? = nil) async {
@@ -859,6 +893,45 @@ final class NewHomeViewController: UIViewController {
         present(nav, animated: true)
     }
 
+    private func scrollToMonth(_ month: LibraryMonthKey) {
+        for (sectionIndex, section) in mergedSections.enumerated() {
+            guard let rowIndex = section.rows.firstIndex(where: { $0.month == month }) else { continue }
+            let itemIndex = rowIndex * 2
+            let indexPath = IndexPath(item: itemIndex, section: sectionIndex)
+            collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: true)
+            return
+        }
+    }
+
+    private func buildCategoryMenu(for category: ArrowDirection) -> UIMenu {
+        let allSelected = selectedLocalMonths.union(selectedRemoteMonths)
+        let months = allSelected
+            .filter { arrowDirection(for: $0) == category }
+            .sorted(by: <)
+
+        var byYear: [Int: [LibraryMonthKey]] = [:]
+        for month in months {
+            byYear[month.year, default: []].append(month)
+        }
+
+        let yearMenus = byYear.keys.sorted().map { year -> UIMenu in
+            let actions = byYear[year]!.map { month -> UIAction in
+                let row = rowLookup[month]
+                let title = String(format: "%02d月", month.month)
+                var parts: [String] = []
+                if let lc = row?.local?.assetCount { parts.append("本地 \(lc) 张") }
+                if let rc = row?.remote?.assetCount { parts.append("远端 \(rc) 张") }
+                let subtitle = parts.isEmpty ? nil : parts.joined(separator: " · ")
+                return UIAction(title: title, subtitle: subtitle) { [weak self] _ in
+                    self?.scrollToMonth(month)
+                }
+            }
+            return UIMenu(title: "\(year)年", options: .displayInline, children: actions)
+        }
+
+        return UIMenu(children: yearMenus)
+    }
+
     // MARK: - Season Colors
 
     private struct SeasonStyle {
@@ -869,24 +942,24 @@ final class NewHomeViewController: UIViewController {
 
     private static let seasonStyles: [SeasonStyle] = [
         SeasonStyle(
-            bg:     UIColor { $0.userInterfaceStyle == .dark ? .materialDarkSurface(tint: .Material.Green._200)  : .Material.Green._50 },
-            title:  UIColor { $0.userInterfaceStyle == .dark ? .Material.Green._200  : .Material.Green._900 },
-            detail: UIColor { $0.userInterfaceStyle == .dark ? .Material.Green._400  : .Material.Green._700 }
+            bg:     .materialSurface(light: .Material.Green._50, darkTint: .Material.Green._200),
+            title:  .materialOnContainer(light: .Material.Green._900, dark: .Material.Green._100),
+            detail: .materialOnSurfaceVariant(light: .Material.Green._700, dark: .Material.Green._200)
         ),
         SeasonStyle(
-            bg:     UIColor { $0.userInterfaceStyle == .dark ? .materialDarkSurface(tint: .Material.Blue._200)  : .Material.Blue._50 },
-            title:  UIColor { $0.userInterfaceStyle == .dark ? .Material.Blue._200  : .Material.Blue._900 },
-            detail: UIColor { $0.userInterfaceStyle == .dark ? .Material.Blue._400  : .Material.Blue._700 }
+            bg:     .materialSurface(light: .Material.Blue._50, darkTint: .Material.Blue._200),
+            title:  .materialOnContainer(light: .Material.Blue._900, dark: .Material.Blue._100),
+            detail: .materialOnSurfaceVariant(light: .Material.Blue._700, dark: .Material.Blue._200)
         ),
         SeasonStyle(
-            bg:     UIColor { $0.userInterfaceStyle == .dark ? .materialDarkSurface(tint: .Material.Amber._200) : .Material.Amber._50 },
-            title:  UIColor { $0.userInterfaceStyle == .dark ? .Material.Amber._200 : .Material.Amber._900 },
-            detail: UIColor { $0.userInterfaceStyle == .dark ? .Material.Amber._400 : .Material.Amber._700 }
+            bg:     .materialSurface(light: .Material.Amber._50, darkTint: .Material.Amber._200),
+            title:  .materialOnContainer(light: .Material.Amber._900, dark: .Material.Amber._100),
+            detail: .materialOnSurfaceVariant(light: .Material.Amber._700, dark: .Material.Amber._200)
         ),
         SeasonStyle(
-            bg:     UIColor { $0.userInterfaceStyle == .dark ? .materialDarkSurface(tint: .Material.Red._200)  : .Material.Red._50 },
-            title:  UIColor { $0.userInterfaceStyle == .dark ? .Material.Red._200  : .Material.Red._900 },
-            detail: UIColor { $0.userInterfaceStyle == .dark ? .Material.Red._400  : .Material.Red._700 }
+            bg:     .materialSurface(light: .Material.Red._50, darkTint: .Material.Red._200),
+            title:  .materialOnContainer(light: .Material.Red._900, dark: .Material.Red._100),
+            detail: .materialOnSurfaceVariant(light: .Material.Red._700, dark: .Material.Red._200)
         ),
     ]
 
@@ -1119,13 +1192,13 @@ private final class DirectionArrowView: UICollectionReusableView {
         switch direction {
         case .toRemote:
             symbolName = "arrow.right"
-            iconColor = UIColor { $0.userInterfaceStyle == .dark ? .Material.Cyan._200 : .Material.Cyan._700 }
+            iconColor = .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
         case .toLocal:
             symbolName = "arrow.left"
-            iconColor = UIColor { $0.userInterfaceStyle == .dark ? .Material.Orange._200 : .Material.Orange._700 }
+            iconColor = .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
         case .sync:
             symbolName = "arrow.left.arrow.right"
-            iconColor = UIColor { $0.userInterfaceStyle == .dark ? .Material.Purple._200 : .Material.Purple._700 }
+            iconColor = .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
         }
 
         let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
@@ -1249,5 +1322,108 @@ private final class MonthCell: UICollectionViewCell {
         checkmark.image = UIImage(systemName: selected ? "checkmark.circle.fill" : "circle")
         checkmark.tintColor = selected ? currentTitleColor : currentDetailColor
         leftStackLeading?.update(inset: 42)
+    }
+}
+
+// MARK: - Selection Action Panel
+
+private final class SelectionActionPanel: UIView {
+    var onExecuteTapped: (() -> Void)?
+    private let separator = UIView()
+    private(set) var backupCategoryButton: UIButton = {
+        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
+        var cfg = UIButton.Configuration.plain()
+        cfg.image = UIImage(systemName: "arrow.right", withConfiguration: iconConfig)
+        cfg.imagePadding = 6
+        cfg.titleAlignment = .leading
+        cfg.subtitle = "备份"
+        cfg.subtitleTextAttributesTransformer = .init { var a = $0; a.font = .preferredFont(forTextStyle: .caption1); return a }
+        cfg.baseForegroundColor = .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
+        let btn = UIButton(configuration: cfg)
+        btn.showsMenuAsPrimaryAction = true
+        return btn
+    }()
+    private(set) var downloadCategoryButton: UIButton = {
+        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
+        var cfg = UIButton.Configuration.plain()
+        cfg.image = UIImage(systemName: "arrow.left", withConfiguration: iconConfig)
+        cfg.imagePadding = 6
+        cfg.titleAlignment = .leading
+        cfg.subtitle = "下载"
+        cfg.subtitleTextAttributesTransformer = .init { var a = $0; a.font = .preferredFont(forTextStyle: .caption1); return a }
+        cfg.baseForegroundColor = .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
+        let btn = UIButton(configuration: cfg)
+        btn.showsMenuAsPrimaryAction = true
+        return btn
+    }()
+    private(set) var syncCategoryButton: UIButton = {
+        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
+        var cfg = UIButton.Configuration.plain()
+        cfg.image = UIImage(systemName: "arrow.left.arrow.right", withConfiguration: iconConfig)
+        cfg.imagePadding = 6
+        cfg.titleAlignment = .leading
+        cfg.subtitle = "同步"
+        cfg.subtitleTextAttributesTransformer = .init { var a = $0; a.font = .preferredFont(forTextStyle: .caption1); return a }
+        cfg.baseForegroundColor = .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
+        let btn = UIButton(configuration: cfg)
+        btn.showsMenuAsPrimaryAction = true
+        return btn
+    }()
+    private let executeButton: UIButton = {
+        var cfg = UIButton.Configuration.filled()
+        cfg.title = "执行"
+        cfg.cornerStyle = .capsule
+        cfg.baseBackgroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
+        cfg.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
+        cfg.contentInsets = .init(top: 8, leading: 20, bottom: 8, trailing: 20)
+        return UIButton(configuration: cfg)
+    }()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setupUI()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setupUI() {
+        backgroundColor = .appPaper
+
+        separator.backgroundColor = .separator
+        addSubview(separator)
+        separator.snp.makeConstraints { make in
+            make.top.leading.trailing.equalToSuperview()
+            make.height.equalTo(0.5)
+        }
+
+        executeButton.addTarget(self, action: #selector(executeTapped), for: .touchUpInside)
+
+        let spacer = UIView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let contentStack = UIStackView(arrangedSubviews: [backupCategoryButton, downloadCategoryButton, syncCategoryButton, spacer, executeButton])
+        contentStack.axis = .horizontal
+        contentStack.spacing = 4
+        contentStack.alignment = .center
+
+        let inset: CGFloat = 12
+        addSubview(contentStack)
+        contentStack.snp.makeConstraints { make in
+            make.top.equalToSuperview().inset(inset)
+            make.leading.trailing.equalToSuperview().inset(inset)
+            make.bottom.equalTo(safeAreaLayoutGuide).inset(inset)
+        }
+    }
+
+    @objc private func executeTapped() { onExecuteTapped?() }
+
+    func configure(backupCount: Int, downloadCount: Int, syncCount: Int) {
+        backupCategoryButton.isHidden = backupCount == 0
+        backupCategoryButton.configuration?.title = "\(backupCount)"
+        downloadCategoryButton.isHidden = downloadCount == 0
+        downloadCategoryButton.configuration?.title = "\(downloadCount)"
+        syncCategoryButton.isHidden = syncCount == 0
+        syncCategoryButton.configuration?.title = "\(syncCount)"
     }
 }
