@@ -283,4 +283,3 @@ private final class ExportDigestState {
     }
 }
 
-extension PhotoLibraryService: PhotoLibraryServiceProtocol {}

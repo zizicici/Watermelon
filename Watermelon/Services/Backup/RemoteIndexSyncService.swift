@@ -60,13 +60,13 @@ final class RemoteIndexSyncService: Sendable {
         }
     }
 
-    private let scanner: RemoteManifestIndexScannerProtocol
+    private let scanner: RemoteManifestIndexScanner
     private let snapshotCache: RemoteLibrarySnapshotCache
     private let syncGate = SyncGate()
     private let state = MutableState()
 
     init(
-        scanner: RemoteManifestIndexScannerProtocol = RemoteManifestIndexScanner(),
+        scanner: RemoteManifestIndexScanner = RemoteManifestIndexScanner(),
         snapshotCache: RemoteLibrarySnapshotCache = RemoteLibrarySnapshotCache()
     ) {
         self.scanner = scanner

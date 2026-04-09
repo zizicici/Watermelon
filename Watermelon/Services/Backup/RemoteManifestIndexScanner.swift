@@ -65,4 +65,3 @@ final class RemoteManifestIndexScanner: Sendable {
 
 }
 
-extension RemoteManifestIndexScanner: RemoteManifestIndexScannerProtocol {}

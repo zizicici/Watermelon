@@ -16,8 +16,8 @@
 4. `StorageClientFactory`
 5. `PhotoLibraryService`
 6. `MetadataService`
-7. `ContentHashIndexRepositoryProtocol`（实际实现 `ContentHashIndexRepository`）
-8. `BackupCoordinatorProtocol`（实际实现 `BackupCoordinator`）
+7. `ContentHashIndexRepository`
+8. `BackupCoordinator`
 9. `RestoreService`
 
 说明：
@@ -57,16 +57,9 @@
 2. 聚合日志、进度、失败项、最近处理项
 3. 管理范围选择状态 `BackupScopeSelection`
 4. 对外暴露观察快照 `Snapshot`
-
-### `BackupRunCommandActor`
-
-职责：
-
-1. 接收 `startRun / resumeRun / requestPause / requestStop`
-2. 管理单 run 生命周期（run token、active task、intent）
-3. 为每次 run 创建独立 `BackupEventStream`
-4. 监听事件并回传 `BackupEngineSignal` 给 `BackupSessionController`
-5. 处理“等待前一 run 清理完成后再启动新 run”的串行化逻辑
+5. 管理单 run 生命周期（run token、runTask/eventListenerTask、termination intent）
+6. 为每次 run 创建独立 `BackupEventStream`，直接处理 `BackupEvent`
+7. 处理控制命令（start/pause/stop/resume）与协作取消
 
 ## 5. 备份执行面
 

@@ -391,4 +391,3 @@ final class ContentHashIndexRepository: @unchecked Sendable {
     }
 }
 
-extension ContentHashIndexRepository: ContentHashIndexRepositoryProtocol {}

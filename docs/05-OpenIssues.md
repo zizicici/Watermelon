@@ -18,7 +18,7 @@
 
 ## 4. 运行控制复杂度
 
-1. `BackupSessionController + BackupRunCommandActor` 的状态组合较多（starting/resuming/pausing/stopping + run intent）。
+1. `BackupSessionController` 的状态组合较多（starting/resuming/pausing/stopping + run intent）。
 2. 已较过去稳定，但后续重构仍需谨慎验证快速切换场景（开始/暂停/停止交替）。
 
 ## 5. flush 与强杀窗口
@@ -38,6 +38,6 @@
 
 ## 8. 建议优先级
 
-1. 优先补 `BackupRunCommandActor` 状态切换与取消语义测试。
+1. 优先补 `BackupSessionController` 状态切换与取消语义测试。
 2. 评估持久化 pending 集，降低 full resume 重扫成本。
 3. 评估按文件/月份动态并发策略，减少手动调参成本。

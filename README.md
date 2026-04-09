@@ -18,12 +18,12 @@
 - App 启动入口：`AppCoordinator.start()` -> `HomeViewController`
 - Home 负责：连接存储、展示本地/远端汇总、进入备份页与“更多”页
 - More 负责：远端存储管理、本地 Hash 索引管理、上传并发设置
-- 备份控制面：`BackupSessionController` + `BackupRunCommandActor`
+- 备份控制面：`BackupSessionController`
 - 备份执行面：`BackupCoordinator` + `AssetProcessor` + `MonthManifestStore`
 
 ## 备份架构（当前实现）
 
-1. `BackupRunCommandActor` 管理运行状态与控制命令（start/pause/stop/resume）。
+1. `BackupSessionController` 管理运行状态与控制命令（start/pause/stop/resume），同时负责 UI 状态聚合。
 2. `BackupCoordinator` 接收 `BackupRunRequest`，完成权限检查、远端索引同步、月份级调度与 worker 执行。
 3. `AssetProcessor` 处理单个 asset：导出资源、计算 hash、碰名处理、上传、写入月 manifest、本地索引回写。
 4. `MonthManifestStore` 在每个月目录维护 manifest 三表（见下文），并在合适时机 flush 到远端。

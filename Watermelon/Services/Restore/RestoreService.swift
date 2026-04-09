@@ -2,11 +2,11 @@ import Foundation
 import Photos
 
 final class RestoreService {
-    private let storageClientFactory: StorageClientFactoryProtocol
+    private let storageClientFactory: StorageClientFactory
 
     init(
         databaseManager _: DatabaseManager,
-        storageClientFactory: StorageClientFactoryProtocol = StorageClientFactory()
+        storageClientFactory: StorageClientFactory = StorageClientFactory()
     ) {
         self.storageClientFactory = storageClientFactory
     }

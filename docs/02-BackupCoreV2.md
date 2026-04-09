@@ -4,9 +4,8 @@
 
 调用链：
 
-1. `BackupSessionController.startBackup()/retryFailedItems()/resumeFromPause()`
-2. `BackupRunCommandActor.startRun()/resumeRun()`
-3. `BackupCoordinator.runBackup(request:eventStream:)`
+1. `BackupSessionController.startBackup()/resumeFromPause()`
+2. `BackupCoordinator.runBackup(request:eventStream:)`
 
 说明：
 
@@ -77,7 +76,7 @@
 
 ## 7. 暂停 / 停止 / 恢复
 
-1. `BackupRunCommandActor` 统一处理控制命令与 intent。
+1. `BackupSessionController` 统一处理控制命令与 intent。
 2. 暂停/停止通过协作取消实现（`Task.cancel` + 检查点退出）。
 3. 恢复 full run 时会重新扫描图库并减去已完成资产集合。
 4. 恢复 scoped/retry run 时直接用剩余 ID 集合。

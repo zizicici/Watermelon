@@ -26,8 +26,7 @@ Watermelon/
     Discovery/  # SMBDiscoveryService (Bonjour, _smb._tcp)
     PhotoLibrary/ Restore/ Metadata/
   UI/
-    Backup/     # BackupEngineActor (in BackupRunCommandActor.swift),
-                # BackupSessionController, BackupViewController
+    Backup/     # BackupSessionController, BackupViewController
     Album/      # AlbumGridCell, AlbumSectionHeaderView
     Auth/ Settings/ Browser/ Common/
   Data/
@@ -52,14 +51,12 @@ Single `DependencyContainer` created at startup holds all top-level singletons:
 
 ### Backup Control Plane
 
-`BackupEngineActor` is the single control plane for backup commands:
+`BackupSessionController` (`@MainActor`) is the unified control plane and UI-facing state aggregator:
 
-1. Handles `start/pause/stop/resume/retry`.
-2. Maintains run token and terminal intent.
-3. Creates per-run `BackupEventStream` and `BackupCancellationController`.
-4. Emits `BackupEngineSignal` for `BackupSessionController` consumption.
-
-`BackupSessionController` is UI-facing state aggregation only (buttons/log/progress/failure list), and does not own low-level run cancellation.
+1. Handles `start/pause/stop/resume/retry` commands directly.
+2. Maintains run token, termination intent, and run task lifecycle.
+3. Creates per-run `BackupEventStream` and manages `runTask`/`eventListenerTask`.
+4. Processes `BackupEvent` directly from the event stream (no intermediate signal layer).
 
 ### Backup Execution Plane
 

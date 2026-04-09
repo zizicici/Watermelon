@@ -6,8 +6,8 @@ final class DependencyContainer {
     let appSession: AppSession
     let storageClientFactory: StorageClientFactory
     let photoLibraryService: PhotoLibraryService
-    let hashIndexRepository: ContentHashIndexRepositoryProtocol
-    let backupCoordinator: BackupCoordinatorProtocol
+    let hashIndexRepository: ContentHashIndexRepository
+    let backupCoordinator: BackupCoordinator
     let restoreService: RestoreService
 
     init() {
