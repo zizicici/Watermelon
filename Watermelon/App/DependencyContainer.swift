@@ -6,7 +6,6 @@ final class DependencyContainer {
     let appSession: AppSession
     let storageClientFactory: StorageClientFactory
     let photoLibraryService: PhotoLibraryService
-    let metadataService: MetadataService
     let hashIndexRepository: ContentHashIndexRepositoryProtocol
     let backupCoordinator: BackupCoordinatorProtocol
     let restoreService: RestoreService
@@ -22,8 +21,6 @@ final class DependencyContainer {
         appSession = AppSession()
         storageClientFactory = StorageClientFactory(databaseManager: databaseManager)
         photoLibraryService = PhotoLibraryService()
-        metadataService = MetadataService()
-
         hashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
 
         backupCoordinator = BackupCoordinator(

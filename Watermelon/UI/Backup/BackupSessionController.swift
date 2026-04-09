@@ -250,77 +250,12 @@ final class BackupSessionController {
         return startBackup(mode: .full)
     }
 
-    func currentScopeSelection() -> BackupScopeSelection {
-        backupScopeSelection
-    }
-
     @discardableResult
     func updateScopeSelection(_ selection: BackupScopeSelection) -> Bool {
         guard canAdjustScope() else { return false }
         backupScopeSelection = selection
         notifyObserversNow()
         return true
-    }
-
-    func ensureDefaultScopeSummaryLoaded() async {
-        guard backupScopeSelection.totalAssetCount == 0 else { return }
-        let totalCount = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true).count
-        backupScopeSelection = BackupScopeSelection(
-            selectedAssetIDs: nil,
-            selectedAssetCount: totalCount,
-            selectedEstimatedBytes: nil,
-            totalAssetCount: totalCount,
-            totalEstimatedBytes: nil
-        )
-        notifyObserversNow()
-    }
-
-    @discardableResult
-    func retryFailedItems(assetIDs: Set<String>? = nil) -> Bool {
-        let targetAssetIDs = assetIDs ?? Set(failedItems.map(\.assetLocalIdentifier))
-        guard !targetAssetIDs.isEmpty else {
-            statusText = "没有可重试项"
-            appendLog("没有可重试的失败项")
-            notifyObservers()
-            return false
-        }
-        return startBackup(mode: .retry(assetIDs: targetAssetIDs))
-    }
-
-    func refreshFailedItems() {
-        rebuildFailedItems()
-        notifyObservers()
-    }
-
-    func loadPreviewImage(
-        for item: FailedItem,
-        targetSize: CGSize = CGSize(width: 1200, height: 1200)
-    ) async -> UIImage? {
-        let authStatus = photoLibraryService.authorizationStatus()
-        guard authStatus == .authorized || authStatus == .limited else { return nil }
-
-        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [item.assetLocalIdentifier], options: nil)
-        guard let asset = fetched.firstObject else { return nil }
-
-        return await withCheckedContinuation { continuation in
-            let manager = PHCachingImageManager()
-            let options = PHImageRequestOptions()
-            options.deliveryMode = .highQualityFormat
-            options.resizeMode = .exact
-            options.isNetworkAccessAllowed = true
-            options.isSynchronous = false
-
-            manager.requestImage(
-                for: asset,
-                targetSize: targetSize,
-                contentMode: .aspectFit,
-                options: options
-            ) { image, info in
-                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-                if isDegraded { return }
-                continuation.resume(returning: image)
-            }
-        }
     }
 
     @discardableResult
