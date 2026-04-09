@@ -677,9 +677,12 @@ final class NewHomeViewController: UIViewController {
 
     /// Returns the progress percentage (0–100) for the given month based on its arrow direction,
     /// or nil if no direction is set or data is unavailable.
+    ///
+    /// Uses reconciliation matched count (content-hash based) rather than fingerprint-based
+    /// backedUpCount, which can over-count when local assets match remote months globally.
     private func progressPercent(for month: LibraryMonthKey) -> Double? {
-        // During execution, use real-time processedCountByMonth for active upload months
-        // because backedUpCount (fingerprint-based) doesn't refresh in the lightweight update path.
+        // During execution, use real-time processedCountByMonth for active months
+        // because reconciliation data doesn't refresh in the lightweight update path.
         if isExecutionMode, executionMonths.contains(month) {
             if completedMonths.contains(month) {
                 return 100.0
@@ -688,28 +691,28 @@ final class NewHomeViewController: UIViewController {
                let processed = processedCountByMonth[month], processed > 0 {
                 return Double(processed) / Double(total) * 100
             }
-            // Not yet started processing — fall through to backedUpCount-based calculation
         }
 
         guard let row = rowLookup[month] else { return nil }
         let direction = arrowDirection(for: month)
         guard let direction else { return nil }
-        guard let backedUp = row.local?.backedUpCount else { return nil }
 
         let localCount = row.local?.assetCount ?? 0
         let remoteCount = row.remote?.assetCount ?? 0
+        let matched = homeDataManager.matchedCount(for: month)
 
         switch direction {
         case .toRemote:
             guard localCount > 0 else { return nil }
-            return Double(backedUp) / Double(localCount) * 100
+            return Double(matched) / Double(localCount) * 100
         case .toLocal:
             guard remoteCount > 0 else { return nil }
-            return Double(backedUp) / Double(remoteCount) * 100
+            return Double(matched) / Double(remoteCount) * 100
         case .sync:
-            let union = localCount + remoteCount - backedUp
-            guard union > 0 else { return nil }
-            return Double(backedUp) / Double(union) * 100
+            let remoteOnly = remoteCount - matched
+            let total = localCount + remoteOnly
+            guard total > 0 else { return nil }
+            return Double(matched) / Double(total) * 100
         }
     }
 
@@ -1187,6 +1190,7 @@ final class NewHomeViewController: UIViewController {
         if isDownloadPhase {
             downloadTask?.cancel()
             downloadTask = nil
+            backupSessionController.stopBackup()
             updateActionPanelExecution(state: .paused)
         } else {
             backupSessionController.pauseBackup()
@@ -1205,12 +1209,15 @@ final class NewHomeViewController: UIViewController {
         let alert = UIAlertController(title: "确认停止", message: "停止后需要重新选择月份执行", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "取消", style: .cancel))
         alert.addAction(UIAlertAction(title: "停止", style: .destructive) { [weak self] _ in
-            if self?.isDownloadPhase == true {
-                self?.downloadTask?.cancel()
-                self?.downloadTask = nil
-                self?.exitExecutionMode()
+            guard let self else { return }
+            if self.isDownloadPhase {
+                self.downloadTask?.cancel()
+                self.downloadTask = nil
+                // Stop any in-flight scoped backup from ensureHashIndexAndDownload
+                self.backupSessionController.stopBackup()
+                self.exitExecutionMode()
             } else {
-                self?.backupSessionController.stopBackup()
+                self.backupSessionController.stopBackup()
             }
         })
         present(alert, animated: true)
@@ -1319,7 +1326,8 @@ final class NewHomeViewController: UIViewController {
         await MainActor.run {
             self.activeMonths = [month]
             self.updateActionPanelExecution(state: .running)
-            self.dataSource.applySnapshotUsingReloadData(self.dataSource.snapshot())
+            self.reconfigureVisibleCells()
+            self.reconfigureVisibleArrows()
         }
 
         // Run scoped backup to ensure local hash index is populated.
@@ -1347,13 +1355,21 @@ final class NewHomeViewController: UIViewController {
     ) async {
         let remoteItems = homeDataManager.remoteOnlyItems(for: month)
         if !remoteItems.isEmpty {
+            await MainActor.run {
+                self.assetCountByMonth[month] = remoteItems.count
+                self.processedCountByMonth[month] = 0
+            }
+
             do {
                 let results = try await dependencies.restoreService.restoreItems(
                     items: remoteItems.map(\.resources),
                     profile: profile,
                     password: password,
-                    onItemCompleted: { [weak self] _, _ in
-                        self?.reconfigureVisibleCells()
+                    onItemCompleted: { [weak self] completed, _ in
+                        guard let self else { return }
+                        self.processedCountByMonth[month] = completed
+                        self.reconfigureVisibleCells()
+                        self.reconfigureVisibleArrows()
                     }
                 )
 
@@ -1372,7 +1388,9 @@ final class NewHomeViewController: UIViewController {
         if Task.isCancelled { return }
         await MainActor.run {
             self.completedMonths.insert(month)
-            self.dataSource.applySnapshotUsingReloadData(self.dataSource.snapshot())
+            self.refreshRemoteDataInPlace()
+            self.reconfigureVisibleCells()
+            self.reconfigureVisibleArrows()
         }
     }
 

@@ -659,6 +659,11 @@ private final class HomeReconcileEngine {
             .reversed()
     }
 
+    func matchedCount(for month: LibraryMonthKey) -> Int {
+        guard let items = mergedByMonth[month] else { return 0 }
+        return items.count { $0.sourceTag == .both }
+    }
+
     private static func localHashIndex(from localItems: [LocalAlbumItem]) -> [Data: [String]] {
         var hashToAssetSet: [Data: Set<String>] = [:]
 
@@ -785,6 +790,10 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
 
     func remoteOnlyItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
         reconcileIndex.remoteOnlyItems(for: month)
+    }
+
+    func matchedCount(for month: LibraryMonthKey) -> Int {
+        reconcileIndex.matchedCount(for: month)
     }
 
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {

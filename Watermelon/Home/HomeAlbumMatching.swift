@@ -92,13 +92,12 @@ enum HomeAlbumMatching {
             var seenHashes = Set<Data>()
 
             for link in sortedLinks {
+                guard seenHashes.insert(link.resourceHash).inserted else { continue }
                 let key = ResourceLookupKey(year: asset.year, month: asset.month, hash: link.resourceHash)
                 if let resource = resourcesByMonthHash[key] {
                     groupedResources.append(resource)
                 }
-                if seenHashes.insert(link.resourceHash).inserted {
-                    contentHashes.append(link.resourceHash)
-                }
+                contentHashes.append(link.resourceHash)
             }
 
             guard let representative = chooseRepresentativeResource(groupedResources) else { continue }

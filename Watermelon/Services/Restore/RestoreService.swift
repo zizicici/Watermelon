@@ -40,6 +40,7 @@ final class RestoreService {
 
         var results: [IndexedRestoredAsset] = []
         for (index, resources) in items.enumerated() {
+            try Task.checkCancellation()
             let creationDate = resources
                 .compactMap(\.creationDateNs)
                 .min()
@@ -150,8 +151,10 @@ final class RestoreService {
                 request.creationDate = creationDate
                 placeholderID = request.placeholderForCreatedAsset?.localIdentifier
 
+                var addedTypes = Set<PHAssetResourceType>()
                 for (resource, url) in downloaded {
                     guard let type = Self.mapResourceType(code: resource.resourceType) else { continue }
+                    guard addedTypes.insert(type).inserted else { continue }
                     let options = PHAssetResourceCreationOptions()
                     options.originalFilename = resource.fileName
                     request.addResource(with: type, fileURL: url, options: options)
