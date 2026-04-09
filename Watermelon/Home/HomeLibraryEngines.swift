@@ -710,6 +710,11 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     @discardableResult
+    func reloadLocalIndex() async -> Bool {
+        await loadLocalIndex(forceReload: true)
+    }
+
+    @discardableResult
     func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) -> Bool {
         guard !assetIDs.isEmpty else { return false }
         let existingIDs = localIndex.knownAssetIDs(in: assetIDs)

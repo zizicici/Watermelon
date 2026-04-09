@@ -10,7 +10,7 @@ extension MonthManifestStore {
         seed: Seed? = nil
     ) async throws -> MonthManifestStore {
         if let seed {
-            return try loadSeeded(
+            return try await loadSeeded(
                 client: client,
                 basePath: basePath,
                 year: year,
@@ -119,18 +119,24 @@ extension MonthManifestStore {
         year: Int,
         month: Int,
         seed: Seed
-    ) throws -> MonthManifestStore {
+    ) async throws -> MonthManifestStore {
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
         let dbQueue = try DatabaseQueue(path: localURL.path)
         try Self.migrate(dbQueue)
 
-        let remoteFilesByName: [String: RemoteFileMetadata] = Dictionary(uniqueKeysWithValues: seed.resources.map { resource in
-            return (
-                resource.fileName,
-                RemoteFileMetadata(size: resource.fileSize)
-            )
-        })
+        // List actual remote directory to detect orphaned files (uploaded but
+        // not recorded in manifest due to crash / force-kill). Without this,
+        // prepareUpload misses disk-level collisions and upload fails with
+        // STATUS_OBJECT_NAME_COLLISION.
+        let monthRelativePath = String(format: "%04d/%02d", year, month)
+        let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
+        let entries = try await client.list(path: monthAbsolutePath)
+        let remoteFilesByName = Dictionary(
+            uniqueKeysWithValues: entries
+                .filter { !$0.isDirectory && $0.name != Self.manifestFileName }
+                .map { ($0.name, RemoteFileMetadata(size: $0.size)) }
+        )
 
         let store = MonthManifestStore(
             client: client,

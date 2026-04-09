@@ -76,7 +76,7 @@ final class NewHomeViewController: UIViewController {
 
     private let dependencies: DependencyContainer
     private let homeDataManager: HomeIncrementalDataManager
-    private lazy var backupSessionController = BackupSessionController(dependencies: dependencies)
+    private var backupSessionController: BackupSessionController!
 
     private var savedProfiles: [ServerProfileRecord] = []
     private var activeProfileID: Int64?
@@ -88,14 +88,10 @@ final class NewHomeViewController: UIViewController {
     // MARK: - Execution Mode State
     private var isExecutionMode = false
     private var executionMonths = Set<LibraryMonthKey>()
-    private var snapshotLocalSelection = Set<LibraryMonthKey>()
-    private var snapshotRemoteSelection = Set<LibraryMonthKey>()
     private var completedMonths = Set<LibraryMonthKey>()
     private var activeMonths = Set<LibraryMonthKey>()
     private var backupObserverID: UUID?
-    private var lastObservedState: BackupSessionController.State?
 
-    private var activeMonthProgress: (completed: Int, total: Int)?
     private var assetCountByMonth: [LibraryMonthKey: Int] = [:]
     private var processedCountByMonth: [LibraryMonthKey: Int] = [:]
 
@@ -349,21 +345,18 @@ final class NewHomeViewController: UIViewController {
 
     private func configureCell(_ cell: MonthCell, item: Item) {
         let summary: MonthSummary
-        let isSelected: Bool?
-
         switch item.side {
         case .local:
             summary = rowLookup[item.month]?.local
                 ?? MonthSummary(month: item.month, assetCount: 0, photoCount: 0, videoCount: 0, backedUpCount: nil, totalSizeBytes: 0)
-            isSelected = selectedLocalMonths.contains(item.month)
         case .remote:
             summary = rowLookup[item.month]?.remote
                 ?? MonthSummary(month: item.month, assetCount: 0, photoCount: 0, videoCount: 0, backedUpCount: nil, totalSizeBytes: 0)
-            isSelected = selectedRemoteMonths.contains(item.month)
         }
 
         let m = item.month.month
 
+        // Execution mode: completed / running get special appearance
         if isExecutionMode, executionMonths.contains(item.month) {
             if completedMonths.contains(item.month) {
                 cell.configureCompleted(
@@ -371,7 +364,8 @@ final class NewHomeViewController: UIViewController {
                     sizeText: summary.sizeText
                 )
                 return
-            } else if activeMonths.contains(item.month) {
+            }
+            if activeMonths.contains(item.month) {
                 cell.configureRunning(
                     monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: Self.monthSecondaryTextColor(month: item.month.month)),
                     sizeText: summary.sizeText,
@@ -380,37 +374,13 @@ final class NewHomeViewController: UIViewController {
                     detailColor: Self.monthSecondaryTextColor(month: m)
                 )
                 return
-            } else {
-                let toggleOn = item.side == .local
-                    ? snapshotLocalSelection.contains(item.month)
-                    : snapshotRemoteSelection.contains(item.month)
-                cell.configure(
-                    monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: Self.monthSecondaryTextColor(month: item.month.month)),
-                    sizeText: summary.sizeText,
-                    bgColor: Self.monthColor(month: m),
-                    titleColor: Self.monthTextColor(month: m),
-                    detailColor: Self.monthSecondaryTextColor(month: m),
-                    isSelected: toggleOn
-                )
-                return
             }
         }
 
-        if isExecutionMode {
-            let toggleOn = item.side == .local
-                ? snapshotLocalSelection.contains(item.month)
-                : snapshotRemoteSelection.contains(item.month)
-            cell.configure(
-                monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: Self.monthSecondaryTextColor(month: item.month.month)),
-                sizeText: summary.sizeText,
-                bgColor: Self.monthColor(month: m),
-                titleColor: Self.monthTextColor(month: m),
-                detailColor: Self.monthSecondaryTextColor(month: m),
-                isSelected: toggleOn
-            )
-            return
-        }
-
+        // Default: normal cell with selection toggle
+        let isSelected = item.side == .local
+            ? selectedLocalMonths.contains(item.month)
+            : selectedRemoteMonths.contains(item.month)
         cell.configure(
             monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: Self.monthSecondaryTextColor(month: item.month.month)),
             sizeText: summary.sizeText,
@@ -697,17 +667,12 @@ final class NewHomeViewController: UIViewController {
     }
 
     private func arrowDirection(for month: LibraryMonthKey) -> ArrowDirection? {
-        let l = selectedLocalMonths.contains(month)
-        let r = selectedRemoteMonths.contains(month)
-        var result: ArrowDirection? = nil
-        switch (l, r) {
-        case (true, false):  result = .toRemote
-        case (false, true):  result = .toLocal
-        case (true, true):   result = .sync
-        case (false, false): result = nil
+        switch (selectedLocalMonths.contains(month), selectedRemoteMonths.contains(month)) {
+        case (true, false):  return .toRemote
+        case (false, true):  return .toLocal
+        case (true, true):   return .sync
+        case (false, false): return nil
         }
-
-        return result
     }
 
     /// Returns the progress percentage (0–100) for the given month based on its arrow direction,
@@ -1096,14 +1061,16 @@ final class NewHomeViewController: UIViewController {
         executionMonths = allMonths
         completedMonths.removeAll()
         activeMonths.removeAll()
-        lastObservedState = nil
-
-        // Snapshot current toggle states
-        snapshotLocalSelection = selectedLocalMonths
-        snapshotRemoteSelection = selectedRemoteMonths
+        assetCountByMonth.removeAll()
+        processedCountByMonth.removeAll()
+        backupSessionController = BackupSessionController(dependencies: dependencies)
 
         // Switch UI to execution mode
-        switchToExecutionPanel()
+        actionPanel.enterExecution(
+            backupTotal: uploadMonths.count,
+            downloadTotal: pendingDownloadMonths.count,
+            syncTotal: pendingSyncMonths.count
+        )
         disableSelectionInteraction()
         applyMergedSnapshot()
 
@@ -1146,14 +1113,10 @@ final class NewHomeViewController: UIViewController {
         isDownloadPhase = false
         isExecutionMode = false
         executionMonths.removeAll()
-        snapshotLocalSelection.removeAll()
-        snapshotRemoteSelection.removeAll()
         completedMonths.removeAll()
         activeMonths.removeAll()
-        activeMonthProgress = nil
         assetCountByMonth.removeAll()
         processedCountByMonth.removeAll()
-        lastObservedState = nil
         uploadMonths.removeAll()
         pendingDownloadMonths.removeAll()
         pendingSyncMonths.removeAll()
@@ -1166,25 +1129,18 @@ final class NewHomeViewController: UIViewController {
         selectedLocalMonths.removeAll()
         selectedRemoteMonths.removeAll()
 
-        switchToSelectionPanel()
-        enableSelectionInteraction()
-        // Reload all data so backedUpCount reflects assets uploaded in this run.
-        // This triggers rebuildAndApply → applyMergedSnapshot which updates
-        // headers, top toggles, and action panel in one pass.
-        scheduleReloadAllData()
-    }
-
-    private func switchToExecutionPanel() {
-        // Panel is already shown (selection was active), just switch to execution appearance
-        actionPanel.enterExecution(
-            backupTotal: uploadMonths.count,
-            downloadTotal: pendingDownloadMonths.count,
-            syncTotal: pendingSyncMonths.count
-        )
-    }
-
-    private func switchToSelectionPanel() {
         actionPanel.resetToSelection()
+        enableSelectionInteraction()
+        // Force-reload local index so newly computed fingerprints from the backup
+        // run are picked up. ensureLocalIndexLoaded (used by scheduleReloadAllData)
+        // skips reload when the index is already loaded, leaving stale fingerprints.
+        reloadTask?.cancel()
+        reloadTask = Task { [weak self] in
+            guard let self else { return }
+            await self.homeDataManager.reloadLocalIndex()
+            self.syncRemoteDataIfNeeded()
+            self.rebuildAndApply()
+        }
     }
 
     private func updateActionPanelExecution(state: BackupSessionController.State) {
@@ -1277,23 +1233,18 @@ final class NewHomeViewController: UIViewController {
             return
         }
 
-        // Collect months to process: downloads first, then syncs
-        let downloadMonths = pendingDownloadMonths.filter { !completedMonths.contains($0) }
-        let syncMonths = pendingSyncMonths.filter { !completedMonths.contains($0) }
-
         downloadTask = Task { [weak self] in
             guard let self else { return }
 
-            // Phase 2: Pure download months
-            // Run scoped backup first to ensure local hash index is populated,
-            // preventing duplicate downloads for assets that exist locally but lack hashes.
-            for month in downloadMonths {
+            // Download months: run scoped backup first to ensure local hash index
+            // is populated, preventing duplicate downloads for local assets lacking hashes.
+            for month in self.pendingDownloadMonths {
                 if Task.isCancelled { return }
                 await self.ensureHashIndexAndDownload(month: month, phase: "下载", profile: profile, password: password)
             }
 
-            // Phase 3: Sync months (upload then download each month)
-            for month in syncMonths {
+            // Sync months: upload was done in the upload phase; now download remoteOnly items.
+            for month in self.pendingSyncMonths {
                 if Task.isCancelled { return }
                 await self.ensureHashIndexAndDownload(month: month, phase: "同步", profile: profile, password: password)
             }
@@ -1328,14 +1279,15 @@ final class NewHomeViewController: UIViewController {
                     self.backupObserverID = nil
                 }
 
+                // Start before adding observer: startBackup() resets stale state
+                // (flushedMonths, startedMonths, etc.) from the previous scoped run.
+                // addObserver fires its callback synchronously, so if we observed first
+                // we'd see the old .completed state and resume the continuation immediately.
+                self.backupSessionController.startBackup()
+
                 var hasResumed = false
                 let observerID = self.backupSessionController.addObserver { [weak self] snapshot in
                     guard let self, !hasResumed else { return }
-                    // Track progress for upload phase visual feedback
-                    if snapshot.total > 0 {
-                        let completed = snapshot.succeeded + snapshot.failed + snapshot.skipped
-                        self.activeMonthProgress = (completed: completed, total: snapshot.total)
-                    }
                     self.reconfigureVisibleCells()
 
                     switch snapshot.state {
@@ -1354,8 +1306,6 @@ final class NewHomeViewController: UIViewController {
                     }
                 }
                 self.backupObserverID = observerID
-
-                self.backupSessionController.startBackup()
             }
         }
     }
@@ -1368,7 +1318,6 @@ final class NewHomeViewController: UIViewController {
     ) async {
         await MainActor.run {
             self.activeMonths = [month]
-            self.activeMonthProgress = nil
             self.updateActionPanelExecution(state: .running)
             self.dataSource.applySnapshotUsingReloadData(self.dataSource.snapshot())
         }
@@ -1398,20 +1347,13 @@ final class NewHomeViewController: UIViewController {
     ) async {
         let remoteItems = homeDataManager.remoteOnlyItems(for: month)
         if !remoteItems.isEmpty {
-            await MainActor.run {
-                self.activeMonthProgress = (completed: 0, total: remoteItems.count)
-                self.reconfigureVisibleCells()
-            }
-
             do {
                 let results = try await dependencies.restoreService.restoreItems(
                     items: remoteItems.map(\.resources),
                     profile: profile,
                     password: password,
-                    onItemCompleted: { [weak self] completed, total in
-                        guard let self else { return }
-                        self.activeMonthProgress = (completed: completed, total: total)
-                        self.reconfigureVisibleCells()
+                    onItemCompleted: { [weak self] _, _ in
+                        self?.reconfigureVisibleCells()
                     }
                 )
 
@@ -1429,7 +1371,6 @@ final class NewHomeViewController: UIViewController {
 
         if Task.isCancelled { return }
         await MainActor.run {
-            self.activeMonthProgress = nil
             self.completedMonths.insert(month)
             self.dataSource.applySnapshotUsingReloadData(self.dataSource.snapshot())
         }
@@ -1486,21 +1427,8 @@ final class NewHomeViewController: UIViewController {
         activeMonths = newActive
         processedCountByMonth = snapshot.processedCountByMonth
 
-        // Update action panel execution progress
         updateActionPanelExecution(state: snapshot.state)
 
-        // Month state change (started/flushed): full rebuild needed for cell state transitions
-        // Progress-only update: lightweight reconfigure on existing cells (preserves indicator)
-        if hadMonthStateChange {
-            rebuildAndApply()
-        } else {
-            refreshRemoteDataInPlace()
-            reconfigureVisibleCells()
-            reconfigureVisibleArrows()
-        }
-        lastObservedState = snapshot.state
-
-        // Handle terminal states
         switch snapshot.state {
         case .completed:
             completedMonths.formUnion(uploadMonths)
@@ -1528,11 +1456,17 @@ final class NewHomeViewController: UIViewController {
             present(alert, animated: true)
 
         case .stopped:
-            rebuildAndApply()
             exitExecutionMode()
 
         default:
-            break
+            // Non-terminal: update visible UI incrementally
+            if hadMonthStateChange {
+                rebuildAndApply()
+            } else {
+                refreshRemoteDataInPlace()
+                reconfigureVisibleCells()
+                reconfigureVisibleArrows()
+            }
         }
     }
 
