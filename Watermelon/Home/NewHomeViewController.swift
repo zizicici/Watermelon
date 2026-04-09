@@ -678,21 +678,9 @@ final class NewHomeViewController: UIViewController {
     /// Returns the progress percentage (0–100) for the given month based on its arrow direction,
     /// or nil if no direction is set or data is unavailable.
     ///
-    /// Uses reconciliation matched count (content-hash based) rather than fingerprint-based
-    /// backedUpCount, which can over-count when local assets match remote months globally.
+    /// Reconciliation matched count is the baseline (always accurate). During execution,
+    /// real-time processedCountByMonth may be higher (upload phase), but never drops below baseline.
     private func progressPercent(for month: LibraryMonthKey) -> Double? {
-        // During execution, use real-time processedCountByMonth for active months
-        // because reconciliation data doesn't refresh in the lightweight update path.
-        if isExecutionMode, executionMonths.contains(month) {
-            if completedMonths.contains(month) {
-                return 100.0
-            }
-            if let total = assetCountByMonth[month], total > 0,
-               let processed = processedCountByMonth[month], processed > 0 {
-                return Double(processed) / Double(total) * 100
-            }
-        }
-
         guard let row = rowLookup[month] else { return nil }
         let direction = arrowDirection(for: month)
         guard let direction else { return nil }
@@ -701,19 +689,33 @@ final class NewHomeViewController: UIViewController {
         let remoteCount = row.remote?.assetCount ?? 0
         let matched = homeDataManager.matchedCount(for: month)
 
+        // Reconciliation baseline: always reflects true matched state
+        let basePercent: Double?
         switch direction {
         case .toRemote:
-            guard localCount > 0 else { return nil }
-            return Double(matched) / Double(localCount) * 100
+            basePercent = localCount > 0 ? Double(matched) / Double(localCount) * 100 : nil
         case .toLocal:
-            guard remoteCount > 0 else { return nil }
-            return Double(matched) / Double(remoteCount) * 100
+            basePercent = remoteCount > 0 ? Double(matched) / Double(remoteCount) * 100 : nil
         case .sync:
             let remoteOnly = remoteCount - matched
             let total = localCount + remoteOnly
-            guard total > 0 else { return nil }
-            return Double(matched) / Double(total) * 100
+            basePercent = total > 0 ? Double(matched) / Double(total) * 100 : nil
         }
+
+        // During execution, session progress (processedCount/total) may advance
+        // faster than reconciliation updates. Use whichever is higher.
+        if isExecutionMode, executionMonths.contains(month) {
+            if completedMonths.contains(month) {
+                return 100.0
+            }
+            if let total = assetCountByMonth[month], total > 0,
+               let processed = processedCountByMonth[month], processed > 0 {
+                let sessionPercent = Double(processed) / Double(total) * 100
+                return max(sessionPercent, basePercent ?? 0)
+            }
+        }
+
+        return basePercent
     }
 
     private func selectionState(for months: Set<LibraryMonthKey>, in selected: Set<LibraryMonthKey>) -> SelectionState {
@@ -1087,11 +1089,16 @@ final class NewHomeViewController: UIViewController {
     }
 
     private func startUploadPhase(months: [LibraryMonthKey]) {
+        let syncMonthSet = Set(pendingSyncMonths)
         var allAssetIDs = Set<String>()
         for month in months {
             let ids = homeDataManager.localAssetIDs(for: month)
             allAssetIDs.formUnion(ids)
-            assetCountByMonth[month] = ids.count
+            // Sync months use reconciliation-based progress (covers both upload & download).
+            // Only pure upload months use session-based processedCount/assetCount tracking.
+            if !syncMonthSet.contains(month) {
+                assetCountByMonth[month] = ids.count
+            }
         }
 
         let selection = BackupScopeSelection(
@@ -1338,9 +1345,13 @@ final class NewHomeViewController: UIViewController {
             if !uploadCompleted || Task.isCancelled { return }
         }
 
-        // Refresh remote data after potential upload
+        // Refresh both remote and local data so remoteOnlyItems accurately
+        // excludes local assets whose hashes were just computed by the scoped backup.
         await MainActor.run { [self] in
             _ = self.syncRemoteDataIfNeeded()
+            if !assetIDs.isEmpty {
+                self.homeDataManager.refreshLocalIndex(forAssetIDs: assetIDs)
+            }
         }
 
         // Now download remoteOnly items with accurate matching
@@ -1355,28 +1366,28 @@ final class NewHomeViewController: UIViewController {
     ) async {
         let remoteItems = homeDataManager.remoteOnlyItems(for: month)
         if !remoteItems.isEmpty {
+            // Clear upload-phase tracking so progressPercent falls through to
+            // reconciliation-based matchedCount, which updates per-item via refreshLocalIndex.
             await MainActor.run {
-                self.assetCountByMonth[month] = remoteItems.count
-                self.processedCountByMonth[month] = 0
+                self.assetCountByMonth.removeValue(forKey: month)
+                self.processedCountByMonth.removeValue(forKey: month)
             }
 
             do {
-                let results = try await dependencies.restoreService.restoreItems(
+                _ = try await dependencies.restoreService.restoreItems(
                     items: remoteItems.map(\.resources),
                     profile: profile,
                     password: password,
-                    onItemCompleted: { [weak self] completed, _ in
+                    onItemCompleted: { [weak self] _, _, restoredAsset in
                         guard let self else { return }
-                        self.processedCountByMonth[month] = completed
+                        if let restoredAsset {
+                            self.writeHashIndexForItem(restoredAsset, remoteItems: remoteItems)
+                            self.homeDataManager.refreshLocalIndex(forAssetIDs: [restoredAsset.asset.localIdentifier])
+                        }
                         self.reconfigureVisibleCells()
                         self.reconfigureVisibleArrows()
                     }
                 )
-
-                if !results.isEmpty {
-                    writeHashIndex(results: results, remoteItems: remoteItems)
-                    homeDataManager.refreshLocalIndex(forAssetIDs: Set(results.map(\.asset.localIdentifier)))
-                }
             } catch {
                 if Task.isCancelled { return }
                 await MainActor.run {
@@ -1394,34 +1405,31 @@ final class NewHomeViewController: UIViewController {
         }
     }
 
-    private func writeHashIndex(results: [RestoreService.IndexedRestoredAsset], remoteItems: [RemoteAlbumItem]) {
-        let hashRepo = ContentHashIndexRepository(databaseManager: dependencies.databaseManager)
+    private func writeHashIndexForItem(_ result: RestoreService.IndexedRestoredAsset, remoteItems: [RemoteAlbumItem]) {
+        guard result.itemIndex < remoteItems.count else { return }
+        let remoteItem = remoteItems[result.itemIndex]
 
-        for result in results {
-            guard result.itemIndex < remoteItems.count else { continue }
-            let remoteItem = remoteItems[result.itemIndex]
-
-            var records: [LocalAssetResourceHashRecord] = []
-            var totalSize: Int64 = 0
-            for link in remoteItem.resourceLinks {
-                if let resource = remoteItem.resources.first(where: { $0.contentHash == link.resourceHash }) {
-                    records.append(LocalAssetResourceHashRecord(
-                        role: link.role,
-                        slot: link.slot,
-                        contentHash: link.resourceHash,
-                        fileSize: resource.fileSize
-                    ))
-                    totalSize += resource.fileSize
-                }
+        var records: [LocalAssetResourceHashRecord] = []
+        var totalSize: Int64 = 0
+        for link in remoteItem.resourceLinks {
+            if let resource = remoteItem.resources.first(where: { $0.contentHash == link.resourceHash }) {
+                records.append(LocalAssetResourceHashRecord(
+                    role: link.role,
+                    slot: link.slot,
+                    contentHash: link.resourceHash,
+                    fileSize: resource.fileSize
+                ))
+                totalSize += resource.fileSize
             }
-
-            try? hashRepo.upsertAssetHashSnapshot(
-                assetLocalIdentifier: result.asset.localIdentifier,
-                assetFingerprint: remoteItem.assetFingerprint,
-                resources: records,
-                totalFileSizeBytes: totalSize
-            )
         }
+
+        let hashRepo = ContentHashIndexRepository(databaseManager: dependencies.databaseManager)
+        try? hashRepo.upsertAssetHashSnapshot(
+            assetLocalIdentifier: result.asset.localIdentifier,
+            assetFingerprint: remoteItem.assetFingerprint,
+            resources: records,
+            totalFileSizeBytes: totalSize
+        )
     }
 
     private func showExecutionCompleted() {
@@ -1477,11 +1485,14 @@ final class NewHomeViewController: UIViewController {
             exitExecutionMode()
 
         default:
-            // Non-terminal: update visible UI incrementally
+            // Non-terminal: update visible UI incrementally.
+            // syncRemoteDataIfNeeded refreshes reconciliation so matchedCount
+            // stays current for sync months that use reconciliation-based progress.
             if hadMonthStateChange {
                 rebuildAndApply()
             } else {
                 refreshRemoteDataInPlace()
+                syncRemoteDataIfNeeded()
                 reconfigureVisibleCells()
                 reconfigureVisibleArrows()
             }

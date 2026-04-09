@@ -27,7 +27,7 @@ final class RestoreService {
         items: [[RemoteManifestResource]],
         profile: ServerProfileRecord,
         password: String,
-        onItemCompleted: @MainActor (Int, Int) -> Void
+        onItemCompleted: @MainActor (Int, Int, IndexedRestoredAsset?) -> Void
     ) async throws -> [IndexedRestoredAsset] {
         guard !items.isEmpty else { return [] }
 
@@ -46,10 +46,13 @@ final class RestoreService {
                 .min()
                 .map { Date(nanosecondsSinceEpoch: $0) }
             let group = RestoreGroup(creationDate: creationDate, resources: resources)
+            var restoredAsset: IndexedRestoredAsset?
             if let asset = try await restoreGroup(group, profile: profile, storageClient: storageClient) {
-                results.append(IndexedRestoredAsset(itemIndex: index, asset: asset))
+                let indexed = IndexedRestoredAsset(itemIndex: index, asset: asset)
+                results.append(indexed)
+                restoredAsset = indexed
             }
-            await onItemCompleted(index + 1, items.count)
+            await onItemCompleted(index + 1, items.count, restoredAsset)
         }
         return results
     }
