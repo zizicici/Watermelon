@@ -23,8 +23,9 @@
 
 ## 5. flush 与强杀窗口
 
-1. 当前 flush 触发主要在“每月处理完成”与“任务收尾”。
+1. 当前 flush 触发主要在”每月处理完成”与”任务收尾”。
 2. 若应用在当前月大量变更后被系统强杀，仍存在最后一批改动尚未 flush 的窗口。
+3. `MonthManifestStore.loadSeeded` 已改为列出实际远端目录，可检测孤儿文件（上传了但 manifest 未 flush），避免 `STATUS_OBJECT_NAME_COLLISION` 失败。
 
 ## 6. 并发策略仍为静态默认 + 手动覆盖
 
@@ -36,7 +37,13 @@
 1. 项目仍缺少成体系单测/集成测试。
 2. 关键链路主要依赖真机手工回归（SMB/WebDAV/外接存储）。
 
-## 8. 建议优先级
+## 8. 下载断点续传的精度
+
+1. 下载已实现逐 item 写入 hash index（中断后可续）。
+2. 但单个 item 内的多资源下载（如 Live Photo 的 HEIC + MOV）是原子的——中断会丢失该 item 的部分下载。
+3. `RestoreService.restoreItems` 循环开头有 `Task.checkCancellation`，粒度是 item 级。
+
+## 9. 建议优先级
 
 1. 优先补 `BackupSessionController` 状态切换与取消语义测试。
 2. 评估持久化 pending 集，降低 full resume 重扫成本。

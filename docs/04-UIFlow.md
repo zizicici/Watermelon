@@ -2,70 +2,68 @@
 
 ## 1. 启动与 Home
 
-App 启动后直接进入 `HomeViewController`。
+App 启动后直接进入 `NewHomeViewController`。
 
-### 顶部导航（右上角连接按钮）
+### 顶部区域
 
-1. 状态文本：`加载中……` / 当前连接标识 / `单机模式`
-2. 当前连接菜单 section：
-3. `单机模式`
-4. 已保存连接（带类型图标：SMB=`network`、WebDAV=`globe`、外接存储=`externaldrive`）
-5. 添加存储菜单 section：
-6. `SMB 局域网发现`
-7. `添加 SMB 存储`
-8. `添加 WebDAV 存储`
-9. `添加外接存储目录`
-10. 菜单末项：`更多`
+左右两栏 header，各带全选 toggle：
+1. 左侧：`本地相册`（全选/取消）
+2. 右侧：`远端存储`（下拉菜单切换连接 + 全选/取消）
 
-### 底部工具栏
-
-1. 左：`筛选`
-2. 右：`备份`（运行中显示 `备份中`）
+远端菜单内容：
+1. 已保存连接列表（当前连接标 ✓）
+2. `未连接` 断开选项
 
 ### 内容区
 
-1. `UICollectionView` 按年月 section 展示本地/远端匹配条目
-2. Home 在备份运行中会节流刷新远端 section
-3. 运行结束后会触发一次全量刷新
+1. `UICollectionViewCompositionalLayout` 按年-月 section 展示
+2. 每月一行：左 cell（本地）+ 右 cell（远端），中间箭头 badge
+3. 箭头方向由选择组合决定：只选本地→(→)、只选远端→(←)、两侧→(↔)
+4. 箭头旁显示进度百分比（基于 reconciliation `matchedCount`）
+5. Section header 按年分组，显示年份、照片/视频计数、大小、年级全选 toggle
+6. Cell 季节配色（1-3月绿、4-6月蓝、7-9月琥珀、10-12月红）
 
-## 2. 筛选菜单
+### 底部面板（SelectionActionPanel）
 
-`筛选` 菜单包含：
+选中月份后弹出，显示三个分类按钮：
+1. 备份(→) 计数 — 长按弹出月份详情菜单
+2. 下载(←) 计数
+3. 同步(↔) 计数
+4. 执行按钮
 
-1. 来源：全部 / 仅本地 / 仅远端 / 远端+本地
-2. 排序：正序 / 倒序
-3. 显示：正方形网格 / 原始比例网格
-4. 已连接远端时提供“重建远端索引”（备份运行中禁用）
+执行模式下切换为：
+1. 分类进度（pending → running x/y → completed ✓）
+2. 暂停/恢复按钮 + 停止按钮
+3. 完成后显示”完成”按钮退出
 
-## 3. 备份页（`BackupViewController`）
+### 执行模式 Cell 状态
 
-### 顶部与控制
+1. **待处理**：正常颜色 + 选中勾
+2. **运行中**：正常颜色 + activity indicator
+3. **已完成**：灰色背景 + 绿色勾
 
-1. 通过 Home 工具栏“备份”以 sheet 打开
-2. 导航栏按钮：开始、暂停、停止
-3. 顶部“备份范围”卡片：显示全选/部分/未选、数量与估算容量，并可“调整”
-4. 状态卡片显示当前上传项与总体进度
-5. 多 worker 时显示 `W1/W2/...` 分段切换查看不同 worker 的实时上传状态
+## 2. 执行流程
 
-### 列表与日志
+### 上传阶段
 
-1. 过滤：全部 / 成功 / 失败 / 跳过 / 日志
-2. 列表项显示缩略图、名称、状态、原因、资源摘要
-3. 日志视图增量追加（避免整段重渲染）
+1. 收集所有上传+同步月份的本地 asset IDs
+2. 创建 `BackupScopeSelection`，通过 `BackupSessionController.startBackup()` 执行
+3. `handleBackupSnapshot` 跟踪 startedMonths/flushedMonths/processedCountByMonth
+4. 进度更新：非终态 → `refreshRemoteDataInPlace + syncRemoteDataIfNeeded + reconfigureVisibleCells/Arrows`
+5. 终态 `.completed` → 转入下载阶段（如有）或显示完成
 
-### 范围调整交互
+### 下载阶段
 
-1. 任务未运行时：可直接进入范围选择器并修改
-2. 任务运行中：弹窗支持“仅查看当前范围”或“停止并调整”
+1. 逐月执行 `ensureHashIndexAndDownload`
+2. 先跑 scoped backup 填充 hash index → 刷新 local index（safety net）
+3. `processDownloadMonth` 下载 remoteOnly items
+4. 每个 item 完成后：`writeHashIndexForItem` + `refreshLocalIndex`（增量持久化）
+5. 进度基于 reconciliation `matchedCount`（每 item 更新，支持断点续传）
 
-## 4. 范围选择器（`BackupRangeSelectorViewController`）
+### 停止/暂停
 
-1. 按月份分组展示，默认折叠
-2. Header 支持该月全选/取消与展开/收起
-3. 月内网格复用 `AlbumGridCell`，可点选资产
-4. 导航栏底部 toolbar 提供“全选/全不选”
-5. 统计信息优先使用本地 hash 索引 size；缺失时显示待统计
-6. 运行中只读打开，不允许修改
+1. 上传阶段：`backupSessionController.stopBackup()`（cooperative cancellation）
+2. 下载阶段：`downloadTask.cancel()` + `backupSessionController.stopBackup()` + `RestoreService` 循环内 `Task.checkCancellation`
 
 ## 5. More 页面（`MoreViewController`）
 

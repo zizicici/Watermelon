@@ -13,7 +13,7 @@ Build with `Watermelon.xcodeproj`. There is no package manager CLI or test runne
 ```
 Watermelon/
   App/          # AppDelegate, SceneDelegate, AppCoordinator, AppSession, DependencyContainer
-  Home/         # HomeViewController, HomeAlbumMatching, HomeLibraryEngines
+  Home/         # NewHomeViewController, HomeAlbumMatching, HomeLibraryEngines
   Services/
     Backup/     # BackupCoordinator, AssetProcessor, BackupAssetResourcePlanner,
                 # MonthManifestStore, RemoteIndexSyncService,
@@ -39,7 +39,7 @@ Watermelon/
 
 ### App Startup
 
-`SceneDelegate` → `AppCoordinator.start()` → `showHome()` → `HomeViewController`.
+`SceneDelegate` → `AppCoordinator.start()` → `showHome()` → `NewHomeViewController`.
 No TabBar. `ServerSelectionViewController` and `SettingsViewController` exist in the codebase but are **not** in the current startup path.
 
 ### Dependency Injection
@@ -98,9 +98,37 @@ Manifest writes are deferred: `upsertResource/upsertAsset` mark `dirty=true`; `f
 
 Passwords are stored in Keychain (`com.zizicici.watermelon.credentials`), not in local DB.
 
-### Home Page Matching
+### Home Page — Data Model
 
-`HomeAlbumMatching` merges local index and remote snapshot into `localOnly` / `remoteOnly` / `both` entries, grouped by year-month section. Remote items are assembled strictly from `assets + asset_resources + resources` relationships.
+Three-engine architecture in `HomeLibraryEngines.swift`:
+
+- **`HomeLocalIndexEngine`** — in-memory index of all `PHAsset` items, grouped by month. Tracks per-asset fingerprint, content hashes, and `isBackedUp` (fingerprint exists in remote set). Supports incremental updates via `PHPhotoLibraryChangeObserver`.
+- **`HomeRemoteIndexEngine`** — in-memory index of remote snapshot data. Applies month-level deltas from `RemoteLibrarySnapshotState`, maintains `remoteFingerprintRefCount` for global fingerprint tracking.
+- **`HomeReconcileEngine`** — merges local and remote per-month into `HomeAlbumItem` with `.localOnly` / `.remoteOnly` / `.both` tags. Exposes `matchedCount(for:)` for progress calculation.
+
+`HomeIncrementalDataManager` (`@MainActor`) owns all three engines and provides the public API: `ensureLocalIndexLoaded`, `reloadLocalIndex` (force), `refreshLocalIndex(forAssetIDs:)`, `syncRemoteSnapshot`, `matchedCount(for:)`, `remoteOnlyItems(for:)`.
+
+### Home Page — Matching
+
+`HomeAlbumMatching.mergeItems` matches remote items to local items by content hash. `bestLocalID` ranks candidates by: exact hash-set match > intersection size > `isBackedUp` > creation-date proximity. Remote items are assembled from `assets + asset_resources + resources` relationships.
+
+### Home Page — Execution Mode
+
+`NewHomeViewController` manages a three-phase execution flow:
+
+1. **Selection phase** — user selects months on left (local) / right (remote) columns. Arrow direction per month: local-only → upload (→), remote-only → download (←), both → sync (↔). `SelectionActionPanel` shows counts and "执行" button.
+
+2. **Upload phase** — a per-execution `BackupSessionController` (fresh instance each session) drives `BackupCoordinator.runBackup` with scoped asset IDs. `handleBackupSnapshot` tracks `startedMonths`/`flushedMonths`/`processedCountByMonth` from backup events.
+
+3. **Download phase** — sequential per-month via `ensureHashIndexAndDownload`:
+   - Scoped backup populates local hash index (skips already-backed-up assets quickly).
+   - `refreshLocalIndex(forAssetIDs:)` ensures reconciliation reflects newly computed hashes.
+   - `processDownloadMonth` downloads `remoteOnlyItems` via `RestoreService`.
+   - Per-item: `writeHashIndexForItem` + `refreshLocalIndex` persists progress immediately (survives mid-download stop).
+
+**Progress calculation** (`progressPercent`): reconciliation `matchedCount` is the baseline (always accurate). During upload, `max(sessionPercent, basePercent)` ensures progress never drops. Sync months skip session tracking entirely and use pure reconciliation (updated per-120ms via `syncRemoteDataIfNeeded` in the progress handler). Download months also use pure reconciliation (updated per-item via `refreshLocalIndex`).
+
+**Pause/Stop**: upload phase → `backupSessionController.stopBackup()` (cooperative cancellation). Download phase → `downloadTask.cancel()` + `backupSessionController.stopBackup()` + `Task.checkCancellation` in `RestoreService.restoreItems` loop.
 
 ### Remote Thumbnails
 
@@ -113,6 +141,9 @@ Passwords are stored in Keychain (`com.zizicici.watermelon.credentials`), not in
 - Name-collision strategy: files < 5 MiB download+hash compare; files ≥ 5 MiB size heuristic; unresolved conflicts use `_n` suffix.
 - Upload retries: max 3 attempts with exponential back-off; collision status triggers immediate rename retry.
 - Pause/stop are cooperative cancellation (not force-kill I/O): cancellation controller + task cancellation.
+- `MonthManifestStore.loadSeeded` lists the actual remote directory (not just seed resources) to detect orphaned files from prior incomplete flushes.
+- Download hash index is written per-item (not batched) so partial downloads survive stop/restart without re-downloading.
+- `BackupSessionController` is created fresh per execution session to avoid state leakage between runs.
 
 ## Known Gaps
 

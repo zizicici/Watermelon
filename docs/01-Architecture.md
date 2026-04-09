@@ -3,7 +3,7 @@
 ## 1. App 入口
 
 1. `SceneDelegate` -> `AppCoordinator.start()`
-2. `AppCoordinator` 当前只路由到 `HomeViewController`
+2. `AppCoordinator` 当前只路由到 `NewHomeViewController`
 3. 非 TabBar 结构，根是单 `UINavigationController`
 
 ## 2. DependencyContainer
@@ -104,22 +104,26 @@
 
 1. 当前是 `final class`，内部可变状态下沉到私有 actor `MutableState`。
 
-## 6. Home / More / Backup UI 层
+## 6. Home UI 层
 
-### Home
+### NewHomeViewController
 
-1. 连接菜单：当前连接 + 添加存储 + 更多
-2. 内容区：本地/远端匹配结果按年月 section
-3. 运行中节流刷新远端 section；run 结束后触发一次全量刷新
+1. 左右双栏布局：左侧"本地相册"、右侧"远端存储"（下拉菜单切换连接）
+2. 按年-月 section 展示，每月一行左右各一个 cell
+3. 支持月份多选，箭头方向：只选本地→上传(→)、只选远端→下载(←)、两侧都选→同步(↔)
+4. 箭头旁显示进度百分比（基于 reconciliation `matchedCount`）
 
-### More
+### HomeLibraryEngines
 
-1. `远端存储`：进入 `ManageStorageProfilesViewController`
-2. `本地数据`：进入 `LocalHashIndexManagerViewController`
-3. `备份`：设置上传并发（automatic/1/2/3/4）
+三层数据引擎（`HomeIncrementalDataManager` 聚合）：
+1. `HomeLocalIndexEngine`：本地 PHAsset 索引，按月分组，跟踪 fingerprint/hash/isBackedUp
+2. `HomeRemoteIndexEngine`：远端快照索引，应用月级 delta，维护全局 fingerprint 引用计数
+3. `HomeReconcileEngine`：合并本地/远端为 both/localOnly/remoteOnly，暴露 `matchedCount(for:)`
 
-### Backup
+### 执行模式
 
-1. 顶部范围卡片 + 调整按钮
-2. 状态卡片支持多 worker 切换查看
-3. 列表过滤（全部/成功/失败/跳过/日志）
+1. **上传阶段**：每次执行新建 `BackupSessionController`，驱动 `BackupCoordinator.runBackup`
+2. **下载阶段**：逐月 `ensureHashIndexAndDownload`（先跑 scoped backup 填充 hash → 刷新 local index → 下载 remoteOnly）
+3. 下载逐 item 写入 hash index（`writeHashIndexForItem` + `refreshLocalIndex`），中断后可续
+4. 进度：上传用 `max(sessionPercent, reconciliation baseline)`；下载和同步用纯 reconciliation
+5. 停止：上传 → `stopBackup()`；下载 → cancel Task + `stopBackup()` + `Task.checkCancellation`

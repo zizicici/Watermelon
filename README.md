@@ -7,27 +7,32 @@
 `Watermelon` 是一个以 iOS 相册为数据源、将资源备份到远端存储的应用，当前支持：
 
 - 存储类型：`SMB`、`WebDAV`、`外接存储目录（security-scoped bookmark）`
+- 操作模式：`上传（本地→远端）`、`下载（远端→本地）`、`同步（双向）`
 - 备份模式：`全量`、`范围备份（scoped）`、`失败重试（retry）`
 - 运行控制：`开始 / 暂停 / 继续 / 停止`
-- 并发上传：按“月份”分桶后由多个 worker 动态领取任务（可在设置中手动覆盖 worker 数）
+- 并发上传：按”月份”分桶后由多个 worker 动态领取任务（可在设置中手动覆盖 worker 数）
 - 远端索引：按月维护 `.watermelon_manifest.sqlite`，并做增量同步
 - 本地索引：维护本地 hash 索引（含资源大小），用于跳过已存在资源和提升二次备份速度
+- 下载断点续传：逐 item 写入 hash index，中断后重启自动跳过已下载项
 
 ## 启动与主流程
 
-- App 启动入口：`AppCoordinator.start()` -> `HomeViewController`
-- Home 负责：连接存储、展示本地/远端汇总、进入备份页与“更多”页
-- More 负责：远端存储管理、本地 Hash 索引管理、上传并发设置
-- 备份控制面：`BackupSessionController`
+- App 启动入口：`AppCoordinator.start()` -> `NewHomeViewController`
+- Home 是左右双栏布局（本地相册 / 远端存储），用户选中月份后执行上传、下载或同步
+- 执行三阶段：上传阶段 → 下载阶段 → 完成（支持暂停/停止）
+- 进度基于 reconciliation `matchedCount`（content-hash 匹配），百分比单调递增不回退
+- 备份控制面：`BackupSessionController`（每次执行新建实例）
 - 备份执行面：`BackupCoordinator` + `AssetProcessor` + `MonthManifestStore`
+- 下载执行面：`RestoreService`（逐 item 增量持久化 hash index）
 
 ## 备份架构（当前实现）
 
-1. `BackupSessionController` 管理运行状态与控制命令（start/pause/stop/resume），同时负责 UI 状态聚合。
+1. `BackupSessionController` 管理运行状态与控制命令（start/pause/stop/resume），同时负责 UI 状态聚合。每次执行创建新实例，避免跨会话状态泄漏。
 2. `BackupCoordinator` 接收 `BackupRunRequest`，完成权限检查、远端索引同步、月份级调度与 worker 执行。
 3. `AssetProcessor` 处理单个 asset：导出资源、计算 hash、碰名处理、上传、写入月 manifest、本地索引回写。
-4. `MonthManifestStore` 在每个月目录维护 manifest 三表（见下文），并在合适时机 flush 到远端。
+4. `MonthManifestStore` 在每个月目录维护 manifest 三表（见下文），并在合适时机 flush 到远端。`loadSeeded` 列出实际远端目录以检测孤儿文件。
 5. `RemoteIndexSyncService` 扫描远端 manifest，构建快照供首页和备份流程复用。
+6. `RestoreService` 下载远端资源到本地相册，支持 `Task.checkCancellation` 粒度的取消。
 
 ## 存储抽象
 

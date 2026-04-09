@@ -7,21 +7,25 @@
 ## 2. 先看哪些文件
 
 1. `Watermelon/App/DependencyContainer.swift`
-2. `Watermelon/Home/HomeViewController.swift`
-3. `Watermelon/Services/Backup/BackupSessionController.swift`
-4. `Watermelon/Services/Backup/BackupCoordinator.swift`
-6. `Watermelon/Services/Backup/AssetProcessor.swift`
-7. `Watermelon/Services/Backup/MonthManifestStore.swift`
-8. `Watermelon/Services/Backup/RemoteIndexSyncService.swift`
+2. `Watermelon/Home/NewHomeViewController.swift`
+3. `Watermelon/Home/HomeLibraryEngines.swift`
+4. `Watermelon/Home/HomeAlbumMatching.swift`
+5. `Watermelon/Services/Backup/BackupSessionController.swift`
+6. `Watermelon/Services/Backup/BackupCoordinator.swift`
+7. `Watermelon/Services/Backup/AssetProcessor.swift`
+8. `Watermelon/Services/Backup/MonthManifestStore.swift`
+9. `Watermelon/Services/Backup/RemoteIndexSyncService.swift`
+10. `Watermelon/Services/Restore/RestoreService.swift`
 
 ## 3. 主流程（运行时）
 
-1. `AppCoordinator.start()` 直接进入 `HomeViewController`。
-2. Home 右上角连接菜单：当前连接、添加存储、更多。
+1. `AppCoordinator.start()` 直接进入 `NewHomeViewController`。
+2. Home 顶部左右分栏：左侧”本地相册”、右侧”远端存储”（下拉菜单切换连接）。
 3. 连接成功时先执行 `backupCoordinator.reloadRemoteIndex(...)`，再刷新 Home 数据。
-4. 点工具栏“备份”打开 `BackupViewController`（sheet）。
-5. `BackupSessionController` 负责 UI 状态聚合与备份命令处理（开始/暂停/停止/恢复），为每次 run 创建独立 `BackupEventStream`，调用 `BackupCoordinator.runBackup(request:eventStream:)`。
+4. 用户选中月份后，底部面板显示备份/下载/同步计数，点”执行”进入三阶段执行模式。
+5. `BackupSessionController`（每次执行新建实例）负责 UI 状态聚合与备份命令处理，调用 `BackupCoordinator.runBackup(request:eventStream:)`。
 6. `BackupCoordinator` 执行权限检查、远端索引同步、按月并发调度、月 manifest flush 与收尾。
+7. 下载阶段由 `RestoreService.restoreItems` 执行，逐 item 写入 hash index 确保中断后可续。
 
 ## 4. 备份链路关键点
 
@@ -52,12 +56,10 @@
 
 ## 6. UI 入口要点
 
-1. Home 右上角菜单末项是“更多”（不再直接放“管理存储”）。
-2. More 页里包含：
-3. `远端存储`（管理存储）
-4. `本地数据`（本地 Hash 索引管理）
-5. `备份`（上传并发 worker 设置）
-6. 备份页支持范围卡片、范围选择器、多 worker 上传状态切换显示。
+1. Home 是左右双栏（本地 / 远端），按年-月 section 展示，支持月份选择。
+2. 选中月份后底部弹出 `SelectionActionPanel`，显示备份(→)/下载(←)/同步(↔)计数。
+3. 点”执行”进入执行模式：上传阶段 → 下载阶段 → 完成。支持暂停/停止。
+4. 箭头百分比基于 reconciliation `matchedCount`，上传阶段额外叠加 session 实时进度。
 
 ## 7. 当前已替代/已下线
 
