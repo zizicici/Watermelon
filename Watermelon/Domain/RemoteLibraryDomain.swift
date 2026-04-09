@@ -169,6 +169,10 @@ enum ResourceTypeCode {
         code == photo || code == alternatePhoto || code == fullSizePhoto || code == adjustmentBasePhoto || code == photoProxy
     }
 
+    static func isPairedVideo(_ code: Int) -> Bool {
+        code == pairedVideo || code == fullSizePairedVideo || code == adjustmentBasePairedVideo
+    }
+
     static func isVideoLike(_ code: Int) -> Bool {
         code == video || code == fullSizeVideo || code == pairedVideo || code == fullSizePairedVideo || code == adjustmentBasePairedVideo || code == adjustmentBaseVideo
     }

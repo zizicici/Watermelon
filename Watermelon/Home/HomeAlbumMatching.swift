@@ -214,7 +214,7 @@ enum HomeAlbumMatching {
     }
 
     private static func detectMediaKind(from resources: [RemoteManifestResource]) -> AlbumMediaKind {
-        let hasPairedVideo = resources.contains { $0.resourceType == ResourceTypeCode.pairedVideo }
+        let hasPairedVideo = resources.contains { ResourceTypeCode.isPairedVideo($0.resourceType) }
         let hasPhotoLike = resources.contains { ResourceTypeCode.isPhotoLike($0.resourceType) }
         if hasPairedVideo, hasPhotoLike {
             return .livePhoto

@@ -34,16 +34,24 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         let totalSize = monthAssets.values.reduce(Int64(0)) { $0 + $1.totalFileSizeBytes }
         let monthLinks = linksByMonth[month] ?? [:]
 
-        // An asset is a photo if it has any photo-like resource (includes Live Photos).
-        // An asset is a video only if it has no photo-like resource.
-        var assetHasPhoto = Set<String>()
+        // Classify per-asset using the same logic as HomeAlbumMatching.detectMediaKind:
+        // livePhoto (pairedVideo + photoLike) and pure photo → photo count;
+        // video-like without paired-photo → video count.
+        var rolesByAssetID: [String: [Int]] = [:]
         for (_, link) in monthLinks {
-            if ResourceTypeCode.isPhotoLike(link.role) {
-                assetHasPhoto.insert(link.assetID)
+            rolesByAssetID[link.assetID, default: []].append(link.role)
+        }
+        var videoCount = 0
+        for assetID in monthAssets.keys {
+            let roles = rolesByAssetID[assetID] ?? []
+            let hasPairedVideo = roles.contains { ResourceTypeCode.isPairedVideo($0) }
+            let hasPhotoLike = roles.contains { ResourceTypeCode.isPhotoLike($0) }
+            if hasPairedVideo, hasPhotoLike { continue }
+            if roles.contains(where: { ResourceTypeCode.isVideoLike($0) }) {
+                videoCount += 1
             }
         }
-        let photoCount = assetHasPhoto.count
-        let videoCount = monthAssets.count - photoCount
+        let photoCount = monthAssets.count - videoCount
 
         return MonthStats(assetCount: monthAssets.count, photoCount: photoCount, videoCount: videoCount, totalSizeBytes: totalSize)
     }
