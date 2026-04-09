@@ -83,27 +83,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         )
     }
 
-    func replace(with nextSnapshot: RemoteLibrarySnapshot) {
-        let (nextResourcesByMonth, nextAssetsByMonth, nextLinksByMonth, nextLinkKeysByAssetID) =
-            Self.buildMonthMaps(from: nextSnapshot)
-
-        lock.withLock {
-            let changedMonths = computeChangedMonthsLocked(
-                nextResourcesByMonth: nextResourcesByMonth,
-                nextAssetsByMonth: nextAssetsByMonth,
-                nextLinksByMonth: nextLinksByMonth
-            )
-
-            guard !changedMonths.isEmpty else { return }
-
-            resourcesByMonth = nextResourcesByMonth
-            assetsByMonth = nextAssetsByMonth
-            linksByMonth = nextLinksByMonth
-            linkKeysByAssetID = nextLinkKeysByAssetID
-            bumpRevisionLocked(changedMonths)
-        }
-    }
-
     func reset() {
         lock.withLock {
             resourcesByMonth.removeAll()

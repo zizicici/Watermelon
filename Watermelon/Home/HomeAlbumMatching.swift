@@ -30,8 +30,6 @@ struct RemoteAlbumItem {
     let resourceLinks: [RemoteAssetResourceLink]
     let representative: RemoteManifestResource
     let mediaKind: AlbumMediaKind
-    let pixelWidth: Int?
-    let pixelHeight: Int?
     let contentHashes: [Data]
 }
 
@@ -49,14 +47,6 @@ enum HomeAlbumMatching {
         let year: Int
         let month: Int
         let hash: Data
-    }
-
-    static func buildRemoteItems(from snapshot: RemoteLibrarySnapshot) -> [RemoteAlbumItem] {
-        buildRemoteItems(
-            assets: snapshot.assets,
-            resources: snapshot.resources,
-            links: snapshot.assetResourceLinks
-        )
     }
 
     static func buildRemoteItems(
@@ -121,8 +111,6 @@ enum HomeAlbumMatching {
                     resourceLinks: sortedLinks,
                     representative: representative,
                     mediaKind: detectMediaKind(from: groupedResources),
-                    pixelWidth: nil,
-                    pixelHeight: nil,
                     contentHashes: contentHashes
                 )
             )
@@ -208,7 +196,7 @@ enum HomeAlbumMatching {
         return result
     }
 
-    static func mergeMediaKind(local: AlbumMediaKind, remote: AlbumMediaKind) -> AlbumMediaKind {
+    private static func mergeMediaKind(local: AlbumMediaKind, remote: AlbumMediaKind) -> AlbumMediaKind {
         if local == .livePhoto || remote == .livePhoto {
             return .livePhoto
         }

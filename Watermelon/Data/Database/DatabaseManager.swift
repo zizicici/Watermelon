@@ -82,14 +82,6 @@ final class DatabaseManager {
         try dbQueue.write(block)
     }
 
-    func latestServerProfile() throws -> ServerProfileRecord? {
-        try read { db in
-            try ServerProfileRecord
-                .order(Column("updatedAt").desc)
-                .fetchOne(db)
-        }
-    }
-
     func fetchServerProfiles() throws -> [ServerProfileRecord] {
         try read { db in
             try ServerProfileRecord

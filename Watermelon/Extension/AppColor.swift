@@ -8,7 +8,5 @@
 import UIKit
 
 struct AppColor {
-    static let text = UIColor.text
-    static let paper = UIColor.paper
     static let background = UIColor.background
 }

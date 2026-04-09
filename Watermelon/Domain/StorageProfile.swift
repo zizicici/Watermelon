@@ -65,40 +65,6 @@ struct StorageProfile {
         }
     }
 
-    var identityKey: String {
-        switch storageType {
-        case .smb:
-            return [
-                storageType.rawValue,
-                record.host,
-                String(record.port),
-                record.shareName,
-                RemotePathBuilder.normalizePath(record.basePath),
-                record.username,
-                record.domain ?? ""
-            ].joined(separator: "|")
-        case .webdav:
-            return [
-                storageType.rawValue,
-                record.webDAVParams?.endpointURLString ?? "missing_endpoint",
-                RemotePathBuilder.normalizePath(record.basePath),
-                record.username
-            ].joined(separator: "|")
-        case .externalVolume:
-            let bookmarkTag: String
-            if let bookmarkData = record.externalVolumeParams?.rootBookmarkData {
-                bookmarkTag = String(bookmarkData.base64EncodedString().prefix(24))
-            } else {
-                bookmarkTag = "missing_bookmark"
-            }
-            return [
-                storageType.rawValue,
-                bookmarkTag,
-                RemotePathBuilder.normalizePath(record.basePath)
-            ].joined(separator: "|")
-        }
-    }
-
     private static func relativeExternalPath(from absolutePath: String) -> String {
         let normalized = absolutePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard !normalized.isEmpty else { return "/" }

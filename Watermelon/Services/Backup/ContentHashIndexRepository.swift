@@ -95,32 +95,6 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
-    func upsertAssetResource(
-        assetLocalIdentifier: String,
-        role: Int,
-        slot: Int,
-        contentHash: Data,
-        fileSize: Int64
-    ) throws {
-        try databaseManager.write { db in
-            try db.execute(
-                sql: """
-                INSERT INTO local_asset_resources (
-                    assetLocalIdentifier,
-                    role,
-                    slot,
-                    contentHash,
-                    fileSize
-                ) VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(assetLocalIdentifier, role, slot) DO UPDATE SET
-                    contentHash = excluded.contentHash,
-                    fileSize = excluded.fileSize
-                """,
-                arguments: [assetLocalIdentifier, role, slot, contentHash, fileSize]
-            )
-        }
-    }
-
     func upsertAssetFingerprint(
         assetLocalIdentifier: String,
         assetFingerprint: Data,
@@ -244,51 +218,6 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 let fingerprint: Data = row["assetFingerprint"]
                 result[assetID] = fingerprint
             }
-            return result
-        }
-    }
-
-    func fetchAssetHashCaches() throws -> [String: LocalAssetHashCache] {
-        try databaseManager.read { db in
-            let assetRows = try Row.fetchAll(
-                db,
-                sql: """
-                SELECT assetLocalIdentifier, assetFingerprint, resourceCount, totalFileSizeBytes, updatedAt
-                FROM local_assets
-                """
-            )
-
-            var result: [String: LocalAssetHashCache] = [:]
-            result.reserveCapacity(assetRows.count)
-            for row in assetRows {
-                let assetID: String = row["assetLocalIdentifier"]
-                result[assetID] = LocalAssetHashCache(
-                    assetFingerprint: row["assetFingerprint"],
-                    resourceCount: Int(row["resourceCount"] as Int64),
-                    totalFileSizeBytes: row["totalFileSizeBytes"],
-                    updatedAt: row["updatedAt"],
-                    hashesByRoleSlot: [:]
-                )
-            }
-
-            let resourceRows = try Row.fetchAll(
-                db,
-                sql: """
-                SELECT assetLocalIdentifier, role, slot, contentHash
-                FROM local_asset_resources
-                """
-            )
-
-            for row in resourceRows {
-                let assetID: String = row["assetLocalIdentifier"]
-                guard var cache = result[assetID] else { continue }
-                let role = Int(row["role"] as Int64)
-                let slot = Int(row["slot"] as Int64)
-                let key = AssetResourceRoleSlot(role: role, slot: slot)
-                cache.hashesByRoleSlot[key] = row["contentHash"]
-                result[assetID] = cache
-            }
-
             return result
         }
     }

@@ -38,22 +38,6 @@ struct BackupTransferState {
     let totalResources: Int
     let resourceFraction: Float
     let stageDescription: String
-
-    var clampedResourceFraction: Float {
-        min(max(resourceFraction, 0), 1)
-    }
-
-    var assetFraction: Float {
-        guard totalResources > 0 else { return 0 }
-        let completedResources = Float(max(resourcePosition - 1, 0))
-        return min(max((completedResources + clampedResourceFraction) / Float(totalResources), 0), 1)
-    }
-
-    var overallFraction: Float {
-        guard totalAssets > 0 else { return 0 }
-        let completedAssets = Float(max(assetPosition - 1, 0))
-        return min(max((completedAssets + assetFraction) / Float(totalAssets), 0), 1)
-    }
 }
 
 struct LocalPhotoResource {
@@ -80,29 +64,14 @@ struct BackupProgress {
     let message: String
     let itemEvent: BackupItemEvent?
     let transferState: BackupTransferState?
-
-    var processed: Int {
-        succeeded + failed + skipped
-    }
-
-    var fraction: Float {
-        guard total > 0 else { return 0 }
-        return Float(processed) / Float(total)
-    }
 }
 
 enum BackupError: LocalizedError {
-    case missingServerProfile
-    case missingCredentials
     case photoPermissionDenied
     case restoreNoSelection
 
     var errorDescription: String? {
         switch self {
-        case .missingServerProfile:
-            return "No server profile configured."
-        case .missingCredentials:
-            return "Missing server credentials."
         case .photoPermissionDenied:
             return "Photo library permission denied."
         case .restoreNoSelection:

@@ -13,11 +13,6 @@ struct BackupRunState: Sendable {
     }
 }
 
-enum ManifestFlushFailurePolicy: Sendable {
-    case failRun
-    case logAndContinue
-}
-
 protocol BackupCoordinatorProtocol: Sendable {
     func runBackup(request: BackupRunRequest, eventStream: BackupEventStream) async throws -> BackupExecutionResult
 
@@ -28,34 +23,11 @@ protocol BackupCoordinatorProtocol: Sendable {
         onMonthSynced: (@Sendable () -> Void)?
     ) async throws -> RemoteLibrarySnapshot
 
-    func currentRemoteSnapshot() -> RemoteLibrarySnapshot
     func currentRemoteSnapshotState(since revision: UInt64?) -> RemoteLibrarySnapshotState
     func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)]
 }
 
 extension BackupCoordinatorProtocol {
-    func runBackup(request: BackupRunRequest) async throws -> BackupExecutionResult {
-        let eventStream = BackupEventStream()
-        defer {
-            eventStream.finish()
-        }
-        return try await runBackup(request: request, eventStream: eventStream)
-    }
-
-    func runBackup(
-        profile: ServerProfileRecord,
-        password: String,
-        onlyAssetLocalIdentifiers: Set<String>? = nil,
-        workerCountOverride: Int? = nil
-    ) async throws -> BackupExecutionResult {
-        try await runBackup(request: BackupRunRequest(
-            profile: profile,
-            password: password,
-            onlyAssetLocalIdentifiers: onlyAssetLocalIdentifiers,
-            workerCountOverride: workerCountOverride
-        ))
-    }
-
     func reloadRemoteIndex(
         profile: ServerProfileRecord,
         password: String,
@@ -71,15 +43,13 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
     private let hashIndexRepository: ContentHashIndexRepositoryProtocol
     private let remoteIndexService: RemoteIndexSyncService
     private let assetProcessor: AssetProcessor
-    private let manifestFlushFailurePolicy: ManifestFlushFailurePolicy
 
     init(
         photoLibraryService: PhotoLibraryServiceProtocol,
         storageClientFactory: StorageClientFactoryProtocol,
         hashIndexRepository: ContentHashIndexRepositoryProtocol,
         remoteIndexService: RemoteIndexSyncService? = nil,
-        assetProcessor: AssetProcessor? = nil,
-        manifestFlushFailurePolicy: ManifestFlushFailurePolicy = .failRun
+        assetProcessor: AssetProcessor? = nil
     ) {
         self.photoLibraryService = photoLibraryService
         self.storageClientFactory = storageClientFactory
@@ -90,7 +60,6 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
             hashIndexRepository: hashIndexRepository,
             remoteIndexService: self.remoteIndexService
         )
-        self.manifestFlushFailurePolicy = manifestFlushFailurePolicy
     }
 
     func runBackup(request: BackupRunRequest, eventStream: BackupEventStream) async throws -> BackupExecutionResult {
@@ -300,10 +269,6 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
             await disconnectClient(client)
             throw error
         }
-    }
-
-    func currentRemoteSnapshot() -> RemoteLibrarySnapshot {
-        remoteIndexService.currentSnapshot()
     }
 
     func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
@@ -742,9 +707,7 @@ final class BackupCoordinator: BackupCoordinatorProtocol, Sendable {
                         month: monthKey.month,
                         action: .flushFailed(error.localizedDescription)
                     )))
-                    if manifestFlushFailurePolicy == .failRun {
-                        throw error
-                    }
+                    throw error
                 }
 
                 if let monthFatalError {

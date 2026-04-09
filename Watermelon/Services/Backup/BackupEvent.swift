@@ -35,8 +35,6 @@ struct MonthChangeEvent: Sendable {
 struct RemoteIndexSyncEvent: Sendable {
     let resourceCount: Int
     let assetCount: Int
-    let changedMonths: Int
-    let removedMonths: Int
 }
 
 final class BackupEventStream: @unchecked Sendable {

@@ -12,10 +12,6 @@ struct BackupScopeSummary: Sendable, Equatable {
     let selectedEstimatedBytes: Int64?
     let totalAssetCount: Int
     let totalEstimatedBytes: Int64?
-
-    var isFullSelection: Bool {
-        mode == .all
-    }
 }
 
 struct BackupScopeSelection: Sendable, Equatable {

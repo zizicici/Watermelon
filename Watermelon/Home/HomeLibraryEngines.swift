@@ -674,11 +674,6 @@ private final class HomeReconcileEngine {
 
 @MainActor
 final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
-    struct MergedMonthSection {
-        let month: LibraryMonthKey
-        let items: [HomeAlbumItem]
-    }
-
     private let photoLibraryService: PhotoLibraryService
     private let contentHashIndexRepository: ContentHashIndexRepository
 
@@ -709,22 +704,9 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         self.contentHashIndexRepository = contentHashIndexRepository
     }
 
-    func invalidate() {
-        fileSizeScanTask?.cancel()
-        fileSizeScanTask = nil
-        unregisterPhotoLibraryObserverIfNeeded()
-        onDataChanged = nil
-        onFileSizesUpdated = nil
-    }
-
     @discardableResult
     func ensureLocalIndexLoaded() async -> Bool {
         await loadLocalIndex(forceReload: false)
-    }
-
-    @discardableResult
-    func reloadLocalIndex() async -> Bool {
-        await loadLocalIndex(forceReload: true)
     }
 
     @discardableResult
@@ -798,20 +780,6 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
 
     func remoteOnlyItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
         reconcileIndex.remoteOnlyItems(for: month)
-    }
-
-    func localItemsSnapshot() -> [LocalAlbumItem] {
-        localIndex.localItemsSnapshot()
-    }
-
-    func remoteItemsSnapshot() -> [RemoteAlbumItem] {
-        remoteIndex.remoteItemsSnapshot()
-    }
-
-    func mergedMonthItemsSnapshot() -> [MergedMonthSection] {
-        reconcileIndex.mergedMonthItemsSnapshot().map { month, items in
-            MergedMonthSection(month: month, items: items)
-        }
     }
 
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {

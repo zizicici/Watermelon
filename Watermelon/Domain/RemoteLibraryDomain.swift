@@ -68,13 +68,6 @@ struct RemoteManifestResource: Hashable, Identifiable {
         String(format: "%04d/%02d/%@", year, month, fileName)
     }
 
-    var creationDate: Date {
-        if let creationDateNs {
-            return Date(nanosecondsSinceEpoch: creationDateNs)
-        }
-        return Date(nanosecondsSinceEpoch: backedUpAtNs)
-    }
-
     var contentHashHex: String {
         contentHash.hexString
     }
@@ -158,7 +151,6 @@ struct RemoteLibrarySnapshotState {
 }
 
 enum ResourceTypeCode {
-    static let unknown = 0
     static let photo = 1              // PHAssetResourceType.photo
     static let video = 2              // .video
     static let audio = 3              // .audio

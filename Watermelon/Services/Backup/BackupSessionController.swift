@@ -1,6 +1,5 @@
 import Foundation
 import Photos
-import UIKit
 
 @MainActor
 final class BackupSessionController {
@@ -19,68 +18,15 @@ final class BackupSessionController {
         case stopped
         case failed
         case completed
-
-        var buttonColor: UIColor {
-            switch self {
-            case .idle:
-                return .systemBlue
-            case .running:
-                return .systemGreen
-            case .paused:
-                return .systemOrange
-            case .stopped:
-                return .systemRed
-            case .failed:
-                return .systemRed
-            case .completed:
-                return .systemBlue
-            }
-        }
-    }
-
-    struct FailedItem: Hashable, Identifiable {
-        let jobID: Int64
-        let assetLocalIdentifier: String
-        let displayName: String
-        let errorMessage: String
-        let retryCount: Int
-        let updatedAt: Date
-
-        var id: String { assetLocalIdentifier }
-    }
-
-    struct ProcessedItem: Hashable, Identifiable {
-        let assetLocalIdentifier: String
-        let displayName: String
-        let status: BackupItemStatus
-        let reason: String?
-        let resourceSummary: String?
-        let updatedAt: Date
-
-        var id: String { assetLocalIdentifier }
     }
 
     struct Snapshot {
         let state: State
-        let primaryActionTitle: String
-        let controlsLocked: Bool
-        let canStart: Bool
-        let canPause: Bool
-        let canStop: Bool
-        let canAdjustScope: Bool
-        let scopeSummary: BackupScopeSummary
         let statusText: String
         let succeeded: Int
         let failed: Int
         let skipped: Int
         let total: Int
-        let logs: [String]
-        let processedItems: [ProcessedItem]
-        let failedItems: [FailedItem]
-        let latestItemEvent: BackupItemEvent?
-        let transferState: BackupTransferState?
-        let transferStatesByWorkerID: [Int: BackupTransferState]
-        let currentProcessingMonth: LibraryMonthKey?
         let startedMonths: Set<LibraryMonthKey>
         let flushedMonths: Set<LibraryMonthKey>
         let processedCountByMonth: [LibraryMonthKey: Int]
@@ -117,18 +63,7 @@ final class BackupSessionController {
     private(set) var failed: Int = 0
     private(set) var skipped: Int = 0
     private(set) var total: Int = 0
-    private(set) var logs: [String] = []
-    private var processedItemsByAssetID: [String: ProcessedItem] = [:]
-    private var processedAssetTimeline: [String] = []
-    private var processedAssetTimelineHead = 0
     private var completedAssetIDsForResume: Set<String> = []
-    private(set) var latestItemEvent: BackupItemEvent?
-    private(set) var transferState: BackupTransferState?
-    private(set) var transferStatesByWorkerID: [Int: BackupTransferState] = [:]
-    private var retryCountByAssetID: [String: Int] = [:]
-    private var failedItemsByAssetID: [String: FailedItem] = [:]
-    private(set) var failedItems: [FailedItem] = []
-    private(set) var currentProcessingMonth: LibraryMonthKey?
     private(set) var startedMonths = Set<LibraryMonthKey>()
     private(set) var flushedMonths = Set<LibraryMonthKey>()
     private(set) var processedCountByMonth: [LibraryMonthKey: Int] = [:]
@@ -174,57 +109,17 @@ final class BackupSessionController {
     }
 
     func snapshot() -> Snapshot {
-        let availability = buttonAvailability()
-        return Snapshot(
+        Snapshot(
             state: state,
-            primaryActionTitle: primaryActionTitle(for: state),
-            controlsLocked: controlsLocked(),
-            canStart: availability.canStart,
-            canPause: availability.canPause,
-            canStop: availability.canStop,
-            canAdjustScope: canAdjustScope(),
-            scopeSummary: currentScopeSummary(),
             statusText: statusText,
             succeeded: succeeded,
             failed: failed,
             skipped: skipped,
             total: total,
-            logs: logs,
-            processedItems: processedItemsSnapshot(),
-            failedItems: failedItems,
-            latestItemEvent: latestItemEvent,
-            transferState: transferState,
-            transferStatesByWorkerID: transferStatesByWorkerID,
-            currentProcessingMonth: currentProcessingMonth,
             startedMonths: startedMonths,
             flushedMonths: flushedMonths,
             processedCountByMonth: processedCountByMonth
         )
-    }
-
-    private func processedItemsSnapshot() -> [ProcessedItem] {
-        let start = processedAssetTimelineHead
-        guard start < processedAssetTimeline.count else { return [] }
-        let reserveCount = min(Self.processedItemsSnapshotLimit, processedAssetTimeline.count - start)
-        var items: [ProcessedItem] = []
-        items.reserveCapacity(reserveCount)
-        var visited = Set<String>()
-        visited.reserveCapacity(reserveCount)
-
-        for index in stride(from: processedAssetTimeline.count - 1, through: start, by: -1) {
-            let assetID = processedAssetTimeline[index]
-            if visited.contains(assetID) {
-                continue
-            }
-            visited.insert(assetID)
-            if let item = processedItemsByAssetID[assetID] {
-                items.append(item)
-                if items.count >= Self.processedItemsSnapshotLimit {
-                    break
-                }
-            }
-        }
-        return items
     }
 
     @discardableResult
@@ -252,7 +147,13 @@ final class BackupSessionController {
 
     @discardableResult
     func updateScopeSelection(_ selection: BackupScopeSelection) -> Bool {
-        guard canAdjustScope() else { return false }
+        guard controlPhase == .idle else { return false }
+        switch state {
+        case .running, .paused:
+            return false
+        default:
+            break
+        }
         backupScopeSelection = selection
         notifyObserversNow()
         return true
@@ -261,19 +162,16 @@ final class BackupSessionController {
     @discardableResult
     private func startBackup(mode: BackupRunMode) -> Bool {
         guard state != .running else {
-            appendLog("已有备份任务正在执行")
             notifyObserversNow()
             return false
         }
         guard controlPhase == .idle else {
-            appendLog("控制命令处理中，请稍后")
             notifyObserversNow()
             return false
         }
         guard let profile = appSession.activeProfile else {
             state = .failed
             statusText = "请先连接远端存储"
-            appendLog("错误: 未连接远端存储")
             notifyObserversNow()
             return false
         }
@@ -282,7 +180,6 @@ final class BackupSessionController {
         guard let resolvedPassword = resolvePassword(for: profile) else {
             state = .failed
             statusText = "请先连接远端存储"
-            appendLog("错误: 未提供远端存储凭据")
             notifyObserversNow()
             return false
         }
@@ -304,14 +201,6 @@ final class BackupSessionController {
 
         completedAssetIDsForResume.removeAll()
         if shouldResetSessionItems {
-            clearProcessedItems()
-            latestItemEvent = nil
-            clearTransferStates()
-            retryCountByAssetID.removeAll()
-            failedItemsByAssetID.removeAll()
-            failedItems.removeAll()
-            logs.removeAll()
-            currentProcessingMonth = nil
             startedMonths.removeAll()
             flushedMonths.removeAll()
             processedCountByMonth.removeAll()
@@ -324,8 +213,6 @@ final class BackupSessionController {
         failed = 0
         skipped = 0
         total = 0
-        appendLog(mode.isRetry ? "开始重试失败 Asset（\(mode.targetCount)）" : "开始备份任务（按 Asset 计数）")
-        appendLog("上传并发模式：\(workerCountMode.getName())")
         notifyObserversNow()
 
         isStartCommandInFlight = true
@@ -354,8 +241,6 @@ final class BackupSessionController {
                 self.currentRunMode = .full
                 self.state = previousState
                 self.statusText = previousStatusText
-                self.clearTransferStates()
-                self.appendLog("备份引擎忙，请稍后重试")
                 self.notifyObserversNow()
                 return
             }
@@ -375,7 +260,6 @@ final class BackupSessionController {
         if isStartCommandInFlight {
             controlPhase = .pausing
             statusText = "正在暂停..."
-            clearTransferStates()
             Task { [runCommandActor] in
                 await runCommandActor.requestPause()
             }
@@ -386,14 +270,12 @@ final class BackupSessionController {
             controlPhase = .idle
             state = .paused
             statusText = "备份已暂停"
-            clearTransferStates()
             notifyObserversNow()
             return
         }
 
         controlPhase = .pausing
         statusText = "正在暂停..."
-        clearTransferStates()
         resumePreparationTask?.cancel()
         Task { [runCommandActor] in
             await runCommandActor.requestPause()
@@ -408,7 +290,6 @@ final class BackupSessionController {
         if isStartCommandInFlight {
             controlPhase = .stopping
             statusText = "正在停止..."
-            clearTransferStates()
             Task { [runCommandActor] in
                 await runCommandActor.requestStop()
             }
@@ -419,14 +300,12 @@ final class BackupSessionController {
             controlPhase = .idle
             state = .stopped
             statusText = "备份已停止"
-            clearTransferStates()
             notifyObserversNow()
             return
         }
 
         controlPhase = .stopping
         statusText = "正在停止..."
-        clearTransferStates()
         resumePreparationTask?.cancel()
         Task { [runCommandActor] in
             await runCommandActor.requestStop()
@@ -480,15 +359,11 @@ final class BackupSessionController {
             }
             state = effectiveIntent == .stop ? .stopped : .paused
             statusText = effectiveIntent == .stop ? "备份已停止" : "备份已暂停"
-            clearTransferStates()
-            appendLog(effectiveIntent == .stop ? "任务已停止" : "任务已暂停")
-            rebuildFailedItems()
             notifyObserversNow()
             return
         }
 
         let profile = failure.profile
-        let userMessage = profile.userFacingStorageErrorMessage(failure.error)
         let externalUnavailable = profile.isExternalStorageUnavailableError(failure.error)
         if externalUnavailable,
            appSession.activeProfile?.id == profile.id {
@@ -500,9 +375,6 @@ final class BackupSessionController {
         currentRunMode = .full
         state = .failed
         statusText = externalUnavailable ? "外接存储已断开" : "备份失败"
-        clearTransferStates()
-        appendLog("错误: \(userMessage)")
-        rebuildFailedItems()
         notifyObserversNow()
     }
 
@@ -522,40 +394,30 @@ final class BackupSessionController {
             skipped = progress.skipped
             total = progress.total
             statusText = progress.message
-            if let state = progress.transferState {
-                applyTransferState(state)
-            }
             if let itemEvent = progress.itemEvent {
                 applyProgressEvent(itemEvent)
             }
             scheduleObserverNotification()
 
-        case .log(let message):
-            appendLog(message)
-            scheduleObserverNotification()
+        case .log:
+            break
 
-        case .transferState(let state):
-            applyTransferState(state)
+        case .transferState:
             scheduleObserverNotification()
 
         case .monthChanged(let change):
             let monthKey = LibraryMonthKey(year: change.year, month: change.month)
-            let monthText = String(format: "%04d年%02d月", change.year, change.month)
             switch change.action {
             case .started:
-                currentProcessingMonth = monthKey
                 startedMonths.insert(monthKey)
-                appendLog("Processing month \(monthText).")
             case .flushed:
                 flushedMonths.insert(monthKey)
-                appendLog("Month \(monthText) manifest flushed.")
-            case .flushFailed(let error):
-                appendLog("Month \(monthText) manifest flush failed: \(error)")
+            case .flushFailed:
+                break
             }
             scheduleObserverNotification()
 
-        case .remoteIndexSynced(let syncEvent):
-            appendLog("Remote index synced. \(syncEvent.resourceCount) resource(s), \(syncEvent.assetCount) asset(s).")
+        case .remoteIndexSynced:
             scheduleObserverNotification()
 
         case .started(let totalAssets):
@@ -586,7 +448,6 @@ final class BackupSessionController {
         activeCommandRunToken = nil
         isStartCommandInFlight = false
         controlPhase = .idle
-        currentProcessingMonth = nil
 
         succeeded = result.succeeded
         failed = result.failed
@@ -599,9 +460,6 @@ final class BackupSessionController {
             currentRunMode = .full
             state = .stopped
             statusText = "备份已停止"
-            clearTransferStates()
-            appendLog("任务已停止")
-            rebuildFailedItems()
             notifyObserversNow()
             return
         }
@@ -612,9 +470,6 @@ final class BackupSessionController {
             currentRunMode = displayMode
             state = .paused
             statusText = "备份已暂停"
-            clearTransferStates()
-            appendLog("任务已暂停")
-            rebuildFailedItems()
             notifyObserversNow()
             return
         }
@@ -626,14 +481,7 @@ final class BackupSessionController {
         completedAssetIDsForResume.removeAll()
         let verb = runMode.isRetry ? "重试" : "备份"
         statusText = result.failed == 0 ? "\(verb)完成" : "\(verb)完成（部分失败）"
-        clearTransferStates()
-        appendLog("完成: 成功\(succeeded) 失败\(result.failed) 跳过\(result.skipped)")
-        rebuildFailedItems()
         notifyObserversNow()
-    }
-
-    private func rebuildFailedItems() {
-        failedItems = failedItemsByAssetID.values.sorted { $0.updatedAt > $1.updatedAt }
     }
 
     private func notifyObservers() {
@@ -664,164 +512,36 @@ final class BackupSessionController {
         notifyObservers()
     }
 
-    private func controlsLocked() -> Bool {
-        controlPhase != .idle
-    }
-
-    private func canAdjustScope() -> Bool {
-        if controlsLocked() { return false }
-        switch state {
-        case .running, .paused:
-            return false
-        default:
-            return true
-        }
-    }
-
-    private func currentScopeSummary() -> BackupScopeSummary {
-        let selection = backupScopeSelection
-        let mode: BackupScopeSummary.Mode
-        if selection.selectedAssetCount <= 0 || selection.totalAssetCount <= 0 {
-            mode = .empty
-        } else if selection.selectedAssetIDs == nil || selection.selectedAssetCount >= selection.totalAssetCount {
-            mode = .all
-        } else {
-            mode = .partial
-        }
-        return BackupScopeSummary(
-            mode: mode,
-            selectedAssetCount: selection.selectedAssetCount,
-            selectedEstimatedBytes: selection.selectedEstimatedBytes,
-            totalAssetCount: selection.totalAssetCount,
-            totalEstimatedBytes: selection.totalEstimatedBytes
-        )
-    }
-
-    private func appendLog(_ line: String) {
-        let timestamp = Self.timeFormatter.string(from: Date())
-        logs.append("[\(timestamp)] \(line)")
-        if logs.count > 800 {
-            logs.removeFirst(logs.count - 800)
-        }
-    }
-
     private func applyProgressEvent(_ event: BackupItemEvent) {
-        latestItemEvent = event
         let monthKey = LibraryMonthKey.from(date: event.resourceDate)
         processedCountByMonth[monthKey, default: 0] += 1
 
-        let item = ProcessedItem(
-            assetLocalIdentifier: event.assetLocalIdentifier,
-            displayName: event.displayName,
-            status: event.status,
-            reason: event.reason,
-            resourceSummary: event.resourceSummary,
-            updatedAt: event.updatedAt
-        )
-        processedItemsByAssetID[event.assetLocalIdentifier] = item
-        appendProcessedAssetTimeline(event.assetLocalIdentifier)
-
-        var failedItemsChanged = false
         if event.status == .failed {
             completedAssetIDsForResume.remove(event.assetLocalIdentifier)
-            retryCountByAssetID[event.assetLocalIdentifier, default: 0] += 1
-            let retryCount = retryCountByAssetID[event.assetLocalIdentifier, default: 0]
-            failedItemsByAssetID[event.assetLocalIdentifier] = FailedItem(
-                jobID: 0,
-                assetLocalIdentifier: event.assetLocalIdentifier,
-                displayName: event.displayName,
-                errorMessage: event.reason ?? "未知错误",
-                retryCount: retryCount,
-                updatedAt: event.updatedAt
-            )
-            failedItemsChanged = true
         } else {
             completedAssetIDsForResume.insert(event.assetLocalIdentifier)
-            if failedItemsByAssetID.removeValue(forKey: event.assetLocalIdentifier) != nil {
-                failedItemsChanged = true
-            }
         }
-
-        if failedItemsChanged {
-            rebuildFailedItems()
-        }
-    }
-
-    private func applyTransferState(_ state: BackupTransferState) {
-        transferState = state
-        transferStatesByWorkerID[state.workerID] = state
-    }
-
-    private func clearTransferStates() {
-        transferState = nil
-        transferStatesByWorkerID.removeAll()
-    }
-
-    private func clearProcessedItems() {
-        processedItemsByAssetID.removeAll()
-        processedAssetTimeline.removeAll()
-        processedAssetTimelineHead = 0
-        completedAssetIDsForResume.removeAll()
-    }
-
-    private func appendProcessedAssetTimeline(_ assetID: String) {
-        processedAssetTimeline.append(assetID)
-        let liveCount = processedAssetTimeline.count - processedAssetTimelineHead
-        if liveCount > Self.processedItemsTimelineCapacity {
-            processedAssetTimelineHead += (liveCount - Self.processedItemsTimelineCapacity)
-        }
-        if processedAssetTimelineHead >= Self.processedItemsTimelineCompactionThreshold,
-           processedAssetTimelineHead * 2 >= processedAssetTimeline.count {
-            processedAssetTimeline.removeFirst(processedAssetTimelineHead)
-            processedAssetTimelineHead = 0
-        }
-        pruneProcessedItemsIfNeeded()
-    }
-
-    private func pruneProcessedItemsIfNeeded() {
-        guard processedItemsByAssetID.count > Self.processedItemsMapSoftLimit else {
-            return
-        }
-        let start = processedAssetTimelineHead
-        guard start < processedAssetTimeline.count else {
-            processedItemsByAssetID.removeAll()
-            return
-        }
-
-        var liveAssetIDs = Set<String>()
-        liveAssetIDs.reserveCapacity(
-            min(Self.processedItemsTimelineCapacity, processedAssetTimeline.count - start)
-        )
-        for index in start ..< processedAssetTimeline.count {
-            liveAssetIDs.insert(processedAssetTimeline[index])
-        }
-
-        processedItemsByAssetID = processedItemsByAssetID.filter { liveAssetIDs.contains($0.key) }
     }
 
     @discardableResult
     private func resumeFromPause() -> Bool {
         guard state != .running else {
-            appendLog("已有备份任务正在执行")
             notifyObserversNow()
             return false
         }
         guard controlPhase == .idle else {
-            appendLog("控制命令处理中，请稍后")
             notifyObserversNow()
             return false
         }
         guard let profile = appSession.activeProfile else {
             state = .failed
             statusText = "请先连接远端存储"
-            appendLog("错误: 未连接远端存储")
             notifyObservers()
             return false
         }
         guard let password = resolvePassword(for: profile) else {
             state = .failed
             statusText = "请先连接远端存储"
-            appendLog("错误: 未提供远端存储凭据")
             notifyObservers()
             return false
         }
@@ -832,10 +552,8 @@ final class BackupSessionController {
         let pausedDisplayMode = lastPausedDisplayRunMode ?? pausedMode
         currentRunMode = pausedDisplayMode
         statusText = "正在准备继续..."
-        appendLog("计算剩余备份 Asset...")
         let workerCountMode = BackupWorkerCountMode.getValue()
         let workerCountOverride = workerCountMode.workerCountOverride
-        appendLog("上传并发模式：\(workerCountMode.getName())")
         notifyObserversNow()
 
         resumePreparationTask = Task { [weak self] in
@@ -854,11 +572,10 @@ final class BackupSessionController {
                 guard self.state == .running else { return }
 
                 switch outcome {
-                case .started(let runToken, let pendingCount):
+                case .started(let runToken, _):
                     self.controlPhase = .idle
                     self.activeCommandRunToken = runToken
                     self.currentRunMode = pausedDisplayMode
-                    self.appendLog("继续备份剩余 \(pendingCount) 个 Asset")
                     self.notifyObserversNow()
 
                 case .noPending:
@@ -868,9 +585,6 @@ final class BackupSessionController {
                     self.currentRunMode = .full
                     self.state = .completed
                     self.statusText = "备份完成"
-                    self.clearTransferStates()
-                    self.appendLog("无剩余 Asset，已完成")
-                    self.rebuildFailedItems()
                     self.notifyObserversNow()
                 case .interrupted(let intent):
                     self.controlPhase = .idle
@@ -880,17 +594,13 @@ final class BackupSessionController {
                         self.currentRunMode = .full
                         self.state = .stopped
                         self.statusText = "备份已停止"
-                        self.appendLog("任务已停止")
                     } else {
                         self.lastPausedRunMode = pausedMode
                         self.lastPausedDisplayRunMode = pausedDisplayMode
                         self.currentRunMode = pausedDisplayMode
                         self.state = .paused
                         self.statusText = "备份已暂停"
-                        self.appendLog("任务已暂停")
                     }
-                    self.clearTransferStates()
-                    self.rebuildFailedItems()
                     self.notifyObserversNow()
 
                 case .busy:
@@ -898,9 +608,6 @@ final class BackupSessionController {
                     self.currentRunMode = .full
                     self.state = .failed
                     self.statusText = "继续备份失败"
-                    self.clearTransferStates()
-                    self.appendLog("错误: 已有备份任务运行中")
-                    self.rebuildFailedItems()
                     self.notifyObserversNow()
                 }
             } catch is CancellationError {
@@ -910,7 +617,6 @@ final class BackupSessionController {
                 let intent: BackupTerminationIntent = (phaseBeforeCancel == .stopping) ? .stop : .pause
                 self.state = intent == .stop ? .stopped : .paused
                 self.statusText = intent == .stop ? "备份已停止" : "备份已暂停"
-                self.clearTransferStates()
                 if intent == .stop {
                     self.lastPausedRunMode = nil
                     self.lastPausedDisplayRunMode = nil
@@ -920,8 +626,6 @@ final class BackupSessionController {
                     self.lastPausedDisplayRunMode = pausedDisplayMode
                     self.currentRunMode = pausedDisplayMode
                 }
-                self.appendLog(intent == .stop ? "任务已停止" : "任务已暂停")
-                self.rebuildFailedItems()
                 self.notifyObserversNow()
             } catch {
                 self.resumePreparationTask = nil
@@ -931,9 +635,6 @@ final class BackupSessionController {
                 self.currentRunMode = .full
                 self.state = .failed
                 self.statusText = "继续备份失败"
-                self.clearTransferStates()
-                self.appendLog("继续失败: \(error.localizedDescription)")
-                self.rebuildFailedItems()
                 self.notifyObserversNow()
             }
         }
@@ -945,30 +646,7 @@ final class BackupSessionController {
         completedAssetIDsForResume
     }
 
-    private func primaryActionTitle(for state: State) -> String {
-        switch state {
-        case .idle:
-            return "开始备份"
-        case .running:
-            return currentRunMode.isRetry ? "重试中..." : "备份中..."
-        case .paused, .stopped, .failed:
-            return "继续备份"
-        case .completed:
-            return "开始备份"
-        }
-    }
-
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter
-    }()
-
     private static let observerNotificationIntervalNanos: UInt64 = 120_000_000
-    private static let processedItemsTimelineCapacity = 3_000
-    private static let processedItemsTimelineCompactionThreshold = 1_000
-    private static let processedItemsSnapshotLimit = 500
-    private static let processedItemsMapSoftLimit = 4_000
 
     private func resolvePassword(for profile: ServerProfileRecord) -> String? {
         if profile.storageProfile.requiresPassword {
@@ -980,23 +658,4 @@ final class BackupSessionController {
         return appSession.activePassword ?? ""
     }
 
-    private func buttonAvailability() -> (canStart: Bool, canPause: Bool, canStop: Bool) {
-        switch controlPhase {
-        case .starting, .resuming:
-            return (false, true, true)
-        case .pausing:
-            return (false, false, true)
-        case .stopping:
-            return (false, false, false)
-        case .idle:
-            switch state {
-            case .running:
-                return (false, true, true)
-            case .paused:
-                return (true, false, true)
-            case .idle, .stopped, .failed, .completed:
-                return (true, false, false)
-            }
-        }
-    }
 }

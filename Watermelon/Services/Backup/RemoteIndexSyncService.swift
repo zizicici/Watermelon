@@ -186,16 +186,10 @@ final class RemoteIndexSyncService: Sendable {
 
         eventStream?.emit(.remoteIndexSynced(RemoteIndexSyncEvent(
             resourceCount: snapshot.totalResourceCount,
-            assetCount: snapshot.totalCount,
-            changedMonths: appliedChangedMonths,
-            removedMonths: appliedRemovedMonths
+            assetCount: snapshot.totalCount
         )))
 
         return snapshot
-    }
-
-    func currentSnapshot() -> RemoteLibrarySnapshot {
-        snapshotCache.current()
     }
 
     func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
@@ -212,11 +206,6 @@ final class RemoteIndexSyncService: Sendable {
 
     func upsertCachedAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]? = nil) {
         snapshotCache.upsertAsset(asset, links: links)
-    }
-
-    func reset() async {
-        await state.reset()
-        snapshotCache.reset()
     }
 
     private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {

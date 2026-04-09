@@ -13,30 +13,12 @@ enum BackupRunMode: Sendable {
         return false
     }
 
-    var isScoped: Bool {
-        if case .scoped = self {
-            return true
-        }
-        return false
-    }
-
     var targetCount: Int {
         switch self {
         case .full:
             return 0
         case .scoped(let assetIDs), .retry(let assetIDs):
             return assetIDs.count
-        }
-    }
-
-    var displayModeText: String {
-        switch self {
-        case .full:
-            return "全量"
-        case .scoped:
-            return "范围"
-        case .retry:
-            return "重试"
         }
     }
 
@@ -203,10 +185,6 @@ actor BackupRunCommandActor {
     }
 
     func requestStop() {
-        applyIntent(.stop)
-    }
-
-    func cancelActive() {
         applyIntent(.stop)
     }
 

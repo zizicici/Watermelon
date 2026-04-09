@@ -2,7 +2,6 @@ import UIKit
 
 extension UIColor {
     static let appPaper = UIColor(named: "PaperColor")!
-    static let appText = UIColor(named: "TextColor")!
     static let appBackground = UIColor(named: "BackgroundColor")!
 }
 

@@ -181,51 +181,8 @@ final class PhotoLibraryService: @unchecked Sendable {
         )
     }
 
-    func requestThumbnail(for asset: PHAsset, targetSize: CGSize, completion: @escaping (UIImage?) -> Void) {
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .fastFormat
-        options.resizeMode = .fast
-        options.isNetworkAccessAllowed = true
-
-        imageManager.requestImage(
-            for: asset,
-            targetSize: targetSize,
-            contentMode: .aspectFill,
-            options: options
-        ) { image, _ in
-            completion(image)
-        }
-    }
-
-    static func mediaTypeName(for asset: PHAsset) -> String {
-        switch asset.mediaType {
-        case .image:
-            return "image"
-        case .video:
-            return "video"
-        case .audio:
-            return "audio"
-        default:
-            return "unknown"
-        }
-    }
-
     static func isLivePhoto(_ asset: PHAsset) -> Bool {
         asset.mediaSubtypes.contains(.photoLive)
-    }
-
-    static func locationJSON(for asset: PHAsset) -> String? {
-        guard let location = asset.location else { return nil }
-        let dict: [String: Double] = [
-            "latitude": location.coordinate.latitude,
-            "longitude": location.coordinate.longitude,
-            "altitude": location.altitude
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: []),
-              let string = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-        return string
     }
 
     static func resourceFileSize(_ resource: PHAssetResource) -> Int64 {

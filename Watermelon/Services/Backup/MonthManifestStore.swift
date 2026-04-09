@@ -22,10 +22,6 @@ final class MonthManifestStore {
     let year: Int
     let month: Int
 
-    var monthKey: String {
-        String(format: "%04d-%02d", year, month)
-    }
-
     var monthRelativePath: String {
         String(format: "%04d/%02d", year, month)
     }
@@ -221,88 +217,6 @@ final class MonthManifestStore {
         try store.seedDatabase(seed)
         try store.reloadCache()
         return store
-    }
-
-    static func loadIfExists(
-        client: RemoteStorageClientProtocol,
-        basePath: String,
-        year: Int,
-        month: Int
-    ) async throws -> MonthManifestStore? {
-        let monthRelativePath = String(format: "%04d/%02d", year, month)
-        let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
-
-        let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: monthAbsolutePath)
-        } catch {
-            return nil
-        }
-
-        guard entries.contains(where: { $0.name == Self.manifestFileName && !$0.isDirectory }) else {
-            return nil
-        }
-
-        let remoteFilesByName = Dictionary(
-            uniqueKeysWithValues: entries
-                .filter { !$0.isDirectory && $0.name != Self.manifestFileName }
-                .map {
-                    (
-                        $0.name,
-                        RemoteFileMetadata(size: $0.size)
-                    )
-                }
-        )
-
-        let localURL = Self.makeLocalManifestURL(year: year, month: month)
-
-        let manifestAbsolutePath = RemotePathBuilder.absolutePath(
-            basePath: basePath,
-            remoteRelativePath: monthRelativePath + "/" + Self.manifestFileName
-        )
-
-        do {
-            try await client.download(remotePath: manifestAbsolutePath, localURL: localURL)
-        } catch {
-            try? FileManager.default.removeItem(at: localURL)
-            return nil
-        }
-
-        var dbQueue: DatabaseQueue?
-        do {
-            let queue = try DatabaseQueue(path: localURL.path)
-            dbQueue = queue
-            try Self.migrate(queue)
-            _ = try await queue.read { db in
-                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
-            }
-        } catch {
-            Self.closeAndRemoveLocalManifest(at: localURL, queue: dbQueue)
-            return nil
-        }
-
-        guard let dbQueue else {
-            Self.closeAndRemoveLocalManifest(at: localURL, queue: nil)
-            return nil
-        }
-
-        let store = MonthManifestStore(
-            client: client,
-            basePath: basePath,
-            year: year,
-            month: month,
-            localManifestURL: localURL,
-            dbQueue: dbQueue,
-            remoteFilesByName: remoteFilesByName,
-            dirty: false
-        )
-
-        do {
-            try store.reloadCache()
-            return store
-        } catch {
-            return nil
-        }
     }
 
     static func loadManifestOnlyIfExists(

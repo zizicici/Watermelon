@@ -15,8 +15,4 @@ struct ConsideringUser {
     static var pushAnimated: Bool {
         return UIAccessibility.prefersCrossFadeTransitions ? false : true
     }
-    
-    static var buttonShapesEnabled: Bool {
-        return UIAccessibility.buttonShapesEnabled
-    }
 }

@@ -16,35 +16,6 @@ final class RestoreService {
         let resources: [RemoteManifestResource]
     }
 
-    func restore(
-        resources: [RemoteManifestResource],
-        profile: ServerProfileRecord,
-        password: String,
-        onLog: @escaping @MainActor (String) -> Void,
-        onProgress: (@MainActor (Int, Int) -> Void)? = nil
-    ) async throws -> [RestoredAsset] {
-        guard !resources.isEmpty else {
-            throw BackupError.restoreNoSelection
-        }
-
-        let storageClient = try storageClientFactory.makeClient(profile: profile, password: password)
-
-        try await storageClient.connect()
-        defer {
-            Task { await storageClient.disconnect() }
-        }
-
-        var restoredAssets: [RestoredAsset] = []
-        let restoreGroups = Self.groupResourcesForRestore(resources)
-        for (groupIndex, group) in restoreGroups.enumerated() {
-            let result = try await restoreGroup(group, profile: profile, storageClient: storageClient)
-            if let result { restoredAssets.append(result) }
-            await onLog("Restored group with \(group.resources.count) resource(s).")
-            await onProgress?(groupIndex + 1, restoreGroups.count)
-        }
-        return restoredAssets
-    }
-
     struct IndexedRestoredAsset {
         let itemIndex: Int
         let asset: RestoredAsset
