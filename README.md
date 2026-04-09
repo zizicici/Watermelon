@@ -69,15 +69,16 @@
 - `assets`
 - `asset_resources`
 
-## 备份范围选择
+## 首页月份选择与执行
 
-`BackupRangeSelectorViewController` 提供范围选择能力：
+`NewHomeViewController` 提供月份级操作：
 
-- 按月份分组展示
-- 支持月内展开并勾选到 asset 粒度
-- 支持全选/全不选
-- 选择结果回写为 `BackupScopeSelection`
-- 任务运行中可查看范围，修改范围需先停止任务
+- 左右双栏：本地相册 / 远端存储，按年-月 section 展示
+- 月份选择：点击 cell 选中，箭头方向自动判定（→上传 / ←下载 / ↔同步）
+- 年级/全局全选 toggle
+- 底部面板：显示各方向计数，点"执行"进入执行模式
+- 执行模式：显示分类进度（pending/running/completed）、暂停/停止控制
+- 进度百分比：reconciliation `matchedCount` 为基线，上传阶段叠加 session 实时进度（取较大值）
 
 ## 本地 Hash 索引管理
 
