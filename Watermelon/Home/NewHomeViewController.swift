@@ -9,6 +9,7 @@ final class NewHomeViewController: UIViewController {
         let assetCount: Int
         let photoCount: Int
         let videoCount: Int
+        let backedUpCount: Int?
         let totalSizeBytes: Int64?
 
         var monthTitle: String {
@@ -219,11 +220,11 @@ final class NewHomeViewController: UIViewController {
 
     private static func createLayout() -> UICollectionViewCompositionalLayout {
         UICollectionViewCompositionalLayout { _, _ in
-            let arrowBadgeSize = NSCollectionLayoutSize(widthDimension: .absolute(20), heightDimension: .absolute(20))
+            let arrowBadgeSize = NSCollectionLayoutSize(widthDimension: .absolute(40), heightDimension: .absolute(38))
             let arrowBadge = NSCollectionLayoutSupplementaryItem(
                 layoutSize: arrowBadgeSize,
                 elementKind: directionArrowElementKind,
-                containerAnchor: NSCollectionLayoutAnchor(edges: [.trailing], absoluteOffset: CGPoint(x: 11, y: 0))
+                containerAnchor: NSCollectionLayoutAnchor(edges: [.trailing], absoluteOffset: CGPoint(x: 21, y: 0))
             )
             arrowBadge.zIndex = 10
 
@@ -366,11 +367,11 @@ final class NewHomeViewController: UIViewController {
         switch item.side {
         case .local:
             summary = rowLookup[item.month]?.local
-                ?? MonthSummary(month: item.month, assetCount: 0, photoCount: 0, videoCount: 0, totalSizeBytes: 0)
+                ?? MonthSummary(month: item.month, assetCount: 0, photoCount: 0, videoCount: 0, backedUpCount: nil, totalSizeBytes: 0)
             isSelected = selectedLocalMonths.contains(item.month)
         case .remote:
             summary = rowLookup[item.month]?.remote
-                ?? MonthSummary(month: item.month, assetCount: 0, photoCount: 0, videoCount: 0, totalSizeBytes: 0)
+                ?? MonthSummary(month: item.month, assetCount: 0, photoCount: 0, videoCount: 0, backedUpCount: nil, totalSizeBytes: 0)
             isSelected = selectedRemoteMonths.contains(item.month)
         }
 
@@ -473,7 +474,7 @@ final class NewHomeViewController: UIViewController {
             // Badge N corresponds to the local item at index N*2.
             let itemIndexPath = IndexPath(item: indexPath.item * 2, section: indexPath.section)
             guard let item = self.dataSource.itemIdentifier(for: itemIndexPath) else { return }
-            arrowView.configure(direction: item.arrowDirection)
+            arrowView.configure(direction: item.arrowDirection, percent: self.progressPercent(for: item.month))
         }
 
         dataSource.supplementaryViewProvider = { collectionView, kind, indexPath in
@@ -583,7 +584,7 @@ final class NewHomeViewController: UIViewController {
 
     private func reloadLocalAndApply() {
         localSummaries = homeDataManager.localMonthSummaries().map {
-            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, totalSizeBytes: $0.totalSizeBytes)
+            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: $0.backedUpCount, totalSizeBytes: $0.totalSizeBytes)
         }
         applyMergedSnapshot()
     }
@@ -596,19 +597,19 @@ final class NewHomeViewController: UIViewController {
         }
         let summaries = dependencies.backupCoordinator.remoteMonthSummaries()
         remoteSummaries = summaries.map {
-            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, totalSizeBytes: $0.totalSizeBytes)
+            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: nil, totalSizeBytes: $0.totalSizeBytes)
         }
         applyMergedSnapshot()
     }
 
     private func rebuildAndApply() {
         localSummaries = homeDataManager.localMonthSummaries().map {
-            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, totalSizeBytes: $0.totalSizeBytes)
+            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: $0.backedUpCount, totalSizeBytes: $0.totalSizeBytes)
         }
         if hasActiveConnection {
             let summaries = dependencies.backupCoordinator.remoteMonthSummaries()
             remoteSummaries = summaries.map {
-                MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, totalSizeBytes: $0.totalSizeBytes)
+                MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: nil, totalSizeBytes: $0.totalSizeBytes)
             }
         } else {
             remoteSummaries = []
@@ -657,15 +658,25 @@ final class NewHomeViewController: UIViewController {
     }
 
     /// Update remoteSummaries and rowLookup from snapshot cache without rebuilding the collection view snapshot.
+    /// Also refreshes local backedUpCount so arrow progress percentages stay current.
     private func refreshRemoteDataInPlace() {
         guard hasActiveConnection else { return }
         let summaries = dependencies.backupCoordinator.remoteMonthSummaries()
         remoteSummaries = summaries.map {
-            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, totalSizeBytes: $0.totalSizeBytes)
+            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: nil, totalSizeBytes: $0.totalSizeBytes)
         }
+        // Refresh local backedUpCount for progress calculation
+        let localByMonth = Dictionary(uniqueKeysWithValues:
+            homeDataManager.localMonthSummaries().map {
+                ($0.month, MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: $0.backedUpCount, totalSizeBytes: $0.totalSizeBytes))
+            }
+        )
         let remoteByMonth = Dictionary(uniqueKeysWithValues: remoteSummaries.map { ($0.month, $0) })
         for (month, var row) in rowLookup {
             row.remote = remoteByMonth[month]
+            if let localSummary = localByMonth[month] {
+                row.local = localSummary
+            }
             rowLookup[month] = row
         }
         // Also add new remote-only months to rowLookup
@@ -683,6 +694,20 @@ final class NewHomeViewController: UIViewController {
         }
     }
 
+    private func reconfigureVisibleArrows() {
+        for (sectionIndex, section) in mergedSections.enumerated() {
+            for (rowIndex, row) in section.rows.enumerated() {
+                let badgeIndexPath = IndexPath(item: rowIndex, section: sectionIndex)
+                guard let arrowView = collectionView.supplementaryView(
+                    forElementKind: directionArrowElementKind, at: badgeIndexPath
+                ) as? DirectionArrowView else { continue }
+                let direction = arrowDirection(for: row.month)
+                let percent = progressPercent(for: row.month)
+                arrowView.configure(direction: direction, percent: percent)
+            }
+        }
+    }
+
     private func arrowDirection(for month: LibraryMonthKey) -> ArrowDirection? {
         let l = selectedLocalMonths.contains(month)
         let r = selectedRemoteMonths.contains(month)
@@ -693,8 +718,46 @@ final class NewHomeViewController: UIViewController {
         case (true, true):   result = .sync
         case (false, false): result = nil
         }
-        
+
         return result
+    }
+
+    /// Returns the progress percentage (0–100) for the given month based on its arrow direction,
+    /// or nil if no direction is set or data is unavailable.
+    private func progressPercent(for month: LibraryMonthKey) -> Double? {
+        // During execution, use real-time processedCountByMonth for active upload months
+        // because backedUpCount (fingerprint-based) doesn't refresh in the lightweight update path.
+        if isExecutionMode, executionMonths.contains(month) {
+            if completedMonths.contains(month) {
+                return 100.0
+            }
+            if let total = assetCountByMonth[month], total > 0,
+               let processed = processedCountByMonth[month], processed > 0 {
+                return Double(processed) / Double(total) * 100
+            }
+            // Not yet started processing — fall through to backedUpCount-based calculation
+        }
+
+        guard let row = rowLookup[month] else { return nil }
+        let direction = arrowDirection(for: month)
+        guard let direction else { return nil }
+        guard let backedUp = row.local?.backedUpCount else { return nil }
+
+        let localCount = row.local?.assetCount ?? 0
+        let remoteCount = row.remote?.assetCount ?? 0
+
+        switch direction {
+        case .toRemote:
+            guard localCount > 0 else { return nil }
+            return Double(backedUp) / Double(localCount) * 100
+        case .toLocal:
+            guard remoteCount > 0 else { return nil }
+            return Double(backedUp) / Double(remoteCount) * 100
+        case .sync:
+            let union = localCount + remoteCount - backedUp
+            guard union > 0 else { return nil }
+            return Double(backedUp) / Double(union) * 100
+        }
     }
 
     private func selectionState(for months: Set<LibraryMonthKey>, in selected: Set<LibraryMonthKey>) -> SelectionState {
@@ -1114,7 +1177,8 @@ final class NewHomeViewController: UIViewController {
 
         switchToSelectionPanel()
         enableSelectionInteraction()
-        rebuildAndApply()
+        // Reload all data so backedUpCount reflects assets uploaded in this run
+        scheduleReloadAllData()
     }
 
     private func switchToExecutionPanel() {
@@ -1455,6 +1519,7 @@ final class NewHomeViewController: UIViewController {
         } else {
             refreshRemoteDataInPlace()
             reconfigureVisibleCells()
+            reconfigureVisibleArrows()
         }
         lastObservedState = snapshot.state
 
@@ -1767,6 +1832,14 @@ private let directionArrowElementKind = "direction-arrow"
 
 private final class DirectionArrowView: UICollectionReusableView {
     private let imageView = UIImageView()
+    private let percentLabel: UILabel = {
+        let label = UILabel()
+        label.font = .monospacedDigitSystemFont(ofSize: 9, weight: .light)
+        label.textAlignment = .center
+        label.adjustsFontSizeToFitWidth = true
+        label.minimumScaleFactor = 0.7
+        return label
+    }()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1774,8 +1847,15 @@ private final class DirectionArrowView: UICollectionReusableView {
         backgroundColor = .clear
         imageView.contentMode = .scaleAspectFit
         addSubview(imageView)
+        addSubview(percentLabel)
         imageView.snp.makeConstraints { make in
-            make.edges.equalToSuperview()
+            make.top.leading.trailing.equalToSuperview()
+            make.height.equalTo(20)
+        }
+        percentLabel.snp.makeConstraints { make in
+            make.top.equalTo(imageView.snp.bottom)
+            make.leading.trailing.equalToSuperview()
+            make.bottom.lessThanOrEqualToSuperview()
         }
     }
 
@@ -1785,12 +1865,14 @@ private final class DirectionArrowView: UICollectionReusableView {
     override func prepareForReuse() {
         super.prepareForReuse()
         imageView.image = nil
+        percentLabel.attributedText = nil
         isHidden = true
     }
 
-    func configure(direction: NewHomeViewController.ArrowDirection?) {
+    func configure(direction: NewHomeViewController.ArrowDirection?, percent: Double? = nil) {
         guard let direction else {
             imageView.image = nil
+            percentLabel.attributedText = nil
             isHidden = true
             return
         }
@@ -1812,6 +1894,21 @@ private final class DirectionArrowView: UICollectionReusableView {
         let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
         imageView.image = UIImage(systemName: symbolName, withConfiguration: config)
         imageView.tintColor = iconColor
+
+        if let percent {
+            let text = String(format: "%.1f%%", percent)
+            let attrStr = NSAttributedString(string: text, attributes: [
+                .kern: -0.5,
+                .font: percentLabel.font!,
+                .foregroundColor: iconColor
+            ])
+            percentLabel.attributedText = attrStr
+            percentLabel.isHidden = false
+        } else {
+            percentLabel.attributedText = nil
+            percentLabel.isHidden = true
+        }
+
         isHidden = false
     }
 }
