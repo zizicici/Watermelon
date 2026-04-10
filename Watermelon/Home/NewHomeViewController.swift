@@ -266,6 +266,13 @@ final class NewHomeViewController: UIViewController {
                 )
                 return
             }
+            if exec.failedMonths.contains(item.month) {
+                cell.configureFailed(
+                    monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: .tertiaryLabel),
+                    sizeText: summary.sizeText
+                )
+                return
+            }
             if exec.activeMonths.contains(item.month) {
                 cell.configureRunning(
                     monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: HomeSeasonStyle.monthSecondaryTextColor(month: m)),
@@ -382,7 +389,7 @@ final class NewHomeViewController: UIViewController {
 
     private func renderExecutionChange() {
         if let exec = store.executionState {
-            let months = exec.activeMonths.union(exec.completedMonths)
+            let months = exec.activeMonths.union(exec.completedMonths).union(exec.failedMonths)
             reconfigureMonths(months)
             updateActionPanelFromExecution(exec)
         } else {
@@ -611,8 +618,8 @@ final class NewHomeViewController: UIViewController {
 
     private func updateRightHeaderButton() {
         switch store.connectionState {
-        case .connecting:
-            rightHeaderLabel.text = "连接中..."
+        case .connecting(let profile):
+            rightHeaderLabel.text = profile.storageProfile.indicatorText + "..."
         case .connected(let profile):
             rightHeaderLabel.text = profile.storageProfile.indicatorText
         case .disconnected:

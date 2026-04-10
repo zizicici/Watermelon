@@ -77,8 +77,14 @@ final class HomeScreenStore {
             self?.handleConnectionChange()
         }
         connectionController.onMonthSynced = { [weak self] in
-            self?.syncRemoteDataIfNeeded()
-            self?.refreshAllAndNotify()
+            guard let self else { return }
+            // Force hasActiveConnection=true: this fires during reloadRemoteIndex,
+            // before appSession.activate(), so connectionState is still .connecting.
+            let snapshotState = self.dependencies.backupCoordinator.currentRemoteSnapshotState(
+                since: self.dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: true)
+            )
+            self.dataManager.syncRemoteSnapshot(state: snapshotState, hasActiveConnection: true)
+            self.refreshAllAndNotify()
         }
         connectionController.onNeedsPasswordPrompt = { [weak self] profile, completion in
             self?.onNeedsPasswordPrompt?(profile, completion)
@@ -97,7 +103,10 @@ final class HomeScreenStore {
             guard let self else { return }
             await self.dataManager.ensureLocalIndexLoaded()
             self.connectionController.attemptAutoConnect()
-            self.syncRemoteDataIfNeeded()
+            // Don't call syncRemoteDataIfNeeded here — if auto-connect is in progress,
+            // connectionState is .connecting and hasActiveConnection would be false,
+            // which would clear remote data and advance revision, corrupting the bootstrap.
+            // Connection callbacks handle sync when ready.
             self.refreshAllAndNotify()
         }
     }
@@ -234,13 +243,20 @@ final class HomeScreenStore {
             wasExecutionActive = true
         }
 
+        if isNowActive {
+            refreshRowLookup()
+            rebuildSections()
+        }
+
         onChange?(.execution)
     }
 
     private func handleConnectionChange() {
-        if !connectionState.isConnected {
-            selection.clear()
-        }
+        selection.clear()
+        // Clear stale remote data from previous profile before syncing new one.
+        // This ensures profile A's months don't leak into profile B's view.
+        let disconnectState = dependencies.backupCoordinator.currentRemoteSnapshotState(since: nil)
+        dataManager.syncRemoteSnapshot(state: disconnectState, hasActiveConnection: false)
         syncRemoteDataIfNeeded()
         refreshRowLookup()
         rebuildSections()

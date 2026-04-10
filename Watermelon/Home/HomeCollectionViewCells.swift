@@ -418,6 +418,31 @@ final class MonthCell: UICollectionViewCell {
         leftStackLeading?.update(inset: 50)
     }
 
+    func configureFailed(monthTitle: String, countText: NSAttributedString, sizeText: String?) {
+        monthLabel.text = monthTitle
+        monthLabel.isHidden = false
+        countLabel.attributedText = countText
+        countLabel.isHidden = false
+        sizeLabel.text = sizeText
+        sizeLabel.isHidden = sizeText == nil
+
+        let grayBg = UIColor.systemGray5
+        let grayTitle = UIColor.secondaryLabel
+        let grayDetail = UIColor.tertiaryLabel
+        colorView.backgroundColor = grayBg
+        monthLabel.textColor = grayTitle
+        countLabel.textColor = grayDetail
+        sizeLabel.textColor = grayDetail
+        currentTitleColor = grayTitle
+        currentDetailColor = grayDetail
+
+        checkmark.isHidden = false
+        checkmark.image = UIImage(systemName: "exclamationmark.circle.fill")
+        checkmark.tintColor = .systemRed
+        activityIndicator.stopAnimating()
+        leftStackLeading?.update(inset: 50)
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         activityIndicator.stopAnimating()

@@ -4,7 +4,7 @@ import Foundation
 
 enum ConnectionState {
     case disconnected
-    case connecting
+    case connecting(ServerProfileRecord)
     case connected(ServerProfileRecord)
 
     var isConnected: Bool {
@@ -12,9 +12,16 @@ enum ConnectionState {
         return false
     }
 
+    var isConnecting: Bool {
+        if case .connecting = self { return true }
+        return false
+    }
+
     var activeProfile: ServerProfileRecord? {
-        if case .connected(let profile) = self { return profile }
-        return nil
+        switch self {
+        case .connected(let p), .connecting(let p): return p
+        case .disconnected: return nil
+        }
     }
 }
 
@@ -78,13 +85,17 @@ struct SelectionState {
 struct MonthPlan {
     let needsUpload: Bool
     let needsDownload: Bool
-    var uploadDone = false
-    var downloadDone = false
-    var failed = false
+    var phase: Phase = .pending
 
-    var isFullyCompleted: Bool {
-        !failed && (!needsUpload || uploadDone) && (!needsDownload || downloadDone)
+    enum Phase {
+        case pending
+        case uploadDone
+        case completed
+        case failed
     }
+
+    var isFullyCompleted: Bool { phase == .completed }
+    var isFailed: Bool { phase == .failed }
 }
 
 enum ExecutionPhase {
@@ -126,7 +137,7 @@ struct HomeExecutionState {
         self.syncMonths = syncMonths
         self.executionMonths = Set(monthPlans.keys)
         self.completedMonths = Set(monthPlans.filter { $0.value.isFullyCompleted }.map(\.key))
-        self.failedMonths = Set(monthPlans.filter { $0.value.failed }.map(\.key))
+        self.failedMonths = Set(monthPlans.filter { $0.value.isFailed }.map(\.key))
     }
 
     let failedMonths: Set<LibraryMonthKey>
@@ -164,17 +175,20 @@ struct HomeExecutionState {
     }
 
     func panelPhases() -> (backup: SelectionActionPanel.CategoryPhase?, download: SelectionActionPanel.CategoryPhase?, sync: SelectionActionPanel.CategoryPhase?) {
-        let completedSet = completedMonths
-
         func phase(for months: [LibraryMonthKey]) -> SelectionActionPanel.CategoryPhase? {
             guard !months.isEmpty else { return nil }
             let monthSet = Set(months)
-            let completed = monthSet.intersection(completedSet).count
+            let completed = monthSet.intersection(completedMonths).count
+            let failed = monthSet.intersection(failedMonths).count
+            let done = completed + failed
             let active = !monthSet.isDisjoint(with: activeMonths)
-            if completed == monthSet.count {
+            if done == monthSet.count {
+                if failed > 0 {
+                    return .failed(completed: completed, failed: failed, total: monthSet.count)
+                }
                 return .completed(total: monthSet.count)
-            } else if active || completed > 0 {
-                return .running(completed: completed, total: monthSet.count)
+            } else if active || done > 0 {
+                return .running(completed: done, total: monthSet.count)
             } else {
                 return .pending(total: monthSet.count)
             }

@@ -7,6 +7,7 @@ final class SelectionActionPanel: UIView {
         case pending(total: Int)
         case running(completed: Int, total: Int)
         case completed(total: Int)
+        case failed(completed: Int, failed: Int, total: Int)
     }
 
     var onExecuteTapped: (() -> Void)?
@@ -276,6 +277,11 @@ final class SelectionActionPanel: UIView {
             button.configuration?.image = UIImage(systemName: "checkmark", withConfiguration: iconConfig)
             button.configuration?.title = "\(total)/\(total)"
             button.configuration?.baseForegroundColor = color
+        case .failed(let completed, let failed, let total):
+            button.configuration?.showsActivityIndicator = false
+            button.configuration?.image = UIImage(systemName: "exclamationmark.triangle.fill", withConfiguration: iconConfig)
+            button.configuration?.title = "\(completed + failed)/\(total)"
+            button.configuration?.baseForegroundColor = .systemRed
         }
     }
 

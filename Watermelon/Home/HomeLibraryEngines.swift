@@ -887,6 +887,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
 
             let reconciledMonths = self.reconcileIfNeeded(changedMonths)
             if !reconciledMonths.isEmpty {
+                self.rescanFileSizes(for: reconciledMonths)
                 self.onMonthsChanged?(reconciledMonths)
             }
         }
@@ -940,6 +941,21 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         registerPhotoLibraryObserverIfNeeded()
         startFileSizeScan()
         return !reconcileIfNeeded(changedMonths).isEmpty
+    }
+
+    private func rescanFileSizes(for months: Set<LibraryMonthKey>) {
+        let cachedSizes = (try? contentHashIndexRepository.fetchFileSizeByAsset()) ?? [:]
+        Task { [weak self] in
+            for month in months {
+                guard let self, !Task.isCancelled else { return }
+                let size = self.localIndex.computeFileSize(for: month, cachedSizes: cachedSizes)
+                guard !Task.isCancelled else { return }
+                self.localIndex.setMonthFileSize(size, for: month)
+                self.cachedLocalSummaries[month] = self.localIndex.localMonthSummary(for: month)
+                self.onFileSizesUpdated?([month])
+                await Task.yield()
+            }
+        }
     }
 
     private func startFileSizeScan() {

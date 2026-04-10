@@ -5,8 +5,19 @@ final class HomeConnectionController {
 
     private let dependencies: DependencyContainer
     private var didAttemptAutoConnect = false
+    private var connectingProfile: ServerProfileRecord?
+    private var connectTask: Task<Void, Never>?
 
-    private(set) var state: ConnectionState = .disconnected
+    var state: ConnectionState {
+        if let profile = connectingProfile {
+            return .connecting(profile)
+        }
+        if let profile = dependencies.appSession.activeProfile {
+            return .connected(profile)
+        }
+        return .disconnected
+    }
+
     private(set) var savedProfiles: [ServerProfileRecord] = []
 
     var onStateChanged: (() -> Void)?
@@ -18,11 +29,6 @@ final class HomeConnectionController {
         self.dependencies = dependencies
         dependencies.appSession.onSessionChanged = { [weak self] _ in
             guard let self else { return }
-            if let profile = self.dependencies.appSession.activeProfile {
-                self.state = .connected(profile)
-            } else if !self.state.isConnecting {
-                self.state = .disconnected
-            }
             self.loadProfiles()
             self.onStateChanged?()
         }
@@ -54,7 +60,7 @@ final class HomeConnectionController {
     }
 
     func promptAndConnect(profile: ServerProfileRecord) {
-        guard !state.isConnecting else { return }
+        guard connectingProfile == nil else { return }
 
         if !profile.storageProfile.requiresPassword {
             connect(profile: profile, password: "")
@@ -74,7 +80,9 @@ final class HomeConnectionController {
     }
 
     func disconnect() {
-        state = .disconnected
+        connectTask?.cancel()
+        connectTask = nil
+        connectingProfile = nil
         try? dependencies.databaseManager.setActiveServerProfileID(nil)
         dependencies.appSession.clear()
     }
@@ -86,11 +94,11 @@ final class HomeConnectionController {
     // MARK: - Internal
 
     private func connect(profile: ServerProfileRecord, password: String, reportFailure: Bool = true) {
-        guard !state.isConnecting else { return }
-        state = .connecting
+        guard connectingProfile == nil else { return }
+        connectingProfile = profile
         onStateChanged?()
 
-        Task { [weak self] in
+        connectTask = Task { [weak self] in
             guard let self else { return }
             do {
                 _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
@@ -102,24 +110,20 @@ final class HomeConnectionController {
                         }
                     }
                 )
+                guard !Task.isCancelled else { return }
                 try self.dependencies.databaseManager.setActiveServerProfileID(profile.id)
-                self.state = .connected(profile)
+                self.connectingProfile = nil
+                self.connectTask = nil
                 self.dependencies.appSession.activate(profile: profile, password: password)
-                // appSession.onSessionChanged fires loadProfiles + onStateChanged
             } catch {
-                self.state = .disconnected
+                guard !Task.isCancelled else { return }
+                self.connectingProfile = nil
+                self.connectTask = nil
                 self.onStateChanged?()
                 if reportFailure {
                     self.onConnectFailed?(profile, error)
                 }
             }
         }
-    }
-}
-
-extension ConnectionState {
-    var isConnecting: Bool {
-        if case .connecting = self { return true }
-        return false
     }
 }

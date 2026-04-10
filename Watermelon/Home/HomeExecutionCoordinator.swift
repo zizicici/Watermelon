@@ -50,16 +50,15 @@ final class HomeExecutionCoordinator {
     private var backupSessionController: BackupSessionController!
 
     private var isDownloadPaused = false
-    private var downloadHadFailure = false
 
     private var currentPhase: ExecutionPhase {
         if !monthPlans.isEmpty && monthPlans.values.allSatisfy(\.isFullyCompleted) {
             return .completed
         }
+        if monthPlans.values.contains(where: \.isFailed) && activeMonths.isEmpty {
+            return .failed("部分月份失败")
+        }
         if isDownloadPhase {
-            if downloadHadFailure && activeMonths.isEmpty {
-                return .failed("部分月份下载失败")
-            }
             return .downloading(isPaused: isDownloadPaused)
         }
         return .uploading(lastBackupControllerState)
@@ -81,7 +80,6 @@ final class HomeExecutionCoordinator {
         pendingSyncMonths = sync
         isDownloadPhase = false
         isDownloadPaused = false
-        downloadHadFailure = false
         downloadTask = nil
         lastBackupControllerState = .idle
 
@@ -192,7 +190,11 @@ final class HomeExecutionCoordinator {
         let previouslyCompleted = Set(monthPlans.filter { $0.value.isFullyCompleted }.map(\.key))
 
         for month in snapshot.flushedMonths where monthPlans[month] != nil {
-            monthPlans[month]?.uploadDone = true
+            if monthPlans[month]?.needsDownload == true {
+                monthPlans[month]?.phase = .uploadDone
+            } else {
+                monthPlans[month]?.phase = .completed
+            }
         }
 
         let nowCompleted = Set(monthPlans.filter { $0.value.isFullyCompleted }.map(\.key))
@@ -207,7 +209,11 @@ final class HomeExecutionCoordinator {
         case .completed:
             let backupTargets = Set(uploadMonths).union(pendingSyncMonths)
             for month in backupTargets where monthPlans[month] != nil {
-                monthPlans[month]?.uploadDone = true
+                if monthPlans[month]?.needsDownload == true {
+                    if monthPlans[month]?.phase == .pending { monthPlans[month]?.phase = .uploadDone }
+                } else {
+                    monthPlans[month]?.phase = .completed
+                }
             }
             activeMonths.removeAll()
 
@@ -225,6 +231,10 @@ final class HomeExecutionCoordinator {
             }
 
         case .failed:
+            for month in activeMonths {
+                monthPlans[month]?.phase = .failed
+            }
+            activeMonths.removeAll()
             onStateChanged?()
             onAlert?("上传失败", snapshot.statusText)
 
@@ -249,7 +259,6 @@ final class HomeExecutionCoordinator {
 
         isDownloadPhase = true
         isDownloadPaused = false
-        downloadHadFailure = false
         onStateChanged?()
 
         guard let profile = dependencies.appSession.activeProfile,
@@ -267,20 +276,19 @@ final class HomeExecutionCoordinator {
 
             for month in remainingDownloads {
                 if Task.isCancelled { return }
-                let ok = await self.ensureHashIndexAndDownload(month: month, phase: "下载", profile: profile, password: password)
-                if !ok { await MainActor.run { self.downloadHadFailure = true } }
+                await self.ensureHashIndexAndDownload(month: month, phase: "下载", profile: profile, password: password)
             }
 
             for month in remainingSyncs {
                 if Task.isCancelled { return }
-                let ok = await self.ensureHashIndexAndDownload(month: month, phase: "同步", profile: profile, password: password)
-                if !ok { await MainActor.run { self.downloadHadFailure = true } }
+                await self.ensureHashIndexAndDownload(month: month, phase: "同步", profile: profile, password: password)
             }
 
             if !Task.isCancelled {
                 await MainActor.run {
                     self.activeMonths.removeAll()
-                    if self.downloadHadFailure {
+                    let hasFailed = self.monthPlans.values.contains(where: \.isFailed)
+                    if hasFailed {
                         self.onStateChanged?()
                     } else {
                         self.showExecutionCompleted()
@@ -352,7 +360,7 @@ final class HomeExecutionCoordinator {
             if Task.isCancelled { return false }
             if !uploadCompleted {
                 await MainActor.run {
-                    self.monthPlans[month]?.failed = true
+                    self.monthPlans[month]?.phase = .failed
                     self.onAlert?("\(phase)失败", "\(String(format: "%04d年%02d月", month.year, month.month)): 备份索引失败")
                 }
                 return false
@@ -399,7 +407,7 @@ final class HomeExecutionCoordinator {
             } catch {
                 if Task.isCancelled { return false }
                 await MainActor.run {
-                    self.monthPlans[month]?.failed = true
+                    self.monthPlans[month]?.phase = .failed
                     self.onAlert?("\(phase)失败", "\(String(format: "%04d年%02d月", month.year, month.month)): \(error.localizedDescription)")
                 }
                 return false
@@ -408,7 +416,7 @@ final class HomeExecutionCoordinator {
 
         if Task.isCancelled { return false }
         await MainActor.run {
-            self.monthPlans[month]?.downloadDone = true
+            self.monthPlans[month]?.phase = .completed
             self.onStateChanged?()
         }
         return true
@@ -417,9 +425,8 @@ final class HomeExecutionCoordinator {
     // MARK: - Helpers
 
     private func showExecutionCompleted() {
-        for key in monthPlans.keys {
-            monthPlans[key]?.uploadDone = true
-            monthPlans[key]?.downloadDone = true
+        for key in monthPlans.keys where monthPlans[key]?.phase != .failed {
+            monthPlans[key]?.phase = .completed
         }
         activeMonths.removeAll()
         onStateChanged?()
