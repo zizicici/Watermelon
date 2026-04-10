@@ -49,7 +49,10 @@ final class HomeScreenStore {
         self.connectionController = HomeConnectionController(dependencies: dependencies)
         self.executionCoordinator = HomeExecutionCoordinator(
             dependencies: dependencies,
-            homeDataManager: dataManager
+            dataAccess: HomeExecutionCoordinator.DataAccess(
+                localAssetIDs: { [dataManager] month in dataManager.localAssetIDs(for: month) },
+                remoteOnlyItems: { [dataManager] month in dataManager.remoteOnlyItems(for: month) }
+            )
         )
         bind()
     }
@@ -72,6 +75,18 @@ final class HomeScreenStore {
         }
         executionCoordinator.onAlert = { [weak self] title, message in
             self?.onAlert?(title, message)
+        }
+        executionCoordinator.onSyncRemoteData = { [weak self] in
+            guard let self else { return }
+            self.syncRemoteDataIfNeeded()
+            self.refreshRowLookup()
+            self.rebuildSections()
+        }
+        executionCoordinator.onRefreshLocalIndex = { [weak self] assetIDs in
+            guard let self else { return }
+            self.dataManager.refreshLocalIndex(forAssetIDs: assetIDs)
+            self.refreshRowLookup()
+            self.rebuildSections()
         }
         connectionController.onStateChanged = { [weak self] in
             self?.handleConnectionChange()
@@ -241,11 +256,6 @@ final class HomeScreenStore {
 
         if !wasExecutionActive && isNowActive {
             wasExecutionActive = true
-        }
-
-        if isNowActive {
-            refreshRowLookup()
-            rebuildSections()
         }
 
         onChange?(.execution)

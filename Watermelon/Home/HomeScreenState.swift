@@ -187,7 +187,11 @@ struct HomeExecutionState {
                     return .failed(completed: completed, failed: failed, total: monthSet.count)
                 }
                 return .completed(total: monthSet.count)
-            } else if active || done > 0 {
+            } else if active {
+                return .running(completed: done, total: monthSet.count)
+            } else if failed > 0 {
+                return .failed(completed: completed, failed: failed, total: monthSet.count)
+            } else if done > 0 {
                 return .running(completed: done, total: monthSet.count)
             } else {
                 return .pending(total: monthSet.count)

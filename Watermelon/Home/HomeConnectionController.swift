@@ -106,7 +106,8 @@ final class HomeConnectionController {
                     password: password,
                     onMonthSynced: { [weak self] in
                         Task { @MainActor [weak self] in
-                            self?.onMonthSynced?()
+                            guard let self, self.connectingProfile?.id == profile.id else { return }
+                            self.onMonthSynced?()
                         }
                     }
                 )

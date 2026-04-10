@@ -27,10 +27,26 @@ final class HomeExecutionCoordinator {
     var onStateChanged: (() -> Void)?
     var onAlert: ((String, String) -> Void)?
 
+    /// Called when the coordinator needs the Store to sync remote data.
+    /// Store should call syncRemoteDataIfNeeded() + refreshRowLookup() + rebuildSections().
+    var onSyncRemoteData: (() -> Void)?
+
+    /// Called when the coordinator needs the Store to refresh local index for specific assets.
+    /// Store should call dataManager.refreshLocalIndex(forAssetIDs:) + refreshRowLookup() + rebuildSections().
+    var onRefreshLocalIndex: ((Set<String>) -> Void)?
+
+    // MARK: - Data Access (read-only, provided by Store)
+
+    struct DataAccess {
+        let localAssetIDs: (LibraryMonthKey) -> Set<String>
+        let remoteOnlyItems: (LibraryMonthKey) -> [RemoteAlbumItem]
+    }
+
+    private let dataAccess: DataAccess
+
     // MARK: - Dependencies
 
     private let dependencies: DependencyContainer
-    private let homeDataManager: HomeIncrementalDataManager
 
     // MARK: - Execution State
 
@@ -66,9 +82,9 @@ final class HomeExecutionCoordinator {
 
     // MARK: - Init
 
-    init(dependencies: DependencyContainer, homeDataManager: HomeIncrementalDataManager) {
+    init(dependencies: DependencyContainer, dataAccess: DataAccess) {
         self.dependencies = dependencies
-        self.homeDataManager = homeDataManager
+        self.dataAccess = dataAccess
     }
 
     // MARK: - Enter / Exit
@@ -161,7 +177,7 @@ final class HomeExecutionCoordinator {
         let syncMonthSet = Set(pendingSyncMonths)
         var allAssetIDs = Set<String>()
         for month in months {
-            let ids = homeDataManager.localAssetIDs(for: month)
+            let ids = dataAccess.localAssetIDs(month)
             allAssetIDs.formUnion(ids)
             if !syncMonthSet.contains(month) {
                 assetCountByMonth[month] = ids.count
@@ -222,10 +238,10 @@ final class HomeExecutionCoordinator {
                 backupObserverID = nil
             }
 
-            syncRemoteData()
+            onSyncRemoteData?()
 
             if !pendingDownloadMonths.isEmpty || !pendingSyncMonths.isEmpty {
-                startDownloadPhase()  // startDownloadPhase fires onStateChanged
+                startDownloadPhase()
             } else {
                 showExecutionCompleted()
             }
@@ -242,9 +258,7 @@ final class HomeExecutionCoordinator {
             exit()
 
         default:
-            if hasNewCompletions {
-                syncRemoteData()
-            }
+            onSyncRemoteData?()
             onStateChanged?()
         }
     }
@@ -354,7 +368,7 @@ final class HomeExecutionCoordinator {
             self.onStateChanged?()
         }
 
-        let assetIDs = homeDataManager.localAssetIDs(for: month)
+        let assetIDs = dataAccess.localAssetIDs(month)
         if !assetIDs.isEmpty {
             let uploadCompleted = await runScopedBackup(assetIDs: assetIDs)
             if Task.isCancelled { return false }
@@ -367,10 +381,10 @@ final class HomeExecutionCoordinator {
             }
         }
 
-        await MainActor.run { [self] in
-            self.syncRemoteData()
+        await MainActor.run {
+            self.onSyncRemoteData?()
             if !assetIDs.isEmpty {
-                self.homeDataManager.refreshLocalIndex(forAssetIDs: assetIDs)
+                self.onRefreshLocalIndex?(assetIDs)
             }
         }
 
@@ -383,7 +397,7 @@ final class HomeExecutionCoordinator {
         profile: ServerProfileRecord,
         password: String
     ) async -> Bool {
-        let remoteItems = homeDataManager.remoteOnlyItems(for: month)
+        let remoteItems = dataAccess.remoteOnlyItems(month)
         if !remoteItems.isEmpty {
             await MainActor.run {
                 self.assetCountByMonth.removeValue(forKey: month)
@@ -399,7 +413,7 @@ final class HomeExecutionCoordinator {
                         guard let self else { return }
                         if let restoredAsset {
                             self.writeHashIndexForItem(restoredAsset, remoteItems: remoteItems)
-                            self.homeDataManager.refreshLocalIndex(forAssetIDs: [restoredAsset.asset.localIdentifier])
+                            self.onRefreshLocalIndex?([restoredAsset.asset.localIdentifier])
                         }
                         self.onStateChanged?()
                     }
@@ -461,13 +475,5 @@ final class HomeExecutionCoordinator {
 
     private func resolvedSessionPassword(for profile: ServerProfileRecord) -> String? {
         profile.resolvedSessionPassword(from: dependencies.appSession)
-    }
-
-    private func syncRemoteData() {
-        let active = homeDataManager.hasActiveConnection
-        let snapshotState = dependencies.backupCoordinator.currentRemoteSnapshotState(
-            since: homeDataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
-        )
-        homeDataManager.syncRemoteSnapshot(state: snapshotState, hasActiveConnection: active)
     }
 }

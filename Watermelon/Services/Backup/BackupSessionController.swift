@@ -30,6 +30,7 @@ final class BackupSessionController {
         let startedMonths: Set<LibraryMonthKey>
         let flushedMonths: Set<LibraryMonthKey>
         let processedCountByMonth: [LibraryMonthKey: Int]
+        let failedCountByMonth: [LibraryMonthKey: Int]
     }
 
     private let backupCoordinator: BackupCoordinator
@@ -72,6 +73,7 @@ final class BackupSessionController {
     private(set) var startedMonths = Set<LibraryMonthKey>()
     private(set) var flushedMonths = Set<LibraryMonthKey>()
     private(set) var processedCountByMonth: [LibraryMonthKey: Int] = [:]
+    private(set) var failedCountByMonth: [LibraryMonthKey: Int] = [:]
 
     init(
         backupCoordinator: BackupCoordinator,
@@ -112,7 +114,8 @@ final class BackupSessionController {
             total: total,
             startedMonths: startedMonths,
             flushedMonths: flushedMonths,
-            processedCountByMonth: processedCountByMonth
+            processedCountByMonth: processedCountByMonth,
+            failedCountByMonth: failedCountByMonth
         )
     }
 
@@ -198,6 +201,7 @@ final class BackupSessionController {
             startedMonths.removeAll()
             flushedMonths.removeAll()
             processedCountByMonth.removeAll()
+            failedCountByMonth.removeAll()
         }
 
         state = .running
@@ -765,6 +769,7 @@ final class BackupSessionController {
         processedCountByMonth[monthKey, default: 0] += 1
 
         if event.status == .failed {
+            failedCountByMonth[monthKey, default: 0] += 1
             completedAssetIDsForResume.remove(event.assetLocalIdentifier)
         } else {
             completedAssetIDsForResume.insert(event.assetLocalIdentifier)
