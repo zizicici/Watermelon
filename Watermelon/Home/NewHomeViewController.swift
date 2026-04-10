@@ -4,131 +4,16 @@ import UIKit
 
 final class NewHomeViewController: UIViewController {
 
-    fileprivate struct MonthSummary {
-        let month: LibraryMonthKey
-        let assetCount: Int
-        let photoCount: Int
-        let videoCount: Int
-        let backedUpCount: Int?
-        let totalSizeBytes: Int64?
-
-        var monthTitle: String {
-            String(format: "%02d月", month.month)
-        }
-
-        func countAttributedText(color: UIColor) -> NSAttributedString {
-            let font = UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
-            let symbolConfig = UIImage.SymbolConfiguration(pointSize: 10, weight: .bold)
-            let result = NSMutableAttributedString()
-
-            if let img = UIImage(systemName: "photo", withConfiguration: symbolConfig)?.withTintColor(color, renderingMode: .alwaysOriginal) {
-                result.append(NSAttributedString(attachment: NSTextAttachment(image: img)))
-            }
-            result.append(NSAttributedString(string: " \(photoCount)  ", attributes: [.font: font, .foregroundColor: color]))
-
-            if let img = UIImage(systemName: "video", withConfiguration: symbolConfig)?.withTintColor(color, renderingMode: .alwaysOriginal) {
-                result.append(NSAttributedString(attachment: NSTextAttachment(image: img)))
-            }
-            result.append(NSAttributedString(string: " \(videoCount)", attributes: [.font: font, .foregroundColor: color]))
-
-            return result
-        }
-
-        var sizeText: String? {
-            guard let bytes = totalSizeBytes else { return nil }
-            return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-        }
-    }
-
-    fileprivate struct MonthRow: Equatable {
-        let month: LibraryMonthKey
-        var local: MonthSummary?
-        var remote: MonthSummary?
-
-        static func == (lhs: MonthRow, rhs: MonthRow) -> Bool { lhs.month == rhs.month }
-    }
-
-    fileprivate struct MergedYearSection {
-        let year: Int
-        let rows: [MonthRow]
-
-        var title: String { "\(year)年" }
-
-        var localPhotoCount: Int { rows.compactMap(\.local).reduce(0) { $0 + $1.photoCount } }
-        var localVideoCount: Int { rows.compactMap(\.local).reduce(0) { $0 + $1.videoCount } }
-        var remotePhotoCount: Int { rows.compactMap(\.remote).reduce(0) { $0 + $1.photoCount } }
-        var remoteVideoCount: Int { rows.compactMap(\.remote).reduce(0) { $0 + $1.videoCount } }
-
-        var localSizeBytes: Int64? {
-            let sizes = rows.compactMap { $0.local?.totalSizeBytes }
-            let locals = rows.compactMap(\.local)
-            guard !locals.isEmpty, sizes.count == locals.count else { return nil }
-            return sizes.reduce(0, +)
-        }
-
-        var remoteSizeBytes: Int64? {
-            let sizes = rows.compactMap { $0.remote?.totalSizeBytes }
-            let remotes = rows.compactMap(\.remote)
-            guard !remotes.isEmpty, sizes.count == remotes.count else { return nil }
-            return sizes.reduce(0, +)
-        }
-    }
-
-    private let dependencies: DependencyContainer
-    private let homeDataManager: HomeIncrementalDataManager
-    private var backupSessionController: BackupSessionController!
-
-    private var savedProfiles: [ServerProfileRecord] = []
-    private var activeProfileID: Int64?
-    private var isConnecting = false
-    private var didAttemptAutoConnect = false
-    private(set) var selectedLocalMonths = Set<LibraryMonthKey>()
-    private(set) var selectedRemoteMonths = Set<LibraryMonthKey>()
-
-    // MARK: - Execution Mode State
-    private var isExecutionMode = false
-    private var executionMonths = Set<LibraryMonthKey>()
-    private var completedMonths = Set<LibraryMonthKey>()
-    private var activeMonths = Set<LibraryMonthKey>()
-    private var backupObserverID: UUID?
-
-    private var assetCountByMonth: [LibraryMonthKey: Int] = [:]
-    private var processedCountByMonth: [LibraryMonthKey: Int] = [:]
-
-    private var uploadMonths: [LibraryMonthKey] = []
-    private var pendingDownloadMonths: [LibraryMonthKey] = []
-    private var pendingSyncMonths: [LibraryMonthKey] = []
-    private var isDownloadPhase = false
-    private var downloadTask: Task<Void, Never>?
+    private let store: HomeScreenStore
 
     private enum Section: Hashable {
         case year(Int)
-    }
-
-    fileprivate enum SelectionState {
-        case none, partial, all
-    }
-
-    fileprivate enum ArrowDirection {
-        case toRemote      // arrow.right
-        case toLocal       // arrow.left
-        case sync          // arrow.left.arrow.right
     }
 
     private struct Item: Hashable {
         enum Side { case local, remote }
         let side: Side
         let month: LibraryMonthKey
-        var arrowDirection: ArrowDirection?
-
-        func hash(into hasher: inout Hasher) {
-            hasher.combine(side)
-            hasher.combine(month)
-        }
-
-        static func == (lhs: Item, rhs: Item) -> Bool {
-            lhs.side == rhs.side && lhs.month == rhs.month
-        }
     }
 
     private typealias DataSource = UICollectionViewDiffableDataSource<Section, Item>
@@ -142,8 +27,6 @@ final class NewHomeViewController: UIViewController {
     }()
 
     private var dataSource: DataSource!
-    private var mergedSections: [MergedYearSection] = []
-    private var rowLookup: [LibraryMonthKey: MonthRow] = [:]
     private var panelShownConstraint: Constraint?
     private var panelHiddenConstraint: Constraint?
     private let leftHeaderLabel: MarqueeLabel = {
@@ -163,34 +46,24 @@ final class NewHomeViewController: UIViewController {
     private let actionPanel = SelectionActionPanel()
     private var collectionBottomToActionPanel: Constraint?
 
-    private var localSummaries: [MonthSummary] = []
-    private var remoteSummaries: [MonthSummary] = []
+    private let remoteOverlay = UIView()
+    private let remoteOverlayLabel = UILabel()
+    private let remoteOverlaySpinner = UIActivityIndicatorView(style: .medium)
+    private let remoteOverlayButton = UIButton(type: .system)
 
-    private var reloadTask: Task<Void, Never>?
+    private var rightHeaderBg: UIView!
+    private var isPanelShown = false
 
     private static let headerAreaHeight: CGFloat = 44
 
-    private var hasActiveConnection: Bool {
-        guard let profile = dependencies.appSession.activeProfile else { return false }
-        return resolvedSessionPassword(for: profile) != nil
-    }
-
     init(dependencies: DependencyContainer) {
-        self.dependencies = dependencies
-        self.homeDataManager = HomeIncrementalDataManager(
-            photoLibraryService: dependencies.photoLibraryService,
-            contentHashIndexRepository: ContentHashIndexRepository(databaseManager: dependencies.databaseManager)
-        )
+        self.store = HomeScreenStore(dependencies: dependencies)
         super.init(nibName: nil, bundle: nil)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    deinit {
-        reloadTask?.cancel()
     }
 
     // MARK: - Lifecycle
@@ -201,11 +74,9 @@ final class NewHomeViewController: UIViewController {
 
         buildUI()
         configureDataSource()
-        bindSession()
-        bindDataManager()
+        bindStore()
 
-        loadSavedProfiles()
-        scheduleReloadAllData()
+        store.load()
     }
 
     // MARK: - Layout
@@ -245,7 +116,7 @@ final class NewHomeViewController: UIViewController {
     private func buildUI() {
         let leftHeaderBg = UIView()
         leftHeaderBg.backgroundColor = .materialSurface(light: .Material.Green._100, darkTint: .Material.Green._200, darkAlpha: 0.16)
-        let rightHeaderBg = UIView()
+        rightHeaderBg = UIView()
         rightHeaderBg.backgroundColor = .materialSurface(light: .Material.Green._100, darkTint: .Material.Green._200, darkAlpha: 0.16)
 
         view.addSubview(leftHeaderBg)
@@ -263,7 +134,6 @@ final class NewHomeViewController: UIViewController {
         }
 
         let headerTextColor = UIColor.materialOnContainer(light: .Material.Green._900, dark: .Material.Green._100)
-
         let symbolConfig = UIImage.SymbolConfiguration(pointSize: 14)
 
         leftToggle.setImage(UIImage(systemName: "circle", withConfiguration: symbolConfig), for: .normal)
@@ -319,11 +189,11 @@ final class NewHomeViewController: UIViewController {
             make.top.bottom.equalTo(rightHeaderStack)
         }
 
-        actionPanel.onExecuteTapped = { [weak self] in self?.backupTapped() }
-        actionPanel.onPauseTapped = { [weak self] in self?.executionPauseTapped() }
-        actionPanel.onStopTapped = { [weak self] in self?.executionStopTapped() }
-        actionPanel.onResumeTapped = { [weak self] in self?.executionResumeTapped() }
-        actionPanel.onCompleteTapped = { [weak self] in self?.exitExecutionMode() }
+        actionPanel.onExecuteTapped = { [weak self] in self?.executeTapped() }
+        actionPanel.onPauseTapped = { [weak self] in self?.store.pauseExecution() }
+        actionPanel.onStopTapped = { [weak self] in self?.confirmStop() }
+        actionPanel.onResumeTapped = { [weak self] in self?.store.resumeExecution() }
+        actionPanel.onCompleteTapped = { [weak self] in self?.store.exitExecution() }
         view.addSubview(actionPanel)
         actionPanel.snp.makeConstraints { make in
             make.leading.trailing.equalToSuperview()
@@ -339,54 +209,84 @@ final class NewHomeViewController: UIViewController {
             make.leading.trailing.equalToSuperview()
             self.collectionBottomToActionPanel = make.bottom.equalTo(actionPanel.snp.top).constraint
         }
+
+        // Remote overlay
+        remoteOverlay.backgroundColor = .appBackground
+        remoteOverlay.isHidden = true
+        remoteOverlayLabel.textAlignment = .center
+        remoteOverlayLabel.numberOfLines = 0
+        remoteOverlayLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        remoteOverlayLabel.textColor = .secondaryLabel
+        remoteOverlaySpinner.hidesWhenStopped = true
+
+        var btnCfg = UIButton.Configuration.plain()
+        btnCfg.image = UIImage(systemName: "chevron.down", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11))
+        btnCfg.imagePlacement = .trailing
+        btnCfg.imagePadding = 4
+        btnCfg.title = "选择存储"
+        btnCfg.baseForegroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
+        remoteOverlayButton.configuration = btnCfg
+        remoteOverlayButton.showsMenuAsPrimaryAction = true
+        remoteOverlayButton.menu = buildDestinationMenu()
+
+        let overlayStack = UIStackView(arrangedSubviews: [remoteOverlaySpinner, remoteOverlayLabel, remoteOverlayButton])
+        overlayStack.axis = .vertical
+        overlayStack.spacing = 12
+        overlayStack.alignment = .center
+        remoteOverlay.addSubview(overlayStack)
+        overlayStack.snp.makeConstraints { make in
+            make.center.equalToSuperview()
+            make.leading.trailing.equalToSuperview().inset(16)
+        }
+
+        view.addSubview(remoteOverlay)
+        remoteOverlay.snp.makeConstraints { make in
+            make.leading.equalTo(view.snp.centerX).offset(1)
+            make.trailing.equalToSuperview()
+            make.top.equalTo(rightHeaderBg.snp.bottom)
+            make.bottom.equalTo(actionPanel.snp.top)
+        }
     }
 
     // MARK: - Data Source
 
     private func configureCell(_ cell: MonthCell, item: Item) {
-        let summary: MonthSummary
-        switch item.side {
-        case .local:
-            summary = rowLookup[item.month]?.local
-                ?? MonthSummary(month: item.month, assetCount: 0, photoCount: 0, videoCount: 0, backedUpCount: nil, totalSizeBytes: 0)
-        case .remote:
-            summary = rowLookup[item.month]?.remote
-                ?? MonthSummary(month: item.month, assetCount: 0, photoCount: 0, videoCount: 0, backedUpCount: nil, totalSizeBytes: 0)
-        }
+        let summary = (item.side == .local
+            ? store.rowLookup[item.month]?.local
+            : store.rowLookup[item.month]?.remote)
+            ?? HomeMonthSummary(month: item.month, assetCount: 0, photoCount: 0, videoCount: 0, backedUpCount: nil, totalSizeBytes: 0)
 
         let m = item.month.month
 
-        // Execution mode: completed / running get special appearance
-        if isExecutionMode, executionMonths.contains(item.month) {
-            if completedMonths.contains(item.month) {
+        if let exec = store.executionState, exec.executionMonths.contains(item.month) {
+            if exec.completedMonths.contains(item.month) {
                 cell.configureCompleted(
                     monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: .tertiaryLabel),
                     sizeText: summary.sizeText
                 )
                 return
             }
-            if activeMonths.contains(item.month) {
+            if exec.activeMonths.contains(item.month) {
                 cell.configureRunning(
-                    monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: Self.monthSecondaryTextColor(month: item.month.month)),
+                    monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: HomeSeasonStyle.monthSecondaryTextColor(month: m)),
                     sizeText: summary.sizeText,
-                    bgColor: Self.monthColor(month: m),
-                    titleColor: Self.monthTextColor(month: m),
-                    detailColor: Self.monthSecondaryTextColor(month: m)
+                    bgColor: HomeSeasonStyle.monthColor(month: m),
+                    titleColor: HomeSeasonStyle.monthTextColor(month: m),
+                    detailColor: HomeSeasonStyle.monthSecondaryTextColor(month: m)
                 )
                 return
             }
         }
 
-        // Default: normal cell with selection toggle
         let isSelected = item.side == .local
-            ? selectedLocalMonths.contains(item.month)
-            : selectedRemoteMonths.contains(item.month)
+            ? store.selection.localMonths.contains(item.month)
+            : store.selection.remoteMonths.contains(item.month)
         cell.configure(
-            monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: Self.monthSecondaryTextColor(month: item.month.month)),
+            monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: HomeSeasonStyle.monthSecondaryTextColor(month: m)),
             sizeText: summary.sizeText,
-            bgColor: Self.monthColor(month: m),
-            titleColor: Self.monthTextColor(month: m),
-            detailColor: Self.monthSecondaryTextColor(month: m),
+            bgColor: HomeSeasonStyle.monthColor(month: m),
+            titleColor: HomeSeasonStyle.monthTextColor(month: m),
+            detailColor: HomeSeasonStyle.monthSecondaryTextColor(month: m),
             isSelected: isSelected
         )
     }
@@ -403,22 +303,20 @@ final class NewHomeViewController: UIViewController {
         let headerRegistration = UICollectionView.SupplementaryRegistration<MergedSectionHeaderView>(
             elementKind: UICollectionView.elementKindSectionHeader
         ) { [weak self] supplementaryView, _, indexPath in
-            guard let self, indexPath.section < self.mergedSections.count else { return }
-            let section = self.mergedSections[indexPath.section]
+            guard let self, indexPath.section < self.store.sections.count else { return }
+            let section = self.store.sections[indexPath.section]
             let allMonths = Set(section.rows.map(\.month))
-            let leftState = self.selectionState(for: allMonths, in: self.selectedLocalMonths)
-            let rightState = self.selectionState(for: allMonths, in: self.selectedRemoteMonths)
+            let leftState = self.store.selection.selectionState(for: allMonths, side: .local)
+            let rightState = self.store.selection.selectionState(for: allMonths, side: .remote)
             let accentColor = self.leftHeaderLabel.textColor ?? .secondaryLabel
             supplementaryView.configure(section: section,
                                         leftState: leftState, rightState: rightState,
                                         selectedColor: accentColor, deselectedColor: UIColor.tertiaryLabel)
             supplementaryView.onLeftTap = { [weak self] in
-                guard self?.isExecutionMode != true else { return }
-                self?.toggleYearSelection(section: indexPath.section, side: .local)
+                self?.store.toggleYear(sectionIndex: indexPath.section, side: .local)
             }
             supplementaryView.onRightTap = { [weak self] in
-                guard self?.isExecutionMode != true else { return }
-                self?.toggleYearSelection(section: indexPath.section, side: .remote)
+                self?.store.toggleYear(sectionIndex: indexPath.section, side: .remote)
             }
         }
 
@@ -426,12 +324,12 @@ final class NewHomeViewController: UIViewController {
             elementKind: directionArrowElementKind
         ) { [weak self] arrowView, _, indexPath in
             guard let self else { return }
-            // Badge supplementary indexPaths are sequential (0,1,2...),
-            // but items alternate local/remote in the snapshot.
-            // Badge N corresponds to the local item at index N*2.
             let itemIndexPath = IndexPath(item: indexPath.item * 2, section: indexPath.section)
             guard let item = self.dataSource.itemIdentifier(for: itemIndexPath) else { return }
-            arrowView.configure(direction: item.arrowDirection, percent: self.progressPercent(for: item.month))
+            arrowView.configure(
+                direction: self.store.selection.arrowDirection(for: item.month),
+                percent: self.store.progressPercent(for: item.month)
+            )
         }
 
         dataSource.supplementaryViewProvider = { collectionView, kind, indexPath in
@@ -440,6 +338,289 @@ final class NewHomeViewController: UIViewController {
             }
             return collectionView.dequeueConfiguredReusableSupplementary(using: headerRegistration, for: indexPath)
         }
+    }
+
+    // MARK: - Store Binding
+
+    private func bindStore() {
+        store.onChange = { [weak self] kind in
+            guard let self else { return }
+            switch kind {
+            case .data(let months):    self.renderDataChange(months)
+            case .selection:           self.renderSelectionChange()
+            case .execution:           self.renderExecutionChange()
+            case .connection:          self.renderConnectionChange()
+            case .structural:          self.renderStructuralChange()
+            }
+        }
+
+        store.onAlert = { [weak self] title, message in
+            self?.showAlert(title: title, message: message)
+        }
+
+        store.onNeedsPasswordPrompt = { [weak self] profile, completion in
+            self?.presentPasswordPrompt(for: profile, completion: completion)
+        }
+
+        store.onConnectFailed = { [weak self] profile, error in
+            self?.showAlert(title: "连接失败", message: profile.userFacingStorageErrorMessage(error))
+        }
+    }
+
+    // MARK: - Render Methods
+
+    private func renderDataChange(_ months: Set<LibraryMonthKey>) {
+        reconfigureMonths(months)
+    }
+
+    private func renderSelectionChange() {
+        let allMonths = Set(store.sections.flatMap { $0.rows.map(\.month) })
+        reconfigureMonths(allMonths)
+        updateTopHeaderToggles()
+        updateActionPanel()
+    }
+
+    private func renderExecutionChange() {
+        if let exec = store.executionState {
+            let months = exec.activeMonths.union(exec.completedMonths)
+            reconfigureMonths(months)
+            updateActionPanelFromExecution(exec)
+        } else {
+            // Execution ended
+            hasEnteredExecution = false
+            actionPanel.resetToSelection()
+            renderStructuralChange()
+        }
+        updateSelectionInteraction()
+    }
+
+    private func renderConnectionChange() {
+        updateRightHeaderButton()
+        renderStructuralChange()
+    }
+
+    private func renderStructuralChange() {
+        applyFullSnapshot()
+        updateTopHeaderToggles()
+        updateActionPanel()
+        updateSelectionInteraction()
+        updateRemoteOverlay()
+    }
+
+    // MARK: - Snapshot Helpers
+
+    private func applyFullSnapshot() {
+        var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
+        for section in store.sections {
+            snapshot.appendSections([.year(section.year)])
+            var items: [Item] = []
+            items.reserveCapacity(section.rows.count * 2)
+            for row in section.rows {
+                items.append(Item(side: .local, month: row.month))
+                items.append(Item(side: .remote, month: row.month))
+            }
+            snapshot.appendItems(items)
+        }
+
+        let currentSnapshot = dataSource.snapshot()
+        let existingItems = snapshot.itemIdentifiers.filter { currentSnapshot.indexOfItem($0) != nil }
+        if !existingItems.isEmpty {
+            snapshot.reconfigureItems(existingItems)
+        }
+
+        dataSource.apply(snapshot, animatingDifferences: false)
+        refreshAllVisibleSupplementaries()
+    }
+
+    private func refreshAllVisibleSupplementaries() {
+        let accentColor = leftHeaderLabel.textColor ?? .secondaryLabel
+        for sectionIndex in 0 ..< store.sections.count {
+            let ms = store.sections[sectionIndex]
+            let headerIndexPath = IndexPath(item: 0, section: sectionIndex)
+            if let header = collectionView.supplementaryView(
+                forElementKind: UICollectionView.elementKindSectionHeader,
+                at: headerIndexPath
+            ) as? MergedSectionHeaderView {
+                let allMonths = Set(ms.rows.map(\.month))
+                let leftState = store.selection.selectionState(for: allMonths, side: .local)
+                let rightState = store.selection.selectionState(for: allMonths, side: .remote)
+                header.configure(section: ms, leftState: leftState, rightState: rightState,
+                                 selectedColor: accentColor, deselectedColor: .tertiaryLabel)
+            }
+            for (rowIndex, row) in ms.rows.enumerated() {
+                let badgeIndexPath = IndexPath(item: rowIndex, section: sectionIndex)
+                if let arrowView = collectionView.supplementaryView(
+                    forElementKind: directionArrowElementKind, at: badgeIndexPath
+                ) as? DirectionArrowView {
+                    arrowView.configure(
+                        direction: store.selection.arrowDirection(for: row.month),
+                        percent: store.progressPercent(for: row.month)
+                    )
+                }
+            }
+        }
+    }
+
+    private func reconfigureMonths(_ months: Set<LibraryMonthKey>) {
+        guard !months.isEmpty else { return }
+
+        var itemsToReconfigure: [Item] = []
+        itemsToReconfigure.reserveCapacity(months.count * 2)
+        for month in months {
+            itemsToReconfigure.append(Item(side: .local, month: month))
+            itemsToReconfigure.append(Item(side: .remote, month: month))
+        }
+
+        var snapshot = dataSource.snapshot()
+        snapshot.reconfigureItems(itemsToReconfigure.filter { snapshot.indexOfItem($0) != nil })
+        dataSource.apply(snapshot, animatingDifferences: false)
+
+        let affectedSections = Set(months.compactMap { month in
+            store.sections.firstIndex { $0.rows.contains { $0.month == month } }
+        })
+        let accentColor = leftHeaderLabel.textColor ?? .secondaryLabel
+        for sectionIndex in affectedSections {
+            let ms = store.sections[sectionIndex]
+            let headerIndexPath = IndexPath(item: 0, section: sectionIndex)
+            if let header = collectionView.supplementaryView(
+                forElementKind: UICollectionView.elementKindSectionHeader,
+                at: headerIndexPath
+            ) as? MergedSectionHeaderView {
+                let allMonths = Set(ms.rows.map(\.month))
+                let leftState = store.selection.selectionState(for: allMonths, side: .local)
+                let rightState = store.selection.selectionState(for: allMonths, side: .remote)
+                header.configure(section: ms, leftState: leftState, rightState: rightState,
+                                 selectedColor: accentColor, deselectedColor: .tertiaryLabel)
+            }
+            for (rowIndex, row) in ms.rows.enumerated() where months.contains(row.month) {
+                let badgeIndexPath = IndexPath(item: rowIndex, section: sectionIndex)
+                if let arrowView = collectionView.supplementaryView(
+                    forElementKind: directionArrowElementKind, at: badgeIndexPath
+                ) as? DirectionArrowView {
+                    arrowView.configure(
+                        direction: store.selection.arrowDirection(for: row.month),
+                        percent: store.progressPercent(for: row.month)
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - UI Updates
+
+    private func updateTopHeaderToggles() {
+        let allMonths = Set(store.sections.flatMap { $0.rows.map(\.month) })
+        let headerColor = leftHeaderLabel.textColor ?? .secondaryLabel
+        let config = UIImage.SymbolConfiguration(pointSize: 14)
+
+        func iconName(for state: HomeSelectionState) -> String {
+            switch state {
+            case .all: return "checkmark.circle.fill"
+            case .partial: return "minus.circle.fill"
+            case .none: return "circle"
+            }
+        }
+
+        leftToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(for: allMonths, side: .local)), withConfiguration: config), for: .normal)
+        leftToggle.tintColor = headerColor
+        rightToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(for: allMonths, side: .remote)), withConfiguration: config), for: .normal)
+        rightToggle.tintColor = headerColor
+    }
+
+    private func updateActionPanel() {
+        if let exec = store.executionState {
+            updateActionPanelFromExecution(exec)
+            return
+        }
+
+        let counts = store.selection.counts()
+        actionPanel.configure(backupCount: counts.backup, downloadCount: counts.download, syncCount: counts.sync)
+        actionPanel.backupCategoryButton.menu = buildCategoryMenu(for: .toRemote)
+        actionPanel.downloadCategoryButton.menu = buildCategoryMenu(for: .toLocal)
+        actionPanel.syncCategoryButton.menu = buildCategoryMenu(for: .sync)
+
+        let shouldShow = !store.selection.isEmpty
+        if shouldShow && !isPanelShown {
+            isPanelShown = true
+            panelHiddenConstraint?.deactivate()
+            panelShownConstraint?.activate()
+            UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseOut) { self.view.layoutIfNeeded() }
+        } else if !shouldShow && isPanelShown {
+            isPanelShown = false
+            panelShownConstraint?.deactivate()
+            panelHiddenConstraint?.activate()
+            UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseIn) { self.view.layoutIfNeeded() }
+        }
+    }
+
+    private var hasEnteredExecution = false
+
+    private func updateActionPanelFromExecution(_ exec: HomeExecutionState) {
+        let phases = exec.panelPhases()
+
+        if !isPanelShown {
+            isPanelShown = true
+            panelHiddenConstraint?.deactivate()
+            panelShownConstraint?.activate()
+            view.layoutIfNeeded()
+        }
+
+        if !hasEnteredExecution {
+            hasEnteredExecution = true
+            actionPanel.enterExecution(
+                backupTotal: exec.uploadMonths.count,
+                downloadTotal: exec.downloadMonths.count,
+                syncTotal: exec.syncMonths.count
+            )
+        }
+
+        actionPanel.updateExecution(
+            backupPhase: phases.backup,
+            downloadPhase: phases.download,
+            syncPhase: phases.sync,
+            state: exec.controllerState
+        )
+    }
+
+    private func updateSelectionInteraction() {
+        let selectable = store.isSelectable
+        leftToggle.isEnabled = selectable
+        rightToggle.isEnabled = selectable
+        rightHeaderMenuOverlay.isEnabled = store.executionState == nil
+        rightHeaderButton.isEnabled = store.executionState == nil
+    }
+
+    private func updateRemoteOverlay() {
+        switch store.connectionState {
+        case .connecting:
+            remoteOverlay.isHidden = false
+            remoteOverlaySpinner.startAnimating()
+            remoteOverlayLabel.text = "连接中..."
+            remoteOverlayButton.isHidden = true
+        case .disconnected:
+            remoteOverlay.isHidden = false
+            remoteOverlaySpinner.stopAnimating()
+            remoteOverlayLabel.text = "未连接远端存储"
+            remoteOverlayButton.isHidden = false
+            remoteOverlayButton.menu = buildDestinationMenu()
+        case .connected:
+            remoteOverlay.isHidden = true
+            remoteOverlaySpinner.stopAnimating()
+        }
+    }
+
+    private func updateRightHeaderButton() {
+        switch store.connectionState {
+        case .connecting:
+            rightHeaderLabel.text = "连接中..."
+        case .connected(let profile):
+            rightHeaderLabel.text = profile.storageProfile.indicatorText
+        case .disconnected:
+            rightHeaderLabel.text = "远端存储"
+        }
+        let menu = buildDestinationMenu()
+        rightHeaderButton.menu = menu
+        rightHeaderMenuOverlay.menu = menu
     }
 
     private func configureRightHeaderButton() {
@@ -464,1065 +645,104 @@ final class NewHomeViewController: UIViewController {
     // MARK: - Destination Menu
 
     private func buildDestinationMenu() -> UIMenu {
-        let disconnected = dependencies.appSession.activeProfile == nil
+        let disconnected = !store.connectionState.isConnected
 
         let disconnectAction = UIAction(
             title: "未连接",
             state: disconnected ? .on : .off
         ) { [weak self] _ in
-            self?.disconnectRemote()
+            self?.store.disconnect()
         }
 
         var profileActions: [UIAction] = []
-        for profile in savedProfiles {
-            let isActive = dependencies.appSession.activeProfile?.id == profile.id
+        for profile in store.savedProfiles {
+            let isActive = store.connectionState.activeProfile?.id == profile.id
             let action = UIAction(
                 title: profile.name,
                 subtitle: profile.storageProfile.displaySubtitle,
                 state: isActive ? .on : .off
             ) { [weak self] _ in
-                self?.promptPasswordAndConnect(profile: profile)
+                self?.store.connectProfile(profile)
             }
             profileActions.append(action)
         }
 
         let profileSection = UIMenu(title: "", options: .displayInline, children: profileActions)
         let disconnectSection = UIMenu(title: "", options: .displayInline, children: [disconnectAction])
-
         return UIMenu(children: [profileSection, disconnectSection])
     }
 
-    private func updateRightHeaderButton() {
-        if isConnecting {
-            rightHeaderLabel.text = "连接中..."
-        } else if let profile = dependencies.appSession.activeProfile {
-            rightHeaderLabel.text = profile.storageProfile.indicatorText
-        } else {
-            rightHeaderLabel.text = "远端存储"
-        }
-        let menu = buildDestinationMenu()
-        rightHeaderButton.menu = menu
-        rightHeaderMenuOverlay.menu = menu
-    }
-
-    // MARK: - Bindings
-
-    private func bindSession() {
-        dependencies.appSession.onSessionChanged = { [weak self] _ in
-            guard let self else { return }
-            self.loadSavedProfiles()
-            self.updateRightHeaderButton()
-            self.syncRemoteDataIfNeeded()
-            self.rebuildAndApply()
-        }
-    }
-
-    private func bindDataManager() {
-        homeDataManager.onDataChanged = { [weak self] in
-            self?.rebuildAndApply()
-        }
-        homeDataManager.onFileSizesUpdated = { [weak self] in
-            self?.reloadLocalAndApply()
-        }
-    }
-
-    // MARK: - Data Loading
-
-    private func scheduleReloadAllData() {
-        reloadTask?.cancel()
-        reloadTask = Task { [weak self] in
-            guard let self else { return }
-            await self.homeDataManager.ensureLocalIndexLoaded()
-            self.attemptAutoConnectIfNeeded()
-            self.syncRemoteDataIfNeeded()
-            self.rebuildAndApply()
-        }
-    }
-
-    private func reloadLocalAndApply() {
-        localSummaries = homeDataManager.localMonthSummaries().map {
-            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: $0.backedUpCount, totalSizeBytes: $0.totalSizeBytes)
-        }
-        applyMergedSnapshot()
-    }
-
-    private func reloadRemoteAndApply(overrideActiveConnection: Bool? = nil) {
-        guard overrideActiveConnection ?? hasActiveConnection else {
-            remoteSummaries = []
-            applyMergedSnapshot()
-            return
-        }
-        let summaries = dependencies.backupCoordinator.remoteMonthSummaries()
-        remoteSummaries = summaries.map {
-            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: nil, totalSizeBytes: $0.totalSizeBytes)
-        }
-        applyMergedSnapshot()
-    }
-
-    private func rebuildAndApply() {
-        localSummaries = homeDataManager.localMonthSummaries().map {
-            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: $0.backedUpCount, totalSizeBytes: $0.totalSizeBytes)
-        }
-        if hasActiveConnection {
-            let summaries = dependencies.backupCoordinator.remoteMonthSummaries()
-            remoteSummaries = summaries.map {
-                MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: nil, totalSizeBytes: $0.totalSizeBytes)
-            }
-        } else {
-            remoteSummaries = []
-        }
-        applyMergedSnapshot()
-    }
-
-    private func applyMergedSnapshot() {
-        let localByMonth = Dictionary(uniqueKeysWithValues: localSummaries.map { ($0.month, $0) })
-        let remoteByMonth = Dictionary(uniqueKeysWithValues: remoteSummaries.map { ($0.month, $0) })
-        let allMonths = Set(localByMonth.keys).union(remoteByMonth.keys)
-
-        var rowsByYear: [Int: [MonthRow]] = [:]
-        for month in allMonths {
-            let row = MonthRow(month: month, local: localByMonth[month], remote: remoteByMonth[month])
-            rowsByYear[month.year, default: []].append(row)
-        }
-
-        mergedSections = rowsByYear
-            .map { year, rows in
-                MergedYearSection(year: year, rows: rows.sorted { $0.month > $1.month })
-            }
-            .sorted { $0.year > $1.year }
-
-        rowLookup = [:]
-        for section in mergedSections {
-            for row in section.rows {
-                rowLookup[row.month] = row
-            }
-        }
-
-        var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
-        for section in mergedSections {
-            snapshot.appendSections([.year(section.year)])
-            var items: [Item] = []
-            items.reserveCapacity(section.rows.count * 2)
-            for row in section.rows {
-                items.append(Item(side: .local, month: row.month, arrowDirection: arrowDirection(for: row.month)))
-                items.append(Item(side: .remote, month: row.month))
-            }
-            snapshot.appendItems(items)
-        }
-        dataSource.applySnapshotUsingReloadData(snapshot)
-        reconfigureVisibleHeaders()
-        updateTopHeaderToggles()
-        updateActionPanel()
-    }
-
-    /// Update remoteSummaries and rowLookup from snapshot cache without rebuilding the collection view snapshot.
-    /// Also refreshes local backedUpCount so arrow progress percentages stay current.
-    private func refreshRemoteDataInPlace() {
-        guard hasActiveConnection else { return }
-        let summaries = dependencies.backupCoordinator.remoteMonthSummaries()
-        remoteSummaries = summaries.map {
-            MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: nil, totalSizeBytes: $0.totalSizeBytes)
-        }
-        // Refresh local backedUpCount for progress calculation
-        let localByMonth = Dictionary(uniqueKeysWithValues:
-            homeDataManager.localMonthSummaries().map {
-                ($0.month, MonthSummary(month: $0.month, assetCount: $0.assetCount, photoCount: $0.photoCount, videoCount: $0.videoCount, backedUpCount: $0.backedUpCount, totalSizeBytes: $0.totalSizeBytes))
-            }
-        )
-        let remoteByMonth = Dictionary(uniqueKeysWithValues: remoteSummaries.map { ($0.month, $0) })
-        for (month, var row) in rowLookup {
-            row.remote = remoteByMonth[month]
-            if let localSummary = localByMonth[month] {
-                row.local = localSummary
-            }
-            rowLookup[month] = row
-        }
-        // Also add new remote-only months to rowLookup
-        for summary in remoteSummaries where rowLookup[summary.month] == nil {
-            rowLookup[summary.month] = MonthRow(month: summary.month, local: nil, remote: summary)
-        }
-    }
-
-    private func reconfigureVisibleCells() {
-        for cell in collectionView.visibleCells {
-            guard let monthCell = cell as? MonthCell,
-                  let indexPath = collectionView.indexPath(for: cell),
-                  let item = dataSource.itemIdentifier(for: indexPath) else { continue }
-            configureCell(monthCell, item: item)
-        }
-    }
-
-    private func reconfigureVisibleArrows() {
-        for (sectionIndex, section) in mergedSections.enumerated() {
-            for (rowIndex, row) in section.rows.enumerated() {
-                let badgeIndexPath = IndexPath(item: rowIndex, section: sectionIndex)
-                guard let arrowView = collectionView.supplementaryView(
-                    forElementKind: directionArrowElementKind, at: badgeIndexPath
-                ) as? DirectionArrowView else { continue }
-                let direction = arrowDirection(for: row.month)
-                let percent = progressPercent(for: row.month)
-                arrowView.configure(direction: direction, percent: percent)
-            }
-        }
-    }
-
-    private func arrowDirection(for month: LibraryMonthKey) -> ArrowDirection? {
-        switch (selectedLocalMonths.contains(month), selectedRemoteMonths.contains(month)) {
-        case (true, false):  return .toRemote
-        case (false, true):  return .toLocal
-        case (true, true):   return .sync
-        case (false, false): return nil
-        }
-    }
-
-    /// Returns the progress percentage (0–100) for the given month based on its arrow direction,
-    /// or nil if no direction is set or data is unavailable.
-    ///
-    /// Reconciliation matched count is the baseline (always accurate). During execution,
-    /// real-time processedCountByMonth may be higher (upload phase), but never drops below baseline.
-    private func progressPercent(for month: LibraryMonthKey) -> Double? {
-        guard let row = rowLookup[month] else { return nil }
-        let direction = arrowDirection(for: month)
-        guard let direction else { return nil }
-
-        let localCount = row.local?.assetCount ?? 0
-        let remoteCount = row.remote?.assetCount ?? 0
-        let matched = homeDataManager.matchedCount(for: month)
-
-        // Reconciliation baseline: always reflects true matched state
-        let basePercent: Double?
-        switch direction {
-        case .toRemote:
-            basePercent = localCount > 0 ? Double(matched) / Double(localCount) * 100 : nil
-        case .toLocal:
-            basePercent = remoteCount > 0 ? Double(matched) / Double(remoteCount) * 100 : nil
-        case .sync:
-            let remoteOnly = remoteCount - matched
-            let total = localCount + remoteOnly
-            basePercent = total > 0 ? Double(matched) / Double(total) * 100 : nil
-        }
-
-        // During execution, session progress (processedCount/total) may advance
-        // faster than reconciliation updates. Use whichever is higher.
-        if isExecutionMode, executionMonths.contains(month) {
-            if completedMonths.contains(month) {
-                return 100.0
-            }
-            if let total = assetCountByMonth[month], total > 0,
-               let processed = processedCountByMonth[month], processed > 0 {
-                let sessionPercent = Double(processed) / Double(total) * 100
-                return max(sessionPercent, basePercent ?? 0)
-            }
-        }
-
-        return basePercent
-    }
-
-    private func selectionState(for months: Set<LibraryMonthKey>, in selected: Set<LibraryMonthKey>) -> SelectionState {
-        guard !months.isEmpty else { return .none }
-        if months.isSubset(of: selected) { return .all }
-        if !months.isDisjoint(with: selected) { return .partial }
-        return .none
-    }
-
-    private func reconfigureVisibleHeaders() {
-        let accentColor = leftHeaderLabel.textColor ?? .secondaryLabel
-        for section in 0 ..< collectionView.numberOfSections {
-            guard section < mergedSections.count else { continue }
-            let indexPath = IndexPath(item: 0, section: section)
-            guard let header = collectionView.supplementaryView(
-                forElementKind: UICollectionView.elementKindSectionHeader,
-                at: indexPath
-            ) as? MergedSectionHeaderView else { continue }
-            let ms = mergedSections[section]
-            let allMonths = Set(ms.rows.map(\.month))
-            let leftState = selectionState(for: allMonths, in: selectedLocalMonths)
-            let rightState = selectionState(for: allMonths, in: selectedRemoteMonths)
-            header.configure(section: ms, leftState: leftState, rightState: rightState,
-                             selectedColor: accentColor, deselectedColor: UIColor.tertiaryLabel)
-        }
-    }
-
-    // MARK: - Connection Management
-
-    private func loadSavedProfiles() {
-        savedProfiles = (try? dependencies.databaseManager.fetchServerProfiles()) ?? []
-        activeProfileID = try? dependencies.databaseManager.activeServerProfileID()
-    }
-
-    private func attemptAutoConnectIfNeeded() {
-        guard !didAttemptAutoConnect else { return }
-        didAttemptAutoConnect = true
-
-        guard let activeID = activeProfileID,
-              let activeProfile = savedProfiles.first(where: { $0.id == activeID }) else {
-            return
-        }
-
-        if activeProfile.storageProfile.requiresPassword {
-            guard let password = try? dependencies.keychainService.readPassword(account: activeProfile.credentialRef),
-                  !password.isEmpty else {
-                return
-            }
-            connect(profile: activeProfile, password: password, showFailureAlert: false)
-        } else {
-            connect(profile: activeProfile, password: "", showFailureAlert: false)
-        }
-    }
-
-    private func disconnectRemote() {
-        try? dependencies.databaseManager.setActiveServerProfileID(nil)
-        dependencies.appSession.clear()
-    }
-
-    private func promptPasswordAndConnect(profile: ServerProfileRecord) {
-        if isConnecting { return }
-        if !profile.storageProfile.requiresPassword {
-            connect(profile: profile, password: "")
-            return
-        }
-
-        if let saved = try? dependencies.keychainService.readPassword(account: profile.credentialRef),
-           !saved.isEmpty {
-            connect(profile: profile, password: saved)
-            return
-        }
-
-        let alert = UIAlertController(title: "输入密码", message: profile.name, preferredStyle: .alert)
-        alert.addTextField { textField in
-            textField.placeholder = "Password"
-            textField.isSecureTextEntry = true
-        }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "连接", style: .default) { [weak self] _ in
-            guard let self,
-                  let password = alert.textFields?.first?.text,
-                  !password.isEmpty else { return }
-            try? self.dependencies.keychainService.save(password: password, account: profile.credentialRef)
-            self.connect(profile: profile, password: password)
-        })
-        present(alert, animated: true)
-    }
-
-    private func connect(profile: ServerProfileRecord, password: String, showFailureAlert: Bool = true) {
-        guard !isConnecting else { return }
-        isConnecting = true
-        updateRightHeaderButton()
-
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
-                    profile: profile,
-                    password: password,
-                    onMonthSynced: { [weak self] in
-                        Task { @MainActor [weak self] in
-                            self?.reloadRemoteAndApply(overrideActiveConnection: true)
-                        }
-                    }
-                )
-                try self.dependencies.databaseManager.setActiveServerProfileID(profile.id)
-                self.dependencies.appSession.activate(profile: profile, password: password)
-
-                await MainActor.run {
-                    self.isConnecting = false
-                    self.loadSavedProfiles()
-                    self.updateRightHeaderButton()
-                    self.syncRemoteDataIfNeeded()
-                    self.rebuildAndApply()
-                }
-            } catch {
-                await MainActor.run {
-                    self.isConnecting = false
-                    self.updateRightHeaderButton()
-                    if showFailureAlert {
-                        self.showAlert(
-                            title: "连接失败",
-                            message: profile.userFacingStorageErrorMessage(error)
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    private func resolvedSessionPassword(for profile: ServerProfileRecord) -> String? {
-        if profile.storageProfile.requiresPassword {
-            guard let password = dependencies.appSession.activePassword,
-                  !password.isEmpty else {
-                return nil
-            }
-            return password
-        }
-        return dependencies.appSession.activePassword ?? ""
-    }
-
-    // MARK: - Selection
-
-    private enum Side { case local, remote }
-
-    private func toggleMonthSelection(_ month: LibraryMonthKey, side: Side) {
-        switch side {
-        case .local:
-            if selectedLocalMonths.contains(month) { selectedLocalMonths.remove(month) }
-            else { selectedLocalMonths.insert(month) }
-        case .remote:
-            if selectedRemoteMonths.contains(month) { selectedRemoteMonths.remove(month) }
-            else { selectedRemoteMonths.insert(month) }
-        }
-        refreshSelectionState()
-    }
-
-    private func toggleYearSelection(section: Int, side: Side) {
-        guard section < mergedSections.count else { return }
-        let allMonths = Set(mergedSections[section].rows.map(\.month))
-        switch side {
-        case .local:
-            if allMonths.isSubset(of: selectedLocalMonths) { selectedLocalMonths.subtract(allMonths) }
-            else { selectedLocalMonths.formUnion(allMonths) }
-        case .remote:
-            if allMonths.isSubset(of: selectedRemoteMonths) { selectedRemoteMonths.subtract(allMonths) }
-            else { selectedRemoteMonths.formUnion(allMonths) }
-        }
-        refreshSelectionState()
-    }
-
-    private func toggleAllSelection(side: Side) {
-        let allMonths = Set(mergedSections.flatMap { $0.rows.map(\.month) })
-        switch side {
-        case .local:
-            if allMonths.isSubset(of: selectedLocalMonths) { selectedLocalMonths.removeAll() }
-            else { selectedLocalMonths = allMonths }
-        case .remote:
-            if allMonths.isSubset(of: selectedRemoteMonths) { selectedRemoteMonths.removeAll() }
-            else { selectedRemoteMonths = allMonths }
-        }
-        refreshSelectionState()
-    }
-
-    private func refreshSelectionState() {
-        var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
-        for section in mergedSections {
-            snapshot.appendSections([.year(section.year)])
-            var items: [Item] = []
-            items.reserveCapacity(section.rows.count * 2)
-            for row in section.rows {
-                items.append(Item(side: .local, month: row.month, arrowDirection: arrowDirection(for: row.month)))
-                items.append(Item(side: .remote, month: row.month))
-            }
-            snapshot.appendItems(items)
-        }
-        dataSource.applySnapshotUsingReloadData(snapshot)
-        reconfigureVisibleHeaders()
-        updateTopHeaderToggles()
-        updateActionPanel()
-    }
+    // MARK: - User Actions
 
     @objc private func leftToggleTapped() {
-        toggleAllSelection(side: .local)
+        store.toggleAll(side: .local)
     }
 
     @objc private func rightToggleTapped() {
-        toggleAllSelection(side: .remote)
+        store.toggleAll(side: .remote)
     }
 
-    private func updateTopHeaderToggles() {
-        let allMonths = Set(mergedSections.flatMap { $0.rows.map(\.month) })
-        let headerColor = leftHeaderLabel.textColor ?? .secondaryLabel
-        let config = UIImage.SymbolConfiguration(pointSize: 14)
-
-        let leftState = selectionState(for: allMonths, in: selectedLocalMonths)
-        let leftIcon: String
-        switch leftState {
-        case .all:     leftIcon = "checkmark.circle.fill"
-        case .partial: leftIcon = "minus.circle.fill"
-        case .none:    leftIcon = "circle"
-        }
-        leftToggle.setImage(UIImage(systemName: leftIcon, withConfiguration: config), for: .normal)
-        leftToggle.tintColor = headerColor
-
-        let rightState = selectionState(for: allMonths, in: selectedRemoteMonths)
-        let rightIcon: String
-        switch rightState {
-        case .all:     rightIcon = "checkmark.circle.fill"
-        case .partial: rightIcon = "minus.circle.fill"
-        case .none:    rightIcon = "circle"
-        }
-        rightToggle.setImage(UIImage(systemName: rightIcon, withConfiguration: config), for: .normal)
-        rightToggle.tintColor = headerColor
-    }
-
-    private func selectionCounts() -> (backup: Int, download: Int, sync: Int) {
-        let allSelectedMonths = selectedLocalMonths.union(selectedRemoteMonths)
-        var backup = 0, download = 0, sync = 0
-        for month in allSelectedMonths {
-            switch arrowDirection(for: month) {
-            case .toRemote: backup += 1
-            case .toLocal:  download += 1
-            case .sync:     sync += 1
-            case nil:       break
-            }
-        }
-        return (backup, download, sync)
-    }
-
-    private var isPanelShown = false
-
-    private func updateActionPanel() {
-        let counts = selectionCounts()
-        actionPanel.configure(backupCount: counts.backup, downloadCount: counts.download, syncCount: counts.sync)
-        actionPanel.backupCategoryButton.menu = buildCategoryMenu(for: .toRemote)
-        actionPanel.downloadCategoryButton.menu = buildCategoryMenu(for: .toLocal)
-        actionPanel.syncCategoryButton.menu = buildCategoryMenu(for: .sync)
-
-        let shouldShow = !selectedLocalMonths.isEmpty || !selectedRemoteMonths.isEmpty
-
-        if shouldShow && !isPanelShown {
-            isPanelShown = true
-            panelHiddenConstraint?.deactivate()
-            panelShownConstraint?.activate()
-            UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseOut) {
-                self.view.layoutIfNeeded()
-            }
-        } else if !shouldShow && isPanelShown {
-            isPanelShown = false
-            panelShownConstraint?.deactivate()
-            panelHiddenConstraint?.activate()
-            UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseIn) {
-                self.view.layoutIfNeeded()
-            }
-        }
-    }
-
-    private func syncRemoteDataInBackground(overrideActiveConnection: Bool? = nil) async {
-        let active = overrideActiveConnection ?? hasActiveConnection
-        let revision = homeDataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
-        let backupCoordinator = dependencies.backupCoordinator
-        let snapshotState = await Task.detached {
-            backupCoordinator.currentRemoteSnapshotState(since: revision)
-        }.value
-        homeDataManager.syncRemoteSnapshot(
-            state: snapshotState,
-            hasActiveConnection: active
-        )
-    }
-
-    @discardableResult
-    private func syncRemoteDataIfNeeded(overrideActiveConnection: Bool? = nil) -> Bool {
-        let active = overrideActiveConnection ?? hasActiveConnection
-        let snapshotState = dependencies.backupCoordinator.currentRemoteSnapshotState(
-            since: homeDataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
-        )
-        return homeDataManager.syncRemoteSnapshot(
-            state: snapshotState,
-            hasActiveConnection: active
-        )
-    }
-
-    // MARK: - Actions
-
-    @objc private func backupTapped() {
-        let counts = selectionCounts()
+    private func executeTapped() {
+        let counts = store.selection.counts()
         guard counts.backup > 0 || counts.download > 0 || counts.sync > 0 else { return }
 
         var lines: [String] = []
         if counts.backup > 0 { lines.append("备份 \(counts.backup) 个月份") }
         if counts.download > 0 { lines.append("下载 \(counts.download) 个月份") }
         if counts.sync > 0 { lines.append("同步 \(counts.sync) 个月份") }
-        let message = lines.joined(separator: "\n")
 
-        let allSelectedMonths = selectedLocalMonths.union(selectedRemoteMonths)
-        let upload = allSelectedMonths.filter { arrowDirection(for: $0) == .toRemote }.sorted()
-        let download = allSelectedMonths.filter { arrowDirection(for: $0) == .toLocal }.sorted()
-        let sync = allSelectedMonths.filter { arrowDirection(for: $0) == .sync }.sorted()
+        let upload = store.selection.months(for: .toRemote)
+        let download = store.selection.months(for: .toLocal)
+        let sync = store.selection.months(for: .sync)
 
-        let alert = UIAlertController(
-            title: "确认执行",
-            message: message,
-            preferredStyle: .alert
-        )
+        let alert = UIAlertController(title: "确认执行", message: lines.joined(separator: "\n"), preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "取消", style: .cancel))
         alert.addAction(UIAlertAction(title: "开始", style: .default) { [weak self] _ in
-            self?.enterExecutionMode(uploadMonths: upload, downloadMonths: download, syncMonths: sync)
+            self?.store.startExecution(upload: upload, download: download, sync: sync)
         })
         present(alert, animated: true)
     }
 
-    // MARK: - Execution Mode
-
-    private func enterExecutionMode(
-        uploadMonths: [LibraryMonthKey],
-        downloadMonths: [LibraryMonthKey],
-        syncMonths: [LibraryMonthKey]
-    ) {
-        isExecutionMode = true
-        self.uploadMonths = uploadMonths
-        self.pendingDownloadMonths = downloadMonths
-        self.pendingSyncMonths = syncMonths
-        isDownloadPhase = false
-        downloadTask = nil
-
-        let allMonths = Set(uploadMonths).union(downloadMonths).union(syncMonths)
-        executionMonths = allMonths
-        completedMonths.removeAll()
-        activeMonths.removeAll()
-        assetCountByMonth.removeAll()
-        processedCountByMonth.removeAll()
-        backupSessionController = BackupSessionController(dependencies: dependencies)
-
-        // Switch UI to execution mode
-        actionPanel.enterExecution(
-            backupTotal: uploadMonths.count,
-            downloadTotal: pendingDownloadMonths.count,
-            syncTotal: pendingSyncMonths.count
-        )
-        disableSelectionInteraction()
-        applyMergedSnapshot()
-
-        // Start upload phase if there are upload months
-        let backupTargetMonths = uploadMonths + syncMonths
-        if !backupTargetMonths.isEmpty {
-            startUploadPhase(months: backupTargetMonths)
-        } else {
-            startDownloadPhase()
-        }
-    }
-
-    private func startUploadPhase(months: [LibraryMonthKey]) {
-        let syncMonthSet = Set(pendingSyncMonths)
-        var allAssetIDs = Set<String>()
-        for month in months {
-            let ids = homeDataManager.localAssetIDs(for: month)
-            allAssetIDs.formUnion(ids)
-            // Sync months use reconciliation-based progress (covers both upload & download).
-            // Only pure upload months use session-based processedCount/assetCount tracking.
-            if !syncMonthSet.contains(month) {
-                assetCountByMonth[month] = ids.count
-            }
-        }
-
-        let selection = BackupScopeSelection(
-            selectedAssetIDs: allAssetIDs,
-            selectedAssetCount: allAssetIDs.count,
-            selectedEstimatedBytes: nil,
-            totalAssetCount: allAssetIDs.count,
-            totalEstimatedBytes: nil
-        )
-        backupSessionController.updateScopeSelection(selection)
-
-        backupObserverID = backupSessionController.addObserver { [weak self] snapshot in
-            self?.handleBackupSnapshot(snapshot)
-        }
-
-        backupSessionController.startBackup()
-    }
-
-    private func exitExecutionMode() {
-        downloadTask?.cancel()
-        downloadTask = nil
-        isDownloadPhase = false
-        isExecutionMode = false
-        executionMonths.removeAll()
-        completedMonths.removeAll()
-        activeMonths.removeAll()
-        assetCountByMonth.removeAll()
-        processedCountByMonth.removeAll()
-        uploadMonths.removeAll()
-        pendingDownloadMonths.removeAll()
-        pendingSyncMonths.removeAll()
-
-        if let observerID = backupObserverID {
-            backupSessionController.removeObserver(observerID)
-            backupObserverID = nil
-        }
-
-        selectedLocalMonths.removeAll()
-        selectedRemoteMonths.removeAll()
-
-        actionPanel.resetToSelection()
-        enableSelectionInteraction()
-        // Force-reload local index so newly computed fingerprints from the backup
-        // run are picked up. ensureLocalIndexLoaded (used by scheduleReloadAllData)
-        // skips reload when the index is already loaded, leaving stale fingerprints.
-        reloadTask?.cancel()
-        reloadTask = Task { [weak self] in
-            guard let self else { return }
-            await self.homeDataManager.reloadLocalIndex()
-            self.syncRemoteDataIfNeeded()
-            self.rebuildAndApply()
-        }
-    }
-
-    private func updateActionPanelExecution(state: BackupSessionController.State) {
-        let uploadSet = Set(uploadMonths)
-        let downloadSet = Set(pendingDownloadMonths)
-        let syncSet = Set(pendingSyncMonths)
-
-        func phase(for months: Set<LibraryMonthKey>) -> SelectionActionPanel.CategoryPhase? {
-            guard !months.isEmpty else { return nil }
-            let completed = months.intersection(completedMonths).count
-            let active = !months.isDisjoint(with: activeMonths)
-            if completed == months.count {
-                return .completed(total: months.count)
-            } else if active || completed > 0 {
-                return .running(completed: completed, total: months.count)
-            } else {
-                return .pending(total: months.count)
-            }
-        }
-
-        actionPanel.updateExecution(
-            backupPhase: phase(for: uploadSet),
-            downloadPhase: phase(for: downloadSet),
-            syncPhase: phase(for: syncSet),
-            state: state
-        )
-    }
-
-    private func disableSelectionInteraction() {
-        leftToggle.isEnabled = false
-        rightToggle.isEnabled = false
-        rightHeaderMenuOverlay.isEnabled = false
-        rightHeaderButton.isEnabled = false
-    }
-
-    private func enableSelectionInteraction() {
-        leftToggle.isEnabled = true
-        rightToggle.isEnabled = true
-        rightHeaderMenuOverlay.isEnabled = true
-        rightHeaderButton.isEnabled = true
-    }
-
-    private func executionPauseTapped() {
-        if isDownloadPhase {
-            downloadTask?.cancel()
-            downloadTask = nil
-            backupSessionController.stopBackup()
-            updateActionPanelExecution(state: .paused)
-        } else {
-            backupSessionController.pauseBackup()
-        }
-    }
-
-    private func executionResumeTapped() {
-        if isDownloadPhase {
-            startDownloadPhase()
-        } else {
-            backupSessionController.startBackup()
-        }
-    }
-
-    private func executionStopTapped() {
+    private func confirmStop() {
         let alert = UIAlertController(title: "确认停止", message: "停止后需要重新选择月份执行", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "取消", style: .cancel))
         alert.addAction(UIAlertAction(title: "停止", style: .destructive) { [weak self] _ in
-            guard let self else { return }
-            if self.isDownloadPhase {
-                self.downloadTask?.cancel()
-                self.downloadTask = nil
-                // Stop any in-flight scoped backup from ensureHashIndexAndDownload
-                self.backupSessionController.stopBackup()
-                self.exitExecutionMode()
-            } else {
-                self.backupSessionController.stopBackup()
-            }
+            self?.store.stopExecution()
         })
         present(alert, animated: true)
     }
 
-    // MARK: - Download / Sync Phase
-
-    private func startDownloadPhase() {
-        guard !pendingDownloadMonths.isEmpty || !pendingSyncMonths.isEmpty else {
-            showExecutionCompleted()
-            return
+    private func presentPasswordPrompt(for profile: ServerProfileRecord, completion: @escaping (String) -> Void) {
+        let alert = UIAlertController(title: "输入密码", message: profile.name, preferredStyle: .alert)
+        alert.addTextField { textField in
+            textField.placeholder = "Password"
+            textField.isSecureTextEntry = true
         }
-
-        isDownloadPhase = true
-
-        guard let profile = dependencies.appSession.activeProfile,
-              let password = resolvedSessionPassword(for: profile) else {
-            showAlert(title: "错误", message: "未连接远端存储")
-            exitExecutionMode()
-            return
-        }
-
-        downloadTask = Task { [weak self] in
-            guard let self else { return }
-
-            // Download months: run scoped backup first to ensure local hash index
-            // is populated, preventing duplicate downloads for local assets lacking hashes.
-            for month in self.pendingDownloadMonths {
-                if Task.isCancelled { return }
-                await self.ensureHashIndexAndDownload(month: month, phase: "下载", profile: profile, password: password)
-            }
-
-            // Sync months: upload was done in the upload phase; now download remoteOnly items.
-            for month in self.pendingSyncMonths {
-                if Task.isCancelled { return }
-                await self.ensureHashIndexAndDownload(month: month, phase: "同步", profile: profile, password: password)
-            }
-
-            // All done
-            if !Task.isCancelled {
-                await MainActor.run {
-                    self.activeMonths.removeAll()
-                    self.showExecutionCompleted()
-                }
-            }
-        }
-    }
-
-    /// Run a scoped backup for given asset IDs and wait for completion.
-    /// Returns true if backup completed successfully, false otherwise.
-    private func runScopedBackup(assetIDs: Set<String>) async -> Bool {
-        await withCheckedContinuation { continuation in
-            Task { @MainActor in
-                let selection = BackupScopeSelection(
-                    selectedAssetIDs: assetIDs,
-                    selectedAssetCount: assetIDs.count,
-                    selectedEstimatedBytes: nil,
-                    totalAssetCount: assetIDs.count,
-                    totalEstimatedBytes: nil
-                )
-                self.backupSessionController.updateScopeSelection(selection)
-
-                // Remove existing observer if any
-                if let id = self.backupObserverID {
-                    self.backupSessionController.removeObserver(id)
-                    self.backupObserverID = nil
-                }
-
-                // Start before adding observer: startBackup() resets stale state
-                // (flushedMonths, startedMonths, etc.) from the previous scoped run.
-                // addObserver fires its callback synchronously, so if we observed first
-                // we'd see the old .completed state and resume the continuation immediately.
-                self.backupSessionController.startBackup()
-
-                var hasResumed = false
-                let observerID = self.backupSessionController.addObserver { [weak self] snapshot in
-                    guard let self, !hasResumed else { return }
-                    self.reconfigureVisibleCells()
-
-                    switch snapshot.state {
-                    case .completed:
-                        hasResumed = true
-                        self.backupSessionController.removeObserver(observerID)
-                        self.backupObserverID = nil
-                        continuation.resume(returning: true)
-                    case .failed, .stopped:
-                        hasResumed = true
-                        self.backupSessionController.removeObserver(observerID)
-                        self.backupObserverID = nil
-                        continuation.resume(returning: false)
-                    default:
-                        break
-                    }
-                }
-                self.backupObserverID = observerID
-            }
-        }
-    }
-
-    private func ensureHashIndexAndDownload(
-        month: LibraryMonthKey,
-        phase: String,
-        profile: ServerProfileRecord,
-        password: String
-    ) async {
-        await MainActor.run {
-            self.activeMonths = [month]
-            self.updateActionPanelExecution(state: .running)
-            self.reconfigureVisibleCells()
-            self.reconfigureVisibleArrows()
-        }
-
-        // Run scoped backup to ensure local hash index is populated.
-        // Already-backed-up assets will be skipped quickly.
-        let assetIDs = homeDataManager.localAssetIDs(for: month)
-        if !assetIDs.isEmpty {
-            let uploadCompleted = await runScopedBackup(assetIDs: assetIDs)
-            if !uploadCompleted || Task.isCancelled { return }
-        }
-
-        // Refresh both remote and local data so remoteOnlyItems accurately
-        // excludes local assets whose hashes were just computed by the scoped backup.
-        await MainActor.run { [self] in
-            _ = self.syncRemoteDataIfNeeded()
-            if !assetIDs.isEmpty {
-                self.homeDataManager.refreshLocalIndex(forAssetIDs: assetIDs)
-            }
-        }
-
-        // Now download remoteOnly items with accurate matching
-        await processDownloadMonth(month, phase: phase, profile: profile, password: password)
-    }
-
-    private func processDownloadMonth(
-        _ month: LibraryMonthKey,
-        phase: String,
-        profile: ServerProfileRecord,
-        password: String
-    ) async {
-        let remoteItems = homeDataManager.remoteOnlyItems(for: month)
-        if !remoteItems.isEmpty {
-            // Clear upload-phase tracking so progressPercent falls through to
-            // reconciliation-based matchedCount, which updates per-item via refreshLocalIndex.
-            await MainActor.run {
-                self.assetCountByMonth.removeValue(forKey: month)
-                self.processedCountByMonth.removeValue(forKey: month)
-            }
-
-            do {
-                _ = try await dependencies.restoreService.restoreItems(
-                    items: remoteItems.map(\.resources),
-                    profile: profile,
-                    password: password,
-                    onItemCompleted: { [weak self] _, _, restoredAsset in
-                        guard let self else { return }
-                        if let restoredAsset {
-                            self.writeHashIndexForItem(restoredAsset, remoteItems: remoteItems)
-                            self.homeDataManager.refreshLocalIndex(forAssetIDs: [restoredAsset.asset.localIdentifier])
-                        }
-                        self.reconfigureVisibleCells()
-                        self.reconfigureVisibleArrows()
-                    }
-                )
-            } catch {
-                if Task.isCancelled { return }
-                await MainActor.run {
-                    self.showAlert(title: "\(phase)失败", message: "\(String(format: "%04d年%02d月", month.year, month.month)): \(error.localizedDescription)")
-                }
-            }
-        }
-
-        if Task.isCancelled { return }
-        await MainActor.run {
-            self.completedMonths.insert(month)
-            self.refreshRemoteDataInPlace()
-            self.reconfigureVisibleCells()
-            self.reconfigureVisibleArrows()
-        }
-    }
-
-    private func writeHashIndexForItem(_ result: RestoreService.IndexedRestoredAsset, remoteItems: [RemoteAlbumItem]) {
-        guard result.itemIndex < remoteItems.count else { return }
-        let remoteItem = remoteItems[result.itemIndex]
-
-        var records: [LocalAssetResourceHashRecord] = []
-        var totalSize: Int64 = 0
-        for link in remoteItem.resourceLinks {
-            if let resource = remoteItem.resources.first(where: { $0.contentHash == link.resourceHash }) {
-                records.append(LocalAssetResourceHashRecord(
-                    role: link.role,
-                    slot: link.slot,
-                    contentHash: link.resourceHash,
-                    fileSize: resource.fileSize
-                ))
-                totalSize += resource.fileSize
-            }
-        }
-
-        let hashRepo = ContentHashIndexRepository(databaseManager: dependencies.databaseManager)
-        try? hashRepo.upsertAssetHashSnapshot(
-            assetLocalIdentifier: result.asset.localIdentifier,
-            assetFingerprint: remoteItem.assetFingerprint,
-            resources: records,
-            totalFileSizeBytes: totalSize
-        )
-    }
-
-    private func showExecutionCompleted() {
-        completedMonths = executionMonths
-        activeMonths.removeAll()
-        updateActionPanelExecution(state: .completed)
-        rebuildAndApply()
-    }
-
-    private func handleBackupSnapshot(_ snapshot: BackupSessionController.Snapshot) {
-        guard isExecutionMode else { return }
-
-        // Track month transitions
-        let newCompleted = snapshot.flushedMonths.intersection(executionMonths)
-        let newActive = snapshot.startedMonths.intersection(executionMonths).subtracting(snapshot.flushedMonths)
-
-        let hadMonthStateChange = !newCompleted.subtracting(completedMonths).isEmpty
-            || activeMonths != newActive
-
-        completedMonths.formUnion(newCompleted)
-        activeMonths = newActive
-        processedCountByMonth = snapshot.processedCountByMonth
-
-        updateActionPanelExecution(state: snapshot.state)
-
-        switch snapshot.state {
-        case .completed:
-            completedMonths.formUnion(uploadMonths)
-            activeMonths.removeAll()
-
-            if let id = backupObserverID {
-                backupSessionController.removeObserver(id)
-                backupObserverID = nil
-            }
-
-            rebuildAndApply()
-
-            if !pendingDownloadMonths.isEmpty || !pendingSyncMonths.isEmpty {
-                startDownloadPhase()
-            } else {
-                showExecutionCompleted()
-            }
-
-        case .failed:
-            rebuildAndApply()
-            let alert = UIAlertController(title: "上传失败", message: snapshot.statusText, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "确定", style: .default) { [weak self] _ in
-                self?.exitExecutionMode()
-            })
-            present(alert, animated: true)
-
-        case .stopped:
-            exitExecutionMode()
-
-        default:
-            // Non-terminal: update visible UI incrementally.
-            // syncRemoteDataIfNeeded refreshes reconciliation so matchedCount
-            // stays current for sync months that use reconciliation-based progress.
-            if hadMonthStateChange {
-                rebuildAndApply()
-            } else {
-                refreshRemoteDataInPlace()
-                syncRemoteDataIfNeeded()
-                reconfigureVisibleCells()
-                reconfigureVisibleArrows()
-            }
-        }
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "连接", style: .default) { _ in
+            guard let password = alert.textFields?.first?.text, !password.isEmpty else { return }
+            completion(password)
+        })
+        present(alert, animated: true)
     }
 
     private func scrollToMonth(_ month: LibraryMonthKey) {
-        for (sectionIndex, section) in mergedSections.enumerated() {
+        for (sectionIndex, section) in store.sections.enumerated() {
             guard let rowIndex = section.rows.firstIndex(where: { $0.month == month }) else { continue }
-            let itemIndex = rowIndex * 2
-            let indexPath = IndexPath(item: itemIndex, section: sectionIndex)
+            let indexPath = IndexPath(item: rowIndex * 2, section: sectionIndex)
             collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: true)
             return
         }
     }
 
-    private func buildCategoryMenu(for category: ArrowDirection) -> UIMenu {
-        let allSelected = selectedLocalMonths.union(selectedRemoteMonths)
-        let months = allSelected
-            .filter { arrowDirection(for: $0) == category }
-            .sorted(by: <)
-
+    private func buildCategoryMenu(for category: HomeArrowDirection) -> UIMenu {
+        let months = store.selection.months(for: category)
         var byYear: [Int: [LibraryMonthKey]] = [:]
-        for month in months {
-            byYear[month.year, default: []].append(month)
-        }
+        for month in months { byYear[month.year, default: []].append(month) }
 
         let yearMenus = byYear.keys.sorted().map { year -> UIMenu in
             let actions = byYear[year]!.map { month -> UIAction in
-                let row = rowLookup[month]
+                let row = store.rowLookup[month]
                 let title = String(format: "%02d月", month.month)
                 var parts: [String] = []
                 if let lc = row?.local?.assetCount { parts.append("本地 \(lc) 张") }
@@ -1534,54 +754,8 @@ final class NewHomeViewController: UIViewController {
             }
             return UIMenu(title: "\(year)年", options: .displayInline, children: actions)
         }
-
         return UIMenu(children: yearMenus)
     }
-
-    // MARK: - Season Colors
-
-    private struct SeasonStyle {
-        let bg: UIColor
-        let title: UIColor
-        let detail: UIColor
-    }
-
-    private static let seasonStyles: [SeasonStyle] = [
-        SeasonStyle(
-            bg:     .materialSurface(light: .Material.Green._50, darkTint: .Material.Green._200),
-            title:  .materialOnContainer(light: .Material.Green._900, dark: .Material.Green._100),
-            detail: .materialOnSurfaceVariant(light: .Material.Green._700, dark: .Material.Green._200)
-        ),
-        SeasonStyle(
-            bg:     .materialSurface(light: .Material.Blue._50, darkTint: .Material.Blue._200),
-            title:  .materialOnContainer(light: .Material.Blue._900, dark: .Material.Blue._100),
-            detail: .materialOnSurfaceVariant(light: .Material.Blue._700, dark: .Material.Blue._200)
-        ),
-        SeasonStyle(
-            bg:     .materialSurface(light: .Material.Amber._50, darkTint: .Material.Amber._200),
-            title:  .materialOnContainer(light: .Material.Amber._900, dark: .Material.Amber._100),
-            detail: .materialOnSurfaceVariant(light: .Material.Amber._700, dark: .Material.Amber._200)
-        ),
-        SeasonStyle(
-            bg:     .materialSurface(light: .Material.Red._50, darkTint: .Material.Red._200),
-            title:  .materialOnContainer(light: .Material.Red._900, dark: .Material.Red._100),
-            detail: .materialOnSurfaceVariant(light: .Material.Red._700, dark: .Material.Red._200)
-        ),
-    ]
-
-    fileprivate static func seasonIndex(for month: Int) -> Int {
-        switch month {
-        case 1...3:  return 0
-        case 4...6:  return 1
-        case 7...9:  return 2
-        case 10...12: return 3
-        default:      return 0
-        }
-    }
-
-    fileprivate static func monthColor(month: Int) -> UIColor { seasonStyles[seasonIndex(for: month)].bg }
-    fileprivate static func monthTextColor(month: Int) -> UIColor { seasonStyles[seasonIndex(for: month)].title }
-    fileprivate static func monthSecondaryTextColor(month: Int) -> UIColor { seasonStyles[seasonIndex(for: month)].detail }
 }
 
 // MARK: - UICollectionViewDelegate
@@ -1589,750 +763,10 @@ final class NewHomeViewController: UIViewController {
 extension NewHomeViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
-        guard !isExecutionMode else { return }
         guard let item = dataSource.itemIdentifier(for: indexPath) else { return }
         switch item.side {
-        case .local:
-            toggleMonthSelection(item.month, side: .local)
-        case .remote:
-            toggleMonthSelection(item.month, side: .remote)
+        case .local:  store.toggleMonth(item.month, side: .local)
+        case .remote: store.toggleMonth(item.month, side: .remote)
         }
-    }
-}
-
-// MARK: - Merged Section Header View
-
-private final class MergedSectionHeaderView: UICollectionReusableView {
-    private let leftHalf = HalfHeaderView()
-    private let rightHalf = HalfHeaderView()
-    private let divider = UIView()
-
-    var onLeftTap: (() -> Void)?
-    var onRightTap: (() -> Void)?
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        divider.backgroundColor = .clear
-
-        addSubview(leftHalf)
-        addSubview(divider)
-        addSubview(rightHalf)
-
-        leftHalf.snp.makeConstraints { make in
-            make.top.bottom.leading.equalToSuperview()
-            make.trailing.equalTo(divider.snp.leading)
-        }
-        divider.snp.makeConstraints { make in
-            make.centerX.equalToSuperview()
-            make.top.bottom.equalToSuperview()
-            make.width.equalTo(2)
-        }
-        rightHalf.snp.makeConstraints { make in
-            make.top.bottom.trailing.equalToSuperview()
-            make.leading.equalTo(divider.snp.trailing)
-        }
-
-        leftHalf.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(leftTapped)))
-        rightHalf.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(rightTapped)))
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    @objc private func leftTapped() { onLeftTap?() }
-    @objc private func rightTapped() { onRightTap?() }
-
-    func configure(section: NewHomeViewController.MergedYearSection,
-                   leftState: NewHomeViewController.SelectionState,
-                   rightState: NewHomeViewController.SelectionState,
-                   selectedColor: UIColor, deselectedColor: UIColor) {
-        let headerFont = UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        let headerColor = UIColor.tertiaryLabel
-        leftHalf.configure(
-            title: section.title,
-            countText: Self.mediaCountAttributedString(photoCount: section.localPhotoCount, videoCount: section.localVideoCount, font: headerFont, color: headerColor),
-            sizeText: section.localSizeBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) },
-            selectionState: leftState,
-            selectedColor: selectedColor,
-            deselectedColor: deselectedColor
-        )
-        rightHalf.configure(
-            title: section.title,
-            countText: Self.mediaCountAttributedString(photoCount: section.remotePhotoCount, videoCount: section.remoteVideoCount, font: headerFont, color: headerColor),
-            sizeText: section.remoteSizeBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) },
-            selectionState: rightState,
-            selectedColor: selectedColor,
-            deselectedColor: deselectedColor
-        )
-    }
-
-    private static func mediaCountAttributedString(photoCount: Int, videoCount: Int, font: UIFont, color: UIColor) -> NSAttributedString {
-        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 9, weight: .bold)
-        let result = NSMutableAttributedString()
-        if let img = UIImage(systemName: "photo", withConfiguration: symbolConfig)?.withTintColor(color, renderingMode: .alwaysOriginal) {
-            result.append(NSAttributedString(attachment: NSTextAttachment(image: img)))
-        }
-        result.append(NSAttributedString(string: " \(photoCount)  ", attributes: [.font: font, .foregroundColor: color]))
-        if let img = UIImage(systemName: "video", withConfiguration: symbolConfig)?.withTintColor(color, renderingMode: .alwaysOriginal) {
-            result.append(NSAttributedString(attachment: NSTextAttachment(image: img)))
-        }
-        result.append(NSAttributedString(string: " \(videoCount)", attributes: [.font: font, .foregroundColor: color]))
-        return result
-    }
-}
-
-// MARK: - Half Header View (reused for left/right)
-
-private final class HalfHeaderView: UIView {
-    private let checkmark = UIImageView()
-    private let titleLabel = UILabel()
-    private let countLabel = UILabel()
-    private let sizeLabel = UILabel()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-
-        checkmark.contentMode = .scaleAspectFit
-        checkmark.tintColor = .tertiaryLabel
-        checkmark.isHidden = true
-
-        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
-        titleLabel.textColor = .secondaryLabel
-
-        countLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        countLabel.textColor = .tertiaryLabel
-
-        sizeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        sizeLabel.textColor = .tertiaryLabel
-
-        addSubview(checkmark)
-        addSubview(titleLabel)
-        addSubview(sizeLabel)
-        addSubview(countLabel)
-
-        titleLabel.setContentHuggingPriority(.required, for: .horizontal)
-        titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        checkmark.snp.makeConstraints { make in
-            make.leading.equalToSuperview().inset(18)
-            make.centerY.equalToSuperview()
-            make.size.equalTo(18)
-        }
-        titleLabel.snp.makeConstraints { make in
-            make.leading.equalToSuperview().inset(16)
-            make.bottom.equalTo(snp.centerY).offset(-3)
-        }
-        sizeLabel.snp.makeConstraints { make in
-            make.leading.equalTo(titleLabel.snp.trailing).offset(6)
-            make.centerY.equalTo(titleLabel)
-            make.trailing.lessThanOrEqualToSuperview().inset(16)
-        }
-        countLabel.snp.makeConstraints { make in
-            make.top.equalTo(snp.centerY).offset(3)
-            make.leading.equalToSuperview().inset(16)
-            make.trailing.lessThanOrEqualToSuperview().inset(16)
-        }
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    func configure(title: String?, countText: NSAttributedString?, sizeText: String?,
-                   selectionState: NewHomeViewController.SelectionState,
-                   selectedColor: UIColor?, deselectedColor: UIColor?) {
-        titleLabel.text = title
-        countLabel.attributedText = countText
-        sizeLabel.text = sizeText
-        sizeLabel.isHidden = sizeText == nil
-
-        checkmark.isHidden = false
-        switch selectionState {
-        case .all:
-            checkmark.image = UIImage(systemName: "checkmark.circle.fill")
-            checkmark.tintColor = selectedColor ?? .secondaryLabel
-        case .partial:
-            checkmark.image = UIImage(systemName: "minus.circle.fill")
-            checkmark.tintColor = selectedColor ?? .secondaryLabel
-        case .none:
-            checkmark.image = UIImage(systemName: "circle")
-            checkmark.tintColor = deselectedColor ?? .tertiaryLabel
-        }
-        titleLabel.snp.updateConstraints { make in
-            make.leading.equalToSuperview().inset(50)
-        }
-        countLabel.snp.updateConstraints { make in
-            make.leading.equalToSuperview().inset(50)
-        }
-    }
-}
-
-// MARK: - Direction Arrow Badge
-
-private let directionArrowElementKind = "direction-arrow"
-
-private final class DirectionArrowView: UICollectionReusableView {
-    private let imageView = UIImageView()
-    private let percentLabel: UILabel = {
-        let label = UILabel()
-        label.font = .monospacedDigitSystemFont(ofSize: 9, weight: .light)
-        label.textAlignment = .center
-        label.adjustsFontSizeToFitWidth = true
-        label.minimumScaleFactor = 0.7
-        return label
-    }()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isUserInteractionEnabled = false
-        backgroundColor = .clear
-        imageView.contentMode = .scaleAspectFit
-        addSubview(imageView)
-        addSubview(percentLabel)
-        imageView.snp.makeConstraints { make in
-            make.top.leading.trailing.equalToSuperview()
-            make.height.equalTo(20)
-        }
-        percentLabel.snp.makeConstraints { make in
-            make.top.equalTo(imageView.snp.bottom)
-            make.leading.trailing.equalToSuperview()
-            make.bottom.lessThanOrEqualToSuperview()
-        }
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        imageView.image = nil
-        percentLabel.attributedText = nil
-        isHidden = true
-    }
-
-    func configure(direction: NewHomeViewController.ArrowDirection?, percent: Double? = nil) {
-        guard let direction else {
-            imageView.image = nil
-            percentLabel.attributedText = nil
-            isHidden = true
-            return
-        }
-
-        let symbolName: String
-        let iconColor: UIColor
-        switch direction {
-        case .toRemote:
-            symbolName = "arrow.right"
-            iconColor = .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
-        case .toLocal:
-            symbolName = "arrow.left"
-            iconColor = .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
-        case .sync:
-            symbolName = "arrow.left.arrow.right"
-            iconColor = .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
-        }
-
-        let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
-        imageView.image = UIImage(systemName: symbolName, withConfiguration: config)
-        imageView.tintColor = iconColor
-
-        if let percent {
-            let text = String(format: "%.1f%%", percent)
-            let attrStr = NSAttributedString(string: text, attributes: [
-                .kern: -0.5,
-                .font: percentLabel.font!,
-                .foregroundColor: iconColor
-            ])
-            percentLabel.attributedText = attrStr
-            percentLabel.isHidden = false
-        } else {
-            percentLabel.attributedText = nil
-            percentLabel.isHidden = true
-        }
-
-        isHidden = false
-    }
-}
-
-// MARK: - Month Cell
-
-private final class MonthCell: UICollectionViewCell {
-    private let colorView = UIView()
-    private let checkmark = UIImageView()
-    private let activityIndicator = UIActivityIndicatorView(style: .medium)
-    private let monthLabel = UILabel()
-    private let countLabel = UILabel()
-    private let sizeLabel = UILabel()
-    private var leftStackLeading: Constraint?
-    private var currentTitleColor: UIColor = .label
-    private var currentDetailColor: UIColor = .secondaryLabel
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .clear
-        contentView.backgroundColor = .clear
-
-        contentView.addSubview(colorView)
-        colorView.snp.makeConstraints { make in
-            make.edges.equalToSuperview()
-        }
-
-        checkmark.contentMode = .scaleAspectFit
-        checkmark.tintColor = .tertiaryLabel
-        checkmark.isHidden = true
-        colorView.addSubview(checkmark)
-        checkmark.snp.makeConstraints { make in
-            make.leading.equalToSuperview().inset(18)
-            make.centerY.equalToSuperview()
-            make.size.equalTo(18)
-        }
-
-        activityIndicator.hidesWhenStopped = true
-        colorView.addSubview(activityIndicator)
-        activityIndicator.snp.makeConstraints { make in
-            make.center.equalTo(checkmark)
-        }
-
-        monthLabel.font = .systemFont(ofSize: 15, weight: .medium)
-        countLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
-        sizeLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
-
-        colorView.addSubview(monthLabel)
-        colorView.addSubview(sizeLabel)
-        colorView.addSubview(countLabel)
-
-        monthLabel.setContentHuggingPriority(.required, for: .horizontal)
-        monthLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        monthLabel.snp.makeConstraints { make in
-            self.leftStackLeading = make.leading.equalToSuperview().inset(16).constraint
-            make.bottom.equalTo(colorView.snp.centerY).offset(-3)
-        }
-        sizeLabel.snp.makeConstraints { make in
-            make.leading.equalTo(monthLabel.snp.trailing).offset(6)
-            make.centerY.equalTo(monthLabel)
-            make.trailing.lessThanOrEqualToSuperview().inset(16)
-        }
-        countLabel.snp.makeConstraints { make in
-            make.leading.equalTo(monthLabel)
-            make.top.equalTo(colorView.snp.centerY).offset(3)
-            make.trailing.lessThanOrEqualToSuperview().inset(16)
-        }
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    func configure(monthTitle: String, countText: NSAttributedString, sizeText: String?,
-                   bgColor: UIColor, titleColor: UIColor, detailColor: UIColor, isSelected: Bool?) {
-        monthLabel.text = monthTitle
-        monthLabel.isHidden = false
-        countLabel.attributedText = countText
-        countLabel.isHidden = false
-        sizeLabel.text = sizeText
-        sizeLabel.isHidden = sizeText == nil
-        colorView.backgroundColor = bgColor
-        monthLabel.textColor = titleColor
-        countLabel.textColor = detailColor
-        sizeLabel.textColor = detailColor
-        currentTitleColor = titleColor
-        currentDetailColor = detailColor
-
-        if let selected = isSelected {
-            checkmark.isHidden = false
-            checkmark.image = UIImage(systemName: selected ? "checkmark.circle.fill" : "circle")
-            checkmark.tintColor = selected ? titleColor : detailColor
-            leftStackLeading?.update(inset: 50)
-        } else {
-            checkmark.isHidden = true
-            leftStackLeading?.update(inset: 50)
-        }
-    }
-
-    func configureEmpty(bgColor: UIColor) {
-        monthLabel.text = nil
-        monthLabel.isHidden = true
-        countLabel.text = nil
-        countLabel.isHidden = true
-        sizeLabel.text = nil
-        sizeLabel.isHidden = true
-        checkmark.isHidden = true
-        colorView.backgroundColor = bgColor
-        leftStackLeading?.update(inset: 50)
-    }
-
-    func setSelected(_ selected: Bool) {
-        checkmark.isHidden = false
-        checkmark.image = UIImage(systemName: selected ? "checkmark.circle.fill" : "circle")
-        checkmark.tintColor = selected ? currentTitleColor : currentDetailColor
-        leftStackLeading?.update(inset: 50)
-    }
-
-    func configureRunning(monthTitle: String, countText: NSAttributedString, sizeText: String?,
-                          bgColor: UIColor, titleColor: UIColor, detailColor: UIColor) {
-        monthLabel.text = monthTitle
-        monthLabel.isHidden = false
-        countLabel.attributedText = countText
-        countLabel.isHidden = false
-        sizeLabel.text = sizeText
-        sizeLabel.isHidden = sizeText == nil
-        colorView.backgroundColor = bgColor
-        monthLabel.textColor = titleColor
-        countLabel.textColor = detailColor
-        sizeLabel.textColor = detailColor
-        currentTitleColor = titleColor
-        currentDetailColor = detailColor
-
-        checkmark.isHidden = true
-        activityIndicator.color = titleColor
-        if !activityIndicator.isAnimating {
-            activityIndicator.startAnimating()
-        }
-        leftStackLeading?.update(inset: 50)
-    }
-
-    func configureCompleted(monthTitle: String, countText: NSAttributedString, sizeText: String?) {
-        monthLabel.text = monthTitle
-        monthLabel.isHidden = false
-        countLabel.attributedText = countText
-        countLabel.isHidden = false
-        sizeLabel.text = sizeText
-        sizeLabel.isHidden = sizeText == nil
-
-        let grayBg = UIColor.systemGray5
-        let grayTitle = UIColor.secondaryLabel
-        let grayDetail = UIColor.tertiaryLabel
-        colorView.backgroundColor = grayBg
-        monthLabel.textColor = grayTitle
-        countLabel.textColor = grayDetail
-        sizeLabel.textColor = grayDetail
-        currentTitleColor = grayTitle
-        currentDetailColor = grayDetail
-
-        checkmark.isHidden = false
-        checkmark.image = UIImage(systemName: "checkmark.circle.fill")
-        checkmark.tintColor = .systemGreen
-        activityIndicator.stopAnimating()
-        leftStackLeading?.update(inset: 50)
-    }
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        activityIndicator.stopAnimating()
-    }
-}
-
-// MARK: - Selection Action Panel
-
-private final class SelectionActionPanel: UIView {
-
-    enum CategoryPhase {
-        case pending(total: Int)
-        case running(completed: Int, total: Int)
-        case completed(total: Int)
-    }
-
-    var onExecuteTapped: (() -> Void)?
-    var onPauseTapped: (() -> Void)?
-    var onStopTapped: (() -> Void)?
-    var onResumeTapped: (() -> Void)?
-    var onCompleteTapped: (() -> Void)?
-
-    private var isExecuting = false
-    private var isPaused = false
-    private var isCompleted = false
-
-    private let separator = UIView()
-    private(set) var backupCategoryButton: UIButton = {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-        var cfg = UIButton.Configuration.plain()
-        cfg.image = UIImage(systemName: "arrow.right", withConfiguration: iconConfig)
-        cfg.imagePadding = 6
-        cfg.titleAlignment = .leading
-        cfg.subtitle = "备份"
-        cfg.subtitleTextAttributesTransformer = .init { var a = $0; a.font = .preferredFont(forTextStyle: .caption1); return a }
-        cfg.baseForegroundColor = .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
-        let btn = UIButton(configuration: cfg)
-        btn.showsMenuAsPrimaryAction = true
-        return btn
-    }()
-    private(set) var downloadCategoryButton: UIButton = {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-        var cfg = UIButton.Configuration.plain()
-        cfg.image = UIImage(systemName: "arrow.left", withConfiguration: iconConfig)
-        cfg.imagePadding = 6
-        cfg.titleAlignment = .leading
-        cfg.subtitle = "下载"
-        cfg.subtitleTextAttributesTransformer = .init { var a = $0; a.font = .preferredFont(forTextStyle: .caption1); return a }
-        cfg.baseForegroundColor = .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
-        let btn = UIButton(configuration: cfg)
-        btn.showsMenuAsPrimaryAction = true
-        return btn
-    }()
-    private(set) var syncCategoryButton: UIButton = {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-        var cfg = UIButton.Configuration.plain()
-        cfg.image = UIImage(systemName: "arrow.left.arrow.right", withConfiguration: iconConfig)
-        cfg.imagePadding = 6
-        cfg.titleAlignment = .leading
-        cfg.subtitle = "同步"
-        cfg.subtitleTextAttributesTransformer = .init { var a = $0; a.font = .preferredFont(forTextStyle: .caption1); return a }
-        cfg.baseForegroundColor = .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
-        let btn = UIButton(configuration: cfg)
-        btn.showsMenuAsPrimaryAction = true
-        return btn
-    }()
-    private let executeButton: UIButton = {
-        var cfg = UIButton.Configuration.filled()
-        cfg.title = "执行"
-        cfg.cornerStyle = .capsule
-        cfg.baseBackgroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
-        cfg.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
-        cfg.contentInsets = .init(top: 8, leading: 20, bottom: 8, trailing: 20)
-        return UIButton(configuration: cfg)
-    }()
-    private let stopButton: UIButton = {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
-        var cfg = UIButton.Configuration.filled()
-        cfg.image = UIImage(systemName: "stop.fill", withConfiguration: iconConfig)
-        cfg.cornerStyle = .capsule
-        cfg.baseBackgroundColor = .materialPrimary(light: .Material.Red._600, dark: .Material.Red._200)
-        cfg.baseForegroundColor = .materialOnPrimary(dark: .Material.Red._800)
-        cfg.contentInsets = .init(top: 8, leading: 14, bottom: 8, trailing: 14)
-        return UIButton(configuration: cfg)
-    }()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setupUI()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func setupUI() {
-        backgroundColor = .appPaper
-
-        separator.backgroundColor = .separator
-        addSubview(separator)
-        separator.snp.makeConstraints { make in
-            make.top.leading.trailing.equalToSuperview()
-            make.height.equalTo(0.5)
-        }
-
-        executeButton.addTarget(self, action: #selector(executeTapped), for: .touchUpInside)
-        stopButton.addTarget(self, action: #selector(stopTappedAction), for: .touchUpInside)
-        stopButton.isHidden = true
-
-        let spacer = UIView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        let contentStack = UIStackView(arrangedSubviews: [backupCategoryButton, downloadCategoryButton, syncCategoryButton, spacer, stopButton, executeButton])
-        contentStack.axis = .horizontal
-        contentStack.spacing = 4
-        contentStack.setCustomSpacing(12, after: stopButton)
-        contentStack.alignment = .center
-
-        let inset: CGFloat = 12
-        addSubview(contentStack)
-        contentStack.snp.makeConstraints { make in
-            make.top.equalToSuperview().inset(inset)
-            make.leading.trailing.equalToSuperview().inset(inset)
-            make.bottom.equalTo(safeAreaLayoutGuide).inset(inset)
-        }
-    }
-
-    @objc private func executeTapped() {
-        if isCompleted {
-            onCompleteTapped?()
-        } else if isExecuting {
-            if isPaused {
-                onResumeTapped?()
-            } else {
-                onPauseTapped?()
-            }
-        } else {
-            onExecuteTapped?()
-        }
-    }
-
-    @objc private func stopTappedAction() { onStopTapped?() }
-
-    // MARK: - Selection Mode
-
-    func configure(backupCount: Int, downloadCount: Int, syncCount: Int) {
-        backupCategoryButton.isHidden = backupCount == 0
-        backupCategoryButton.configuration?.title = "\(backupCount)"
-        downloadCategoryButton.isHidden = downloadCount == 0
-        downloadCategoryButton.configuration?.title = "\(downloadCount)"
-        syncCategoryButton.isHidden = syncCount == 0
-        syncCategoryButton.configuration?.title = "\(syncCount)"
-    }
-
-    // MARK: - Execution Mode
-
-    func enterExecution(backupTotal: Int, downloadTotal: Int, syncTotal: Int) {
-        isExecuting = true
-        isPaused = false
-        isCompleted = false
-
-        // Disable menus on category buttons
-        backupCategoryButton.showsMenuAsPrimaryAction = false
-        backupCategoryButton.menu = nil
-        downloadCategoryButton.showsMenuAsPrimaryAction = false
-        downloadCategoryButton.menu = nil
-        syncCategoryButton.showsMenuAsPrimaryAction = false
-        syncCategoryButton.menu = nil
-
-        // Show category buttons that have work, configure as pending
-        applyCategoryPhase(button: backupCategoryButton, phase: backupTotal > 0 ? .pending(total: backupTotal) : nil,
-                           iconName: "arrow.right", color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200))
-        applyCategoryPhase(button: downloadCategoryButton, phase: downloadTotal > 0 ? .pending(total: downloadTotal) : nil,
-                           iconName: "arrow.left", color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200))
-        applyCategoryPhase(button: syncCategoryButton, phase: syncTotal > 0 ? .pending(total: syncTotal) : nil,
-                           iconName: "arrow.left.arrow.right", color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200))
-
-        // Switch execute button to pause
-        applyPauseAppearance()
-        stopButton.isHidden = false
-        stopButton.isEnabled = true
-    }
-
-    func updateExecution(
-        backupPhase: CategoryPhase?,
-        downloadPhase: CategoryPhase?,
-        syncPhase: CategoryPhase?,
-        state: BackupSessionController.State
-    ) {
-        applyCategoryPhase(button: backupCategoryButton, phase: backupPhase,
-                           iconName: "arrow.right", color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200))
-        applyCategoryPhase(button: downloadCategoryButton, phase: downloadPhase,
-                           iconName: "arrow.left", color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200))
-        applyCategoryPhase(button: syncCategoryButton, phase: syncPhase,
-                           iconName: "arrow.left.arrow.right", color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200))
-
-        switch state {
-        case .running:
-            isPaused = false
-            applyPauseAppearance()
-            executeButton.isEnabled = true
-            stopButton.isEnabled = true
-        case .paused:
-            isPaused = true
-            applyResumeAppearance()
-            executeButton.isEnabled = true
-            stopButton.isEnabled = true
-        case .completed:
-            isPaused = false
-            isCompleted = true
-            applyCompleteAppearance()
-            executeButton.isEnabled = true
-            stopButton.isHidden = true
-        case .failed:
-            isPaused = false
-            executeButton.isEnabled = false
-            stopButton.isEnabled = true
-        case .stopped:
-            isPaused = false
-            executeButton.isEnabled = false
-            stopButton.isEnabled = false
-        case .idle:
-            isPaused = false
-            executeButton.isEnabled = false
-            stopButton.isEnabled = false
-        }
-    }
-
-    func resetToSelection() {
-        isExecuting = false
-        isPaused = false
-        isCompleted = false
-
-        // Restore category button menus
-        backupCategoryButton.showsMenuAsPrimaryAction = true
-        downloadCategoryButton.showsMenuAsPrimaryAction = true
-        syncCategoryButton.showsMenuAsPrimaryAction = true
-
-        // Restore category button state
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-        for (button, iconName, color) in [
-            (backupCategoryButton, "arrow.right", UIColor.materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)),
-            (downloadCategoryButton, "arrow.left", UIColor.materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)),
-            (syncCategoryButton, "arrow.left.arrow.right", UIColor.materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)),
-        ] {
-            button.isUserInteractionEnabled = true
-            button.configuration?.showsActivityIndicator = false
-            button.configuration?.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
-            button.configuration?.baseForegroundColor = color
-        }
-
-        // Restore execute button
-        var cfg = UIButton.Configuration.filled()
-        cfg.title = "执行"
-        cfg.cornerStyle = .capsule
-        cfg.baseBackgroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
-        cfg.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
-        cfg.contentInsets = .init(top: 8, leading: 20, bottom: 8, trailing: 20)
-        executeButton.configuration = cfg
-        executeButton.isEnabled = true
-
-        stopButton.isHidden = true
-    }
-
-    // MARK: - Private Helpers
-
-    private func applyCategoryPhase(button: UIButton, phase: CategoryPhase?, iconName: String, color: UIColor) {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-        guard let phase else {
-            button.isHidden = true
-            return
-        }
-        button.isHidden = false
-        button.isUserInteractionEnabled = false
-
-        switch phase {
-        case .pending(let total):
-            button.configuration?.showsActivityIndicator = false
-            button.configuration?.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
-            button.configuration?.title = "\(total)"
-            button.configuration?.baseForegroundColor = color.withAlphaComponent(0.5)
-        case .running(let completed, let total):
-            button.configuration?.showsActivityIndicator = true
-            button.configuration?.title = "\(completed)/\(total)"
-            button.configuration?.baseForegroundColor = color
-        case .completed(let total):
-            button.configuration?.showsActivityIndicator = false
-            button.configuration?.image = UIImage(systemName: "checkmark", withConfiguration: iconConfig)
-            button.configuration?.title = "\(total)/\(total)"
-            button.configuration?.baseForegroundColor = color
-        }
-    }
-
-    private func applyPauseAppearance() {
-        applyExecuteButtonStyle(iconName: "pause.fill", light: .Material.Orange._600, dark: .Material.Orange._200, onDark: .Material.Orange._800)
-    }
-
-    private func applyResumeAppearance() {
-        applyExecuteButtonStyle(iconName: "play.fill", light: .Material.Green._600, dark: .Material.Green._200, onDark: .Material.Green._800)
-    }
-
-    private func applyCompleteAppearance() {
-        var cfg = UIButton.Configuration.filled()
-        cfg.title = "完成"
-        cfg.cornerStyle = .capsule
-        cfg.baseBackgroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
-        cfg.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
-        cfg.contentInsets = .init(top: 8, leading: 20, bottom: 8, trailing: 20)
-        executeButton.configuration = cfg
-    }
-
-    private func applyExecuteButtonStyle(iconName: String, light: UIColor, dark: UIColor, onDark: UIColor) {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
-        var cfg = UIButton.Configuration.filled()
-        cfg.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
-        cfg.cornerStyle = .capsule
-        cfg.baseBackgroundColor = .materialPrimary(light: light, dark: dark)
-        cfg.baseForegroundColor = .materialOnPrimary(dark: onDark)
-        cfg.contentInsets = .init(top: 8, leading: 14, bottom: 8, trailing: 14)
-        executeButton.configuration = cfg
     }
 }

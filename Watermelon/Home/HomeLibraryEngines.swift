@@ -318,6 +318,25 @@ private final class HomeLocalIndexEngine {
         return result
     }
 
+    func localMonthSummary(for month: LibraryMonthKey) -> HomeMonthSummary? {
+        guard let assetIDs = localAssetIDsByMonth[month] else { return nil }
+        var photos = 0, videos = 0, backedUp = 0
+        for id in assetIDs {
+            guard let state = localStatesByAssetID[id] else { continue }
+            switch state.mediaKind {
+            case .photo, .livePhoto: photos += 1
+            case .video: videos += 1
+            }
+            if state.isBackedUp { backedUp += 1 }
+        }
+        return HomeMonthSummary(
+            month: month, assetCount: assetIDs.count,
+            photoCount: photos, videoCount: videos,
+            backedUpCount: backedUp,
+            totalSizeBytes: monthFileSizes[month]
+        )
+    }
+
     func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
         localAssetIDsByMonth[month] ?? []
     }
@@ -558,6 +577,25 @@ private final class HomeRemoteIndexEngine {
         return HomeRemoteDelta(changedMonths: changedMonths, changedFingerprints: changedFingerprints)
     }
 
+    func remoteMonthSummary(for month: LibraryMonthKey) -> HomeMonthSummary? {
+        guard let items = remoteItemsByMonth[month], !items.isEmpty else { return nil }
+        var photos = 0, videos = 0
+        var totalSize: Int64 = 0
+        for item in items {
+            switch item.mediaKind {
+            case .photo, .livePhoto: photos += 1
+            case .video: videos += 1
+            }
+            totalSize += item.resources.reduce(Int64(0)) { $0 + $1.fileSize }
+        }
+        return HomeMonthSummary(
+            month: month, assetCount: items.count,
+            photoCount: photos, videoCount: videos,
+            backedUpCount: nil,
+            totalSizeBytes: totalSize
+        )
+    }
+
     func remoteItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
         remoteItemsByMonth[month] ?? []
     }
@@ -609,8 +647,8 @@ private final class HomeReconcileEngine {
         localIndex: HomeLocalIndexEngine,
         remoteIndex: HomeRemoteIndexEngine,
         hasActiveConnection: Bool
-    ) -> Bool {
-        guard !changedMonths.isEmpty else { return false }
+    ) -> Set<LibraryMonthKey> {
+        guard !changedMonths.isEmpty else { return [] }
 
         for month in changedMonths {
             let localItems = localIndex.localItems(for: month)
@@ -641,7 +679,7 @@ private final class HomeReconcileEngine {
             }
         }
 
-        return true
+        return changedMonths
     }
 
     func mergedMonthItemsSnapshot() -> [(month: LibraryMonthKey, items: [HomeAlbumItem])] {
@@ -687,11 +725,14 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     private let reconcileIndex = HomeReconcileEngine()
 
     private var isObservingPhotoLibrary = false
-    private var hasActiveConnection = false
+    private(set) var hasActiveConnection = false
     private var needsRemoteBootstrap = false
 
-    var onDataChanged: (() -> Void)?
-    var onFileSizesUpdated: (() -> Void)?
+    private var cachedLocalSummaries: [LibraryMonthKey: HomeMonthSummary] = [:]
+    private var cachedRemoteSummaries: [LibraryMonthKey: HomeMonthSummary] = [:]
+
+    var onMonthsChanged: ((Set<LibraryMonthKey>) -> Void)?
+    var onFileSizesUpdated: ((Set<LibraryMonthKey>) -> Void)?
     private var fileSizeScanTask: Task<Void, Never>?
 
     func remoteSnapshotRevisionForQuery(hasActiveConnection: Bool) -> UInt64? {
@@ -720,10 +761,10 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     @discardableResult
-    func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) -> Bool {
-        guard !assetIDs.isEmpty else { return false }
+    func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) -> Set<LibraryMonthKey> {
+        guard !assetIDs.isEmpty else { return [] }
         let existingIDs = localIndex.knownAssetIDs(in: assetIDs)
-        guard !existingIDs.isEmpty else { return false }
+        guard !existingIDs.isEmpty else { return [] }
 
         let hashMap = (try? contentHashIndexRepository.fetchHashMapByAsset(assetIDs: existingIDs)) ?? [:]
         let fingerprintMap = (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset(assetIDs: existingIDs)) ?? [:]
@@ -741,7 +782,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     func syncRemoteSnapshot(
         state: RemoteLibrarySnapshotState,
         hasActiveConnection: Bool
-    ) -> Bool {
+    ) -> Set<LibraryMonthKey> {
         var changedMonths = Set<LibraryMonthKey>()
 
         if self.hasActiveConnection != hasActiveConnection {
@@ -784,6 +825,31 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         }
     }
 
+    /// Incremental summary cache — returns all month rows from cache.
+    func allMonthRows() -> [LibraryMonthKey: HomeMonthRow] {
+        let allMonths = Set(cachedLocalSummaries.keys).union(cachedRemoteSummaries.keys)
+        var result: [LibraryMonthKey: HomeMonthRow] = [:]
+        result.reserveCapacity(allMonths.count)
+        for month in allMonths {
+            result[month] = HomeMonthRow(month: month, local: cachedLocalSummaries[month], remote: cachedRemoteSummaries[month])
+        }
+        return result
+    }
+
+    private func updateCachedSummaries(for months: Set<LibraryMonthKey>) {
+        for month in months {
+            cachedLocalSummaries[month] = localIndex.localMonthSummary(for: month)
+            cachedRemoteSummaries[month] = hasActiveConnection ? remoteIndex.remoteMonthSummary(for: month) : nil
+        }
+    }
+
+    private func rebuildAllCachedSummaries() {
+        cachedLocalSummaries.removeAll()
+        cachedRemoteSummaries.removeAll()
+        let allMonths = localIndex.allMonths.union(remoteIndex.allMonths)
+        updateCachedSummaries(for: allMonths)
+    }
+
     func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
         localIndex.localAssetIDs(for: month)
     }
@@ -819,19 +885,24 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
                 remoteFingerprintSet: self.remoteIndex.assetFingerprintSet
             )
 
-            if self.reconcileIfNeeded(changedMonths) {
-                self.onDataChanged?()
+            let reconciledMonths = self.reconcileIfNeeded(changedMonths)
+            if !reconciledMonths.isEmpty {
+                self.onMonthsChanged?(reconciledMonths)
             }
         }
     }
 
-    private func reconcileIfNeeded(_ changedMonths: Set<LibraryMonthKey>) -> Bool {
-        reconcileIndex.reconcile(
+    private func reconcileIfNeeded(_ changedMonths: Set<LibraryMonthKey>) -> Set<LibraryMonthKey> {
+        let result = reconcileIndex.reconcile(
             changedMonths: changedMonths,
             localIndex: localIndex,
             remoteIndex: remoteIndex,
             hasActiveConnection: hasActiveConnection
         )
+        if !result.isEmpty {
+            updateCachedSummaries(for: result)
+        }
+        return result
     }
 
     @discardableResult
@@ -852,7 +923,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
 
         guard authorized else {
             unregisterPhotoLibraryObserverIfNeeded()
-            return reconcileIfNeeded(localIndex.clearIfNeeded())
+            return !reconcileIfNeeded(localIndex.clearIfNeeded()).isEmpty
         }
 
         let fetchResult = photoLibraryService.fetchAssetsResult()
@@ -868,23 +939,22 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
 
         registerPhotoLibraryObserverIfNeeded()
         startFileSizeScan()
-        return reconcileIfNeeded(changedMonths)
+        return !reconcileIfNeeded(changedMonths).isEmpty
     }
 
     private func startFileSizeScan() {
         fileSizeScanTask?.cancel()
         let months = localIndex.localMonthAssetCounts().map(\.month)
         let cachedSizes = (try? contentHashIndexRepository.fetchFileSizeByAsset()) ?? [:]
-        fileSizeScanTask = Task.detached { [localIndex, weak self] in
+        fileSizeScanTask = Task { [weak self] in
             for month in months {
+                guard let self, !Task.isCancelled else { return }
+                let size = self.localIndex.computeFileSize(for: month, cachedSizes: cachedSizes)
                 guard !Task.isCancelled else { return }
-                let size = localIndex.computeFileSize(for: month, cachedSizes: cachedSizes)
-                guard !Task.isCancelled else { return }
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.localIndex.setMonthFileSize(size, for: month)
-                    self.onFileSizesUpdated?()
-                }
+                self.localIndex.setMonthFileSize(size, for: month)
+                self.cachedLocalSummaries[month] = self.localIndex.localMonthSummary(for: month)
+                self.onFileSizesUpdated?([month])
+                await Task.yield()
             }
         }
     }

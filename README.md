@@ -98,6 +98,7 @@ Swift Package 依赖：
 - `GRDB`
 - `Kingfisher`
 - `SnapKit`
+- `MarqueeLabel`
 - `AppInfo`
 
 ## 本地开发

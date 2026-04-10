@@ -124,4 +124,12 @@ extension ServerProfileRecord {
         }
         return error.localizedDescription
     }
+
+    func resolvedSessionPassword(from session: AppSession) -> String? {
+        if storageProfile.requiresPassword {
+            guard let password = session.activePassword, !password.isEmpty else { return nil }
+            return password
+        }
+        return session.activePassword ?? ""
+    }
 }
