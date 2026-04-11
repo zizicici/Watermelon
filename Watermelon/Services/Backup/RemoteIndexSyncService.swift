@@ -141,7 +141,7 @@ final class RemoteIndexSyncService: Sendable {
 
         for month in changedMonths.sorted() {
             let monthStart = CFAbsoluteTimeGetCurrent()
-            guard let store = try await MonthManifestStore.loadManifestOnlyIfExists(
+            guard let store = try await MonthManifestStore.loadManifestDirect(
                 client: client,
                 basePath: profile.basePath,
                 year: month.year,
@@ -156,19 +156,18 @@ final class RemoteIndexSyncService: Sendable {
             let downloadElapsed = CFAbsoluteTimeGetCurrent() - monthStart
 
             let processStart = CFAbsoluteTimeGetCurrent()
-            let monthAssets = store.allAssets()
-            let monthLinks = monthAssets.flatMap { store.links(forAssetFingerprint: $0.assetFingerprint) }
+            let snapshot = store.unsortedSnapshot()
             if snapshotCache.replaceMonth(
                 month,
-                resources: store.allItems(),
-                assets: monthAssets,
-                assetResourceLinks: monthLinks
+                resources: snapshot.resources,
+                assets: snapshot.assets,
+                assetResourceLinks: snapshot.links
             ) {
                 appliedChangedMonths += 1
                 onMonthSynced?()
             }
             let processElapsed = CFAbsoluteTimeGetCurrent() - processStart
-            syncLog.info("[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(monthAssets.count)")
+            syncLog.info("[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(snapshot.assets.count)")
         }
 
         for month in removedMonths.sorted() {

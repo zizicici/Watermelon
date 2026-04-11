@@ -78,9 +78,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         let monthDeltas = monthEntries.map { entry in
             RemoteLibraryMonthDelta(
                 month: entry.month,
-                resources: Self.sortedResources(entry.resources),
-                assets: Self.sortedAssets(entry.assets),
-                assetResourceLinks: Self.sortedLinks(entry.links)
+                resources: entry.resources,
+                assets: entry.assets,
+                assetResourceLinks: entry.links
             )
         }
 

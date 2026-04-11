@@ -115,12 +115,7 @@ enum HomeAlbumMatching {
             )
         }
 
-        return result.sorted {
-            if $0.creationDate != $1.creationDate {
-                return $0.creationDate > $1.creationDate
-            }
-            return $0.id > $1.id
-        }
+        return result
     }
 
     static func mergeItems(

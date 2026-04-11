@@ -1,12 +1,15 @@
 import Foundation
 import Photos
+import os.log
+
+private let dataLog = Logger(subsystem: "com.zizicici.watermelon", category: "HomeData")
 
 private struct HomeRemoteDelta {
     let changedMonths: Set<LibraryMonthKey>
     let changedFingerprints: Set<Data>
 }
 
-private final class HomeLocalIndexEngine {
+private final class HomeLocalIndexEngine: @unchecked Sendable {
     private struct LocalState {
         let asset: PHAsset
         let month: LibraryMonthKey
@@ -483,7 +486,7 @@ private final class HomeLocalIndexEngine {
 
 }
 
-private final class HomeRemoteIndexEngine {
+private final class HomeRemoteIndexEngine: @unchecked Sendable {
     private var remoteItemsByMonth: [LibraryMonthKey: [RemoteAlbumItem]] = [:]
     private var remoteFingerprintsByMonth: [LibraryMonthKey: Set<Data>] = [:]
     private var remoteFingerprintRefCount: [Data: Int] = [:]
@@ -639,7 +642,7 @@ private final class HomeRemoteIndexEngine {
     }
 }
 
-private final class HomeReconcileEngine {
+private final class HomeReconcileEngine: @unchecked Sendable {
     private var mergedByMonth: [LibraryMonthKey: [HomeAlbumItem]] = [:]
 
     func reconcile(
@@ -728,6 +731,13 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     private(set) var hasActiveConnection = false
     private var needsRemoteBootstrap = false
 
+    private static let processingQueue = DispatchQueue(
+        label: "com.zizicici.watermelon.homeData.processing",
+        qos: .userInitiated
+    )
+    private var isProcessingRemoteData = false
+    private var deferredPhotoChange: PHChange?
+
     private var cachedLocalSummaries: [LibraryMonthKey: HomeMonthSummary] = [:]
     private var cachedRemoteSummaries: [LibraryMonthKey: HomeMonthSummary] = [:]
 
@@ -783,9 +793,11 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         state: RemoteLibrarySnapshotState,
         hasActiveConnection: Bool
     ) -> Set<LibraryMonthKey> {
+        let start = CFAbsoluteTimeGetCurrent()
         var changedMonths = Set<LibraryMonthKey>()
 
-        if self.hasActiveConnection != hasActiveConnection {
+        let connectionFlipped = self.hasActiveConnection != hasActiveConnection
+        if connectionFlipped {
             self.hasActiveConnection = hasActiveConnection
             if !hasActiveConnection {
                 needsRemoteBootstrap = true
@@ -811,7 +823,87 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
             needsRemoteBootstrap = false
         }
 
-        return reconcileIfNeeded(changedMonths)
+        let result = reconcileIfNeeded(changedMonths)
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+        dataLog.info("[HomeData] syncRemoteSnapshot: isFullSnapshot=\(state.isFullSnapshot), deltaMonths=\(state.monthDeltas.count), connected=\(hasActiveConnection), connectionFlipped=\(connectionFlipped), changedFingerprints=\(remoteDelta.changedFingerprints.count), reconciledMonths=\(result.count), \(String(format: "%.3f", elapsed))s")
+        return result
+    }
+
+    /// Processes remote snapshot on a dedicated serial queue so the main thread stays free.
+    /// Only `updateCachedSummaries` and UI updates run on MainActor after processing completes.
+    @discardableResult
+    func syncRemoteSnapshotOnProcessingQueue(
+        state: RemoteLibrarySnapshotState,
+        hasActiveConnection: Bool
+    ) async -> Set<LibraryMonthKey> {
+        // MainActor: connection state (fast)
+        let connectionFlipped = self.hasActiveConnection != hasActiveConnection
+        if connectionFlipped {
+            self.hasActiveConnection = hasActiveConnection
+            if !hasActiveConnection { needsRemoteBootstrap = true }
+        }
+        isProcessingRemoteData = true
+
+        let localIdx = self.localIndex
+        let remoteIdx = self.remoteIndex
+        let reconcileIdx = self.reconcileIndex
+        let localAllMonths = connectionFlipped ? localIndex.allMonths : []
+        let remoteAllMonths = connectionFlipped ? remoteIndex.allMonths : []
+
+        // Dedicated serial queue: apply + refreshBackedUpState + reconcile
+        let reconciledMonths: Set<LibraryMonthKey> = await withCheckedContinuation { cont in
+            Self.processingQueue.async {
+                let start = CFAbsoluteTimeGetCurrent()
+
+                let remoteDelta = remoteIdx.apply(state: state, hasActiveConnection: hasActiveConnection)
+                var changedMonths = remoteDelta.changedMonths
+
+                if !remoteDelta.changedFingerprints.isEmpty {
+                    changedMonths.formUnion(
+                        localIdx.refreshBackedUpState(
+                            changedFingerprints: remoteDelta.changedFingerprints,
+                            remoteFingerprintSet: remoteIdx.assetFingerprintSet,
+                            limitMonths: remoteDelta.changedMonths
+                        )
+                    )
+                }
+
+                if connectionFlipped {
+                    changedMonths.formUnion(localAllMonths)
+                    changedMonths.formUnion(remoteAllMonths)
+                }
+
+                // step3: reconcile
+                let result = reconcileIdx.reconcile(
+                    changedMonths: changedMonths,
+                    localIndex: localIdx,
+                    remoteIndex: remoteIdx,
+                    hasActiveConnection: hasActiveConnection
+                )
+
+                let elapsed = CFAbsoluteTimeGetCurrent() - start
+                dataLog.info("[HomeData] processingQueue: months=\(result.count), fingerprints=\(remoteDelta.changedFingerprints.count), \(String(format: "%.3f", elapsed))s")
+
+                cont.resume(returning: result)
+            }
+        }
+
+        // MainActor: post-processing
+        if hasActiveConnection, state.isFullSnapshot {
+            needsRemoteBootstrap = false
+        }
+        if !reconciledMonths.isEmpty {
+            updateCachedSummaries(for: reconciledMonths)
+        }
+        isProcessingRemoteData = false
+
+        // Process any deferred photo library changes
+        if let deferred = deferredPhotoChange {
+            deferredPhotoChange = nil
+            applyPhotoLibraryChangeNow(deferred)
+        }
+
+        return reconciledMonths
     }
 
     func localMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, backedUpCount: Int?, totalSizeBytes: Int64?)] {
@@ -866,32 +958,42 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         Task { @MainActor [weak self] in
             guard let self else { return }
 
-            let changedMonths = self.localIndex.applyPhotoLibraryChange(
-                changeInstance,
-                fetchHashMapByAsset: { [contentHashIndexRepository] assetIDs in
-                    guard !assetIDs.isEmpty else { return [:] }
-                    return (try? contentHashIndexRepository.fetchHashMapByAsset(assetIDs: assetIDs)) ?? [:]
-                },
-                fetchFingerprintByAsset: { [contentHashIndexRepository] assetIDs in
-                    guard !assetIDs.isEmpty else { return [:] }
-                    return (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset(assetIDs: assetIDs)) ?? [:]
-                },
-                fetchAllHashMapByAsset: { [contentHashIndexRepository] in
-                    (try? contentHashIndexRepository.fetchHashMapByAsset()) ?? [:]
-                },
-                fetchAllFingerprintByAsset: { [contentHashIndexRepository] in
-                    (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset()) ?? [:]
-                },
-                remoteFingerprintSet: self.remoteIndex.assetFingerprintSet
-            )
-
-            let reconciledMonths = self.reconcileIfNeeded(changedMonths)
-            if !reconciledMonths.isEmpty {
-                self.rescanFileSizes(for: reconciledMonths)
-                self.onMonthsChanged?(reconciledMonths)
+            if self.isProcessingRemoteData {
+                self.deferredPhotoChange = changeInstance
+                return
             }
+
+            self.applyPhotoLibraryChangeNow(changeInstance)
         }
     }
+
+    private func applyPhotoLibraryChangeNow(_ changeInstance: PHChange) {
+        let changedMonths = localIndex.applyPhotoLibraryChange(
+            changeInstance,
+            fetchHashMapByAsset: { [contentHashIndexRepository] assetIDs in
+                guard !assetIDs.isEmpty else { return [:] }
+                return (try? contentHashIndexRepository.fetchHashMapByAsset(assetIDs: assetIDs)) ?? [:]
+            },
+            fetchFingerprintByAsset: { [contentHashIndexRepository] assetIDs in
+                guard !assetIDs.isEmpty else { return [:] }
+                return (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset(assetIDs: assetIDs)) ?? [:]
+            },
+            fetchAllHashMapByAsset: { [contentHashIndexRepository] in
+                (try? contentHashIndexRepository.fetchHashMapByAsset()) ?? [:]
+            },
+            fetchAllFingerprintByAsset: { [contentHashIndexRepository] in
+                (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset()) ?? [:]
+            },
+            remoteFingerprintSet: remoteIndex.assetFingerprintSet
+        )
+
+        let reconciledMonths = reconcileIfNeeded(changedMonths)
+        if !reconciledMonths.isEmpty {
+            rescanFileSizes(for: reconciledMonths)
+            onMonthsChanged?(reconciledMonths)
+        }
+    }
+
 
     private func reconcileIfNeeded(_ changedMonths: Set<LibraryMonthKey>) -> Set<LibraryMonthKey> {
         let result = reconcileIndex.reconcile(

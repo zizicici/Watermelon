@@ -170,10 +170,36 @@ extension MonthManifestStore {
             return nil
         }
 
+        return try await loadManifestDirect(
+            client: client,
+            basePath: basePath,
+            year: year,
+            month: month,
+            manifestAbsolutePath: manifestAbsolutePath
+        )
+    }
+
+    /// Downloads and loads a manifest directly, skipping the existence check.
+    /// Use when the caller has already confirmed the manifest exists (e.g., via scanManifestDigests).
+    static func loadManifestDirect(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        year: Int,
+        month: Int,
+        manifestAbsolutePath: String? = nil
+    ) async throws -> MonthManifestStore? {
+        let absPath = manifestAbsolutePath ?? {
+            let monthRelativePath = String(format: "%04d/%02d", year, month)
+            return RemotePathBuilder.absolutePath(
+                basePath: basePath,
+                remoteRelativePath: monthRelativePath + "/" + Self.manifestFileName
+            )
+        }()
+
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
         do {
-            try await client.download(remotePath: manifestAbsolutePath, localURL: localURL)
+            try await client.download(remotePath: absPath, localURL: localURL)
         } catch {
             try? FileManager.default.removeItem(at: localURL)
             return nil

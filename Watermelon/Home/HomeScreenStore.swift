@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let homeLog = Logger(subsystem: "com.zizicici.watermelon", category: "HomeSync")
 
 @MainActor
 final class HomeScreenStore {
@@ -91,16 +94,8 @@ final class HomeScreenStore {
         connectionController.onStateChanged = { [weak self] in
             self?.handleConnectionChange()
         }
-        connectionController.onMonthSynced = { [weak self] in
-            guard let self else { return }
-            // Force hasActiveConnection=true: this fires during reloadRemoteIndex,
-            // before appSession.activate(), so connectionState is still .connecting.
-            let snapshotState = self.dependencies.backupCoordinator.currentRemoteSnapshotState(
-                since: self.dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: true)
-            )
-            self.dataManager.syncRemoteSnapshot(state: snapshotState, hasActiveConnection: true)
-            self.refreshAllAndNotify()
-        }
+        // Remote snapshot data accumulates in snapshotCache on the connection thread;
+        // processing happens in handleConnectionChange once connected.
         connectionController.onNeedsPasswordPrompt = { [weak self] profile, completion in
             self?.onNeedsPasswordPrompt?(profile, completion)
         }
@@ -236,6 +231,7 @@ final class HomeScreenStore {
 
     private func handleExecutionChange() {
         let isNowActive = executionCoordinator.isActive
+        homeLog.info("[HomeSync] handleExecutionChange: active=\(isNowActive), wasActive=\(self.wasExecutionActive)")
 
         if wasExecutionActive && !isNowActive {
             // Execution ended
@@ -262,25 +258,57 @@ final class HomeScreenStore {
     }
 
     private func handleConnectionChange() {
+        let stateDesc: String
+        switch connectionState {
+        case .connected: stateDesc = "connected"
+        case .connecting: stateDesc = "connecting"
+        case .disconnected: stateDesc = "disconnected"
+        }
+        homeLog.info("[HomeSync] handleConnectionChange: state=\(stateDesc)")
+
+        reloadTask?.cancel()
         selection.clear()
-        // Clear stale remote data from previous profile before syncing new one.
-        // This ensures profile A's months don't leak into profile B's view.
-        let disconnectState = dependencies.backupCoordinator.currentRemoteSnapshotState(since: nil)
-        dataManager.syncRemoteSnapshot(state: disconnectState, hasActiveConnection: false)
-        syncRemoteDataIfNeeded()
-        refreshRowLookup()
-        rebuildSections()
-        onChange?(.connection)
+
+        if connectionState.isConnected {
+            // Connected: heavy processing on dedicated serial queue, main thread stays free.
+            reloadTask = Task { [weak self] in
+                guard let self else { return }
+                let start = CFAbsoluteTimeGetCurrent()
+                let revision = self.dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: true)
+                let state = self.dependencies.backupCoordinator.currentRemoteSnapshotState(since: revision)
+                homeLog.info("[HomeSync] handleConnectionChange: processing start, revision=\(revision.map { String($0) } ?? "nil"), deltaMonths=\(state.monthDeltas.count)")
+                await self.dataManager.syncRemoteSnapshotOnProcessingQueue(state: state, hasActiveConnection: true)
+                guard !Task.isCancelled else { return }
+                self.refreshRowLookup()
+                self.rebuildSections()
+                let elapsed = CFAbsoluteTimeGetCurrent() - start
+                homeLog.info("[HomeSync] handleConnectionChange: done, \(String(format: "%.3f", elapsed))s")
+                self.onChange?(.connection)
+            }
+        } else {
+            // Disconnecting or .connecting — clear stale remote data synchronously (fast).
+            let disconnectState = dependencies.backupCoordinator.currentRemoteSnapshotState(since: nil)
+            dataManager.syncRemoteSnapshot(state: disconnectState, hasActiveConnection: false)
+            homeLog.info("[HomeSync] handleConnectionChange: cleared remote data")
+            syncRemoteDataIfNeeded()
+            refreshRowLookup()
+            rebuildSections()
+            onChange?(.connection)
+        }
     }
 
     // MARK: - Data Refresh
 
     func syncRemoteDataIfNeeded() {
+        let start = CFAbsoluteTimeGetCurrent()
         let active = connectionState.isConnected
+        let revision = dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
         let snapshotState = dependencies.backupCoordinator.currentRemoteSnapshotState(
-            since: dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
+            since: revision
         )
         dataManager.syncRemoteSnapshot(state: snapshotState, hasActiveConnection: active)
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+        homeLog.info("[HomeSync] syncRemoteDataIfNeeded: revision=\(revision.map { String($0) } ?? "nil"), connected=\(active), deltaMonths=\(snapshotState.monthDeltas.count), \(String(format: "%.3f", elapsed))s")
     }
 
     private func refreshRowLookup() {

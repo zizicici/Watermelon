@@ -1,5 +1,8 @@
 import Foundation
 import Photos
+import os.log
+
+private let homeExecLog = Logger(subsystem: "com.zizicici.watermelon", category: "HomeExec")
 
 @MainActor
 final class HomeExecutionCoordinator {
@@ -258,7 +261,10 @@ final class HomeExecutionCoordinator {
             exit()
 
         default:
-            onSyncRemoteData?()
+            if hasNewCompletions || !snapshot.processedCountByMonth.isEmpty {
+                homeExecLog.info("[HomeExec] backupSnapshot: syncRemote, hasNewCompletions=\(hasNewCompletions), hasProgress=\(!snapshot.processedCountByMonth.isEmpty)")
+                onSyncRemoteData?()
+            }
             onStateChanged?()
         }
     }

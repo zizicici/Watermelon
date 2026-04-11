@@ -117,6 +117,16 @@ final class MonthManifestStore {
         }
     }
 
+    /// Unsorted bulk export for snapshotCache — avoids sorting overhead
+    /// since replaceMonth builds its own dictionaries by key.
+    func unsortedSnapshot() -> (resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink]) {
+        (
+            resources: Array(itemsByFileName.values),
+            assets: Array(assetsByFingerprint.values),
+            links: assetLinksByFingerprint.values.flatMap { $0 }
+        )
+    }
+
     @discardableResult
     func upsertResource(_ item: RemoteManifestResource) throws -> RemoteManifestResource {
         if let existingFileName = itemsByHash[item.contentHash],
