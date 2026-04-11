@@ -6,6 +6,7 @@ final class SelectionActionPanel: UIView {
     enum CategoryPhase {
         case pending(total: Int)
         case running(completed: Int, total: Int)
+        case paused(completed: Int, total: Int)
         case completed(total: Int)
         case failed(completed: Int, failed: Int, total: Int)
     }
@@ -177,7 +178,7 @@ final class SelectionActionPanel: UIView {
         backupPhase: CategoryPhase?,
         downloadPhase: CategoryPhase?,
         syncPhase: CategoryPhase?,
-        state: BackupSessionController.State
+        phase: ExecutionPhase
     ) {
         applyCategoryPhase(button: backupCategoryButton, phase: backupPhase,
                            iconName: "arrow.right", color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200))
@@ -186,35 +187,26 @@ final class SelectionActionPanel: UIView {
         applyCategoryPhase(button: syncCategoryButton, phase: syncPhase,
                            iconName: "arrow.left.arrow.right", color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200))
 
-        switch state {
-        case .running:
-            isPaused = false
+        isPaused = false
+        isCompleted = false
+        stopButton.isHidden = false
+        stopButton.isEnabled = true
+
+        switch phase {
+        case .uploading, .downloading:
             applyPauseAppearance()
             executeButton.isEnabled = true
-            stopButton.isEnabled = true
-        case .paused:
+        case .uploadPaused, .downloadPaused:
             isPaused = true
             applyResumeAppearance()
             executeButton.isEnabled = true
-            stopButton.isEnabled = true
         case .completed:
-            isPaused = false
             isCompleted = true
             applyCompleteAppearance()
             executeButton.isEnabled = true
             stopButton.isHidden = true
         case .failed:
-            isPaused = false
             executeButton.isEnabled = false
-            stopButton.isEnabled = true
-        case .stopped:
-            isPaused = false
-            executeButton.isEnabled = false
-            stopButton.isEnabled = false
-        case .idle:
-            isPaused = false
-            executeButton.isEnabled = false
-            stopButton.isEnabled = false
         }
     }
 
@@ -270,6 +262,11 @@ final class SelectionActionPanel: UIView {
             button.configuration?.baseForegroundColor = color.withAlphaComponent(0.5)
         case .running(let completed, let total):
             button.configuration?.showsActivityIndicator = true
+            button.configuration?.title = "\(completed)/\(total)"
+            button.configuration?.baseForegroundColor = color
+        case .paused(let completed, let total):
+            button.configuration?.showsActivityIndicator = false
+            button.configuration?.image = UIImage(systemName: "pause.fill", withConfiguration: iconConfig)
             button.configuration?.title = "\(completed)/\(total)"
             button.configuration?.baseForegroundColor = color
         case .completed(let total):

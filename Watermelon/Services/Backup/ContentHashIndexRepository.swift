@@ -371,6 +371,33 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
+    func writeHashIndex(
+        assetLocalIdentifier: String,
+        remoteAssetFingerprint: Data,
+        resourceLinks: [RemoteAssetResourceLink],
+        resources: [RemoteManifestResource]
+    ) {
+        var records: [LocalAssetResourceHashRecord] = []
+        var totalSize: Int64 = 0
+        for link in resourceLinks {
+            if let resource = resources.first(where: { $0.contentHash == link.resourceHash }) {
+                records.append(LocalAssetResourceHashRecord(
+                    role: link.role,
+                    slot: link.slot,
+                    contentHash: link.resourceHash,
+                    fileSize: resource.fileSize
+                ))
+                totalSize += resource.fileSize
+            }
+        }
+        try? upsertAssetHashSnapshot(
+            assetLocalIdentifier: assetLocalIdentifier,
+            assetFingerprint: remoteAssetFingerprint,
+            resources: records,
+            totalFileSizeBytes: totalSize
+        )
+    }
+
     func deleteIndexEntries(assetIDs: [String]) throws {
         guard !assetIDs.isEmpty else { return }
         let chunkSize = 400

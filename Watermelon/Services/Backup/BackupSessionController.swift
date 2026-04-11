@@ -29,6 +29,7 @@ final class BackupSessionController {
         let total: Int
         let startedMonths: Set<LibraryMonthKey>
         let flushedMonths: Set<LibraryMonthKey>
+        let completedMonths: Set<LibraryMonthKey>
         let processedCountByMonth: [LibraryMonthKey: Int]
         let failedCountByMonth: [LibraryMonthKey: Int]
     }
@@ -72,6 +73,7 @@ final class BackupSessionController {
     private var completedAssetIDsForResume: Set<String> = []
     private(set) var startedMonths = Set<LibraryMonthKey>()
     private(set) var flushedMonths = Set<LibraryMonthKey>()
+    private(set) var completedMonths = Set<LibraryMonthKey>()
     private(set) var processedCountByMonth: [LibraryMonthKey: Int] = [:]
     private(set) var failedCountByMonth: [LibraryMonthKey: Int] = [:]
 
@@ -114,6 +116,7 @@ final class BackupSessionController {
             total: total,
             startedMonths: startedMonths,
             flushedMonths: flushedMonths,
+            completedMonths: completedMonths,
             processedCountByMonth: processedCountByMonth,
             failedCountByMonth: failedCountByMonth
         )
@@ -200,6 +203,7 @@ final class BackupSessionController {
         if shouldResetSessionItems {
             startedMonths.removeAll()
             flushedMonths.removeAll()
+            completedMonths.removeAll()
             processedCountByMonth.removeAll()
             failedCountByMonth.removeAll()
         }
@@ -219,6 +223,7 @@ final class BackupSessionController {
             guard let self else { return }
             if Task.isCancelled {
                 self.startCommandTask = nil
+                self.resolveStartCancellation(mode: mode)
                 return
             }
 
@@ -226,11 +231,15 @@ final class BackupSessionController {
                 try await self.waitForPreviousRunToClear()
             } catch {
                 self.startCommandTask = nil
-                self.isStartCommandInFlight = false
-                self.controlPhase = .idle
-                self.state = previousState
-                self.statusText = previousStatusText
-                self.notifyObserversNow()
+                if error is CancellationError {
+                    self.resolveStartCancellation(mode: mode)
+                } else {
+                    self.isStartCommandInFlight = false
+                    self.controlPhase = .idle
+                    self.state = previousState
+                    self.statusText = previousStatusText
+                    self.notifyObserversNow()
+                }
                 return
             }
 
@@ -243,7 +252,15 @@ final class BackupSessionController {
             )
 
             self.startCommandTask = nil
-            if Task.isCancelled { return }
+            if Task.isCancelled {
+                if runToken != nil {
+                    self.isStartCommandInFlight = false
+                    self.controlPhase = .idle
+                } else {
+                    self.resolveStartCancellation(mode: mode)
+                }
+                return
+            }
 
             guard runToken != nil else {
                 self.isStartCommandInFlight = false
@@ -391,8 +408,8 @@ final class BackupSessionController {
     }
 
     private func applyIntent(_ intent: BackupTerminationIntent) {
+        activeTerminationIntent = intent
         if runTask != nil {
-            activeTerminationIntent = intent
             runTask?.cancel()
             return
         }
@@ -409,6 +426,30 @@ final class BackupSessionController {
         eventListenerTask?.cancel()
         eventListenerTask = nil
         activeTerminationIntent = .none
+    }
+
+    private func resolveStartCancellation(mode: BackupRunMode) {
+        let phaseBeforeCancel = controlPhase
+        controlPhase = .idle
+        isStartCommandInFlight = false
+        activeTerminationIntent = .none
+
+        let intent: BackupTerminationIntent = (phaseBeforeCancel == .stopping) ? .stop : .pause
+
+        if intent == .stop {
+            lastPausedRunMode = nil
+            lastPausedDisplayRunMode = nil
+            currentRunMode = .full
+            state = .stopped
+            statusText = "备份已停止"
+        } else {
+            lastPausedRunMode = mode
+            lastPausedDisplayRunMode = mode
+            currentRunMode = mode
+            state = .paused
+            statusText = "备份已暂停"
+        }
+        notifyObserversNow()
     }
 
     // MARK: - Event handling
@@ -445,6 +486,9 @@ final class BackupSessionController {
             switch change.action {
             case .started:
                 startedMonths.insert(monthKey)
+            case .completed:
+                flushedMonths.insert(monthKey)
+                completedMonths.insert(monthKey)
             case .flushed:
                 flushedMonths.insert(monthKey)
             case .flushFailed:

@@ -89,7 +89,9 @@ struct MonthPlan {
 
     enum Phase {
         case pending
+        case uploading
         case uploadDone
+        case downloading
         case completed
         case failed
     }
@@ -98,12 +100,13 @@ struct MonthPlan {
     var isFailed: Bool { phase == .failed }
 }
 
-enum ExecutionPhase {
-    case uploading(BackupSessionController.State)
-    case downloading(isPaused: Bool)
+enum ExecutionPhase: Equatable {
+    case uploading
+    case uploadPaused
+    case downloading
+    case downloadPaused
     case completed
     case failed(String)
-    case stopped
 }
 
 struct HomeExecutionState {
@@ -175,7 +178,9 @@ struct HomeExecutionState {
     }
 
     func panelPhases() -> (backup: SelectionActionPanel.CategoryPhase?, download: SelectionActionPanel.CategoryPhase?, sync: SelectionActionPanel.CategoryPhase?) {
-        func phase(for months: [LibraryMonthKey]) -> SelectionActionPanel.CategoryPhase? {
+        let isPaused = (phase == .uploadPaused || phase == .downloadPaused)
+
+        func categoryPhase(for months: [LibraryMonthKey]) -> SelectionActionPanel.CategoryPhase? {
             guard !months.isEmpty else { return nil }
             let monthSet = Set(months)
             let completed = monthSet.intersection(completedMonths).count
@@ -189,6 +194,8 @@ struct HomeExecutionState {
                 return .completed(total: monthSet.count)
             } else if active {
                 return .running(completed: done, total: monthSet.count)
+            } else if isPaused {
+                return .paused(completed: done, total: monthSet.count)
             } else if failed > 0 {
                 return .failed(completed: completed, failed: failed, total: monthSet.count)
             } else if done > 0 {
@@ -198,18 +205,9 @@ struct HomeExecutionState {
             }
         }
 
-        return (phase(for: uploadMonths), phase(for: downloadMonths), phase(for: syncMonths))
+        return (categoryPhase(for: uploadMonths), categoryPhase(for: downloadMonths), categoryPhase(for: syncMonths))
     }
 
-    var controllerState: BackupSessionController.State {
-        switch phase {
-        case .uploading(let state): return state
-        case .downloading(let isPaused): return isPaused ? .paused : .running
-        case .completed: return .completed
-        case .failed: return .failed
-        case .stopped: return .stopped
-        }
-    }
 }
 
 // MARK: - Change Kind

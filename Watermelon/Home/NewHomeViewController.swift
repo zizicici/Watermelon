@@ -389,8 +389,7 @@ final class NewHomeViewController: UIViewController {
 
     private func renderExecutionChange() {
         if let exec = store.executionState {
-            let months = exec.activeMonths.union(exec.completedMonths).union(exec.failedMonths)
-            reconfigureMonths(months)
+            reconfigureMonths(exec.executionMonths)
             updateActionPanelFromExecution(exec)
         } else {
             // Execution ended
@@ -585,7 +584,7 @@ final class NewHomeViewController: UIViewController {
             backupPhase: phases.backup,
             downloadPhase: phases.download,
             syncPhase: phases.sync,
-            state: exec.controllerState
+            phase: exec.phase
         )
     }
 

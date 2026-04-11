@@ -50,11 +50,21 @@ final class HomeScreenStore {
             contentHashIndexRepository: ContentHashIndexRepository(databaseManager: dependencies.databaseManager)
         )
         self.connectionController = HomeConnectionController(dependencies: dependencies)
+        let connectionCtrl = self.connectionController
         self.executionCoordinator = HomeExecutionCoordinator(
             dependencies: dependencies,
             dataAccess: HomeExecutionCoordinator.DataAccess(
                 localAssetIDs: { [dataManager] month in dataManager.localAssetIDs(for: month) },
-                remoteOnlyItems: { [dataManager] month in dataManager.remoteOnlyItems(for: month) }
+                remoteOnlyItems: { [dataManager] month in dataManager.remoteOnlyItems(for: month) },
+                syncRemoteData: { [dataManager, dependencies, weak connectionCtrl] in
+                    let active = connectionCtrl?.state.isConnected ?? false
+                    let revision = dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
+                    let snapshotState = dependencies.backupCoordinator.currentRemoteSnapshotState(since: revision)
+                    dataManager.syncRemoteSnapshot(state: snapshotState, hasActiveConnection: active)
+                },
+                refreshLocalIndex: { [dataManager] assetIDs in
+                    dataManager.refreshLocalIndex(forAssetIDs: assetIDs)
+                }
             )
         )
         bind()
@@ -78,18 +88,6 @@ final class HomeScreenStore {
         }
         executionCoordinator.onAlert = { [weak self] title, message in
             self?.onAlert?(title, message)
-        }
-        executionCoordinator.onSyncRemoteData = { [weak self] in
-            guard let self else { return }
-            self.syncRemoteDataIfNeeded()
-            self.refreshRowLookup()
-            self.rebuildSections()
-        }
-        executionCoordinator.onRefreshLocalIndex = { [weak self] assetIDs in
-            guard let self else { return }
-            self.dataManager.refreshLocalIndex(forAssetIDs: assetIDs)
-            self.refreshRowLookup()
-            self.rebuildSections()
         }
         connectionController.onStateChanged = { [weak self] in
             self?.handleConnectionChange()
@@ -246,7 +244,7 @@ final class HomeScreenStore {
                 self.refreshAllAndNotify()
             }
 
-            onChange?(.structural)
+            onChange?(.execution)
             return
         }
 

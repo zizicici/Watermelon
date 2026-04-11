@@ -27,6 +27,7 @@ struct MonthChangeEvent: Sendable {
 
     enum MonthAction: Sendable {
         case started
+        case completed
         case flushed
         case flushFailed(String)
     }

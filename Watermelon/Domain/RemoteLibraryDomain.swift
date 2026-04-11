@@ -115,6 +115,10 @@ struct LibraryMonthKey: Hashable, Comparable, Sendable {
         String(format: "%04d-%02d", year, month)
     }
 
+    var displayText: String {
+        String(format: "%04d年%02d月", year, month)
+    }
+
     static func < (lhs: LibraryMonthKey, rhs: LibraryMonthKey) -> Bool {
         if lhs.year == rhs.year {
             return lhs.month < rhs.month

@@ -561,15 +561,21 @@ final class BackupCoordinator: Sendable {
                 let shouldForceFlush = workerState.paused && monthStore.dirty
                 do {
                     _ = try await monthStore.flushToRemote(ignoreCancellation: shouldForceFlush)
-                    eventStream.emit(.monthChanged(MonthChangeEvent(
-                        year: monthKey.year,
-                        month: monthKey.month,
-                        action: .flushed
-                    )))
                     if shouldForceFlush {
+                        eventStream.emit(.monthChanged(MonthChangeEvent(
+                            year: monthKey.year,
+                            month: monthKey.month,
+                            action: .flushed
+                        )))
                         eventStream.emit(.log(
                             "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) manifest flushed before exit."
                         ))
+                    } else {
+                        eventStream.emit(.monthChanged(MonthChangeEvent(
+                            year: monthKey.year,
+                            month: monthKey.month,
+                            action: .completed
+                        )))
                     }
                 } catch {
                     eventStream.emit(.monthChanged(MonthChangeEvent(
