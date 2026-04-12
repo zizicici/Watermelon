@@ -212,6 +212,13 @@ struct HomeExecutionSession {
         return AlertMessage(title: "错误", message: message)
     }
 
+    mutating func failExecutionForMissingConnection() -> AlertMessage {
+        let message = "未连接远端存储"
+        applyEvent(.failed(reason: message), where: { !$0.isTerminal })
+        phase = .failed(message)
+        return AlertMessage(title: "错误", message: message)
+    }
+
     mutating func beginDownloadMonth(_ month: LibraryMonthKey) {
         monthPlans[month]?.apply(.downloadStarted)
         assetCountByMonth.removeValue(forKey: month)

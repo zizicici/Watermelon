@@ -250,7 +250,7 @@ final class HomeScreenStore {
             reloadTask = Task { [weak self] in
                 guard let self else { return }
                 await self.dataManager.reloadLocalIndex()
-                self.syncRemoteDataIfNeeded()
+                await self.syncRemoteDataIfNeeded()
                 self.refreshAllAndNotify()
             }
 
@@ -296,47 +296,36 @@ final class HomeScreenStore {
         }
         homeLog.info("[HomeSync] handleConnectionChange: state=\(stateDesc)")
 
+        if case .disconnected = connectionState, executionCoordinator.isActive {
+            executionCoordinator.failForMissingConnection()
+        }
+
         reloadTask?.cancel()
         selection.clear()
 
-        if connectionState.isConnected {
-            // Connected: heavy processing on dedicated serial queue, main thread stays free.
-            reloadTask = Task { [weak self] in
-                guard let self else { return }
-                let start = CFAbsoluteTimeGetCurrent()
-                let revision = self.dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: true)
-                let state = self.dependencies.backupCoordinator.currentRemoteSnapshotState(since: revision)
-                homeLog.info("[HomeSync] handleConnectionChange: processing start, revision=\(revision.map { String($0) } ?? "nil"), deltaMonths=\(state.monthDeltas.count)")
-                await self.dataManager.syncRemoteSnapshotOnProcessingQueue(state: state, hasActiveConnection: true)
-                guard !Task.isCancelled else { return }
-                self.refreshRowLookup()
-                self.rebuildSections()
-                let elapsed = CFAbsoluteTimeGetCurrent() - start
-                homeLog.info("[HomeSync] handleConnectionChange: done, \(String(format: "%.3f", elapsed))s")
-                self.onChange?(.connection)
-            }
-        } else {
-            // Disconnecting or .connecting — clear stale remote data synchronously (fast).
-            let disconnectState = dependencies.backupCoordinator.currentRemoteSnapshotState(since: nil)
-            dataManager.syncRemoteSnapshot(state: disconnectState, hasActiveConnection: false)
-            homeLog.info("[HomeSync] handleConnectionChange: cleared remote data")
-            syncRemoteDataIfNeeded()
-            refreshRowLookup()
-            rebuildSections()
-            onChange?(.connection)
+        reloadTask = Task { [weak self] in
+            guard let self else { return }
+            let start = CFAbsoluteTimeGetCurrent()
+            await self.syncRemoteDataIfNeeded()
+            guard !Task.isCancelled else { return }
+            self.refreshRowLookup()
+            self.rebuildSections()
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            homeLog.info("[HomeSync] handleConnectionChange: done, \(String(format: "%.3f", elapsed))s")
+            self.onChange?(.connection)
         }
     }
 
     // MARK: - Data Refresh
 
-    func syncRemoteDataIfNeeded() {
+    func syncRemoteDataIfNeeded() async {
         let start = CFAbsoluteTimeGetCurrent()
         let active = connectionState.isConnected
         let revision = dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
         let snapshotState = dependencies.backupCoordinator.currentRemoteSnapshotState(
             since: revision
         )
-        dataManager.syncRemoteSnapshot(state: snapshotState, hasActiveConnection: active)
+        await dataManager.syncRemoteSnapshotOnProcessingQueue(state: snapshotState, hasActiveConnection: active)
         let elapsed = CFAbsoluteTimeGetCurrent() - start
         homeLog.info("[HomeSync] syncRemoteDataIfNeeded: revision=\(revision.map { String($0) } ?? "nil"), connected=\(active), deltaMonths=\(snapshotState.monthDeltas.count), \(String(format: "%.3f", elapsed))s")
     }

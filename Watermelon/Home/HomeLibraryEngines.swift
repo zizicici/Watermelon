@@ -1,5 +1,5 @@
 import Foundation
-import Photos
+@preconcurrency import Photos
 import os.log
 
 private let dataLog = Logger(subsystem: "com.zizicici.watermelon", category: "HomeData")
@@ -107,15 +107,17 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
 
     func refresh(
         assetIDs: Set<String>,
+        fetchedAssetsByID: [String: PHAsset],
         hashMapByAsset: [String: [Data]],
         fingerprintByAsset: [String: Data],
         remoteFingerprintSet: Set<Data>
     ) -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty else { return [] }
-        guard !localStatesByAssetID.isEmpty else { return [] }
+        guard localFetchResult != nil else { return [] }
 
         let existingIDs = knownAssetIDs(in: assetIDs)
-        guard !existingIDs.isEmpty else { return [] }
+        let insertedIDs = Set(fetchedAssetsByID.keys).subtracting(existingIDs)
+        guard !existingIDs.isEmpty || !insertedIDs.isEmpty else { return [] }
 
         var changedMonths = Set<LibraryMonthKey>()
         for assetID in existingIDs {
@@ -125,6 +127,20 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
             changedMonths.formUnion(
                 upsertLocalState(
                     asset: current.asset,
+                    hashes: hashes,
+                    fingerprint: fingerprint,
+                    remoteFingerprintSet: remoteFingerprintSet
+                )
+            )
+        }
+
+        for assetID in insertedIDs {
+            guard let asset = fetchedAssetsByID[assetID] else { continue }
+            let hashes = hashMapByAsset[assetID] ?? []
+            let fingerprint = fingerprintByAsset[assetID]
+            changedMonths.formUnion(
+                upsertLocalState(
+                    asset: asset,
                     hashes: hashes,
                     fingerprint: fingerprint,
                     remoteFingerprintSet: remoteFingerprintSet
@@ -718,39 +734,28 @@ private final class HomeReconcileEngine: @unchecked Sendable {
     }
 }
 
-@MainActor
-final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
+private struct HomeDataLoadResult {
+    let didReload: Bool
+    let changedMonths: Set<LibraryMonthKey>
+    let isAuthorized: Bool
+}
+
+private final class HomeDataProcessingWorker: @unchecked Sendable {
     private let photoLibraryService: PhotoLibraryService
     private let contentHashIndexRepository: ContentHashIndexRepository
+    private let processingQueue = DispatchQueue(
+        label: "com.zizicici.watermelon.homeData.processing",
+        qos: .userInitiated
+    )
 
     private let localIndex = HomeLocalIndexEngine()
     private let remoteIndex = HomeRemoteIndexEngine()
     private let reconcileIndex = HomeReconcileEngine()
 
-    private var isObservingPhotoLibrary = false
-    private(set) var hasActiveConnection = false
+    private var hasActiveConnection = false
     private var needsRemoteBootstrap = false
-
-    private static let processingQueue = DispatchQueue(
-        label: "com.zizicici.watermelon.homeData.processing",
-        qos: .userInitiated
-    )
-    private var processingMutationCount = 0
-    private var deferredPhotoChange: PHChange?
-
     private var cachedLocalSummaries: [LibraryMonthKey: HomeMonthSummary] = [:]
     private var cachedRemoteSummaries: [LibraryMonthKey: HomeMonthSummary] = [:]
-
-    var onMonthsChanged: ((Set<LibraryMonthKey>) -> Void)?
-    var onFileSizesUpdated: ((Set<LibraryMonthKey>) -> Void)?
-    private var fileSizeScanTask: Task<Void, Never>?
-
-    func remoteSnapshotRevisionForQuery(hasActiveConnection: Bool) -> UInt64? {
-        if hasActiveConnection, needsRemoteBootstrap {
-            return nil
-        }
-        return remoteIndex.snapshotRevision
-    }
 
     init(
         photoLibraryService: PhotoLibraryService,
@@ -760,301 +765,18 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         self.contentHashIndexRepository = contentHashIndexRepository
     }
 
-    @discardableResult
-    func ensureLocalIndexLoaded() async -> Bool {
-        await loadLocalIndex(forceReload: false)
-    }
-
-    @discardableResult
-    func reloadLocalIndex() async -> Bool {
-        await loadLocalIndex(forceReload: true)
-    }
-
-    /// Refreshes local hash-backed state on the processing queue so restore completion
-    /// does not block the main thread with DB reads or reconcile work.
-    @discardableResult
-    func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) async -> Set<LibraryMonthKey> {
-        guard !assetIDs.isEmpty else { return [] }
-
-        beginProcessingMutation()
-        let localIdx = localIndex
-        let remoteIdx = remoteIndex
-        let reconcileIdx = reconcileIndex
-        let repository = contentHashIndexRepository
-        let hasActiveConnection = self.hasActiveConnection
-
-        let reconciledMonths: Set<LibraryMonthKey> = await withCheckedContinuation { continuation in
-            Self.processingQueue.async {
-                let start = CFAbsoluteTimeGetCurrent()
-                let existingIDs = localIdx.knownAssetIDs(in: assetIDs)
-                guard !existingIDs.isEmpty else {
-                    continuation.resume(returning: [])
-                    return
-                }
-
-                let hashMap = (try? repository.fetchHashMapByAsset(assetIDs: existingIDs)) ?? [:]
-                let fingerprintMap = (try? repository.fetchAssetFingerprintsByAsset(assetIDs: existingIDs)) ?? [:]
-
-                let changedMonths = localIdx.refresh(
-                    assetIDs: existingIDs,
-                    hashMapByAsset: hashMap,
-                    fingerprintByAsset: fingerprintMap,
-                    remoteFingerprintSet: remoteIdx.assetFingerprintSet
-                )
-                let result = reconcileIdx.reconcile(
-                    changedMonths: changedMonths,
-                    localIndex: localIdx,
-                    remoteIndex: remoteIdx,
-                    hasActiveConnection: hasActiveConnection
-                )
-                let elapsed = CFAbsoluteTimeGetCurrent() - start
-                dataLog.info("[HomeData] refreshLocalIndex: assets=\(existingIDs.count), months=\(result.count), \(String(format: "%.3f", elapsed))s")
-                continuation.resume(returning: result)
+    func remoteSnapshotRevisionForQuery(hasActiveConnection: Bool) -> UInt64? {
+        processingQueue.sync {
+            if hasActiveConnection, needsRemoteBootstrap {
+                return nil
             }
-        }
-
-        finishProcessingMutation(reconciledMonths)
-        return reconciledMonths
-    }
-
-    @discardableResult
-    func syncRemoteSnapshot(
-        state: RemoteLibrarySnapshotState,
-        hasActiveConnection: Bool
-    ) -> Set<LibraryMonthKey> {
-        let start = CFAbsoluteTimeGetCurrent()
-        var changedMonths = Set<LibraryMonthKey>()
-
-        let connectionFlipped = self.hasActiveConnection != hasActiveConnection
-        if connectionFlipped {
-            self.hasActiveConnection = hasActiveConnection
-            if !hasActiveConnection {
-                needsRemoteBootstrap = true
-            }
-            changedMonths.formUnion(localIndex.allMonths)
-            changedMonths.formUnion(remoteIndex.allMonths)
-        }
-
-        let remoteDelta = remoteIndex.apply(state: state, hasActiveConnection: hasActiveConnection)
-        changedMonths.formUnion(remoteDelta.changedMonths)
-
-        if !remoteDelta.changedFingerprints.isEmpty {
-            changedMonths.formUnion(
-                localIndex.refreshBackedUpState(
-                    changedFingerprints: remoteDelta.changedFingerprints,
-                    remoteFingerprintSet: remoteIndex.assetFingerprintSet,
-                    limitMonths: remoteDelta.changedMonths
-                )
-            )
-        }
-
-        if hasActiveConnection, state.isFullSnapshot {
-            needsRemoteBootstrap = false
-        }
-
-        let result = reconcileIfNeeded(changedMonths)
-        let elapsed = CFAbsoluteTimeGetCurrent() - start
-        dataLog.info("[HomeData] syncRemoteSnapshot: isFullSnapshot=\(state.isFullSnapshot), deltaMonths=\(state.monthDeltas.count), connected=\(hasActiveConnection), connectionFlipped=\(connectionFlipped), changedFingerprints=\(remoteDelta.changedFingerprints.count), reconciledMonths=\(result.count), \(String(format: "%.3f", elapsed))s")
-        return result
-    }
-
-    /// Processes remote snapshot on a dedicated serial queue so the main thread stays free.
-    /// Only `updateCachedSummaries` and UI updates run on MainActor after processing completes.
-    @discardableResult
-    func syncRemoteSnapshotOnProcessingQueue(
-        state: RemoteLibrarySnapshotState,
-        hasActiveConnection: Bool
-    ) async -> Set<LibraryMonthKey> {
-        // MainActor: connection state (fast)
-        let connectionFlipped = self.hasActiveConnection != hasActiveConnection
-        if connectionFlipped {
-            self.hasActiveConnection = hasActiveConnection
-            if !hasActiveConnection { needsRemoteBootstrap = true }
-        }
-        beginProcessingMutation()
-
-        let localIdx = self.localIndex
-        let remoteIdx = self.remoteIndex
-        let reconcileIdx = self.reconcileIndex
-        let localAllMonths = connectionFlipped ? localIndex.allMonths : []
-        let remoteAllMonths = connectionFlipped ? remoteIndex.allMonths : []
-
-        // Dedicated serial queue: apply + refreshBackedUpState + reconcile
-        let reconciledMonths: Set<LibraryMonthKey> = await withCheckedContinuation { cont in
-            Self.processingQueue.async {
-                let start = CFAbsoluteTimeGetCurrent()
-
-                let remoteDelta = remoteIdx.apply(state: state, hasActiveConnection: hasActiveConnection)
-                var changedMonths = remoteDelta.changedMonths
-
-                if !remoteDelta.changedFingerprints.isEmpty {
-                    changedMonths.formUnion(
-                        localIdx.refreshBackedUpState(
-                            changedFingerprints: remoteDelta.changedFingerprints,
-                            remoteFingerprintSet: remoteIdx.assetFingerprintSet,
-                            limitMonths: remoteDelta.changedMonths
-                        )
-                    )
-                }
-
-                if connectionFlipped {
-                    changedMonths.formUnion(localAllMonths)
-                    changedMonths.formUnion(remoteAllMonths)
-                }
-
-                // step3: reconcile
-                let result = reconcileIdx.reconcile(
-                    changedMonths: changedMonths,
-                    localIndex: localIdx,
-                    remoteIndex: remoteIdx,
-                    hasActiveConnection: hasActiveConnection
-                )
-
-                let elapsed = CFAbsoluteTimeGetCurrent() - start
-                dataLog.info("[HomeData] processingQueue: months=\(result.count), fingerprints=\(remoteDelta.changedFingerprints.count), \(String(format: "%.3f", elapsed))s")
-
-                cont.resume(returning: result)
-            }
-        }
-
-        // MainActor: post-processing
-        if hasActiveConnection, state.isFullSnapshot {
-            needsRemoteBootstrap = false
-        }
-        finishProcessingMutation(reconciledMonths)
-
-        return reconciledMonths
-    }
-
-    func localMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, backedUpCount: Int?, totalSizeBytes: Int64?)] {
-        let monthCounts = localIndex.localMonthAssetCounts()
-        let mediaCounts = localIndex.localMonthMediaCounts()
-        let backedUpCounts: [LibraryMonthKey: Int]? = hasActiveConnection ? localIndex.localMonthBackedUpCounts() : nil
-        let fileSizes = localIndex.monthFileSizes
-        return monthCounts.map { entry in
-            let media = mediaCounts[entry.month]
-            return (month: entry.month, assetCount: entry.count, photoCount: media?.photoCount ?? 0, videoCount: media?.videoCount ?? 0, backedUpCount: backedUpCounts?[entry.month], totalSizeBytes: fileSizes[entry.month])
+            return remoteIndex.snapshotRevision
         }
     }
 
-    func monthRow(for month: LibraryMonthKey) -> HomeMonthRow {
-        HomeMonthRow(month: month, local: cachedLocalSummaries[month], remote: cachedRemoteSummaries[month])
-    }
-
-    /// Incremental summary cache — returns all month rows from cache.
-    func allMonthRows() -> [LibraryMonthKey: HomeMonthRow] {
-        let allMonths = Set(cachedLocalSummaries.keys).union(cachedRemoteSummaries.keys)
-        var result: [LibraryMonthKey: HomeMonthRow] = [:]
-        result.reserveCapacity(allMonths.count)
-        for month in allMonths {
-            result[month] = HomeMonthRow(month: month, local: cachedLocalSummaries[month], remote: cachedRemoteSummaries[month])
-        }
-        return result
-    }
-
-    private func updateCachedSummaries(for months: Set<LibraryMonthKey>) {
-        for month in months {
-            cachedLocalSummaries[month] = localIndex.localMonthSummary(for: month)
-            cachedRemoteSummaries[month] = hasActiveConnection ? remoteIndex.remoteMonthSummary(for: month) : nil
-        }
-    }
-
-    private func rebuildAllCachedSummaries() {
-        cachedLocalSummaries.removeAll()
-        cachedRemoteSummaries.removeAll()
-        let allMonths = localIndex.allMonths.union(remoteIndex.allMonths)
-        updateCachedSummaries(for: allMonths)
-    }
-
-    func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
-        localIndex.localAssetIDs(for: month)
-    }
-
-    func remoteOnlyItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
-        reconcileIndex.remoteOnlyItems(for: month)
-    }
-
-    func matchedCount(for month: LibraryMonthKey) -> Int {
-        reconcileIndex.matchedCount(for: month)
-    }
-
-    nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            if self.processingMutationCount > 0 {
-                self.deferredPhotoChange = changeInstance
-                return
-            }
-
-            self.applyPhotoLibraryChangeNow(changeInstance)
-        }
-    }
-
-    private func applyPhotoLibraryChangeNow(_ changeInstance: PHChange) {
-        let changedMonths = localIndex.applyPhotoLibraryChange(
-            changeInstance,
-            fetchHashMapByAsset: { [contentHashIndexRepository] assetIDs in
-                guard !assetIDs.isEmpty else { return [:] }
-                return (try? contentHashIndexRepository.fetchHashMapByAsset(assetIDs: assetIDs)) ?? [:]
-            },
-            fetchFingerprintByAsset: { [contentHashIndexRepository] assetIDs in
-                guard !assetIDs.isEmpty else { return [:] }
-                return (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset(assetIDs: assetIDs)) ?? [:]
-            },
-            fetchAllHashMapByAsset: { [contentHashIndexRepository] in
-                (try? contentHashIndexRepository.fetchHashMapByAsset()) ?? [:]
-            },
-            fetchAllFingerprintByAsset: { [contentHashIndexRepository] in
-                (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset()) ?? [:]
-            },
-            remoteFingerprintSet: remoteIndex.assetFingerprintSet
-        )
-
-        let reconciledMonths = reconcileIfNeeded(changedMonths)
-        if !reconciledMonths.isEmpty {
-            rescanFileSizes(for: reconciledMonths)
-            onMonthsChanged?(reconciledMonths)
-        }
-    }
-
-
-    private func reconcileIfNeeded(_ changedMonths: Set<LibraryMonthKey>) -> Set<LibraryMonthKey> {
-        let result = reconcileIndex.reconcile(
-            changedMonths: changedMonths,
-            localIndex: localIndex,
-            remoteIndex: remoteIndex,
-            hasActiveConnection: hasActiveConnection
-        )
-        if !result.isEmpty {
-            updateCachedSummaries(for: result)
-        }
-        return result
-    }
-
-    private func beginProcessingMutation() {
-        processingMutationCount += 1
-    }
-
-    private func finishProcessingMutation(_ reconciledMonths: Set<LibraryMonthKey>) {
-        if !reconciledMonths.isEmpty {
-            updateCachedSummaries(for: reconciledMonths)
-        }
-
-        if processingMutationCount > 0 {
-            processingMutationCount -= 1
-        }
-
-        guard processingMutationCount == 0, let deferred = deferredPhotoChange else { return }
-        deferredPhotoChange = nil
-        applyPhotoLibraryChangeNow(deferred)
-    }
-
-    @discardableResult
-    private func loadLocalIndex(forceReload: Bool) async -> Bool {
-        if !forceReload, localIndex.hasLoadedIndex {
-            registerPhotoLibraryObserverIfNeeded()
-            return false
+    func loadLocalIndex(forceReload: Bool) async -> HomeDataLoadResult {
+        if !forceReload, processingQueue.sync(execute: { localIndex.hasLoadedIndex }) {
+            return HomeDataLoadResult(didReload: false, changedMonths: [], isAuthorized: true)
         }
 
         let status = photoLibraryService.authorizationStatus()
@@ -1067,24 +789,371 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         }
 
         guard authorized else {
-            unregisterPhotoLibraryObserverIfNeeded()
-            return !reconcileIfNeeded(localIndex.clearIfNeeded()).isEmpty
+            let changedMonths = await withCheckedContinuation { continuation in
+                processingQueue.async {
+                    let result = self.reconcileLocked(self.localIndex.clearIfNeeded())
+                    continuation.resume(returning: result)
+                }
+            }
+            return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: false)
         }
 
         let fetchResult = photoLibraryService.fetchAssetsResult()
         let hashMapByAsset = (try? contentHashIndexRepository.fetchHashMapByAsset()) ?? [:]
         let fingerprintByAsset = (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset()) ?? [:]
 
-        let changedMonths = localIndex.reloadAll(
-            fetchResult: fetchResult,
-            hashMapByAsset: hashMapByAsset,
-            fingerprintByAsset: fingerprintByAsset,
-            remoteFingerprintSet: remoteIndex.assetFingerprintSet
-        )
+        let changedMonths = await withCheckedContinuation { continuation in
+            processingQueue.async {
+                let changed = self.localIndex.reloadAll(
+                    fetchResult: fetchResult,
+                    hashMapByAsset: hashMapByAsset,
+                    fingerprintByAsset: fingerprintByAsset,
+                    remoteFingerprintSet: self.remoteIndex.assetFingerprintSet
+                )
+                let result = self.reconcileLocked(changed)
+                continuation.resume(returning: result)
+            }
+        }
 
-        registerPhotoLibraryObserverIfNeeded()
-        startFileSizeScan()
-        return !reconcileIfNeeded(changedMonths).isEmpty
+        return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: true)
+    }
+
+    func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) async -> Set<LibraryMonthKey> {
+        guard !assetIDs.isEmpty else { return [] }
+
+        return await withCheckedContinuation { continuation in
+            processingQueue.async {
+                let start = CFAbsoluteTimeGetCurrent()
+                let existingIDs = self.localIndex.knownAssetIDs(in: assetIDs)
+                let missingIDs = assetIDs.subtracting(existingIDs)
+                let fetchedMissingAssets = self.photoLibraryService.fetchAssets(localIdentifiers: missingIDs)
+                let fetchedAssetsByID = Dictionary(uniqueKeysWithValues: fetchedMissingAssets.map { ($0.localIdentifier, $0) })
+                let targetIDs = existingIDs.union(fetchedAssetsByID.keys)
+                guard !targetIDs.isEmpty else {
+                    continuation.resume(returning: [])
+                    return
+                }
+
+                let hashMap = (try? self.contentHashIndexRepository.fetchHashMapByAsset(assetIDs: targetIDs)) ?? [:]
+                let fingerprintMap = (try? self.contentHashIndexRepository.fetchAssetFingerprintsByAsset(assetIDs: targetIDs)) ?? [:]
+                let changedMonths = self.localIndex.refresh(
+                    assetIDs: targetIDs,
+                    fetchedAssetsByID: fetchedAssetsByID,
+                    hashMapByAsset: hashMap,
+                    fingerprintByAsset: fingerprintMap,
+                    remoteFingerprintSet: self.remoteIndex.assetFingerprintSet
+                )
+                let result = self.reconcileLocked(changedMonths)
+                let elapsed = CFAbsoluteTimeGetCurrent() - start
+                dataLog.info("[HomeData] refreshLocalIndex: assets=\(targetIDs.count), inserted=\(fetchedAssetsByID.count), months=\(result.count), \(String(format: "%.3f", elapsed))s")
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    func syncRemoteSnapshot(
+        state: RemoteLibrarySnapshotState,
+        hasActiveConnection: Bool
+    ) async -> Set<LibraryMonthKey> {
+        await withCheckedContinuation { continuation in
+            processingQueue.async {
+                let start = CFAbsoluteTimeGetCurrent()
+                let connectionFlipped = self.hasActiveConnection != hasActiveConnection
+                if connectionFlipped {
+                    self.hasActiveConnection = hasActiveConnection
+                    if !hasActiveConnection {
+                        self.needsRemoteBootstrap = true
+                    }
+                }
+
+                let localAllMonths = connectionFlipped ? self.localIndex.allMonths : []
+                let remoteAllMonths = connectionFlipped ? self.remoteIndex.allMonths : []
+                let remoteDelta = self.remoteIndex.apply(state: state, hasActiveConnection: hasActiveConnection)
+                var changedMonths = remoteDelta.changedMonths
+
+                if !remoteDelta.changedFingerprints.isEmpty {
+                    changedMonths.formUnion(
+                        self.localIndex.refreshBackedUpState(
+                            changedFingerprints: remoteDelta.changedFingerprints,
+                            remoteFingerprintSet: self.remoteIndex.assetFingerprintSet,
+                            limitMonths: remoteDelta.changedMonths
+                        )
+                    )
+                }
+
+                if connectionFlipped {
+                    changedMonths.formUnion(localAllMonths)
+                    changedMonths.formUnion(remoteAllMonths)
+                }
+
+                if hasActiveConnection, state.isFullSnapshot {
+                    self.needsRemoteBootstrap = false
+                }
+
+                let result = self.reconcileLocked(changedMonths)
+                let elapsed = CFAbsoluteTimeGetCurrent() - start
+                dataLog.info("[HomeData] processingQueue: months=\(result.count), fingerprints=\(remoteDelta.changedFingerprints.count), \(String(format: "%.3f", elapsed))s")
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    func applyPhotoLibraryChange(_ changeInstance: PHChange) async -> Set<LibraryMonthKey> {
+        await withCheckedContinuation { continuation in
+            processingQueue.async {
+                let changedMonths = self.localIndex.applyPhotoLibraryChange(
+                    changeInstance,
+                    fetchHashMapByAsset: { [contentHashIndexRepository = self.contentHashIndexRepository] assetIDs in
+                        guard !assetIDs.isEmpty else { return [:] }
+                        return (try? contentHashIndexRepository.fetchHashMapByAsset(assetIDs: assetIDs)) ?? [:]
+                    },
+                    fetchFingerprintByAsset: { [contentHashIndexRepository = self.contentHashIndexRepository] assetIDs in
+                        guard !assetIDs.isEmpty else { return [:] }
+                        return (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset(assetIDs: assetIDs)) ?? [:]
+                    },
+                    fetchAllHashMapByAsset: { [contentHashIndexRepository = self.contentHashIndexRepository] in
+                        (try? contentHashIndexRepository.fetchHashMapByAsset()) ?? [:]
+                    },
+                    fetchAllFingerprintByAsset: { [contentHashIndexRepository = self.contentHashIndexRepository] in
+                        (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset()) ?? [:]
+                    },
+                    remoteFingerprintSet: self.remoteIndex.assetFingerprintSet
+                )
+                let result = self.reconcileLocked(changedMonths)
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    func localMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, backedUpCount: Int?, totalSizeBytes: Int64?)] {
+        processingQueue.sync {
+            let monthCounts = localIndex.localMonthAssetCounts()
+            let mediaCounts = localIndex.localMonthMediaCounts()
+            let backedUpCounts: [LibraryMonthKey: Int]? = hasActiveConnection ? localIndex.localMonthBackedUpCounts() : nil
+            let fileSizes = localIndex.monthFileSizes
+            return monthCounts.map { entry in
+                let media = mediaCounts[entry.month]
+                return (
+                    month: entry.month,
+                    assetCount: entry.count,
+                    photoCount: media?.photoCount ?? 0,
+                    videoCount: media?.videoCount ?? 0,
+                    backedUpCount: backedUpCounts?[entry.month],
+                    totalSizeBytes: fileSizes[entry.month]
+                )
+            }
+        }
+    }
+
+    func monthRow(for month: LibraryMonthKey) -> HomeMonthRow {
+        processingQueue.sync {
+            HomeMonthRow(month: month, local: cachedLocalSummaries[month], remote: cachedRemoteSummaries[month])
+        }
+    }
+
+    func allMonthRows() -> [LibraryMonthKey: HomeMonthRow] {
+        processingQueue.sync {
+            let allMonths = Set(cachedLocalSummaries.keys).union(cachedRemoteSummaries.keys)
+            var result: [LibraryMonthKey: HomeMonthRow] = [:]
+            result.reserveCapacity(allMonths.count)
+            for month in allMonths {
+                result[month] = HomeMonthRow(month: month, local: cachedLocalSummaries[month], remote: cachedRemoteSummaries[month])
+            }
+            return result
+        }
+    }
+
+    func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
+        processingQueue.sync {
+            localIndex.localAssetIDs(for: month)
+        }
+    }
+
+    func remoteOnlyItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
+        processingQueue.sync {
+            reconcileIndex.remoteOnlyItems(for: month)
+        }
+    }
+
+    func matchedCount(for month: LibraryMonthKey) -> Int {
+        processingQueue.sync {
+            reconcileIndex.matchedCount(for: month)
+        }
+    }
+
+    func localMonthsForFileSizeScan() -> [LibraryMonthKey] {
+        processingQueue.sync {
+            localIndex.localMonthAssetCounts().map(\.month)
+        }
+    }
+
+    func updateFileSize(for month: LibraryMonthKey, cachedSizes: [String: Int64]) async {
+        await withCheckedContinuation { continuation in
+            processingQueue.async {
+                let size = self.localIndex.computeFileSize(for: month, cachedSizes: cachedSizes)
+                self.localIndex.setMonthFileSize(size, for: month)
+                self.cachedLocalSummaries[month] = self.localIndex.localMonthSummary(for: month)
+                continuation.resume()
+            }
+        }
+    }
+
+    private func reconcileLocked(_ changedMonths: Set<LibraryMonthKey>) -> Set<LibraryMonthKey> {
+        let result = reconcileIndex.reconcile(
+            changedMonths: changedMonths,
+            localIndex: localIndex,
+            remoteIndex: remoteIndex,
+            hasActiveConnection: hasActiveConnection
+        )
+        if !result.isEmpty {
+            updateCachedSummaries(for: result)
+        }
+        return result
+    }
+
+    private func updateCachedSummaries(for months: Set<LibraryMonthKey>) {
+        for month in months {
+            cachedLocalSummaries[month] = localIndex.localMonthSummary(for: month)
+            cachedRemoteSummaries[month] = hasActiveConnection ? remoteIndex.remoteMonthSummary(for: month) : nil
+        }
+    }
+}
+
+@MainActor
+final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
+    private let contentHashIndexRepository: ContentHashIndexRepository
+    private let processingWorker: HomeDataProcessingWorker
+
+    private var isObservingPhotoLibrary = false
+    private var processingMutationCount = 0
+    private var deferredPhotoChanges: [PHChange] = []
+    private var isDrainingDeferredPhotoChanges = false
+
+    var onMonthsChanged: ((Set<LibraryMonthKey>) -> Void)?
+    var onFileSizesUpdated: ((Set<LibraryMonthKey>) -> Void)?
+    private var fileSizeScanTask: Task<Void, Never>?
+
+    init(
+        photoLibraryService: PhotoLibraryService,
+        contentHashIndexRepository: ContentHashIndexRepository
+    ) {
+        self.contentHashIndexRepository = contentHashIndexRepository
+        self.processingWorker = HomeDataProcessingWorker(
+            photoLibraryService: photoLibraryService,
+            contentHashIndexRepository: contentHashIndexRepository
+        )
+    }
+
+    func remoteSnapshotRevisionForQuery(hasActiveConnection: Bool) -> UInt64? {
+        processingWorker.remoteSnapshotRevisionForQuery(hasActiveConnection: hasActiveConnection)
+    }
+
+    @discardableResult
+    func ensureLocalIndexLoaded() async -> Bool {
+        await loadLocalIndex(forceReload: false)
+    }
+
+    @discardableResult
+    func reloadLocalIndex() async -> Bool {
+        await loadLocalIndex(forceReload: true)
+    }
+
+    @discardableResult
+    func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) async -> Set<LibraryMonthKey> {
+        guard !assetIDs.isEmpty else { return [] }
+        beginProcessingMutation()
+        let reconciledMonths = await processingWorker.refreshLocalIndex(forAssetIDs: assetIDs)
+        finishProcessingMutation()
+        return reconciledMonths
+    }
+
+    @discardableResult
+    func syncRemoteSnapshotOnProcessingQueue(
+        state: RemoteLibrarySnapshotState,
+        hasActiveConnection: Bool
+    ) async -> Set<LibraryMonthKey> {
+        beginProcessingMutation()
+        let reconciledMonths = await processingWorker.syncRemoteSnapshot(
+            state: state,
+            hasActiveConnection: hasActiveConnection
+        )
+        finishProcessingMutation()
+        return reconciledMonths
+    }
+
+    func localMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, backedUpCount: Int?, totalSizeBytes: Int64?)] {
+        processingWorker.localMonthSummaries()
+    }
+
+    func monthRow(for month: LibraryMonthKey) -> HomeMonthRow {
+        processingWorker.monthRow(for: month)
+    }
+
+    func allMonthRows() -> [LibraryMonthKey: HomeMonthRow] {
+        processingWorker.allMonthRows()
+    }
+
+    func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
+        processingWorker.localAssetIDs(for: month)
+    }
+
+    func remoteOnlyItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
+        processingWorker.remoteOnlyItems(for: month)
+    }
+
+    func matchedCount(for month: LibraryMonthKey) -> Int {
+        processingWorker.matchedCount(for: month)
+    }
+
+    nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            if self.processingMutationCount > 0 || self.isDrainingDeferredPhotoChanges {
+                self.deferredPhotoChanges.append(changeInstance)
+                return
+            }
+
+            await self.applyPhotoLibraryChangeNow(changeInstance)
+        }
+    }
+
+    private func beginProcessingMutation() {
+        processingMutationCount += 1
+    }
+
+    private func finishProcessingMutation() {
+        if processingMutationCount > 0 {
+            processingMutationCount -= 1
+        }
+
+        scheduleDeferredPhotoChangeDrainIfNeeded()
+    }
+
+    @discardableResult
+    private func loadLocalIndex(forceReload: Bool) async -> Bool {
+        let result = await processingWorker.loadLocalIndex(forceReload: forceReload)
+        if result.isAuthorized {
+            registerPhotoLibraryObserverIfNeeded()
+            if result.didReload {
+                startFileSizeScan()
+            }
+        } else {
+            unregisterPhotoLibraryObserverIfNeeded()
+            fileSizeScanTask?.cancel()
+            fileSizeScanTask = nil
+        }
+        return !result.changedMonths.isEmpty
+    }
+
+    private func applyPhotoLibraryChangeNow(_ changeInstance: PHChange) async {
+        beginProcessingMutation()
+        let reconciledMonths = await processingWorker.applyPhotoLibraryChange(changeInstance)
+        finishProcessingMutation()
+        if !reconciledMonths.isEmpty {
+            rescanFileSizes(for: reconciledMonths)
+            onMonthsChanged?(reconciledMonths)
+        }
     }
 
     private func rescanFileSizes(for months: Set<LibraryMonthKey>) {
@@ -1092,10 +1161,8 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         Task { [weak self] in
             for month in months {
                 guard let self, !Task.isCancelled else { return }
-                let size = self.localIndex.computeFileSize(for: month, cachedSizes: cachedSizes)
+                await self.processingWorker.updateFileSize(for: month, cachedSizes: cachedSizes)
                 guard !Task.isCancelled else { return }
-                self.localIndex.setMonthFileSize(size, for: month)
-                self.cachedLocalSummaries[month] = self.localIndex.localMonthSummary(for: month)
                 self.onFileSizesUpdated?([month])
                 await Task.yield()
             }
@@ -1104,15 +1171,13 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
 
     private func startFileSizeScan() {
         fileSizeScanTask?.cancel()
-        let months = localIndex.localMonthAssetCounts().map(\.month)
+        let months = processingWorker.localMonthsForFileSizeScan()
         let cachedSizes = (try? contentHashIndexRepository.fetchFileSizeByAsset()) ?? [:]
         fileSizeScanTask = Task { [weak self] in
             for month in months {
                 guard let self, !Task.isCancelled else { return }
-                let size = self.localIndex.computeFileSize(for: month, cachedSizes: cachedSizes)
+                await self.processingWorker.updateFileSize(for: month, cachedSizes: cachedSizes)
                 guard !Task.isCancelled else { return }
-                self.localIndex.setMonthFileSize(size, for: month)
-                self.cachedLocalSummaries[month] = self.localIndex.localMonthSummary(for: month)
                 self.onFileSizesUpdated?([month])
                 await Task.yield()
             }
@@ -1129,5 +1194,31 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         guard isObservingPhotoLibrary else { return }
         PHPhotoLibrary.shared().unregisterChangeObserver(self)
         isObservingPhotoLibrary = false
+    }
+
+    private func scheduleDeferredPhotoChangeDrainIfNeeded() {
+        guard processingMutationCount == 0,
+              !deferredPhotoChanges.isEmpty,
+              !isDrainingDeferredPhotoChanges else { return }
+        Task { @MainActor [weak self] in
+            await self?.drainDeferredPhotoChangesIfNeeded()
+        }
+    }
+
+    private func drainDeferredPhotoChangesIfNeeded() async {
+        guard processingMutationCount == 0,
+              !deferredPhotoChanges.isEmpty,
+              !isDrainingDeferredPhotoChanges else { return }
+
+        isDrainingDeferredPhotoChanges = true
+        defer {
+            isDrainingDeferredPhotoChanges = false
+            scheduleDeferredPhotoChangeDrainIfNeeded()
+        }
+
+        while processingMutationCount == 0, !deferredPhotoChanges.isEmpty {
+            let deferred = deferredPhotoChanges.removeFirst()
+            await applyPhotoLibraryChangeNow(deferred)
+        }
     }
 }

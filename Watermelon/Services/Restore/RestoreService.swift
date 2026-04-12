@@ -71,6 +71,7 @@ final class RestoreService {
 
         var downloaded: [(RemoteManifestResource, URL)] = []
         for resource in group.resources {
+            try Task.checkCancellation()
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(
                 "restore_\(UUID().uuidString)_\(resource.fileName)"
             )
@@ -89,6 +90,7 @@ final class RestoreService {
         }
 
         do {
+            try Task.checkCancellation()
             let localID = try await saveToPhotoLibrary(downloaded: downloaded, creationDate: group.creationDate)
             print("[RestoreService]   saveToPhotoLibrary succeeded, localID=\(localID ?? "nil")")
 

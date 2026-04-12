@@ -36,10 +36,9 @@ final class BackupSessionController {
         let failedCountByMonth: [LibraryMonthKey: Int]
     }
 
-    private let backupCoordinator: BackupCoordinator
-    private let appSession: AppSession
-    private let databaseManager: DatabaseManager
+    private let connectionResolver: BackupSessionConnectionResolver
     private let resumePlanner: BackupResumePlanner
+    private let runDriver: BackupRunDriver
 
     private var session = BackupSessionState()
 
@@ -50,11 +49,6 @@ final class BackupSessionController {
     private var hasPendingObserverNotification = false
     private var startCommandWaiters: [UUID: StartCommandWaiter] = [:]
 
-    private var runTask: Task<Void, Never>?
-    private var eventListenerTask: Task<Void, Never>?
-    private var activeEventStream: BackupEventStream?
-    private var activeWorkerCountOverride: Int?
-    private var activeRunToken: UInt64 = 0
     private var activeTerminationIntent: BackupTerminationIntent = .none
 
     private var controlPhase: BackupSessionControlPhase {
@@ -153,10 +147,12 @@ final class BackupSessionController {
         databaseManager: DatabaseManager,
         photoLibraryService: PhotoLibraryService
     ) {
-        self.backupCoordinator = backupCoordinator
-        self.appSession = appSession
-        self.databaseManager = databaseManager
+        self.connectionResolver = BackupSessionConnectionResolver(
+            appSession: appSession,
+            databaseManager: databaseManager
+        )
         self.resumePlanner = BackupResumePlanner(photoLibraryService: photoLibraryService)
+        self.runDriver = BackupRunDriver(backupCoordinator: backupCoordinator)
     }
 
     convenience init(dependencies: DependencyContainer) {
@@ -169,8 +165,10 @@ final class BackupSessionController {
     }
 
     deinit {
-        runTask?.cancel()
-        eventListenerTask?.cancel()
+        let runDriver = self.runDriver
+        Task { @MainActor in
+            runDriver.cancelAll()
+        }
         startCommandTask?.cancel()
         resumePreparationTask?.cancel()
         notifyThrottleTask?.cancel()
@@ -262,7 +260,7 @@ final class BackupSessionController {
             notifyObserversNow()
             return false
         }
-        guard let connection = resolveActiveConnection() else {
+        guard let connection = connectionResolver.resolveActiveConnection() else {
             session.failForMissingConnection()
             notifyObserversNow()
             return false
@@ -285,7 +283,7 @@ final class BackupSessionController {
             }
 
             do {
-                try await self.waitForPreviousRunToClear()
+                try await self.runDriver.waitForPreviousRunToClear()
             } catch {
                 self.startCommandTask = nil
                 if error is CancellationError {
@@ -299,7 +297,7 @@ final class BackupSessionController {
                 return
             }
 
-            let runToken = self.startRunInternal(
+            let runToken = self.startRun(
                 profile: connection.profile,
                 password: connection.password,
                 mode: mode,
@@ -379,75 +377,44 @@ final class BackupSessionController {
 
     // MARK: - Run lifecycle
 
-    private func waitForPreviousRunToClear() async throws {
-        while runTask != nil || eventListenerTask != nil || activeEventStream != nil {
-            try Task.checkCancellation()
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
-    }
-
-    private func startRunInternal(
+    private func startRun(
         profile: ServerProfileRecord,
         password: String,
         mode: BackupRunMode,
         displayMode: BackupRunMode,
         workerCountOverride: Int?
     ) -> UInt64? {
-        guard runTask == nil, eventListenerTask == nil, activeEventStream == nil else {
-            return nil
-        }
-
-        activeRunToken &+= 1
-        let runToken = activeRunToken
-        let eventStream = BackupEventStream()
-        activeEventStream = eventStream
-        activeWorkerCountOverride = workerCountOverride
         activeTerminationIntent = .none
-
-        let capturedRunToken = runToken
-        let capturedRunMode = mode
-        let capturedDisplayMode = displayMode
-
-        eventListenerTask = Task { [weak self] in
-            for await event in eventStream.stream {
-                guard let self else { return }
-                guard capturedRunToken == self.activeRunToken else { return }
-                let shouldStop = self.handleEvent(
+        let runToken = runDriver.startRun(
+            profile: profile,
+            password: password,
+            mode: mode,
+            displayMode: displayMode,
+            workerCountOverride: workerCountOverride,
+            terminalIntentProvider: { [weak self] in
+                self?.activeTerminationIntent ?? .none
+            },
+            onEvent: { [weak self] event, runMode, displayMode, terminalIntent in
+                self?.handleEvent(
                     event,
-                    runMode: capturedRunMode,
-                    displayMode: capturedDisplayMode,
-                    terminalIntent: self.activeTerminationIntent
-                )
-                if shouldStop { break }
-            }
-        }
-
-        runTask = Task.detached(priority: .userInitiated) { [weak self, eventStream] in
-            guard let self else { return }
-            defer {
-                eventStream.finish()
-            }
-            do {
-                let request = BackupRunRequest(
-                    profile: profile,
-                    password: password,
-                    onlyAssetLocalIdentifiers: mode.targetAssetIdentifiers,
-                    workerCountOverride: workerCountOverride
-                )
-                _ = try await self.backupCoordinator.runBackup(request: request, eventStream: eventStream)
-            } catch {
-                await self.handleRunError(
+                    runMode: runMode,
+                    displayMode: displayMode,
+                    terminalIntent: terminalIntent
+                ) ?? true
+            },
+            onError: { [weak self] error, runToken, runMode, displayMode, profile in
+                self?.handleRunError(
                     error,
-                    runToken: capturedRunToken,
-                    runMode: capturedRunMode,
-                    displayMode: capturedDisplayMode,
+                    runToken: runToken,
+                    runMode: runMode,
+                    displayMode: displayMode,
                     profile: profile
                 )
             }
-        }
+        )
 
         if activeTerminationIntent != .none {
-            runTask?.cancel()
+            runDriver.cancelRunTask()
         }
 
         return runToken
@@ -455,8 +422,8 @@ final class BackupSessionController {
 
     private func applyIntent(_ intent: BackupTerminationIntent) {
         activeTerminationIntent = intent
-        if runTask != nil {
-            runTask?.cancel()
+        if runDriver.hasActiveRunTask {
+            runDriver.cancelRunTask()
             return
         }
 
@@ -464,14 +431,6 @@ final class BackupSessionController {
             startCommandTask?.cancel()
         }
         resumePreparationTask?.cancel()
-    }
-
-    private func clearActiveRunState() {
-        runTask = nil
-        activeEventStream = nil
-        eventListenerTask?.cancel()
-        eventListenerTask = nil
-        activeTerminationIntent = .none
     }
 
     // MARK: - Event handling
@@ -483,7 +442,8 @@ final class BackupSessionController {
         terminalIntent: BackupTerminationIntent
     ) -> Bool {
         if case .finished = event {
-            clearActiveRunState()
+            runDriver.clearActiveRunState()
+            activeTerminationIntent = .none
         }
 
         let outcome = session.reduce(
@@ -513,18 +473,15 @@ final class BackupSessionController {
         displayMode: BackupRunMode,
         profile: ServerProfileRecord
     ) {
-        guard runToken == activeRunToken else { return }
+        guard runDriver.matchesActiveRunToken(runToken) else { return }
 
         let intent = activeTerminationIntent
-        clearActiveRunState()
+        runDriver.clearActiveRunState()
+        activeTerminationIntent = .none
 
         let phaseBeforeFailure = controlPhase
         let externalUnavailable = profile.isExternalStorageUnavailableError(error)
-        if externalUnavailable,
-           appSession.activeProfile?.id == profile.id {
-            try? databaseManager.setActiveServerProfileID(nil)
-            appSession.clear()
-        }
+        connectionResolver.handleExternalStorageUnavailableIfNeeded(error, for: profile)
         session.applyRunError(
             error,
             runMode: runMode,
@@ -548,7 +505,7 @@ final class BackupSessionController {
             notifyObserversNow()
             return false
         }
-        guard let connection = resolveActiveConnection() else {
+        guard let connection = connectionResolver.resolveActiveConnection() else {
             session.failForMissingConnection()
             notifyObservers()
             return false
@@ -577,14 +534,14 @@ final class BackupSessionController {
                     return
                 }
 
-                try await self.waitForPreviousRunToClear()
+                try await self.runDriver.waitForPreviousRunToClear()
 
-                let runToken = self.startRunInternal(
+                let runToken = self.startRun(
                     profile: connection.profile,
                     password: connection.password,
                     mode: resumedExecutionMode,
                     displayMode: resumeContext.pausedDisplayMode,
-                    workerCountOverride: workerCountOverride ?? self.activeWorkerCountOverride
+                    workerCountOverride: workerCountOverride ?? self.runDriver.activeWorkerCountOverride
                 )
 
                 if runToken != nil {
@@ -685,23 +642,4 @@ final class BackupSessionController {
     }
 
     private static let observerNotificationIntervalNanos: UInt64 = 120_000_000
-
-    private func resolveActiveConnection() -> (profile: ServerProfileRecord, password: String)? {
-        guard let profile = appSession.activeProfile,
-              let password = resolvePassword(for: profile) else {
-            return nil
-        }
-        return (profile, password)
-    }
-
-    private func resolvePassword(for profile: ServerProfileRecord) -> String? {
-        if profile.storageProfile.requiresPassword {
-            guard let activePassword = appSession.activePassword, !activePassword.isEmpty else {
-                return nil
-            }
-            return activePassword
-        }
-        return appSession.activePassword ?? ""
-    }
-
 }

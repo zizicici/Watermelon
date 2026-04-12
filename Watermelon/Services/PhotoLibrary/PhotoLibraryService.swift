@@ -79,6 +79,17 @@ final class PhotoLibraryService: @unchecked Sendable {
         return PHAsset.fetchAssets(with: options)
     }
 
+    func fetchAssets(localIdentifiers: Set<String>) -> [PHAsset] {
+        guard !localIdentifiers.isEmpty else { return [] }
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: Array(localIdentifiers), options: nil)
+        var assets: [PHAsset] = []
+        assets.reserveCapacity(result.count)
+        for index in 0 ..< result.count {
+            assets.append(result.object(at: index))
+        }
+        return assets
+    }
+
     func exportResourceToTempFile(
         _ resource: PHAssetResource,
         cancellationController: BackupCancellationController? = nil
@@ -282,4 +293,3 @@ private final class ExportDigestState {
         lock.withLock { Data(hasher.finalize()) }
     }
 }
-

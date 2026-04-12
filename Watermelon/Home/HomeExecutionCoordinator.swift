@@ -31,11 +31,8 @@ final class HomeExecutionCoordinator {
     // MARK: - Runtime
 
     private var session = HomeExecutionSession()
+    private let dataRefresher: HomeExecutionDataRefresher
     private var executionTask: Task<Void, Never>?
-    private var remoteSyncTask: Task<Void, Never>?
-    private var remoteSyncRequested = false
-    private var remoteSyncWaiters: [CheckedContinuation<Set<LibraryMonthKey>, Never>] = []
-    private var pendingDataChangedMonths = Set<LibraryMonthKey>()
     private var backupSessionController: BackupSessionController!
     private var uploadHelper: UploadWorkflowHelper!
     private var downloadHelper: DownloadWorkflowHelper!
@@ -45,14 +42,20 @@ final class HomeExecutionCoordinator {
     init(dependencies: DependencyContainer, dataAccess: DataAccess) {
         self.dependencies = dependencies
         self.dataAccess = dataAccess
+        self.dataRefresher = HomeExecutionDataRefresher(
+            syncRemoteData: dataAccess.syncRemoteData,
+            refreshLocalIndex: dataAccess.refreshLocalIndex
+        )
+        self.dataRefresher.onStateChanged = { [weak self] in
+            self?.notifyStateChanged()
+        }
     }
 
     // MARK: - Enter / Exit
 
     func enter(upload: [LibraryMonthKey], download: [LibraryMonthKey], sync: [LibraryMonthKey]) {
         executionTask = nil
-        remoteSyncRequested = false
-        pendingDataChangedMonths.removeAll()
+        dataRefresher.reset()
         session.enter(upload: upload, download: download, sync: sync, localAssetIDs: dataAccess.localAssetIDs)
         backupSessionController = BackupSessionController(dependencies: dependencies)
         uploadHelper = UploadWorkflowHelper(backupSessionController: backupSessionController)
@@ -67,24 +70,15 @@ final class HomeExecutionCoordinator {
     func exit() {
         executionTask?.cancel()
         executionTask = nil
-        remoteSyncTask?.cancel()
-        remoteSyncTask = nil
-        remoteSyncRequested = false
+        dataRefresher.cancel()
         uploadHelper?.cancel()
         downloadHelper?.cancel()
-        let remoteSyncWaiters = self.remoteSyncWaiters
-        self.remoteSyncWaiters.removeAll()
-        pendingDataChangedMonths.removeAll()
-        for waiter in remoteSyncWaiters {
-            waiter.resume(returning: [])
-        }
         session.reset()
         notifyStateChanged()
     }
 
     func consumePendingDataChangedMonths() -> Set<LibraryMonthKey> {
-        defer { pendingDataChangedMonths.removeAll() }
-        return pendingDataChangedMonths
+        dataRefresher.consumePendingChangedMonths()
     }
 
     func pause() {
@@ -130,6 +124,27 @@ final class HomeExecutionCoordinator {
         }
     }
 
+    func failForMissingConnection() {
+        guard let phase = session.currentPhase else { return }
+        switch phase {
+        case .completed, .failed:
+            return
+        default:
+            break
+        }
+
+        executionTask?.cancel()
+        executionTask = nil
+        dataRefresher.cancel()
+        uploadHelper?.stop()
+        uploadHelper?.cancel()
+        downloadHelper?.cancel()
+
+        let alert = session.failExecutionForMissingConnection()
+        notifyStateChanged()
+        onAlert?(alert.title, alert.message)
+    }
+
     // MARK: - Execution Task
 
     private func startExecution() {
@@ -144,6 +159,7 @@ final class HomeExecutionCoordinator {
                 }
                 guard !Task.isCancelled else { return }
                 guard await self.handleUploadResult(result) else { return }
+                guard !Task.isCancelled else { return }
             }
 
             await self.runDownloadPhase()
@@ -159,7 +175,7 @@ final class HomeExecutionCoordinator {
             syncThrottleInterval: Self.syncThrottleInterval
         )
         if shouldSyncRemoteData {
-            scheduleRemoteSync()
+            dataRefresher.scheduleRemoteSync()
         }
         notifyStateChanged()
     }
@@ -168,7 +184,8 @@ final class HomeExecutionCoordinator {
     private func handleUploadResult(_ result: UploadWorkflowHelper.UploadResult) async -> Bool {
         switch session.handleUploadResult(result) {
         case .continueToDownload:
-            _ = await syncRemoteDataAndWait()
+            _ = await dataRefresher.syncRemoteDataAndWait()
+            guard !Task.isCancelled else { return false }
             notifyStateChanged()
             return true
         case .paused:
@@ -182,7 +199,8 @@ final class HomeExecutionCoordinator {
             exit()
             return false
         case .finished:
-            _ = await syncRemoteDataAndWait()
+            _ = await dataRefresher.syncRemoteDataAndWait()
+            guard !Task.isCancelled else { return false }
             notifyStateChanged()
             return false
         }
@@ -244,16 +262,17 @@ final class HomeExecutionCoordinator {
             }
         }
 
-        _ = await syncRemoteDataAndWait()
+        _ = await dataRefresher.syncRemoteDataAndWait()
+        if Task.isCancelled { return }
         if !assetIDs.isEmpty {
-            await refreshLocalIndexAndNotify(assetIDs)
+            await dataRefresher.refreshLocalIndexAndNotify(assetIDs)
             if Task.isCancelled { return }
         }
 
         let remoteItems = dataAccess.remoteOnlyItems(month)
         let result = await downloadHelper.downloadItems(remoteItems, context: context) { [weak self] assetID in
             guard let self else { return }
-            await self.refreshLocalIndexAndNotify([assetID])
+            await self.dataRefresher.refreshLocalIndexAndNotify([assetID])
         }
 
         switch result {
@@ -271,56 +290,5 @@ final class HomeExecutionCoordinator {
 
     private func notifyStateChanged() {
         onStateChanged?()
-    }
-
-    private func refreshLocalIndexAndNotify(_ assetIDs: Set<String>) async {
-        let changedMonths = await dataAccess.refreshLocalIndex(assetIDs)
-        guard !changedMonths.isEmpty else { return }
-        pendingDataChangedMonths.formUnion(changedMonths)
-        notifyStateChanged()
-    }
-
-    private func scheduleRemoteSync() {
-        remoteSyncRequested = true
-        ensureRemoteSyncTask()
-    }
-
-    private func syncRemoteDataAndWait() async -> Set<LibraryMonthKey> {
-        remoteSyncRequested = true
-        ensureRemoteSyncTask()
-        return await withCheckedContinuation { continuation in
-            remoteSyncWaiters.append(continuation)
-        }
-    }
-
-    private func ensureRemoteSyncTask() {
-        guard remoteSyncTask == nil else { return }
-
-        remoteSyncTask = Task { [weak self] in
-            guard let self else { return }
-
-            var aggregatedChangedMonths = Set<LibraryMonthKey>()
-            while self.remoteSyncRequested {
-                self.remoteSyncRequested = false
-                if Task.isCancelled { break }
-
-                let changedMonths = await self.dataAccess.syncRemoteData()
-                if Task.isCancelled { break }
-                aggregatedChangedMonths.formUnion(changedMonths)
-                self.pendingDataChangedMonths.formUnion(changedMonths)
-
-                if !changedMonths.isEmpty {
-                    self.notifyStateChanged()
-                }
-            }
-
-            let waiters = self.remoteSyncWaiters
-            self.remoteSyncWaiters.removeAll()
-            self.remoteSyncTask = nil
-
-            for waiter in waiters {
-                waiter.resume(returning: aggregatedChangedMonths)
-            }
-        }
     }
 }
