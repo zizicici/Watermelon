@@ -181,6 +181,14 @@ enum ExecutionPhase: Equatable {
     case failed(String)
 }
 
+enum ExecutionControlState: Equatable {
+    case idle
+    case starting
+    case resuming
+    case pausing
+    case stopping
+}
+
 struct MonthFailureInfo {
     let month: LibraryMonthKey
     let message: String
@@ -189,6 +197,7 @@ struct MonthFailureInfo {
 struct HomeExecutionState {
     let monthPlans: [LibraryMonthKey: MonthPlan]
     let phase: ExecutionPhase
+    let controlState: ExecutionControlState
     let processedCountByMonth: [LibraryMonthKey: Int]
     let assetCountByMonth: [LibraryMonthKey: Int]
     let uploadMonths: [LibraryMonthKey]
@@ -199,6 +208,7 @@ struct HomeExecutionState {
 
     init(monthPlans: [LibraryMonthKey: MonthPlan],
          phase: ExecutionPhase,
+         controlState: ExecutionControlState,
          processedCountByMonth: [LibraryMonthKey: Int],
          assetCountByMonth: [LibraryMonthKey: Int],
          uploadMonths: [LibraryMonthKey],
@@ -206,6 +216,7 @@ struct HomeExecutionState {
          syncMonths: [LibraryMonthKey]) {
         self.monthPlans = monthPlans
         self.phase = phase
+        self.controlState = controlState
         self.processedCountByMonth = processedCountByMonth
         self.assetCountByMonth = assetCountByMonth
         self.uploadMonths = uploadMonths

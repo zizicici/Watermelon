@@ -24,6 +24,7 @@ final class BackupSessionController {
 
     struct Snapshot {
         let state: State
+        let controlPhase: BackupSessionControlPhase
         let statusText: String
         let succeeded: Int
         let failed: Int

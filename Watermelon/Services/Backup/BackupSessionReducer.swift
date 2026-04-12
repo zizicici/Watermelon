@@ -69,6 +69,7 @@ struct BackupSessionState {
     func snapshot() -> BackupSessionController.Snapshot {
         BackupSessionController.Snapshot(
             state: state,
+            controlPhase: controlPhase,
             statusText: statusText,
             succeeded: succeeded,
             failed: failed,

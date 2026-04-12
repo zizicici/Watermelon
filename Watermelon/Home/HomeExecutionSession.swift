@@ -34,11 +34,12 @@ struct HomeExecutionSession {
 
     var isActive: Bool { phase != nil }
 
-    var currentState: HomeExecutionState? {
+    func currentState(controlState: ExecutionControlState) -> HomeExecutionState? {
         guard let phase else { return nil }
         return HomeExecutionState(
             monthPlans: monthPlans,
             phase: phase,
+            controlState: controlState,
             processedCountByMonth: processedCountByMonth,
             assetCountByMonth: assetCountByMonth,
             uploadMonths: uploadMonths,

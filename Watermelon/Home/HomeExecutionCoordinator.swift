@@ -7,7 +7,7 @@ final class HomeExecutionCoordinator {
 
     var phase: ExecutionPhase? { session.currentPhase }
     var isActive: Bool { session.isActive }
-    var currentState: HomeExecutionState? { session.currentState }
+    var currentState: HomeExecutionState? { session.currentState(controlState: currentControlState) }
 
     // MARK: - Callbacks
 
@@ -33,6 +33,7 @@ final class HomeExecutionCoordinator {
     private var session = HomeExecutionSession()
     private let dataRefresher: HomeExecutionDataRefresher
     private var executionTask: Task<Void, Never>?
+    private var transientControlState: ExecutionControlState?
     private var backupSessionController: BackupSessionController!
     private var uploadHelper: UploadWorkflowHelper!
     private var downloadHelper: DownloadWorkflowHelper!
@@ -55,6 +56,7 @@ final class HomeExecutionCoordinator {
 
     func enter(upload: [LibraryMonthKey], download: [LibraryMonthKey], sync: [LibraryMonthKey]) {
         executionTask = nil
+        transientControlState = nil
         dataRefresher.reset()
         session.enter(upload: upload, download: download, sync: sync, localAssetIDs: dataAccess.localAssetIDs)
         backupSessionController = BackupSessionController(dependencies: dependencies)
@@ -70,6 +72,7 @@ final class HomeExecutionCoordinator {
     func exit() {
         executionTask?.cancel()
         executionTask = nil
+        transientControlState = nil
         dataRefresher.cancel()
         uploadHelper?.cancel()
         downloadHelper?.cancel()
@@ -89,10 +92,13 @@ final class HomeExecutionCoordinator {
             uploadHelper.pause()
             notifyStateChanged()
         case .download:
+            let taskToAwait = executionTask
             executionTask?.cancel()
             executionTask = nil
+            transientControlState = .pausing
             downloadHelper.cancel()
             notifyStateChanged()
+            settleDownloadPause(after: taskToAwait)
         case nil:
             break
         }
@@ -135,6 +141,7 @@ final class HomeExecutionCoordinator {
 
         executionTask?.cancel()
         executionTask = nil
+        transientControlState = nil
         dataRefresher.cancel()
         uploadHelper?.stop()
         uploadHelper?.cancel()
@@ -290,5 +297,43 @@ final class HomeExecutionCoordinator {
 
     private func notifyStateChanged() {
         onStateChanged?()
+    }
+
+    private var currentControlState: ExecutionControlState {
+        if let transientControlState {
+            return transientControlState
+        }
+        guard session.isActive else { return .idle }
+        switch backupSessionController?.snapshot().controlPhase {
+        case .starting:
+            return .starting
+        case .resuming:
+            return .resuming
+        case .pausing:
+            return .pausing
+        case .stopping:
+            return .stopping
+        case .idle, .none:
+            return .idle
+        }
+    }
+
+    private func settleDownloadPause(after task: Task<Void, Never>?) {
+        guard let task else {
+            transientControlState = nil
+            notifyStateChanged()
+            return
+        }
+
+        Task { [weak self] in
+            _ = await task.value
+            await MainActor.run {
+                guard let self,
+                      self.transientControlState == .pausing,
+                      self.session.currentPhase == .downloadPaused else { return }
+                self.transientControlState = nil
+                self.notifyStateChanged()
+            }
+        }
     }
 }

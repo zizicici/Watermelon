@@ -591,7 +591,8 @@ final class NewHomeViewController: UIViewController {
             backupPhase: phases.backup,
             downloadPhase: phases.download,
             syncPhase: phases.sync,
-            phase: exec.phase
+            phase: exec.phase,
+            controlState: exec.controlState
         )
 
         if let (menu, title) = buildFailureMenu(from: exec) {
