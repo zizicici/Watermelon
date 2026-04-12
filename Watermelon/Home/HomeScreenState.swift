@@ -122,6 +122,14 @@ struct MonthPlan {
     var isDone: Bool { phase == .completed || phase == .partiallyFailed }
     var isFailed: Bool { phase == .failed }
     var isActive: Bool { phase == .uploading || phase == .downloading }
+    var direction: HomeArrowDirection? {
+        switch (needsUpload, needsDownload) {
+        case (true, false): return .toRemote
+        case (false, true): return .toLocal
+        case (true, true): return .sync
+        case (false, false): return nil
+        }
+    }
 
     mutating func apply(_ event: MonthEvent) {
         switch (phase, event) {
@@ -219,8 +227,12 @@ struct HomeExecutionState {
         }.sorted { $0.month < $1.month }
     }
 
-    func progressPercent(for month: LibraryMonthKey, row: HomeMonthRow?, direction: HomeArrowDirection?, matchedCount: Int) -> Double? {
-        guard let row, let direction else { return nil }
+    func direction(for month: LibraryMonthKey) -> HomeArrowDirection? {
+        monthPlans[month]?.direction
+    }
+
+    func progressPercent(for month: LibraryMonthKey, row: HomeMonthRow?, direction fallbackDirection: HomeArrowDirection?, matchedCount: Int) -> Double? {
+        guard let row, let direction = direction(for: month) ?? fallbackDirection else { return nil }
 
         let localCount = row.local?.assetCount ?? 0
         let remoteCount = row.remote?.assetCount ?? 0

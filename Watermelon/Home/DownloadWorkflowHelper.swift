@@ -1,7 +1,4 @@
 import Foundation
-import os.log
-
-private let downloadLog = Logger(subsystem: "com.zizicici.watermelon", category: "DownloadHelper")
 
 /// Pure domain executor for download operations.
 /// Knows only how to run scoped backups and download remote items.
@@ -28,6 +25,7 @@ final class DownloadWorkflowHelper {
     // MARK: - Public Operations
 
     /// Runs a scoped backup to populate the local hash index for the given assets.
+    /// Start readiness is handled inside BSC instead of helper-side polling.
     func runScopedBackup(
         assetIDs: Set<String>,
         onProgress: @escaping () -> Void
@@ -42,25 +40,8 @@ final class DownloadWorkflowHelper {
 
         removeObserver()
 
-        // Wait for BSC to accept scope + start. During rapid pause→resume,
-        // BSC may still be in a stop transition. Poll both updateScopeSelection
-        // and startBackup to avoid using stale scope from a previous run.
-        // startBackup must succeed before addObserver (addObserver immediately
-        // replays the current snapshot, which may be a stale terminal state).
-        var ready = false
-        for _ in 0..<20 {
-            if backupSessionController.updateScopeSelection(selection),
-               backupSessionController.startBackup() {
-                ready = true
-                break
-            }
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            if Task.isCancelled { return false }
-        }
-        guard ready else {
-            downloadLog.warning("[DownloadHelper] BSC did not become ready after 20 attempts")
-            return false
-        }
+        let started = await backupSessionController.startBackupWhenReady(scope: selection)
+        guard started else { return false }
 
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             pendingScopedContinuation = continuation
@@ -91,20 +72,24 @@ final class DownloadWorkflowHelper {
     func downloadItems(
         _ remoteItems: [RemoteAlbumItem],
         context: Context,
-        onItemRestored: @MainActor @escaping (String) -> Void
+        onItemRestored: @MainActor @escaping (String) async -> Void
     ) async -> DownloadMonthResult {
         guard !remoteItems.isEmpty else { return .success }
+        let hashIndexRepository = dependencies.hashIndexRepository
 
         do {
             _ = try await dependencies.restoreService.restoreItems(
                 items: remoteItems.map(\.resources),
                 profile: context.profile,
                 password: context.password,
-                onItemCompleted: { [weak self] _, _, restoredAsset in
-                    guard let self else { return }
+                onItemCompleted: { _, _, restoredAsset in
                     if let restoredAsset {
-                        self.writeHashIndex(for: restoredAsset, remoteItems: remoteItems)
-                        onItemRestored(restoredAsset.asset.localIdentifier)
+                        try await Self.writeHashIndex(
+                            for: restoredAsset,
+                            remoteItems: remoteItems,
+                            repository: hashIndexRepository
+                        )
+                        await onItemRestored(restoredAsset.asset.localIdentifier)
                     }
                 }
             )
@@ -133,15 +118,22 @@ final class DownloadWorkflowHelper {
         }
     }
 
-    private func writeHashIndex(for result: RestoreService.IndexedRestoredAsset, remoteItems: [RemoteAlbumItem]) {
+    private static func writeHashIndex(
+        for result: RestoreService.IndexedRestoredAsset,
+        remoteItems: [RemoteAlbumItem],
+        repository: ContentHashIndexRepository
+    ) async throws {
         guard result.itemIndex < remoteItems.count else { return }
         let remoteItem = remoteItems[result.itemIndex]
-        dependencies.hashIndexRepository.writeHashIndex(
-            assetLocalIdentifier: result.asset.localIdentifier,
-            remoteAssetFingerprint: remoteItem.assetFingerprint,
-            resourceLinks: remoteItem.resourceLinks,
-            resources: remoteItem.resources
-        )
+
+        try await Task.detached(priority: .utility) {
+            try repository.writeHashIndex(
+                assetLocalIdentifier: result.asset.localIdentifier,
+                remoteAssetFingerprint: remoteItem.assetFingerprint,
+                resourceLinks: remoteItem.resourceLinks,
+                resources: remoteItem.resources
+            )
+        }.value
     }
 }
 

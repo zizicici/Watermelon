@@ -61,10 +61,13 @@ final class HomeScreenStore {
                     let active = connectionCtrl?.state.isConnected ?? false
                     let revision = dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
                     let snapshotState = dependencies.backupCoordinator.currentRemoteSnapshotState(since: revision)
-                    dataManager.syncRemoteSnapshot(state: snapshotState, hasActiveConnection: active)
+                    return await dataManager.syncRemoteSnapshotOnProcessingQueue(
+                        state: snapshotState,
+                        hasActiveConnection: active
+                    )
                 },
                 refreshLocalIndex: { [dataManager] assetIDs in
-                    dataManager.refreshLocalIndex(forAssetIDs: assetIDs)
+                    await dataManager.refreshLocalIndex(forAssetIDs: assetIDs)
                 }
             )
         )
@@ -186,9 +189,13 @@ final class HomeScreenStore {
 
     // MARK: - Derived State
 
+    func arrowDirection(for month: LibraryMonthKey) -> HomeArrowDirection? {
+        executionState?.direction(for: month) ?? selection.arrowDirection(for: month)
+    }
+
     func progressPercent(for month: LibraryMonthKey) -> Double? {
         let row = rowLookup[month]
-        let direction = selection.arrowDirection(for: month)
+        let direction = arrowDirection(for: month)
         let matched = dataManager.matchedCount(for: month)
 
         if let exec = executionState {
@@ -258,7 +265,7 @@ final class HomeScreenStore {
         // Compute which months actually need UI update:
         // - months whose phase changed
         // - months that are active (progress bar updates)
-        var changedMonths = Set<LibraryMonthKey>()
+        var changedMonths = executionCoordinator.consumePendingDataChangedMonths()
         if let state = executionCoordinator.currentState {
             for (month, plan) in state.monthPlans {
                 if lastMonthPhases[month] != plan.phase || plan.isActive {

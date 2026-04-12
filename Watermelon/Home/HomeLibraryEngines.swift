@@ -735,7 +735,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         label: "com.zizicici.watermelon.homeData.processing",
         qos: .userInitiated
     )
-    private var isProcessingRemoteData = false
+    private var processingMutationCount = 0
     private var deferredPhotoChange: PHChange?
 
     private var cachedLocalSummaries: [LibraryMonthKey: HomeMonthSummary] = [:]
@@ -770,22 +770,51 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         await loadLocalIndex(forceReload: true)
     }
 
+    /// Refreshes local hash-backed state on the processing queue so restore completion
+    /// does not block the main thread with DB reads or reconcile work.
     @discardableResult
-    func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) -> Set<LibraryMonthKey> {
+    func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) async -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty else { return [] }
-        let existingIDs = localIndex.knownAssetIDs(in: assetIDs)
-        guard !existingIDs.isEmpty else { return [] }
 
-        let hashMap = (try? contentHashIndexRepository.fetchHashMapByAsset(assetIDs: existingIDs)) ?? [:]
-        let fingerprintMap = (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset(assetIDs: existingIDs)) ?? [:]
+        beginProcessingMutation()
+        let localIdx = localIndex
+        let remoteIdx = remoteIndex
+        let reconcileIdx = reconcileIndex
+        let repository = contentHashIndexRepository
+        let hasActiveConnection = self.hasActiveConnection
 
-        let changedMonths = localIndex.refresh(
-            assetIDs: existingIDs,
-            hashMapByAsset: hashMap,
-            fingerprintByAsset: fingerprintMap,
-            remoteFingerprintSet: remoteIndex.assetFingerprintSet
-        )
-        return reconcileIfNeeded(changedMonths)
+        let reconciledMonths: Set<LibraryMonthKey> = await withCheckedContinuation { continuation in
+            Self.processingQueue.async {
+                let start = CFAbsoluteTimeGetCurrent()
+                let existingIDs = localIdx.knownAssetIDs(in: assetIDs)
+                guard !existingIDs.isEmpty else {
+                    continuation.resume(returning: [])
+                    return
+                }
+
+                let hashMap = (try? repository.fetchHashMapByAsset(assetIDs: existingIDs)) ?? [:]
+                let fingerprintMap = (try? repository.fetchAssetFingerprintsByAsset(assetIDs: existingIDs)) ?? [:]
+
+                let changedMonths = localIdx.refresh(
+                    assetIDs: existingIDs,
+                    hashMapByAsset: hashMap,
+                    fingerprintByAsset: fingerprintMap,
+                    remoteFingerprintSet: remoteIdx.assetFingerprintSet
+                )
+                let result = reconcileIdx.reconcile(
+                    changedMonths: changedMonths,
+                    localIndex: localIdx,
+                    remoteIndex: remoteIdx,
+                    hasActiveConnection: hasActiveConnection
+                )
+                let elapsed = CFAbsoluteTimeGetCurrent() - start
+                dataLog.info("[HomeData] refreshLocalIndex: assets=\(existingIDs.count), months=\(result.count), \(String(format: "%.3f", elapsed))s")
+                continuation.resume(returning: result)
+            }
+        }
+
+        finishProcessingMutation(reconciledMonths)
+        return reconciledMonths
     }
 
     @discardableResult
@@ -842,7 +871,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
             self.hasActiveConnection = hasActiveConnection
             if !hasActiveConnection { needsRemoteBootstrap = true }
         }
-        isProcessingRemoteData = true
+        beginProcessingMutation()
 
         let localIdx = self.localIndex
         let remoteIdx = self.remoteIndex
@@ -892,16 +921,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         if hasActiveConnection, state.isFullSnapshot {
             needsRemoteBootstrap = false
         }
-        if !reconciledMonths.isEmpty {
-            updateCachedSummaries(for: reconciledMonths)
-        }
-        isProcessingRemoteData = false
-
-        // Process any deferred photo library changes
-        if let deferred = deferredPhotoChange {
-            deferredPhotoChange = nil
-            applyPhotoLibraryChangeNow(deferred)
-        }
+        finishProcessingMutation(reconciledMonths)
 
         return reconciledMonths
     }
@@ -962,7 +982,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         Task { @MainActor [weak self] in
             guard let self else { return }
 
-            if self.isProcessingRemoteData {
+            if self.processingMutationCount > 0 {
                 self.deferredPhotoChange = changeInstance
                 return
             }
@@ -1010,6 +1030,24 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
             updateCachedSummaries(for: result)
         }
         return result
+    }
+
+    private func beginProcessingMutation() {
+        processingMutationCount += 1
+    }
+
+    private func finishProcessingMutation(_ reconciledMonths: Set<LibraryMonthKey>) {
+        if !reconciledMonths.isEmpty {
+            updateCachedSummaries(for: reconciledMonths)
+        }
+
+        if processingMutationCount > 0 {
+            processingMutationCount -= 1
+        }
+
+        guard processingMutationCount == 0, let deferred = deferredPhotoChange else { return }
+        deferredPhotoChange = nil
+        applyPhotoLibraryChangeNow(deferred)
     }
 
     @discardableResult

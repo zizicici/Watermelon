@@ -282,6 +282,7 @@ final class NewHomeViewController: UIViewController {
                     showSpinner: plan.isActive
                 )
                 if plan.phase == .partiallyFailed { cell.showWarningIndicator() }
+                if plan.phase == .uploadPaused || plan.phase == .downloadPaused { cell.showPauseIndicator() }
                 return
             case .pending:
                 break
@@ -337,7 +338,7 @@ final class NewHomeViewController: UIViewController {
             let itemIndexPath = IndexPath(item: indexPath.item * 2, section: indexPath.section)
             guard let item = self.dataSource.itemIdentifier(for: itemIndexPath) else { return }
             arrowView.configure(
-                direction: self.store.selection.arrowDirection(for: item.month),
+                direction: self.store.arrowDirection(for: item.month),
                 percent: self.store.progressPercent(for: item.month)
             )
         }
@@ -465,7 +466,7 @@ final class NewHomeViewController: UIViewController {
                     forElementKind: directionArrowElementKind, at: badgeIndexPath
                 ) as? DirectionArrowView {
                     arrowView.configure(
-                        direction: store.selection.arrowDirection(for: row.month),
+                        direction: store.arrowDirection(for: row.month),
                         percent: store.progressPercent(for: row.month)
                     )
                 }
@@ -510,7 +511,7 @@ final class NewHomeViewController: UIViewController {
                     forElementKind: directionArrowElementKind, at: badgeIndexPath
                 ) as? DirectionArrowView {
                     arrowView.configure(
-                        direction: store.selection.arrowDirection(for: row.month),
+                        direction: store.arrowDirection(for: row.month),
                         percent: store.progressPercent(for: row.month)
                     )
                 }

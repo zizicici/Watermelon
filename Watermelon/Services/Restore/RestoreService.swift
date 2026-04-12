@@ -27,7 +27,7 @@ final class RestoreService {
         items: [[RemoteManifestResource]],
         profile: ServerProfileRecord,
         password: String,
-        onItemCompleted: @MainActor (Int, Int, IndexedRestoredAsset?) -> Void
+        onItemCompleted: @Sendable (Int, Int, IndexedRestoredAsset?) async throws -> Void
     ) async throws -> [IndexedRestoredAsset] {
         guard !items.isEmpty else { return [] }
 
@@ -52,7 +52,7 @@ final class RestoreService {
                 results.append(indexed)
                 restoredAsset = indexed
             }
-            await onItemCompleted(index + 1, items.count, restoredAsset)
+            try await onItemCompleted(index + 1, items.count, restoredAsset)
         }
         return results
     }

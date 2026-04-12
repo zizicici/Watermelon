@@ -405,6 +405,13 @@ final class MonthCell: UICollectionViewCell {
         activityIndicator.stopAnimating()
     }
 
+    func showPauseIndicator() {
+        checkmark.isHidden = false
+        checkmark.image = UIImage(systemName: "pause.circle.fill")
+        checkmark.tintColor = currentTitleColor
+        activityIndicator.stopAnimating()
+    }
+
     func configureCompleted(monthTitle: String, countText: NSAttributedString, sizeText: String?) {
         monthLabel.text = monthTitle
         monthLabel.isHidden = false

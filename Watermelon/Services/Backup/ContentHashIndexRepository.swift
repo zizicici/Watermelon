@@ -376,7 +376,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         remoteAssetFingerprint: Data,
         resourceLinks: [RemoteAssetResourceLink],
         resources: [RemoteManifestResource]
-    ) {
+    ) throws {
         var records: [LocalAssetResourceHashRecord] = []
         var totalSize: Int64 = 0
         for link in resourceLinks {
@@ -390,7 +390,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 totalSize += resource.fileSize
             }
         }
-        try? upsertAssetHashSnapshot(
+        try upsertAssetHashSnapshot(
             assetLocalIdentifier: assetLocalIdentifier,
             assetFingerprint: remoteAssetFingerprint,
             resources: records,
@@ -417,4 +417,3 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 }
-
