@@ -917,6 +917,10 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         }
     }
 
+    func monthRow(for month: LibraryMonthKey) -> HomeMonthRow {
+        HomeMonthRow(month: month, local: cachedLocalSummaries[month], remote: cachedRemoteSummaries[month])
+    }
+
     /// Incremental summary cache — returns all month rows from cache.
     func allMonthRows() -> [LibraryMonthKey: HomeMonthRow] {
         let allMonths = Set(cachedLocalSummaries.keys).union(cachedRemoteSummaries.keys)

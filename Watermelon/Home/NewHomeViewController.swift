@@ -258,30 +258,33 @@ final class NewHomeViewController: UIViewController {
 
         let m = item.month.month
 
-        if let exec = store.executionState, exec.executionMonths.contains(item.month) {
-            if exec.completedMonths.contains(item.month) {
+        if let exec = store.executionState, let plan = exec.monthPlans[item.month] {
+            switch plan.phase {
+            case .completed:
                 cell.configureCompleted(
                     monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: .tertiaryLabel),
                     sizeText: summary.sizeText
                 )
                 return
-            }
-            if exec.failedMonths.contains(item.month) {
+            case .failed:
                 cell.configureFailed(
                     monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: .tertiaryLabel),
                     sizeText: summary.sizeText
                 )
                 return
-            }
-            if exec.activeMonths.contains(item.month) {
+            case .partiallyFailed, .uploading, .downloading, .uploadPaused, .downloadPaused, .uploadDone:
                 cell.configureRunning(
                     monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: HomeSeasonStyle.monthSecondaryTextColor(month: m)),
                     sizeText: summary.sizeText,
                     bgColor: HomeSeasonStyle.monthColor(month: m),
                     titleColor: HomeSeasonStyle.monthTextColor(month: m),
-                    detailColor: HomeSeasonStyle.monthSecondaryTextColor(month: m)
+                    detailColor: HomeSeasonStyle.monthSecondaryTextColor(month: m),
+                    showSpinner: plan.isActive
                 )
+                if plan.phase == .partiallyFailed { cell.showWarningIndicator() }
                 return
+            case .pending:
+                break
             }
         }
 
@@ -355,7 +358,7 @@ final class NewHomeViewController: UIViewController {
             switch kind {
             case .data(let months):    self.renderDataChange(months)
             case .selection:           self.renderSelectionChange()
-            case .execution:           self.renderExecutionChange()
+            case .execution(let months): self.renderExecutionChange(changedMonths: months)
             case .connection:          self.renderConnectionChange()
             case .structural:          self.renderStructuralChange()
             }
@@ -387,17 +390,20 @@ final class NewHomeViewController: UIViewController {
         updateActionPanel()
     }
 
-    private func renderExecutionChange() {
+    private func renderExecutionChange(changedMonths: Set<LibraryMonthKey>) {
         if let exec = store.executionState {
-            reconfigureMonths(exec.executionMonths)
+            let isFirstTick = !hasEnteredExecution
+            reconfigureMonths(changedMonths.isEmpty ? exec.executionMonths : changedMonths)
             updateActionPanelFromExecution(exec)
+            if isFirstTick {
+                updateSelectionInteraction()
+            }
         } else {
             // Execution ended
             hasEnteredExecution = false
             actionPanel.resetToSelection()
             renderStructuralChange()
         }
-        updateSelectionInteraction()
     }
 
     private func renderConnectionChange() {
@@ -586,6 +592,33 @@ final class NewHomeViewController: UIViewController {
             syncPhase: phases.sync,
             phase: exec.phase
         )
+
+        if let (menu, title) = buildFailureMenu(from: exec) {
+            actionPanel.updateFailureSummary(menu: menu, title: title)
+        } else {
+            actionPanel.updateFailureSummary(menu: nil, title: nil)
+        }
+    }
+
+    private func buildFailureMenu(from exec: HomeExecutionState) -> (UIMenu, String)? {
+        let infos = exec.failedMonthInfos
+        guard !infos.isEmpty else { return nil }
+
+        var byYear: [Int: [MonthFailureInfo]] = [:]
+        for info in infos {
+            byYear[info.month.year, default: []].append(info)
+        }
+
+        let yearMenus = byYear.keys.sorted().map { year -> UIMenu in
+            let actions = byYear[year]!.sorted { $0.month < $1.month }.map { info in
+                UIAction(title: info.month.displayText, subtitle: info.message) { [weak self] _ in
+                    self?.scrollToMonth(info.month)
+                }
+            }
+            return UIMenu(title: "\(year)年", options: .displayInline, children: actions)
+        }
+
+        return (UIMenu(children: yearMenus), "\(infos.count) 项失败")
     }
 
     private func updateSelectionInteraction() {

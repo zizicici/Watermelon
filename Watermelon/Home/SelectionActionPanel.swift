@@ -5,7 +5,7 @@ final class SelectionActionPanel: UIView {
 
     enum CategoryPhase {
         case pending(total: Int)
-        case running(completed: Int, total: Int)
+        case running(completed: Int, failed: Int, total: Int)
         case paused(completed: Int, total: Int)
         case completed(total: Int)
         case failed(completed: Int, failed: Int, total: Int)
@@ -89,6 +89,26 @@ final class SelectionActionPanel: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    private(set) var failureSummaryButton: UIButton = {
+        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
+        var cfg = UIButton.Configuration.plain()
+        cfg.image = UIImage(systemName: "exclamationmark.triangle.fill", withConfiguration: iconConfig)
+        cfg.imagePadding = 6
+        cfg.titleAlignment = .leading
+        cfg.baseForegroundColor = .systemRed
+        let btn = UIButton(configuration: cfg)
+        btn.showsMenuAsPrimaryAction = true
+        btn.isHidden = true
+        return btn
+    }()
+
+    private let categoryScrollView: UIScrollView = {
+        let sv = UIScrollView()
+        sv.showsHorizontalScrollIndicator = false
+        sv.showsVerticalScrollIndicator = false
+        return sv
+    }()
+
     private func setupUI() {
         backgroundColor = .appPaper
 
@@ -103,10 +123,22 @@ final class SelectionActionPanel: UIView {
         stopButton.addTarget(self, action: #selector(stopTappedAction), for: .touchUpInside)
         stopButton.isHidden = true
 
+        // Scrollable category buttons (failure + backup + download + sync)
+        let scrollContent = UIStackView(arrangedSubviews: [failureSummaryButton, backupCategoryButton, downloadCategoryButton, syncCategoryButton])
+        scrollContent.axis = .horizontal
+        scrollContent.spacing = 4
+        scrollContent.alignment = .center
+
+        categoryScrollView.addSubview(scrollContent)
+        scrollContent.snp.makeConstraints { make in
+            make.edges.equalToSuperview()
+            make.height.equalToSuperview()
+        }
+
         let spacer = UIView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        let contentStack = UIStackView(arrangedSubviews: [backupCategoryButton, downloadCategoryButton, syncCategoryButton, spacer, stopButton, executeButton])
+        let contentStack = UIStackView(arrangedSubviews: [categoryScrollView, spacer, stopButton, executeButton])
         contentStack.axis = .horizontal
         contentStack.spacing = 4
         contentStack.setCustomSpacing(12, after: stopButton)
@@ -150,11 +182,24 @@ final class SelectionActionPanel: UIView {
 
     // MARK: - Execution Mode
 
+    func updateFailureSummary(menu: UIMenu?, title: String?) {
+        if let menu, let title {
+            failureSummaryButton.isHidden = false
+            failureSummaryButton.menu = menu
+            failureSummaryButton.configuration?.title = title
+        } else {
+            failureSummaryButton.isHidden = true
+            failureSummaryButton.menu = nil
+        }
+    }
+
     func enterExecution(backupTotal: Int, downloadTotal: Int, syncTotal: Int) {
         isExecuting = true
         isPaused = false
         isCompleted = false
 
+        failureSummaryButton.isHidden = true
+        failureSummaryButton.menu = nil
         backupCategoryButton.showsMenuAsPrimaryAction = false
         backupCategoryButton.menu = nil
         downloadCategoryButton.showsMenuAsPrimaryAction = false
@@ -206,7 +251,9 @@ final class SelectionActionPanel: UIView {
             executeButton.isEnabled = true
             stopButton.isHidden = true
         case .failed:
+            applyFailedAppearance()
             executeButton.isEnabled = false
+            stopButton.isEnabled = true
         }
     }
 
@@ -215,6 +262,8 @@ final class SelectionActionPanel: UIView {
         isPaused = false
         isCompleted = false
 
+        failureSummaryButton.isHidden = true
+        failureSummaryButton.menu = nil
         backupCategoryButton.showsMenuAsPrimaryAction = true
         downloadCategoryButton.showsMenuAsPrimaryAction = true
         syncCategoryButton.showsMenuAsPrimaryAction = true
@@ -260,10 +309,16 @@ final class SelectionActionPanel: UIView {
             button.configuration?.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
             button.configuration?.title = "\(total)"
             button.configuration?.baseForegroundColor = color.withAlphaComponent(0.5)
-        case .running(let completed, let total):
+        case .running(let completed, let failed, let total):
             button.configuration?.showsActivityIndicator = true
-            button.configuration?.title = "\(completed)/\(total)"
-            button.configuration?.baseForegroundColor = color
+            if failed > 0 {
+                button.configuration?.image = UIImage(systemName: "exclamationmark.triangle.fill", withConfiguration: iconConfig)
+                button.configuration?.title = "\(completed)/\(total)"
+                button.configuration?.baseForegroundColor = .systemOrange
+            } else {
+                button.configuration?.title = "\(completed)/\(total)"
+                button.configuration?.baseForegroundColor = color
+            }
         case .paused(let completed, let total):
             button.configuration?.showsActivityIndicator = false
             button.configuration?.image = UIImage(systemName: "pause.fill", withConfiguration: iconConfig)
@@ -288,6 +343,10 @@ final class SelectionActionPanel: UIView {
 
     private func applyResumeAppearance() {
         applyExecuteButtonStyle(iconName: "play.fill", light: .Material.Green._600, dark: .Material.Green._200, onDark: .Material.Green._800)
+    }
+
+    private func applyFailedAppearance() {
+        applyExecuteButtonStyle(iconName: "exclamationmark.triangle.fill", light: .Material.Red._600, dark: .Material.Red._200, onDark: .Material.Red._800)
     }
 
     private func applyCompleteAppearance() {

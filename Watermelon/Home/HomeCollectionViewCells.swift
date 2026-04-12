@@ -371,7 +371,8 @@ final class MonthCell: UICollectionViewCell {
     }
 
     func configureRunning(monthTitle: String, countText: NSAttributedString, sizeText: String?,
-                          bgColor: UIColor, titleColor: UIColor, detailColor: UIColor) {
+                          bgColor: UIColor, titleColor: UIColor, detailColor: UIColor,
+                          showSpinner: Bool = true) {
         monthLabel.text = monthTitle
         monthLabel.isHidden = false
         countLabel.attributedText = countText
@@ -387,10 +388,21 @@ final class MonthCell: UICollectionViewCell {
 
         checkmark.isHidden = true
         activityIndicator.color = titleColor
-        if !activityIndicator.isAnimating {
-            activityIndicator.startAnimating()
+        if showSpinner {
+            if !activityIndicator.isAnimating {
+                activityIndicator.startAnimating()
+            }
+        } else {
+            activityIndicator.stopAnimating()
         }
         leftStackLeading?.update(inset: 50)
+    }
+
+    func showWarningIndicator() {
+        checkmark.isHidden = false
+        checkmark.image = UIImage(systemName: "exclamationmark.triangle.fill")
+        checkmark.tintColor = .systemOrange
+        activityIndicator.stopAnimating()
     }
 
     func configureCompleted(monthTitle: String, countText: NSAttributedString, sizeText: String?) {

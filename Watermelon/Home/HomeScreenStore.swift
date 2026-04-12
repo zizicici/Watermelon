@@ -39,6 +39,7 @@ final class HomeScreenStore {
     // MARK: - Private
 
     private var wasExecutionActive = false
+    private var lastMonthPhases: [LibraryMonthKey: MonthPlan.Phase] = [:]
     private var reloadTask: Task<Void, Never>?
 
     // MARK: - Init
@@ -235,6 +236,8 @@ final class HomeScreenStore {
             // Execution ended
             selection.clear()
             wasExecutionActive = false
+            let allPrevious = Set(lastMonthPhases.keys)
+            lastMonthPhases.removeAll()
 
             reloadTask?.cancel()
             reloadTask = Task { [weak self] in
@@ -244,7 +247,7 @@ final class HomeScreenStore {
                 self.refreshAllAndNotify()
             }
 
-            onChange?(.execution)
+            onChange?(.execution(allPrevious))
             return
         }
 
@@ -252,7 +255,29 @@ final class HomeScreenStore {
             wasExecutionActive = true
         }
 
-        onChange?(.execution)
+        // Compute which months actually need UI update:
+        // - months whose phase changed
+        // - months that are active (progress bar updates)
+        var changedMonths = Set<LibraryMonthKey>()
+        if let state = executionCoordinator.currentState {
+            for (month, plan) in state.monthPlans {
+                if lastMonthPhases[month] != plan.phase || plan.isActive {
+                    changedMonths.insert(month)
+                }
+            }
+            // Months removed from execution
+            for month in lastMonthPhases.keys where state.monthPlans[month] == nil {
+                changedMonths.insert(month)
+            }
+            lastMonthPhases = state.monthPlans.mapValues(\.phase)
+
+            // Refresh rowLookup only for changed months
+            for month in changedMonths {
+                rowLookup[month] = dataManager.monthRow(for: month)
+            }
+        }
+
+        onChange?(.execution(changedMonths))
     }
 
     private func handleConnectionChange() {

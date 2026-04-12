@@ -8,11 +8,10 @@ enum BackupEvent: Sendable {
     case remoteIndexSynced(RemoteIndexSyncEvent)
     case started(totalAssets: Int)
     case finished(BackupExecutionResult)
-    case failed(Error)
 
     var isTerminal: Bool {
         switch self {
-        case .finished, .failed:
+        case .finished:
             return true
         default:
             return false

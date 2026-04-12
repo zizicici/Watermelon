@@ -17,7 +17,6 @@ final class HomeExecutionCoordinator {
         guard let phase else { return nil }
         return HomeExecutionState(
             monthPlans: monthPlans,
-            activeMonths: activeMonths,
             phase: phase,
             processedCountByMonth: processedCountByMonth,
             assetCountByMonth: assetCountByMonth,
@@ -50,8 +49,6 @@ final class HomeExecutionCoordinator {
     // MARK: - Execution State
 
     private var monthPlans: [LibraryMonthKey: MonthPlan] = [:]
-    private var activeMonths = Set<LibraryMonthKey>()
-    private var uploadObserverID: UUID?
 
     private var assetCountByMonth: [LibraryMonthKey: Int] = [:]
     private var processedCountByMonth: [LibraryMonthKey: Int] = [:]
@@ -59,9 +56,17 @@ final class HomeExecutionCoordinator {
     private var uploadMonths: [LibraryMonthKey] = []
     private var pendingDownloadMonths: [LibraryMonthKey] = []
     private var pendingSyncMonths: [LibraryMonthKey] = []
-    private var downloadTask: Task<Void, Never>?
+    private var executionTask: Task<Void, Never>?
+    private var uploadPhaseCompleted = false
+    private var pendingUploadScope: BackupScopeSelection?
     private var backupSessionController: BackupSessionController!
+    private var uploadHelper: UploadWorkflowHelper!
     private var downloadHelper: DownloadWorkflowHelper!
+
+    // MARK: - Sync Throttle
+
+    private var lastSyncTime: CFAbsoluteTime = 0
+    private static let syncThrottleInterval: CFAbsoluteTime = 2.0
 
     // MARK: - Init
 
@@ -76,73 +81,57 @@ final class HomeExecutionCoordinator {
         uploadMonths = upload
         pendingDownloadMonths = download
         pendingSyncMonths = sync
-        downloadTask = nil
+        executionTask = nil
 
         monthPlans.removeAll()
         for m in upload   { monthPlans[m] = MonthPlan(needsUpload: true,  needsDownload: false) }
         for m in download { monthPlans[m] = MonthPlan(needsUpload: false, needsDownload: true) }
         for m in sync     { monthPlans[m] = MonthPlan(needsUpload: true,  needsDownload: true) }
-        activeMonths.removeAll()
+
         assetCountByMonth.removeAll()
         processedCountByMonth.removeAll()
+        lastSyncTime = 0
         backupSessionController = BackupSessionController(dependencies: dependencies)
+        uploadHelper = UploadWorkflowHelper(backupSessionController: backupSessionController)
         downloadHelper = DownloadWorkflowHelper(
             dependencies: dependencies,
-            backupSessionController: backupSessionController,
-            callbacks: DownloadWorkflowHelper.Callbacks(
-                localAssetIDs: dataAccess.localAssetIDs,
-                remoteOnlyItems: dataAccess.remoteOnlyItems,
-                syncRemoteData: dataAccess.syncRemoteData,
-                refreshLocalIndex: dataAccess.refreshLocalIndex,
-                onProgress: { [weak self] in self?.onStateChanged?() }
-            )
+            backupSessionController: backupSessionController
         )
 
-        let backupTargetMonths = upload + sync
-        if !backupTargetMonths.isEmpty {
-            phase = .uploading
-            onStateChanged?()
-            startUploadPhase(months: backupTargetMonths)
-        } else {
-            phase = .downloading
-            onStateChanged?()
-            startDownloadPhase()
-        }
+        uploadPhaseCompleted = (upload + sync).isEmpty
+        pendingUploadScope = uploadPhaseCompleted ? nil : buildUploadScope()
+        phase = uploadPhaseCompleted ? .downloading : .uploading
+        onStateChanged?()
+        startExecution()
     }
 
     func exit() {
-        downloadTask?.cancel()
-        downloadTask = nil
+        executionTask?.cancel()
+        executionTask = nil
+        uploadHelper?.cancel()
         downloadHelper?.cancel()
         phase = nil
         monthPlans.removeAll()
-        activeMonths.removeAll()
+
         assetCountByMonth.removeAll()
         processedCountByMonth.removeAll()
         uploadMonths.removeAll()
         pendingDownloadMonths.removeAll()
         pendingSyncMonths.removeAll()
-
-        if let observerID = uploadObserverID {
-            backupSessionController.removeObserver(observerID)
-            uploadObserverID = nil
-        }
-
         onStateChanged?()
     }
 
     func pause() {
         switch phase {
         case .uploading:
-            backupSessionController.pauseBackup()
-            // phase changes to .uploadPaused when observer reports .paused
+            uploadHelper.pause()
+            // BSC cooperative pause → runUpload returns .paused → processUploadResult
         case .downloading:
-            downloadTask?.cancel()
-            downloadTask = nil
-            backupSessionController.stopBackup()
-            downloadHelper?.cancel()
+            executionTask?.cancel()
+            executionTask = nil
+            downloadHelper.cancel()
+            applyEvent(.downloadPaused, where: { $0.phase == .downloading })
             phase = .downloadPaused
-            activeMonths.removeAll()
             onStateChanged?()
         default:
             break
@@ -152,13 +141,16 @@ final class HomeExecutionCoordinator {
     func resume() {
         switch phase {
         case .uploadPaused:
+            applyEvent(.uploadResumed, where: { $0.phase == .uploadPaused })
             phase = .uploading
+            lastSyncTime = 0
             onStateChanged?()
-            backupSessionController.startBackup()
+            startExecution()
         case .downloadPaused:
+            applyEvent(.downloadResumed, where: { $0.phase == .downloadPaused })
             phase = .downloading
             onStateChanged?()
-            startDownloadPhase()
+            startExecution()
         default:
             break
         }
@@ -166,13 +158,17 @@ final class HomeExecutionCoordinator {
 
     func stop() {
         switch phase {
-        case .uploading, .uploadPaused:
-            backupSessionController.stopBackup()
-            // observer receives .stopped → handleBackupSnapshot → exit()
+        case .uploading:
+            uploadHelper.stop()
+            // BSC cooperative stop → runUpload returns .stopped → processUploadResult → exit
+        case .uploadPaused:
+            executionTask?.cancel()
+            executionTask = nil
+            exit()
         case .downloading, .downloadPaused:
-            downloadTask?.cancel()
-            downloadTask = nil
-            backupSessionController.stopBackup()
+            executionTask?.cancel()
+            executionTask = nil
+            downloadHelper.cancel()
             exit()
         case .completed, .failed:
             exit()
@@ -181,161 +177,166 @@ final class HomeExecutionCoordinator {
         }
     }
 
+    // MARK: - Execution Task
+
+    private func startExecution() {
+        executionTask = Task { [weak self] in
+            guard let self else { return }
+
+            // Upload phase
+            if !self.uploadPhaseCompleted {
+                let scope = self.pendingUploadScope
+                self.pendingUploadScope = nil
+                let result = await self.uploadHelper.runUpload(scope: scope) { [weak self] progress in
+                    self?.handleUploadProgress(progress)
+                }
+                guard !Task.isCancelled else { return }
+                guard self.processUploadResult(result) else { return }
+                self.uploadPhaseCompleted = true
+            }
+
+            // Download phase
+            await self.runDownloadPhase()
+        }
+    }
+
     // MARK: - Upload Phase
 
-    private func startUploadPhase(months: [LibraryMonthKey]) {
+    private func buildUploadScope() -> BackupScopeSelection {
         let syncMonthSet = Set(pendingSyncMonths)
         var allAssetIDs = Set<String>()
-        for month in months {
+        for month in uploadMonths + pendingSyncMonths {
             let ids = dataAccess.localAssetIDs(month)
             allAssetIDs.formUnion(ids)
             if !syncMonthSet.contains(month) {
                 assetCountByMonth[month] = ids.count
             }
         }
-
-        let selection = BackupScopeSelection(
+        lastSyncTime = 0
+        return BackupScopeSelection(
             selectedAssetIDs: allAssetIDs,
             selectedAssetCount: allAssetIDs.count,
             selectedEstimatedBytes: nil,
             totalAssetCount: allAssetIDs.count,
             totalEstimatedBytes: nil
         )
-        backupSessionController.updateScopeSelection(selection)
-
-        uploadObserverID = backupSessionController.addObserver { [weak self] snapshot in
-            self?.handleBackupSnapshot(snapshot)
-        }
-
-        backupSessionController.startBackup()
     }
 
-    private func handleBackupSnapshot(_ snapshot: BackupSessionController.Snapshot) {
-        guard phase != nil else { return }
+    private func handleUploadProgress(_ progress: UploadWorkflowHelper.UploadProgress) {
+        let previousDoneCount = monthPlans.values.filter(\.isDone).count
 
-        let previouslyCompleted = Set(monthPlans.filter { $0.value.isFullyCompleted }.map(\.key))
-
-        for month in snapshot.startedMonths where monthPlans[month] != nil {
-            if monthPlans[month]?.phase == .pending {
-                monthPlans[month]?.phase = .uploading
-            }
+        for month in progress.startedMonths where monthPlans[month] != nil {
+            monthPlans[month]?.apply(.uploadStarted)
         }
 
-        for month in snapshot.completedMonths where monthPlans[month] != nil {
-            if monthPlans[month]?.needsDownload == true {
-                monthPlans[month]?.phase = .uploadDone
-            } else {
-                monthPlans[month]?.phase = .completed
-            }
+        for month in progress.completedMonths where monthPlans[month] != nil {
+            monthPlans[month]?.apply(.uploadCompleted)
         }
 
-        let nowCompleted = Set(monthPlans.filter { $0.value.isFullyCompleted }.map(\.key))
-        let hasNewCompletions = !nowCompleted.subtracting(previouslyCompleted).isEmpty
+        let currentDoneCount = monthPlans.values.filter(\.isDone).count
+        let hasNewCompletions = currentDoneCount > previousDoneCount
+        processedCountByMonth = progress.processedCountByMonth
 
-        let executionMonthSet = Set(monthPlans.keys)
-        activeMonths = snapshot.startedMonths.intersection(executionMonthSet).subtracting(nowCompleted)
-        processedCountByMonth = snapshot.processedCountByMonth
+        let now = CFAbsoluteTimeGetCurrent()
+        if hasNewCompletions {
+            dataAccess.syncRemoteData()
+            lastSyncTime = now
+        } else if !progress.processedCountByMonth.isEmpty,
+                  now - lastSyncTime >= Self.syncThrottleInterval {
+            dataAccess.syncRemoteData()
+            lastSyncTime = now
+        }
 
-        switch snapshot.state {
-        case .completed:
+        onStateChanged?()
+    }
+
+    @discardableResult
+    private func processUploadResult(_ result: UploadWorkflowHelper.UploadResult) -> Bool {
+        switch result {
+        case .completed(let failedCountByMonth):
             let backupTargets = Set(uploadMonths).union(pendingSyncMonths)
             for month in backupTargets where monthPlans[month] != nil {
-                if monthPlans[month]?.needsDownload == true {
-                    if monthPlans[month]?.phase == .pending { monthPlans[month]?.phase = .uploadDone }
+                let failedCount = failedCountByMonth[month] ?? 0
+                if failedCount > 0 {
+                    monthPlans[month]?.apply(.partiallyFailed(count: failedCount))
                 } else {
-                    monthPlans[month]?.phase = .completed
+                    monthPlans[month]?.apply(.uploadCompleted)
                 }
             }
-            activeMonths.removeAll()
-
-            if let id = uploadObserverID {
-                backupSessionController.removeObserver(id)
-                uploadObserverID = nil
-            }
-
             dataAccess.syncRemoteData()
 
-            if !pendingDownloadMonths.isEmpty || !pendingSyncMonths.isEmpty {
+            let hasRemainingWork = (pendingDownloadMonths + pendingSyncMonths).contains {
+                monthPlans[$0]?.isTerminal != true
+            }
+            if hasRemainingWork {
                 phase = .downloading
-                startDownloadPhase()
+                onStateChanged?()
+                return true
             } else {
-                phase = .completed
-                showExecutionCompleted()
+                handleCompletion()
+                return false
             }
 
         case .paused:
             phase = .uploadPaused
-            activeMonths.removeAll()
+            applyEvent(.uploadPaused, where: { $0.isActive })
             onStateChanged?()
+            return false
 
-        case .failed:
-            for month in activeMonths {
-                monthPlans[month]?.phase = .failed
-            }
-            activeMonths.removeAll()
-            phase = .failed(snapshot.statusText)
+        case .failed(let message):
+            // Only mark upload targets as failed; download-only months stay .pending
+            applyUploadTargetsFailed(reason: message)
+            phase = .failed(message)
             onStateChanged?()
-            onAlert?("上传失败", snapshot.statusText)
+            onAlert?("上传失败", message)
+            return false
 
         case .stopped:
             exit()
+            return false
 
-        default:
-            if hasNewCompletions || !snapshot.processedCountByMonth.isEmpty {
-                homeExecLog.info("[HomeExec] backupSnapshot: syncRemote, hasNewCompletions=\(hasNewCompletions), hasProgress=\(!snapshot.processedCountByMonth.isEmpty)")
-                dataAccess.syncRemoteData()
-            }
+        case .startFailed:
+            applyUploadTargetsFailed(reason: "备份启动失败")
+            phase = .failed("备份启动失败")
             onStateChanged?()
+            onAlert?("上传失败", "备份启动失败")
+            return false
         }
     }
 
     // MARK: - Download Phase
 
-    private func startDownloadPhase() {
-        guard !pendingDownloadMonths.isEmpty || !pendingSyncMonths.isEmpty else {
-            showExecutionCompleted()
-            return
+    private func runDownloadPhase() async {
+        let remaining = (pendingDownloadMonths + pendingSyncMonths).filter {
+            monthPlans[$0]?.isTerminal != true
         }
 
-        onStateChanged?()
+        guard !remaining.isEmpty else {
+            handleCompletion()
+            return
+        }
 
         guard let profile = dependencies.appSession.activeProfile,
               let password = resolvedSessionPassword(for: profile) else {
+            applyEvent(.failed(reason: "未连接远端存储"), where: { !$0.isTerminal })
+            phase = .failed("未连接远端存储")
+            onStateChanged?()
             onAlert?("错误", "未连接远端存储")
-            exit()
             return
         }
 
-        let remainingDownloads = pendingDownloadMonths.filter { monthPlans[$0]?.isFullyCompleted != true }
-        let remainingSyncs = pendingSyncMonths.filter { monthPlans[$0]?.isFullyCompleted != true }
+        phase = .downloading
+        onStateChanged?()
+
         let context = DownloadWorkflowHelper.Context(profile: profile, password: password)
 
-        downloadTask = Task { [weak self] in
-            guard let self else { return }
+        for month in remaining {
+            if Task.isCancelled { return }
+            await runDownloadMonth(month, context: context, phaseLabel: monthPlans[month]?.needsUpload == true ? "同步" : "下载")
+        }
 
-            for month in remainingDownloads {
-                if Task.isCancelled { return }
-                await self.runDownloadMonth(month, context: context, phaseLabel: "下载")
-            }
-
-            for month in remainingSyncs {
-                if Task.isCancelled { return }
-                await self.runDownloadMonth(month, context: context, phaseLabel: "同步")
-            }
-
-            if !Task.isCancelled {
-                await MainActor.run {
-                    self.activeMonths.removeAll()
-                    let hasFailed = self.monthPlans.values.contains(where: \.isFailed)
-                    if hasFailed {
-                        self.phase = .failed("部分月份失败")
-                        self.onStateChanged?()
-                    } else {
-                        self.phase = .completed
-                        self.showExecutionCompleted()
-                    }
-                }
-            }
+        if !Task.isCancelled {
+            handleCompletion()
         }
     }
 
@@ -344,38 +345,86 @@ final class HomeExecutionCoordinator {
         context: DownloadWorkflowHelper.Context,
         phaseLabel: String
     ) async {
-        await MainActor.run {
-            self.activeMonths = [month]
-            self.monthPlans[month]?.phase = .downloading
-            self.assetCountByMonth.removeValue(forKey: month)
-            self.processedCountByMonth.removeValue(forKey: month)
-            self.onStateChanged?()
+        monthPlans[month]?.apply(.downloadStarted)
+        assetCountByMonth.removeValue(forKey: month)
+        processedCountByMonth.removeValue(forKey: month)
+        onStateChanged?()
+
+        // Step 1: Scoped backup to build hash index
+        let assetIDs = dataAccess.localAssetIDs(month)
+        if !assetIDs.isEmpty {
+            let ok = await downloadHelper.runScopedBackup(assetIDs: assetIDs) { [weak self] in
+                self?.onStateChanged?()
+            }
+            if Task.isCancelled { return }
+            if !ok {
+                monthPlans[month]?.apply(.failed(reason: "备份索引失败"))
+                onStateChanged?()
+                onAlert?("\(phaseLabel)失败", "\(month.displayText): 备份索引失败")
+                return
+            }
         }
 
-        let result = await downloadHelper.downloadMonth(month, context: context, phaseLabel: phaseLabel)
+        // Step 2: Sync remote data + refresh local index
+        dataAccess.syncRemoteData()
+        if !assetIDs.isEmpty {
+            dataAccess.refreshLocalIndex(assetIDs)
+        }
 
-        await MainActor.run {
-            switch result {
-            case .success:
-                self.monthPlans[month]?.phase = .completed
-                self.onStateChanged?()
-            case .failed(let message):
-                self.monthPlans[month]?.phase = .failed
-                self.onStateChanged?()
-                self.onAlert?("\(phaseLabel)失败", message)
-            case .cancelled:
-                break
-            }
+        // Step 3: Download remote-only items
+        let remoteItems = dataAccess.remoteOnlyItems(month)
+        let result = await downloadHelper.downloadItems(remoteItems, context: context) { [weak self] assetID in
+            self?.dataAccess.refreshLocalIndex([assetID])
+            self?.onStateChanged?()
+        }
+
+        switch result {
+        case .success:
+            monthPlans[month]?.apply(.downloadCompleted)
+            onStateChanged?()
+        case .failed(let message):
+            monthPlans[month]?.apply(.failed(reason: message))
+            onStateChanged?()
+            onAlert?("\(phaseLabel)失败", "\(month.displayText): \(message)")
+        case .cancelled:
+            break
         }
     }
 
     // MARK: - Helpers
 
-    private func showExecutionCompleted() {
-        for key in monthPlans.keys where monthPlans[key]?.phase != .failed {
-            monthPlans[key]?.phase = .completed
+    private func applyUploadTargetsFailed(reason: String) {
+        let uploadTargets = Set(uploadMonths).union(pendingSyncMonths)
+        for month in uploadTargets {
+            // Skip months that already completed upload — their upload was fine,
+            // only subsequent phases were prevented by the failure.
+            let p = monthPlans[month]?.phase
+            guard p != .uploadDone && p != .completed && p != .partiallyFailed else { continue }
+            monthPlans[month]?.apply(.failed(reason: reason))
         }
-        activeMonths.removeAll()
+    }
+
+    private func applyEvent(_ event: MonthEvent, where predicate: (MonthPlan) -> Bool) {
+        for key in monthPlans.keys {
+            if let plan = monthPlans[key], predicate(plan) {
+                monthPlans[key]?.apply(event)
+            }
+        }
+    }
+
+    private func handleCompletion() {
+        for key in monthPlans.keys {
+            monthPlans[key]?.apply(.completed)
+        }
+        // .partiallyFailed months count as "done" — global phase is .completed
+        // with the failure summary button providing the warning (product decision).
+        // Only hard .failed months trigger global .failed.
+        let hasFailed = monthPlans.values.contains(where: \.isFailed)
+        if hasFailed {
+            phase = .failed("部分月份失败")
+        } else {
+            phase = .completed
+        }
         onStateChanged?()
     }
 

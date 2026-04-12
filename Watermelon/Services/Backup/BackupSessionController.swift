@@ -39,7 +39,7 @@ final class BackupSessionController {
     private let databaseManager: DatabaseManager
     private let photoLibraryService: PhotoLibraryService
 
-    private var observers: [UUID: (Snapshot) -> Void] = [:]
+    private var observers: [UUID: @MainActor (Snapshot) -> Void] = [:]
     private var startCommandTask: Task<Void, Never>?
     private var resumePreparationTask: Task<Void, Never>?
     private var notifyThrottleTask: Task<Void, Never>?
@@ -123,7 +123,7 @@ final class BackupSessionController {
     }
 
     @discardableResult
-    func addObserver(_ observer: @escaping (Snapshot) -> Void) -> UUID {
+    func addObserver(_ observer: @escaping @MainActor (Snapshot) -> Void) -> UUID {
         let id = UUID()
         observers[id] = observer
         observer(snapshot())
@@ -291,6 +291,7 @@ final class BackupSessionController {
             return
         }
         if state != .running {
+            guard state == .idle || state == .paused else { return }
             controlPhase = .idle
             state = .paused
             statusText = "备份已暂停"
@@ -317,6 +318,7 @@ final class BackupSessionController {
             return
         }
         if state != .running {
+            guard state == .idle || state == .paused || state == .stopped else { return }
             controlPhase = .idle
             state = .stopped
             statusText = "备份已停止"
@@ -511,10 +513,6 @@ final class BackupSessionController {
                 displayMode: displayMode,
                 terminalIntent: terminalIntent
             )
-            return true
-
-        case .failed:
-            clearActiveRunState()
             return true
         }
         return false

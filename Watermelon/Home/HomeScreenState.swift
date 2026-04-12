@@ -80,24 +80,88 @@ struct SelectionState {
     }
 }
 
+// MARK: - Month Event
+
+enum MonthEvent {
+    case uploadStarted
+    case uploadPaused
+    case uploadResumed
+    case uploadCompleted
+    case partiallyFailed(count: Int)
+    case downloadStarted
+    case downloadPaused
+    case downloadResumed
+    case downloadCompleted
+    case failed(reason: String)
+    case completed
+}
+
 // MARK: - Execution State
 
 struct MonthPlan {
     let needsUpload: Bool
     let needsDownload: Bool
     var phase: Phase = .pending
+    var failedItemCount: Int = 0
+    var failureMessage: String?
 
     enum Phase {
         case pending
         case uploading
+        case uploadPaused
         case uploadDone
         case downloading
+        case downloadPaused
         case completed
+        case partiallyFailed
         case failed
     }
 
+    var isTerminal: Bool { phase == .completed || phase == .failed || phase == .partiallyFailed }
     var isFullyCompleted: Bool { phase == .completed }
+    var isDone: Bool { phase == .completed || phase == .partiallyFailed }
     var isFailed: Bool { phase == .failed }
+    var isActive: Bool { phase == .uploading || phase == .downloading }
+
+    mutating func apply(_ event: MonthEvent) {
+        switch (phase, event) {
+        case (.pending, .uploadStarted):
+            phase = .uploading
+        case (.uploading, .uploadPaused):
+            phase = .uploadPaused
+        case (.uploadPaused, .uploadResumed):
+            phase = .uploading
+        case (.uploading, .uploadCompleted),
+             (.pending, .uploadCompleted):
+            phase = needsDownload ? .uploadDone : .completed
+        case (.uploading, .partiallyFailed(let count)),
+             (.uploadDone, .partiallyFailed(let count)),
+             (.completed, .partiallyFailed(let count)):
+            // partiallyFailed can override uploadDone/completed because
+            // failedCountByMonth is only available at session completion,
+            // after individual month completions have already been reported
+            // by progress snapshots.
+            phase = .partiallyFailed
+            failedItemCount = count
+            failureMessage = "\(count)个资源失败"
+        case (.uploadDone, .downloadStarted),
+             (.pending, .downloadStarted):
+            phase = .downloading
+        case (.downloading, .downloadPaused):
+            phase = .downloadPaused
+        case (.downloadPaused, .downloadResumed):
+            phase = .pending
+        case (.downloading, .downloadCompleted):
+            phase = .completed
+        case (_, .failed(let reason)) where !isTerminal:
+            phase = .failed
+            failureMessage = reason
+        case (_, .completed) where !isTerminal:
+            phase = .completed
+        default:
+            break
+        }
+    }
 }
 
 enum ExecutionPhase: Equatable {
@@ -109,9 +173,13 @@ enum ExecutionPhase: Equatable {
     case failed(String)
 }
 
+struct MonthFailureInfo {
+    let month: LibraryMonthKey
+    let message: String
+}
+
 struct HomeExecutionState {
     let monthPlans: [LibraryMonthKey: MonthPlan]
-    let activeMonths: Set<LibraryMonthKey>
     let phase: ExecutionPhase
     let processedCountByMonth: [LibraryMonthKey: Int]
     let assetCountByMonth: [LibraryMonthKey: Int]
@@ -120,10 +188,8 @@ struct HomeExecutionState {
     let syncMonths: [LibraryMonthKey]
 
     let executionMonths: Set<LibraryMonthKey>
-    let completedMonths: Set<LibraryMonthKey>
 
     init(monthPlans: [LibraryMonthKey: MonthPlan],
-         activeMonths: Set<LibraryMonthKey>,
          phase: ExecutionPhase,
          processedCountByMonth: [LibraryMonthKey: Int],
          assetCountByMonth: [LibraryMonthKey: Int],
@@ -131,7 +197,6 @@ struct HomeExecutionState {
          downloadMonths: [LibraryMonthKey],
          syncMonths: [LibraryMonthKey]) {
         self.monthPlans = monthPlans
-        self.activeMonths = activeMonths
         self.phase = phase
         self.processedCountByMonth = processedCountByMonth
         self.assetCountByMonth = assetCountByMonth
@@ -139,11 +204,20 @@ struct HomeExecutionState {
         self.downloadMonths = downloadMonths
         self.syncMonths = syncMonths
         self.executionMonths = Set(monthPlans.keys)
-        self.completedMonths = Set(monthPlans.filter { $0.value.isFullyCompleted }.map(\.key))
-        self.failedMonths = Set(monthPlans.filter { $0.value.isFailed }.map(\.key))
     }
 
-    let failedMonths: Set<LibraryMonthKey>
+    var failedMonthInfos: [MonthFailureInfo] {
+        monthPlans.compactMap { month, plan in
+            switch plan.phase {
+            case .failed:
+                return MonthFailureInfo(month: month, message: plan.failureMessage ?? "失败")
+            case .partiallyFailed:
+                return MonthFailureInfo(month: month, message: plan.failureMessage ?? "\(plan.failedItemCount)个资源失败")
+            default:
+                return nil
+            }
+        }.sorted { $0.month < $1.month }
+    }
 
     func progressPercent(for month: LibraryMonthKey, row: HomeMonthRow?, direction: HomeArrowDirection?, matchedCount: Int) -> Double? {
         guard let row, let direction else { return nil }
@@ -178,31 +252,34 @@ struct HomeExecutionState {
     }
 
     func panelPhases() -> (backup: SelectionActionPanel.CategoryPhase?, download: SelectionActionPanel.CategoryPhase?, sync: SelectionActionPanel.CategoryPhase?) {
-        let isPaused = (phase == .uploadPaused || phase == .downloadPaused)
-
         func categoryPhase(for months: [LibraryMonthKey]) -> SelectionActionPanel.CategoryPhase? {
             guard !months.isEmpty else { return nil }
-            let monthSet = Set(months)
-            let completed = monthSet.intersection(completedMonths).count
-            let failed = monthSet.intersection(failedMonths).count
-            let done = completed + failed
-            let active = !monthSet.isDisjoint(with: activeMonths)
-            if done == monthSet.count {
-                if failed > 0 {
-                    return .failed(completed: completed, failed: failed, total: monthSet.count)
+            var completed = 0, failed = 0, active = 0, paused = 0, partiallyFailed = 0, uploadDone = 0
+            for m in months {
+                switch monthPlans[m]?.phase {
+                case .completed:                     completed += 1
+                case .partiallyFailed:               partiallyFailed += 1
+                case .failed:                        failed += 1
+                case .uploading, .downloading:       active += 1
+                case .uploadPaused, .downloadPaused: paused += 1
+                case .uploadDone:                    uploadDone += 1
+                default: break
                 }
-                return .completed(total: monthSet.count)
-            } else if active {
-                return .running(completed: done, total: monthSet.count)
-            } else if isPaused {
-                return .paused(completed: done, total: monthSet.count)
-            } else if failed > 0 {
-                return .failed(completed: completed, failed: failed, total: monthSet.count)
-            } else if done > 0 {
-                return .running(completed: done, total: monthSet.count)
-            } else {
-                return .pending(total: monthSet.count)
             }
+            let done = completed + failed + partiallyFailed
+            let inProgress = done + uploadDone
+            let total = months.count
+
+            if done == total {
+                return failed > 0
+                    ? .failed(completed: completed + partiallyFailed, failed: failed, total: total)
+                    : .completed(total: total)
+            }
+            if active > 0    { return .running(completed: inProgress, failed: failed, total: total) }
+            if failed > 0    { return .failed(completed: completed + partiallyFailed, failed: failed, total: total) }
+            if paused > 0    { return .paused(completed: inProgress, total: total) }
+            if inProgress > 0 { return .running(completed: inProgress, failed: failed, total: total) }
+            return .pending(total: total)
         }
 
         return (categoryPhase(for: uploadMonths), categoryPhase(for: downloadMonths), categoryPhase(for: syncMonths))
@@ -215,7 +292,7 @@ struct HomeExecutionState {
 enum HomeChangeKind {
     case data(Set<LibraryMonthKey>)
     case selection
-    case execution
+    case execution(Set<LibraryMonthKey>)
     case connection
     case structural
 }

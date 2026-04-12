@@ -1,13 +1,12 @@
 import Foundation
 import os.log
 
-private let downloadLog = Logger(subsystem: "com.zizicici.watermelon", category: "DownloadWorkflow")
+private let downloadLog = Logger(subsystem: "com.zizicici.watermelon", category: "DownloadHelper")
 
-/// Encapsulates the download/sync workflow for a single month:
-/// scoped backup (to build hash index) → sync remote data → download remote-only items.
-///
-/// Owns no execution state — the coordinator drives it and updates monthPlans/phase
-/// based on the results.
+/// Pure domain executor for download operations.
+/// Knows only how to run scoped backups and download remote items.
+/// Does NOT know about Home's data cache (syncRemoteData/refreshLocalIndex).
+/// The coordinator decides when and how to refresh caches between steps.
 @MainActor
 final class DownloadWorkflowHelper {
 
@@ -16,120 +15,84 @@ final class DownloadWorkflowHelper {
         let password: String
     }
 
-    struct Callbacks {
-        let localAssetIDs: (LibraryMonthKey) -> Set<String>
-        let remoteOnlyItems: (LibraryMonthKey) -> [RemoteAlbumItem]
-        let syncRemoteData: () -> Void
-        let refreshLocalIndex: (Set<String>) -> Void
-        let onProgress: () -> Void
-    }
-
     private let dependencies: DependencyContainer
     private let backupSessionController: BackupSessionController
-    private let callbacks: Callbacks
     private var backupObserverID: UUID?
     private var pendingScopedContinuation: CheckedContinuation<Bool, Never>?
 
-    init(
-        dependencies: DependencyContainer,
-        backupSessionController: BackupSessionController,
-        callbacks: Callbacks
-    ) {
+    init(dependencies: DependencyContainer, backupSessionController: BackupSessionController) {
         self.dependencies = dependencies
         self.backupSessionController = backupSessionController
-        self.callbacks = callbacks
     }
 
-    // MARK: - Public
+    // MARK: - Public Operations
 
-    /// Runs the full download workflow for a single month:
-    /// 1. Scoped backup to populate local hash index
-    /// 2. Sync remote data + refresh local index
-    /// 3. Download remote-only items via RestoreService
-    ///
-    /// Returns `true` if the month was fully processed, `false` on failure or cancellation.
-    func downloadMonth(
-        _ month: LibraryMonthKey,
-        context: Context,
-        phaseLabel: String
-    ) async -> DownloadMonthResult {
-        let assetIDs = callbacks.localAssetIDs(month)
-        if !assetIDs.isEmpty {
-            let uploadCompleted = await runScopedBackup(assetIDs: assetIDs)
-            if Task.isCancelled { return .cancelled }
-            if !uploadCompleted {
-                return .failed("\(month.displayText): 备份索引失败")
+    /// Runs a scoped backup to populate the local hash index for the given assets.
+    func runScopedBackup(
+        assetIDs: Set<String>,
+        onProgress: @escaping () -> Void
+    ) async -> Bool {
+        let selection = BackupScopeSelection(
+            selectedAssetIDs: assetIDs,
+            selectedAssetCount: assetIDs.count,
+            selectedEstimatedBytes: nil,
+            totalAssetCount: assetIDs.count,
+            totalEstimatedBytes: nil
+        )
+
+        removeObserver()
+
+        // Wait for BSC to accept scope + start. During rapid pause→resume,
+        // BSC may still be in a stop transition. Poll both updateScopeSelection
+        // and startBackup to avoid using stale scope from a previous run.
+        // startBackup must succeed before addObserver (addObserver immediately
+        // replays the current snapshot, which may be a stale terminal state).
+        var ready = false
+        for _ in 0..<20 {
+            if backupSessionController.updateScopeSelection(selection),
+               backupSessionController.startBackup() {
+                ready = true
+                break
             }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if Task.isCancelled { return false }
+        }
+        guard ready else {
+            downloadLog.warning("[DownloadHelper] BSC did not become ready after 20 attempts")
+            return false
         }
 
-        callbacks.syncRemoteData()
-        if !assetIDs.isEmpty {
-            callbacks.refreshLocalIndex(assetIDs)
-        }
-
-        return await downloadRemoteItems(month: month, context: context, phaseLabel: phaseLabel)
-    }
-
-    func cancel() {
-        if let id = backupObserverID {
-            backupSessionController.removeObserver(id)
-            backupObserverID = nil
-        }
-        if let continuation = pendingScopedContinuation {
-            pendingScopedContinuation = nil
-            continuation.resume(returning: false)
-        }
-    }
-
-    // MARK: - Internal
-
-    private func runScopedBackup(assetIDs: Set<String>) async -> Bool {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             pendingScopedContinuation = continuation
-
-            let selection = BackupScopeSelection(
-                selectedAssetIDs: assetIDs,
-                selectedAssetCount: assetIDs.count,
-                selectedEstimatedBytes: nil,
-                totalAssetCount: assetIDs.count,
-                totalEstimatedBytes: nil
-            )
-            backupSessionController.updateScopeSelection(selection)
-
-            if let id = backupObserverID {
-                backupSessionController.removeObserver(id)
-                backupObserverID = nil
-            }
-
-            backupSessionController.startBackup()
 
             let observerID = backupSessionController.addObserver { [weak self] snapshot in
                 guard let self, let cont = self.pendingScopedContinuation else { return }
-                self.callbacks.onProgress()
+                onProgress()
 
-                func resolve(_ value: Bool) {
-                    self.pendingScopedContinuation = nil
-                    self.backupSessionController.removeObserver(observerID)
-                    self.backupObserverID = nil
-                    cont.resume(returning: value)
+                let resolved: Bool?
+                switch snapshot.state {
+                case .completed:        resolved = true
+                case .failed, .stopped: resolved = false
+                default:                resolved = nil
                 }
 
-                switch snapshot.state {
-                case .completed:      resolve(true)
-                case .failed, .stopped: resolve(false)
-                default:              break
+                if let resolved {
+                    self.pendingScopedContinuation = nil
+                    self.removeObserver()
+                    cont.resume(returning: resolved)
                 }
             }
             backupObserverID = observerID
         }
     }
 
-    private func downloadRemoteItems(
-        month: LibraryMonthKey,
+    /// Downloads remote-only items via RestoreService and writes hash index per item.
+    /// Calls `onItemRestored` with the asset local identifier after each successful restore.
+    func downloadItems(
+        _ remoteItems: [RemoteAlbumItem],
         context: Context,
-        phaseLabel: String
+        onItemRestored: @MainActor @escaping (String) -> Void
     ) async -> DownloadMonthResult {
-        let remoteItems = callbacks.remoteOnlyItems(month)
         guard !remoteItems.isEmpty else { return .success }
 
         do {
@@ -141,15 +104,32 @@ final class DownloadWorkflowHelper {
                     guard let self else { return }
                     if let restoredAsset {
                         self.writeHashIndex(for: restoredAsset, remoteItems: remoteItems)
-                        self.callbacks.refreshLocalIndex([restoredAsset.asset.localIdentifier])
+                        onItemRestored(restoredAsset.asset.localIdentifier)
                     }
-                    self.callbacks.onProgress()
                 }
             )
             return Task.isCancelled ? .cancelled : .success
         } catch {
             if Task.isCancelled { return .cancelled }
-            return .failed("\(month.displayText): \(error.localizedDescription)")
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    func cancel() {
+        backupSessionController.stopBackup()
+        removeObserver()
+        if let continuation = pendingScopedContinuation {
+            pendingScopedContinuation = nil
+            continuation.resume(returning: false)
+        }
+    }
+
+    // MARK: - Private
+
+    private func removeObserver() {
+        if let id = backupObserverID {
+            backupSessionController.removeObserver(id)
+            backupObserverID = nil
         }
     }
 
