@@ -58,7 +58,10 @@ final class HomeScreenStore {
         self.dependencies = dependencies
         self.dataManager = HomeIncrementalDataManager(
             photoLibraryService: dependencies.photoLibraryService,
-            contentHashIndexRepository: ContentHashIndexRepository(databaseManager: dependencies.databaseManager)
+            contentHashIndexRepository: ContentHashIndexRepository(databaseManager: dependencies.databaseManager),
+            loadRemoteMonthDelta: { [backupCoordinator = dependencies.backupCoordinator] month in
+                backupCoordinator.remoteMonthDelta(for: month)
+            }
         )
         self.connectionController = HomeConnectionController(dependencies: dependencies)
         let connectionCtrl = self.connectionController

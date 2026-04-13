@@ -1,5 +1,4 @@
 import Foundation
-import Photos
 
 enum AlbumMediaKind {
     case photo
@@ -15,7 +14,6 @@ enum ItemSourceTag {
 
 struct LocalAlbumItem {
     let id: String
-    let asset: PHAsset
     let creationDate: Date
     let isBackedUp: Bool
     let mediaKind: AlbumMediaKind
@@ -44,6 +42,17 @@ struct HomeAlbumItem {
 }
 
 enum HomeAlbumMatching {
+    struct MatchComputation {
+        let matchedCount: Int
+        let remoteOnlyItems: [RemoteAlbumItem]
+    }
+
+    private struct MatchOutcome {
+        let matchedPairs: [(local: LocalAlbumItem, remote: RemoteAlbumItem)]
+        let remoteOnlyItems: [RemoteAlbumItem]
+        let consumedLocalIDs: Set<String>
+    }
+
     private struct ResourceLookupKey: Hashable {
         let year: Int
         let month: Int
@@ -125,88 +134,43 @@ enum HomeAlbumMatching {
         localAssetIdentifierByHash: [Data: [String]],
         hasActiveConnection: Bool
     ) -> [HomeAlbumItem] {
-        let localByID = Dictionary(uniqueKeysWithValues: localItems.map { ($0.id, $0) })
-        let localHashSetByID = Dictionary(uniqueKeysWithValues: localItems.map { ($0.id, Set($0.contentHashes)) })
-        var consumedLocalIDs = Set<String>()
+        let outcome = resolveMatches(
+            localItems: localItems,
+            remoteItems: remoteItems,
+            localAssetIdentifierByHash: localAssetIdentifierByHash,
+            hasActiveConnection: hasActiveConnection,
+            includeRemoteOnlyItems: true
+        )
         var result: [HomeAlbumItem] = []
         result.reserveCapacity(localItems.count + remoteItems.count)
 
-        if hasActiveConnection {
-            // Pass 1: Fingerprint-exact match (highest confidence)
-            var localIDByFingerprint: [Data: String] = [:]
-            for local in localItems {
-                if let fp = local.fingerprint, localIDByFingerprint[fp] == nil {
-                    localIDByFingerprint[fp] = local.id
-                }
-            }
-
-            var unmatchedRemotes: [RemoteAlbumItem] = []
-            for remote in remoteItems {
-                if let localID = localIDByFingerprint[remote.assetFingerprint],
-                   !consumedLocalIDs.contains(localID),
-                   let local = localByID[localID] {
-                    consumedLocalIDs.insert(localID)
-                    result.append(
-                        HomeAlbumItem(
-                            id: "both:\(local.id)",
-                            creationDate: local.creationDate,
-                            sourceTag: .both,
-                            mediaKind: mergeMediaKind(local: local.mediaKind, remote: remote.mediaKind),
-                            localItem: local,
-                            remoteItem: remote
-                        )
-                    )
-                } else {
-                    unmatchedRemotes.append(remote)
-                }
-            }
-
-            // Pass 2: Content-hash fallback for unmatched remotes (only considers locals without a fingerprint)
-            for remote in unmatchedRemotes {
-                var candidateLocalIDSet = Set<String>()
-                for hash in remote.contentHashes {
-                    guard let localIDs = localAssetIdentifierByHash[hash] else { continue }
-                    for localID in localIDs where !consumedLocalIDs.contains(localID) {
-                        guard let local = localByID[localID], local.fingerprint == nil else { continue }
-                        candidateLocalIDSet.insert(localID)
-                    }
-                }
-
-                let localID = bestLocalID(
-                    candidateLocalIDs: Array(candidateLocalIDSet),
-                    remote: remote,
-                    localByID: localByID,
-                    localHashSetByID: localHashSetByID
+        for pair in outcome.matchedPairs {
+            result.append(
+                HomeAlbumItem(
+                    id: "both:\(pair.local.id)",
+                    creationDate: pair.local.creationDate,
+                    sourceTag: .both,
+                    mediaKind: mergeMediaKind(local: pair.local.mediaKind, remote: pair.remote.mediaKind),
+                    localItem: pair.local,
+                    remoteItem: pair.remote
                 )
-
-                if let localID, let local = localByID[localID] {
-                    consumedLocalIDs.insert(localID)
-                    result.append(
-                        HomeAlbumItem(
-                            id: "both:\(local.id)",
-                            creationDate: local.creationDate,
-                            sourceTag: .both,
-                            mediaKind: mergeMediaKind(local: local.mediaKind, remote: remote.mediaKind),
-                            localItem: local,
-                            remoteItem: remote
-                        )
-                    )
-                } else {
-                    result.append(
-                        HomeAlbumItem(
-                            id: "remote:\(remote.id)",
-                            creationDate: remote.creationDate,
-                            sourceTag: .remoteOnly,
-                            mediaKind: remote.mediaKind,
-                            localItem: nil,
-                            remoteItem: remote
-                        )
-                    )
-                }
-            }
+            )
         }
 
-        for local in localItems where !consumedLocalIDs.contains(local.id) {
+        for remote in outcome.remoteOnlyItems {
+            result.append(
+                HomeAlbumItem(
+                    id: "remote:\(remote.id)",
+                    creationDate: remote.creationDate,
+                    sourceTag: .remoteOnly,
+                    mediaKind: remote.mediaKind,
+                    localItem: nil,
+                    remoteItem: remote
+                )
+            )
+        }
+
+        for local in localItems where !outcome.consumedLocalIDs.contains(local.id) {
             result.append(
                 HomeAlbumItem(
                     id: "local:\(local.id)",
@@ -220,6 +184,27 @@ enum HomeAlbumMatching {
         }
 
         return result
+    }
+
+    static func computeMatch(
+        localItems: [LocalAlbumItem],
+        remoteItems: [RemoteAlbumItem],
+        localAssetIdentifierByHash: [Data: [String]],
+        hasActiveConnection: Bool,
+        includeRemoteOnlyItems: Bool
+    ) -> MatchComputation {
+        let outcome = resolveMatches(
+            localItems: localItems,
+            remoteItems: remoteItems,
+            localAssetIdentifierByHash: localAssetIdentifierByHash,
+            hasActiveConnection: hasActiveConnection,
+            includeRemoteOnlyItems: includeRemoteOnlyItems
+        )
+
+        return MatchComputation(
+            matchedCount: outcome.matchedPairs.count,
+            remoteOnlyItems: outcome.remoteOnlyItems
+        )
     }
 
     private static func mergeMediaKind(local: AlbumMediaKind, remote: AlbumMediaKind) -> AlbumMediaKind {
@@ -248,6 +233,81 @@ enum HomeAlbumMatching {
 
         let hasVideo = resources.contains { ResourceTypeCode.isVideoLike($0.resourceType) }
         return hasVideo ? .video : .photo
+    }
+
+    private static func resolveMatches(
+        localItems: [LocalAlbumItem],
+        remoteItems: [RemoteAlbumItem],
+        localAssetIdentifierByHash: [Data: [String]],
+        hasActiveConnection: Bool,
+        includeRemoteOnlyItems: Bool
+    ) -> MatchOutcome {
+        guard hasActiveConnection, !remoteItems.isEmpty else {
+            return MatchOutcome(matchedPairs: [], remoteOnlyItems: [], consumedLocalIDs: [])
+        }
+
+        let localByID = Dictionary(uniqueKeysWithValues: localItems.map { ($0.id, $0) })
+        let localHashSetByID = Dictionary(uniqueKeysWithValues: localItems.map { ($0.id, Set($0.contentHashes)) })
+        var consumedLocalIDs = Set<String>()
+        var matchedPairs: [(local: LocalAlbumItem, remote: RemoteAlbumItem)] = []
+        matchedPairs.reserveCapacity(min(localItems.count, remoteItems.count))
+
+        var localIDByFingerprint: [Data: String] = [:]
+        localIDByFingerprint.reserveCapacity(localItems.count)
+        for local in localItems {
+            if let fp = local.fingerprint, localIDByFingerprint[fp] == nil {
+                localIDByFingerprint[fp] = local.id
+            }
+        }
+
+        var unmatchedRemotes: [RemoteAlbumItem] = []
+        unmatchedRemotes.reserveCapacity(remoteItems.count)
+        for remote in remoteItems {
+            if let localID = localIDByFingerprint[remote.assetFingerprint],
+               !consumedLocalIDs.contains(localID),
+               let local = localByID[localID] {
+                consumedLocalIDs.insert(localID)
+                matchedPairs.append((local: local, remote: remote))
+            } else {
+                unmatchedRemotes.append(remote)
+            }
+        }
+
+        var remoteOnlyItems: [RemoteAlbumItem] = []
+        if includeRemoteOnlyItems {
+            remoteOnlyItems.reserveCapacity(unmatchedRemotes.count)
+        }
+
+        for remote in unmatchedRemotes {
+            var candidateLocalIDSet = Set<String>()
+            for hash in remote.contentHashes {
+                guard let localIDs = localAssetIdentifierByHash[hash] else { continue }
+                for localID in localIDs where !consumedLocalIDs.contains(localID) {
+                    guard let local = localByID[localID], local.fingerprint == nil else { continue }
+                    candidateLocalIDSet.insert(localID)
+                }
+            }
+
+            let localID = bestLocalID(
+                candidateLocalIDs: Array(candidateLocalIDSet),
+                remote: remote,
+                localByID: localByID,
+                localHashSetByID: localHashSetByID
+            )
+
+            if let localID, let local = localByID[localID] {
+                consumedLocalIDs.insert(localID)
+                matchedPairs.append((local: local, remote: remote))
+            } else if includeRemoteOnlyItems {
+                remoteOnlyItems.append(remote)
+            }
+        }
+
+        return MatchOutcome(
+            matchedPairs: matchedPairs,
+            remoteOnlyItems: remoteOnlyItems,
+            consumedLocalIDs: consumedLocalIDs
+        )
     }
 
     private static func bestLocalID(
@@ -290,4 +350,3 @@ enum HomeAlbumMatching {
         }
     }
 }
-

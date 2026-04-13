@@ -66,4 +66,8 @@ final class BackupCoordinator: Sendable {
     func currentRemoteSnapshotState(since revision: UInt64?) -> RemoteLibrarySnapshotState {
         remoteIndexService.currentState(since: revision)
     }
+
+    func remoteMonthDelta(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
+        remoteIndexService.remoteMonthDelta(for: month)
+    }
 }

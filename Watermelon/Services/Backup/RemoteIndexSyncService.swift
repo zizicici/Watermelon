@@ -193,6 +193,10 @@ final class RemoteIndexSyncService: Sendable {
         snapshotCache.state(since: revision)
     }
 
+    func remoteMonthDelta(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
+        snapshotCache.monthDelta(for: month)
+    }
+
     func upsertCachedResource(_ item: RemoteManifestResource) {
         snapshotCache.upsertResource(item)
     }

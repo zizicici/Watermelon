@@ -30,6 +30,7 @@ struct LocalHashIndexStats: Sendable {
 }
 
 final class ContentHashIndexRepository: @unchecked Sendable {
+    private static let scopedAssetQueryChunkSize = 400
     private let databaseManager: DatabaseManager
 
     init(databaseManager: DatabaseManager) {
@@ -153,24 +154,29 @@ final class ContentHashIndexRepository: @unchecked Sendable {
 
         return try databaseManager.read { db in
             let sortedIDs = assetIDs.sorted()
-            let placeholders = Array(repeating: "?", count: sortedIDs.count).joined(separator: ", ")
-            let rows = try Row.fetchAll(
-                db,
-                sql: """
-                SELECT assetLocalIdentifier, contentHash
-                FROM local_asset_resources
-                WHERE assetLocalIdentifier IN (\(placeholders))
-                """,
-                arguments: StatementArguments(sortedIDs)
-            )
-
             var result: [String: [Data]] = [:]
-            result.reserveCapacity(rows.count)
-            for row in rows {
-                let assetID: String = row["assetLocalIdentifier"]
-                let hash: Data = row["contentHash"]
-                result[assetID, default: []].append(hash)
+            result.reserveCapacity(sortedIDs.count)
+
+            for chunkStart in stride(from: 0, to: sortedIDs.count, by: Self.scopedAssetQueryChunkSize) {
+                let chunk = Array(sortedIDs[chunkStart ..< min(chunkStart + Self.scopedAssetQueryChunkSize, sortedIDs.count)])
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT assetLocalIdentifier, contentHash
+                    FROM local_asset_resources
+                    WHERE assetLocalIdentifier IN (\(placeholders))
+                    """,
+                    arguments: StatementArguments(chunk)
+                )
+
+                for row in rows {
+                    let assetID: String = row["assetLocalIdentifier"]
+                    let hash: Data = row["contentHash"]
+                    result[assetID, default: []].append(hash)
+                }
             }
+
             return result
         }
     }
@@ -200,24 +206,29 @@ final class ContentHashIndexRepository: @unchecked Sendable {
 
         return try databaseManager.read { db in
             let sortedIDs = assetIDs.sorted()
-            let placeholders = Array(repeating: "?", count: sortedIDs.count).joined(separator: ", ")
-            let rows = try Row.fetchAll(
-                db,
-                sql: """
-                SELECT assetLocalIdentifier, assetFingerprint
-                FROM local_assets
-                WHERE assetLocalIdentifier IN (\(placeholders))
-                """,
-                arguments: StatementArguments(sortedIDs)
-            )
-
             var result: [String: Data] = [:]
-            result.reserveCapacity(rows.count)
-            for row in rows {
-                let assetID: String = row["assetLocalIdentifier"]
-                let fingerprint: Data = row["assetFingerprint"]
-                result[assetID] = fingerprint
+            result.reserveCapacity(sortedIDs.count)
+
+            for chunkStart in stride(from: 0, to: sortedIDs.count, by: Self.scopedAssetQueryChunkSize) {
+                let chunk = Array(sortedIDs[chunkStart ..< min(chunkStart + Self.scopedAssetQueryChunkSize, sortedIDs.count)])
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT assetLocalIdentifier, assetFingerprint
+                    FROM local_assets
+                    WHERE assetLocalIdentifier IN (\(placeholders))
+                    """,
+                    arguments: StatementArguments(chunk)
+                )
+
+                for row in rows {
+                    let assetID: String = row["assetLocalIdentifier"]
+                    let fingerprint: Data = row["assetFingerprint"]
+                    result[assetID] = fingerprint
+                }
             }
+
             return result
         }
     }
@@ -292,6 +303,39 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 let size: Int64 = row["totalFileSizeBytes"]
                 result[id] = size
             }
+            return result
+        }
+    }
+
+    func fetchFileSizeByAsset(assetIDs: Set<String>) throws -> [String: Int64] {
+        guard !assetIDs.isEmpty else { return [:] }
+
+        return try databaseManager.read { db in
+            let sortedIDs = assetIDs.sorted()
+            let chunkSize = 400
+            var result: [String: Int64] = [:]
+
+            for chunkStart in stride(from: 0, to: sortedIDs.count, by: chunkSize) {
+                let chunk = Array(sortedIDs[chunkStart ..< min(chunkStart + chunkSize, sortedIDs.count)])
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT assetLocalIdentifier, totalFileSizeBytes
+                    FROM local_assets
+                    WHERE totalFileSizeBytes > 0
+                      AND assetLocalIdentifier IN (\(placeholders))
+                    """,
+                    arguments: StatementArguments(chunk)
+                )
+
+                for row in rows {
+                    let id: String = row["assetLocalIdentifier"]
+                    let size: Int64 = row["totalFileSizeBytes"]
+                    result[id] = size
+                }
+            }
+
             return result
         }
     }
