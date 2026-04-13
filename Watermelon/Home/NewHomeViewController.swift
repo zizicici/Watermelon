@@ -34,12 +34,16 @@ final class NewHomeViewController: UIViewController {
         label.animationDelay = 2
         return label
     }()
+    private let leftHeaderCountLabel = UILabel()
+    private let leftHeaderSizeLabel = UILabel()
     private let leftToggle = UIButton(type: .system)
     private let rightHeaderLabel: MarqueeLabel = {
         let label = MarqueeLabel(frame: .zero, rate: 30, fadeLength: 8)
         label.animationDelay = 2
         return label
     }()
+    private let rightHeaderCountLabel = UILabel()
+    private let rightHeaderSizeLabel = UILabel()
     private let rightHeaderMenuOverlay = UIButton(type: .system)
     private let rightHeaderButton = UIButton(type: .system)
     private let rightToggle = UIButton(type: .system)
@@ -53,8 +57,15 @@ final class NewHomeViewController: UIViewController {
 
     private var rightHeaderBg: UIView!
     private var isPanelShown = false
+    private var hasLoadedHeaderSummary = false
 
-    private static let headerAreaHeight: CGFloat = 44
+    private static let headerAreaHeight: CGFloat = 96
+
+    private struct HeaderSummary {
+        let photoCount: Int
+        let videoCount: Int
+        let totalSizeBytes: Int64?
+    }
 
     init(dependencies: DependencyContainer) {
         self.store = HomeScreenStore(dependencies: dependencies)
@@ -145,18 +156,40 @@ final class NewHomeViewController: UIViewController {
         leftHeaderLabel.text = "本地相册"
         leftHeaderLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         leftHeaderLabel.textColor = headerTextColor
+        leftHeaderLabel.textAlignment = .center
+        configureHeaderDetailLabel(leftHeaderCountLabel, color: headerTextColor)
+        configureHeaderDetailLabel(leftHeaderSizeLabel, color: headerTextColor)
 
-        let leftHeaderStack = UIStackView(arrangedSubviews: [leftToggle, leftHeaderLabel])
-        leftHeaderStack.axis = .horizontal
-        leftHeaderStack.spacing = 4
-        leftHeaderStack.alignment = .center
-        leftHeaderBg.addSubview(leftHeaderStack)
-        leftHeaderStack.snp.makeConstraints { make in
+        let leftHeaderContentView = UIView()
+        let leftHeaderTitleRow = UIStackView(arrangedSubviews: [leftToggle, leftHeaderLabel])
+        leftHeaderTitleRow.axis = .horizontal
+        leftHeaderTitleRow.spacing = 4
+        leftHeaderTitleRow.alignment = .center
+        leftHeaderBg.addSubview(leftHeaderContentView)
+        leftHeaderContentView.addSubview(leftHeaderTitleRow)
+        leftHeaderContentView.addSubview(leftHeaderCountLabel)
+        leftHeaderContentView.addSubview(leftHeaderSizeLabel)
+
+        leftHeaderContentView.snp.makeConstraints { make in
+            make.top.equalTo(view.safeAreaLayoutGuide.snp.top).offset(10)
+            make.bottom.equalTo(leftHeaderBg.snp.bottom).inset(10)
+            make.leading.equalTo(view.safeAreaLayoutGuide.snp.leading).offset(12)
+            make.trailing.equalTo(leftHeaderBg.snp.trailing).inset(12)
+        }
+        leftHeaderTitleRow.snp.makeConstraints { make in
+            make.top.equalToSuperview()
             make.centerX.equalToSuperview()
+            make.leading.greaterThanOrEqualToSuperview()
+            make.trailing.lessThanOrEqualToSuperview()
+        }
+        leftHeaderCountLabel.snp.makeConstraints { make in
+            make.top.equalTo(leftHeaderTitleRow.snp.bottom).offset(8)
+            make.leading.trailing.equalToSuperview()
+        }
+        leftHeaderSizeLabel.snp.makeConstraints { make in
+            make.top.equalTo(leftHeaderCountLabel.snp.bottom).offset(6)
+            make.leading.trailing.equalToSuperview()
             make.bottom.equalToSuperview()
-            make.height.equalTo(Self.headerAreaHeight)
-            make.leading.greaterThanOrEqualToSuperview().inset(8)
-            make.trailing.lessThanOrEqualToSuperview().inset(8)
         }
 
         rightToggle.setImage(UIImage(systemName: "circle", withConfiguration: symbolConfig), for: .normal)
@@ -167,27 +200,57 @@ final class NewHomeViewController: UIViewController {
 
         configureRightHeaderButton()
 
-        let rightHeaderStack = UIStackView(arrangedSubviews: [rightToggle, rightHeaderLabel, rightHeaderButton])
-        rightHeaderStack.axis = .horizontal
-        rightHeaderStack.spacing = 4
-        rightHeaderStack.alignment = .center
-        rightHeaderBg.addSubview(rightHeaderStack)
-        rightHeaderStack.snp.makeConstraints { make in
+        configureHeaderDetailLabel(rightHeaderCountLabel, color: headerTextColor)
+        configureHeaderDetailLabel(rightHeaderSizeLabel, color: headerTextColor)
+
+        let rightHeaderTitleStack = UIStackView(arrangedSubviews: [rightHeaderLabel, rightHeaderButton])
+        rightHeaderTitleStack.axis = .horizontal
+        rightHeaderTitleStack.spacing = 4
+        rightHeaderTitleStack.alignment = .center
+        let rightHeaderTitleRow = UIStackView(arrangedSubviews: [rightToggle, rightHeaderTitleStack])
+        rightHeaderTitleRow.axis = .horizontal
+        rightHeaderTitleRow.spacing = 4
+        rightHeaderTitleRow.alignment = .center
+
+        let rightHeaderContentView = UIView()
+        rightHeaderBg.addSubview(rightHeaderContentView)
+        rightHeaderContentView.addSubview(rightHeaderTitleRow)
+        rightHeaderContentView.addSubview(rightHeaderCountLabel)
+        rightHeaderContentView.addSubview(rightHeaderSizeLabel)
+
+        rightHeaderContentView.snp.makeConstraints { make in
+            make.top.equalTo(view.safeAreaLayoutGuide.snp.top).offset(10)
+            make.bottom.equalTo(rightHeaderBg.snp.bottom).inset(10)
+            make.leading.equalTo(rightHeaderBg.snp.leading).inset(12)
+            make.trailing.equalTo(view.safeAreaLayoutGuide.snp.trailing).inset(12)
+        }
+        rightHeaderTitleRow.snp.makeConstraints { make in
+            make.top.equalToSuperview()
             make.centerX.equalToSuperview()
+            make.leading.greaterThanOrEqualToSuperview()
+            make.trailing.lessThanOrEqualToSuperview()
+        }
+        rightHeaderCountLabel.snp.makeConstraints { make in
+            make.top.equalTo(rightHeaderTitleRow.snp.bottom).offset(8)
+            make.leading.trailing.equalToSuperview()
+        }
+        rightHeaderSizeLabel.snp.makeConstraints { make in
+            make.top.equalTo(rightHeaderCountLabel.snp.bottom).offset(6)
+            make.leading.trailing.equalToSuperview()
             make.bottom.equalToSuperview()
-            make.height.equalTo(Self.headerAreaHeight)
-            make.leading.greaterThanOrEqualToSuperview().inset(8)
-            make.trailing.lessThanOrEqualToSuperview().inset(8)
         }
 
         rightHeaderMenuOverlay.showsMenuAsPrimaryAction = true
         rightHeaderMenuOverlay.menu = buildDestinationMenu()
         rightHeaderBg.addSubview(rightHeaderMenuOverlay)
         rightHeaderMenuOverlay.snp.makeConstraints { make in
-            make.leading.equalTo(rightHeaderLabel)
-            make.trailing.equalTo(rightHeaderButton)
-            make.top.bottom.equalTo(rightHeaderStack)
+            make.leading.equalTo(rightHeaderTitleStack)
+            make.trailing.equalTo(rightHeaderTitleStack)
+            make.top.bottom.equalTo(rightHeaderTitleStack)
         }
+
+        applyHeaderPlaceholder(to: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
+        applyHeaderPlaceholder(to: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel)
 
         actionPanel.onExecuteTapped = { [weak self] in self?.executeTapped() }
         actionPanel.onPauseTapped = { [weak self] in self?.store.pauseExecution() }
@@ -381,7 +444,9 @@ final class NewHomeViewController: UIViewController {
     // MARK: - Render Methods
 
     private func renderDataChange(_ months: Set<LibraryMonthKey>) {
+        hasLoadedHeaderSummary = true
         reconfigureMonths(months)
+        updateTopHeaderSummaries()
     }
 
     private func renderSelectionChange() {
@@ -394,6 +459,7 @@ final class NewHomeViewController: UIViewController {
     private func renderExecutionChange(changedMonths: Set<LibraryMonthKey>) {
         if let exec = store.executionState {
             reconfigureMonths(changedMonths.isEmpty ? exec.executionMonths : changedMonths)
+            updateTopHeaderSummaries()
             updateActionPanelFromExecution(exec)
             updateSelectionInteraction()
         } else {
@@ -407,8 +473,10 @@ final class NewHomeViewController: UIViewController {
     }
 
     private func renderStructuralChange() {
+        hasLoadedHeaderSummary = true
         applyFullSnapshot()
         updateTopHeaderToggles()
+        updateTopHeaderSummaries()
         updateActionPanel()
         updateSelectionInteraction()
         updateRemoteOverlay()
@@ -532,6 +600,113 @@ final class NewHomeViewController: UIViewController {
         leftToggle.tintColor = headerColor
         rightToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(for: allMonths, side: .remote)), withConfiguration: config), for: .normal)
         rightToggle.tintColor = headerColor
+    }
+
+    private func updateTopHeaderSummaries() {
+        guard hasLoadedHeaderSummary else {
+            applyHeaderPlaceholder(to: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
+            applyHeaderPlaceholder(to: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel)
+            return
+        }
+
+        let headerColor = leftHeaderLabel.textColor ?? .secondaryLabel
+        if let summary = aggregatedHeaderSummary(for: .local, treatsEmptyAsZero: true) {
+            applyHeaderSummary(summary, to: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel, color: headerColor)
+        } else {
+            applyHeaderPlaceholder(to: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
+        }
+
+        if store.connectionState.isConnected,
+           let summary = aggregatedHeaderSummary(for: .remote, treatsEmptyAsZero: true) {
+            applyHeaderSummary(summary, to: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel, color: headerColor)
+        } else {
+            applyHeaderPlaceholder(to: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel)
+        }
+    }
+
+    private func aggregatedHeaderSummary(for side: Item.Side, treatsEmptyAsZero: Bool) -> HeaderSummary? {
+        let summaries = store.rowLookup.values.compactMap { row in
+            switch side {
+            case .local:
+                return row.local
+            case .remote:
+                return row.remote
+            }
+        }
+
+        guard !summaries.isEmpty else {
+            guard treatsEmptyAsZero else { return nil }
+            return HeaderSummary(photoCount: 0, videoCount: 0, totalSizeBytes: 0)
+        }
+
+        let totalPhotoCount = summaries.reduce(0) { $0 + $1.photoCount }
+        let totalVideoCount = summaries.reduce(0) { $0 + $1.videoCount }
+        let sizeValues = summaries.compactMap(\.totalSizeBytes)
+        let totalSizeBytes = sizeValues.count == summaries.count ? sizeValues.reduce(0, +) : nil
+
+        return HeaderSummary(
+            photoCount: totalPhotoCount,
+            videoCount: totalVideoCount,
+            totalSizeBytes: totalSizeBytes
+        )
+    }
+
+    private func applyHeaderSummary(
+        _ summary: HeaderSummary,
+        to countLabel: UILabel,
+        sizeLabel: UILabel,
+        color: UIColor
+    ) {
+        countLabel.text = nil
+        countLabel.attributedText = makeHeaderCountText(photoCount: summary.photoCount, videoCount: summary.videoCount, color: color)
+        if let totalSizeBytes = summary.totalSizeBytes {
+            sizeLabel.attributedText = nil
+            sizeLabel.text = ByteCountFormatter.string(fromByteCount: totalSizeBytes, countStyle: .file)
+        } else {
+            sizeLabel.attributedText = nil
+            sizeLabel.text = "-"
+        }
+    }
+
+    private func applyHeaderPlaceholder(to countLabel: UILabel, sizeLabel: UILabel) {
+        countLabel.attributedText = nil
+        countLabel.text = "-"
+        sizeLabel.attributedText = nil
+        sizeLabel.text = "-"
+    }
+
+    private func configureHeaderDetailLabel(_ label: UILabel, color: UIColor) {
+        label.textAlignment = .center
+        label.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        label.textColor = color
+        label.numberOfLines = 1
+        label.lineBreakMode = .byTruncatingTail
+    }
+
+    private func makeHeaderCountText(photoCount: Int, videoCount: Int, color: UIColor) -> NSAttributedString {
+        let font = UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 9, weight: .bold)
+        let result = NSMutableAttributedString()
+
+        if let image = UIImage(systemName: "photo", withConfiguration: symbolConfig)?
+            .withTintColor(color, renderingMode: .alwaysOriginal) {
+            result.append(NSAttributedString(attachment: NSTextAttachment(image: image)))
+        }
+        result.append(NSAttributedString(
+            string: " \(photoCount)  ",
+            attributes: [.font: font, .foregroundColor: color]
+        ))
+
+        if let image = UIImage(systemName: "video", withConfiguration: symbolConfig)?
+            .withTintColor(color, renderingMode: .alwaysOriginal) {
+            result.append(NSAttributedString(attachment: NSTextAttachment(image: image)))
+        }
+        result.append(NSAttributedString(
+            string: " \(videoCount)",
+            attributes: [.font: font, .foregroundColor: color]
+        ))
+
+        return result
     }
 
     private func updateActionPanel() {
@@ -659,6 +834,7 @@ final class NewHomeViewController: UIViewController {
         rightHeaderLabel.text = "远端存储"
         rightHeaderLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         rightHeaderLabel.textColor = headerTextColor
+        rightHeaderLabel.textAlignment = .center
 
         var config = UIButton.Configuration.plain()
         config.image = UIImage(systemName: "chevron.down", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11))
