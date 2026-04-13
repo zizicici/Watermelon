@@ -20,6 +20,7 @@ struct LocalAlbumItem {
     let isBackedUp: Bool
     let mediaKind: AlbumMediaKind
     let contentHashes: [Data]
+    let fingerprint: Data?
 }
 
 struct RemoteAlbumItem {
@@ -131,11 +132,42 @@ enum HomeAlbumMatching {
         result.reserveCapacity(localItems.count + remoteItems.count)
 
         if hasActiveConnection {
+            // Pass 1: Fingerprint-exact match (highest confidence)
+            var localIDByFingerprint: [Data: String] = [:]
+            for local in localItems {
+                if let fp = local.fingerprint, localIDByFingerprint[fp] == nil {
+                    localIDByFingerprint[fp] = local.id
+                }
+            }
+
+            var unmatchedRemotes: [RemoteAlbumItem] = []
             for remote in remoteItems {
+                if let localID = localIDByFingerprint[remote.assetFingerprint],
+                   !consumedLocalIDs.contains(localID),
+                   let local = localByID[localID] {
+                    consumedLocalIDs.insert(localID)
+                    result.append(
+                        HomeAlbumItem(
+                            id: "both:\(local.id)",
+                            creationDate: local.creationDate,
+                            sourceTag: .both,
+                            mediaKind: mergeMediaKind(local: local.mediaKind, remote: remote.mediaKind),
+                            localItem: local,
+                            remoteItem: remote
+                        )
+                    )
+                } else {
+                    unmatchedRemotes.append(remote)
+                }
+            }
+
+            // Pass 2: Content-hash fallback for unmatched remotes (only considers locals without a fingerprint)
+            for remote in unmatchedRemotes {
                 var candidateLocalIDSet = Set<String>()
                 for hash in remote.contentHashes {
                     guard let localIDs = localAssetIdentifierByHash[hash] else { continue }
-                    for localID in localIDs where !consumedLocalIDs.contains(localID) && localByID[localID] != nil {
+                    for localID in localIDs where !consumedLocalIDs.contains(localID) {
+                        guard let local = localByID[localID], local.fingerprint == nil else { continue }
                         candidateLocalIDSet.insert(localID)
                     }
                 }

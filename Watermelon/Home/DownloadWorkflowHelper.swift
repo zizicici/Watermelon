@@ -29,18 +29,28 @@ final class DownloadWorkflowHelper {
         let hashIndexRepository = dependencies.hashIndexRepository
 
         do {
+            let descriptors = remoteItems.map { item in
+                RestoreService.RestoreItemDescriptor(
+                    resources: item.resources,
+                    identity: item.assetFingerprint
+                )
+            }
+            let remoteItemByFingerprint = Dictionary(uniqueKeysWithValues: remoteItems.map {
+                ($0.assetFingerprint, $0)
+            })
+
             _ = try await dependencies.restoreService.restoreItems(
-                items: remoteItems.map(\.resources),
+                items: descriptors,
                 profile: context.profile,
                 password: context.password,
-                onItemCompleted: { _, _, restoredAsset in
-                    if let restoredAsset {
+                onItemCompleted: { _, _, restoredItem in
+                    if let restoredItem, let remoteItem = remoteItemByFingerprint[restoredItem.identity] {
                         try await Self.writeHashIndex(
-                            for: restoredAsset,
-                            remoteItems: remoteItems,
+                            assetLocalIdentifier: restoredItem.asset.localIdentifier,
+                            remoteItem: remoteItem,
                             repository: hashIndexRepository
                         )
-                        await onItemRestored(restoredAsset.asset.localIdentifier)
+                        await onItemRestored(restoredItem.asset.localIdentifier)
                     }
                 }
             )
@@ -55,16 +65,13 @@ final class DownloadWorkflowHelper {
     func cancel() {}
 
     private static func writeHashIndex(
-        for result: RestoreService.IndexedRestoredAsset,
-        remoteItems: [RemoteAlbumItem],
+        assetLocalIdentifier: String,
+        remoteItem: RemoteAlbumItem,
         repository: ContentHashIndexRepository
     ) async throws {
-        guard result.itemIndex < remoteItems.count else { return }
-        let remoteItem = remoteItems[result.itemIndex]
-
         try await Task.detached(priority: .utility) {
             try repository.writeHashIndex(
-                assetLocalIdentifier: result.asset.localIdentifier,
+                assetLocalIdentifier: assetLocalIdentifier,
                 remoteAssetFingerprint: remoteItem.assetFingerprint,
                 resourceLinks: remoteItem.resourceLinks,
                 resources: remoteItem.resources

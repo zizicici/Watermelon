@@ -235,8 +235,7 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
 
     func refreshBackedUpState(
         changedFingerprints: Set<Data>,
-        remoteFingerprintSet: Set<Data>,
-        limitMonths: Set<LibraryMonthKey>? = nil
+        remoteFingerprintSet: Set<Data>
     ) -> Set<LibraryMonthKey> {
         guard !changedFingerprints.isEmpty else { return [] }
 
@@ -250,9 +249,6 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         var changedMonths = Set<LibraryMonthKey>()
         for assetID in targetAssetIDs {
             guard let state = localStatesByAssetID[assetID] else { continue }
-            if let limitMonths, !limitMonths.contains(state.month) {
-                continue
-            }
             changedMonths.formUnion(
                 upsertLocalState(
                     asset: state.asset,
@@ -276,7 +272,8 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
                     creationDate: state.asset.creationDate ?? Date(timeIntervalSince1970: 0),
                     isBackedUp: state.isBackedUp,
                     mediaKind: state.mediaKind,
-                    contentHashes: state.hashes
+                    contentHashes: state.hashes,
+                    fingerprint: state.fingerprint
                 )
             }
             .sorted {
@@ -873,8 +870,7 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
                     changedMonths.formUnion(
                         self.localIndex.refreshBackedUpState(
                             changedFingerprints: remoteDelta.changedFingerprints,
-                            remoteFingerprintSet: self.remoteIndex.assetFingerprintSet,
-                            limitMonths: remoteDelta.changedMonths
+                            remoteFingerprintSet: self.remoteIndex.assetFingerprintSet
                         )
                     )
                 }

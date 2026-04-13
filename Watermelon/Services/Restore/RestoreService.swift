@@ -11,24 +11,27 @@ final class RestoreService {
         self.storageClientFactory = storageClientFactory
     }
 
+    struct RestoreItemDescriptor: Sendable {
+        let resources: [RemoteManifestResource]
+        let identity: Data
+    }
+
     struct RestoredAsset {
         let localIdentifier: String
         let resources: [RemoteManifestResource]
     }
 
-    struct IndexedRestoredAsset {
-        let itemIndex: Int
+    struct RestoredItem: Sendable {
+        let identity: Data
         let asset: RestoredAsset
     }
 
-    /// Restore pre-grouped items with a single connection. Each inner array is one asset's resources.
-    /// Returns results with `itemIndex` matching the input `items` array index.
     func restoreItems(
-        items: [[RemoteManifestResource]],
+        items: [RestoreItemDescriptor],
         profile: ServerProfileRecord,
         password: String,
-        onItemCompleted: @Sendable (Int, Int, IndexedRestoredAsset?) async throws -> Void
-    ) async throws -> [IndexedRestoredAsset] {
+        onItemCompleted: @Sendable (Int, Int, RestoredItem?) async throws -> Void
+    ) async throws -> [RestoredItem] {
         guard !items.isEmpty else { return [] }
 
         let storageClient = try storageClientFactory.makeClient(profile: profile, password: password)
@@ -38,21 +41,21 @@ final class RestoreService {
             Task { await storageClient.disconnect() }
         }
 
-        var results: [IndexedRestoredAsset] = []
-        for (index, resources) in items.enumerated() {
+        var results: [RestoredItem] = []
+        for (index, item) in items.enumerated() {
             try Task.checkCancellation()
-            let creationDate = resources
+            let creationDate = item.resources
                 .compactMap(\.creationDateNs)
                 .min()
                 .map { Date(nanosecondsSinceEpoch: $0) }
-            let group = RestoreGroup(creationDate: creationDate, resources: resources)
-            var restoredAsset: IndexedRestoredAsset?
+            let group = RestoreGroup(creationDate: creationDate, resources: item.resources)
+            var restoredItem: RestoredItem?
             if let asset = try await restoreGroup(group, profile: profile, storageClient: storageClient) {
-                let indexed = IndexedRestoredAsset(itemIndex: index, asset: asset)
-                results.append(indexed)
-                restoredAsset = indexed
+                let restored = RestoredItem(identity: item.identity, asset: asset)
+                results.append(restored)
+                restoredItem = restored
             }
-            try await onItemCompleted(index + 1, items.count, restoredAsset)
+            try await onItemCompleted(index + 1, items.count, restoredItem)
         }
         return results
     }

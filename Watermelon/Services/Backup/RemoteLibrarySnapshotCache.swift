@@ -166,7 +166,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             }
             monthStatsCache[month] = nil
             bumpRevisionLocked([month])
-            monthLastChangedRevision[month] = nil
             return true
         }
     }

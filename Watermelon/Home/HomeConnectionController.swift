@@ -118,6 +118,18 @@ final class HomeConnectionController {
                 self.dependencies.appSession.activate(profile: profile, password: password)
             } catch {
                 guard !Task.isCancelled else { return }
+
+                // The failed sync may have reset the shared snapshot cache.
+                // If a previous profile is still active, restore its remote index.
+                if let prev = self.dependencies.appSession.activeProfile,
+                   let prevPassword = prev.resolvedSessionPassword(from: self.dependencies.appSession) {
+                    _ = try? await self.dependencies.backupCoordinator.reloadRemoteIndex(
+                        profile: prev,
+                        password: prevPassword,
+                        onMonthSynced: nil
+                    )
+                }
+
                 self.connectingProfile = nil
                 self.connectTask = nil
                 self.onStateChanged?()

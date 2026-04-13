@@ -299,7 +299,17 @@ final class HomeScreenStore {
         }
 
         selection.clear()
-        scheduleRefresh([.syncRemote, .notifyConnection])
+
+        switch connectionState {
+        case .connecting:
+            // Don't sync remote during connecting — reloadRemoteIndex is still rebuilding
+            // the shared snapshotCache. A sync here with hasActiveConnection=false would clear
+            // the remote engine and record a stale revision, causing the subsequent .connected
+            // refresh to get an empty delta.
+            scheduleRefresh([.notifyConnection])
+        case .connected, .disconnected:
+            scheduleRefresh([.syncRemote, .notifyConnection])
+        }
     }
 
     // MARK: - Data Refresh

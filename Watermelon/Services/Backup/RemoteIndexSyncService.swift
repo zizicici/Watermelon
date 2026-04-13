@@ -116,8 +116,10 @@ final class RemoteIndexSyncService: Sendable {
         if previousDigests.isEmpty {
             changedMonths = remoteMonths
         } else {
-            for (month, digest) in remoteDigests where previousDigests[month] != digest {
-                changedMonths.insert(month)
+            for (month, digest) in remoteDigests {
+                if previousDigests[month] != digest || digest.manifestModifiedAtNs == nil {
+                    changedMonths.insert(month)
+                }
             }
         }
 
