@@ -247,6 +247,7 @@ struct BackupParallelExecutor: Sendable {
                                 selectedResources: selectedResources
                             )
                             let errorMessage = profile.userFacingStorageErrorMessage(error)
+                            print("[BackupUpload] asset processing FAILED: asset=\(displayName), reason=\(errorMessage)")
                             eventStream.emit(.log("Failed asset: \(displayName) - \(errorMessage)"))
 
                             let progressState = await aggregator.recordFailure()

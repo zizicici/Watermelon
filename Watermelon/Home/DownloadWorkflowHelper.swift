@@ -47,6 +47,7 @@ final class DownloadWorkflowHelper {
             return Task.isCancelled ? .cancelled : .success
         } catch {
             if Task.isCancelled { return .cancelled }
+            print("[DownloadWorkflowHelper] download FAILED: itemCount=\(remoteItems.count), reason=\(error.localizedDescription)")
             return .failed(error.localizedDescription)
         }
     }

@@ -208,6 +208,7 @@ final class AssetProcessor: Sendable {
 
         if failedCount > 0 {
             let firstError = firstFailedReason ?? "resource_failed"
+            print("[BackupUpload] asset FAILED: asset=\(displayName), success=\(successCount), skipped=\(skippedCount), failed=\(failedCount), reason=\(firstError)")
             eventStream.emit(.log(
                 "Asset failed (partial): \(displayName). success=\(successCount), skipped=\(skippedCount), failed=\(failedCount)"
             ))

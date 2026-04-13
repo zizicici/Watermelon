@@ -81,7 +81,12 @@ final class RestoreService {
                 basePath: profile.basePath,
                 remoteRelativePath: resource.remoteRelativePath
             )
-            try await storageClient.download(remotePath: remotePath, localURL: tempURL)
+            do {
+                try await storageClient.download(remotePath: remotePath, localURL: tempURL)
+            } catch {
+                print("[RestoreService]   download FAILED: \(resource.fileName), remotePath=\(remotePath), reason=\(error.localizedDescription)")
+                throw error
+            }
 
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? -1
             let fileExists = FileManager.default.fileExists(atPath: tempURL.path)

@@ -3,6 +3,7 @@ import Foundation
 import Photos
 
 struct UploadPreparation {
+    let baseFileName: String
     var targetFileName: String
     var remoteAbsolutePath: String
     var attemptedFileNames: Set<String>
@@ -38,13 +39,21 @@ extension AssetProcessor {
         }
 
         let collisionStart = CFAbsoluteTimeGetCurrent()
-        var preparation = try await prepareUpload(
-            prepared: prepared,
-            monthStore: monthStore,
-            profile: profile,
-            client: client,
-            cancellationController: cancellationController
-        )
+        var preparation: UploadPreparation
+        do {
+            preparation = try await prepareUpload(
+                prepared: prepared,
+                monthStore: monthStore,
+                profile: profile,
+                client: client,
+                cancellationController: cancellationController
+            )
+        } catch {
+            if !(error is CancellationError) {
+                print("[BackupUpload] prepare FAILED: asset=\(displayName), resource=\(prepared.local.originalFilename), reason=\(error.localizedDescription)")
+            }
+            throw error
+        }
         assetTiming.collisionCheckSeconds += Self.elapsedSeconds(since: collisionStart)
 
         if let skipReason = preparation.skipReason {
@@ -77,9 +86,11 @@ extension AssetProcessor {
         )
 
         guard let uploadedFileName = retryOutcome.fileName else {
+            let reason = retryOutcome.lastError?.localizedDescription ?? "Unknown upload failure"
+            print("[BackupUpload] upload FAILED: asset=\(displayName), resource=\(prepared.local.originalFilename), reason=\(reason)")
             return ResourceUploadResult(
                 status: .failed,
-                reason: retryOutcome.lastError?.localizedDescription ?? "Unknown upload failure"
+                reason: reason
             )
         }
 
@@ -104,11 +115,13 @@ extension AssetProcessor {
         let localHash = prepared.contentHash
         let localFileSize = prepared.fileSize
 
-        var targetFileName = local.preferredRemoteFileName
+        let baseFileName = local.preferredRemoteFileName
+        var targetFileName = baseFileName
         var skipReason: String?
         var attemptedFileNames: Set<String> = [targetFileName]
 
-        if monthStore.existingFileNames().contains(targetFileName) {
+        let existingFileNames = monthStore.existingFileNames()
+        if Self.containsOccupiedFileName(targetFileName, in: existingFileNames) {
             let existingManifestResource = monthStore.findByFileName(targetFileName)
             let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: targetFileName)
             if localFileSize < Self.smallFileThresholdBytes {
@@ -131,8 +144,8 @@ extension AssetProcessor {
             }
             if skipReason == nil {
                 targetFileName = Self.resolveNextAvailableName(
-                    baseName: targetFileName,
-                    occupiedNames: monthStore.existingFileNames()
+                    baseName: baseFileName,
+                    occupiedNames: existingFileNames
                 )
                 attemptedFileNames.insert(targetFileName)
             }
@@ -145,6 +158,7 @@ extension AssetProcessor {
         )
 
         return UploadPreparation(
+            baseFileName: baseFileName,
             targetFileName: targetFileName,
             remoteAbsolutePath: remoteAbsolutePath,
             attemptedFileNames: attemptedFileNames,
@@ -293,8 +307,9 @@ extension AssetProcessor {
                     var occupiedNames = monthStore.existingFileNames()
                     occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
                     occupiedNames.insert(uploadPreparation.targetFileName)
+                    let previousFileName = uploadPreparation.targetFileName
                     uploadPreparation.targetFileName = Self.resolveNextAvailableName(
-                        baseName: uploadPreparation.targetFileName,
+                        baseName: uploadPreparation.baseFileName,
                         occupiedNames: occupiedNames
                     )
                     uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
@@ -303,6 +318,7 @@ extension AssetProcessor {
                         basePath: profile.basePath,
                         remoteRelativePath: retryRelativePath
                     )
+                    print("[BackupUpload] collision RETRY: asset=\(displayName), resource=\(local.originalFilename), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
                     continue
                 }
 
@@ -322,7 +338,8 @@ extension AssetProcessor {
     }
 
     private static func resolveNextAvailableName(baseName: String, occupiedNames: Set<String>) -> String {
-        guard occupiedNames.contains(baseName) else {
+        let occupiedKeys = Set(occupiedNames.map(Self.collisionKey(for:)))
+        guard occupiedKeys.contains(Self.collisionKey(for: baseName)) else {
             return baseName
         }
 
@@ -330,42 +347,30 @@ extension AssetProcessor {
         let ext = nsName.pathExtension
         let stem = nsName.deletingPathExtension
 
-        let parsed = splitStemAndSuffix(stem)
-        let root = parsed.root
-        var suffix = max(parsed.suffix ?? 0, 0)
-
+        var suffix = 1
         while true {
-            suffix += 1
-            let candidateStem = "\(root)_\(suffix)"
+            let candidateStem = "\(stem)_\(suffix)"
             let candidate: String
             if ext.isEmpty {
                 candidate = candidateStem
             } else {
                 candidate = "\(candidateStem).\(ext)"
             }
-            if !occupiedNames.contains(candidate) {
+            if !occupiedKeys.contains(Self.collisionKey(for: candidate)) {
                 return candidate
             }
+            suffix += 1
         }
     }
 
-    private static func splitStemAndSuffix(_ stem: String) -> (root: String, suffix: Int?) {
-        guard let underscore = stem.lastIndex(of: "_") else {
-            return (stem, nil)
-        }
-        let suffixStart = stem.index(after: underscore)
-        guard suffixStart < stem.endIndex else {
-            return (stem, nil)
-        }
-        let suffixPart = String(stem[suffixStart...])
-        guard let suffixValue = Int(suffixPart) else {
-            return (stem, nil)
-        }
-        let root = String(stem[..<underscore])
-        guard !root.isEmpty else {
-            return (stem, nil)
-        }
-        return (root, suffixValue)
+    private static func containsOccupiedFileName(_ fileName: String, in occupiedNames: Set<String>) -> Bool {
+        let targetKey = collisionKey(for: fileName)
+        return occupiedNames.contains { collisionKey(for: $0) == targetKey }
+    }
+
+    private static func collisionKey(for fileName: String) -> String {
+        fileName.precomposedStringWithCanonicalMapping
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
     }
 
     func recordUploadedResource(
