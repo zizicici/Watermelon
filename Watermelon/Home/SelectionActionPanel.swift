@@ -3,7 +3,7 @@ import UIKit
 
 final class SelectionActionPanel: UIView {
 
-    enum CategoryPhase {
+    enum CategoryPhase: Equatable {
         case pending(total: Int)
         case running(completed: Int, failed: Int, total: Int)
         case paused(completed: Int, total: Int)
@@ -17,12 +17,7 @@ final class SelectionActionPanel: UIView {
     var onResumeTapped: (() -> Void)?
     var onCompleteTapped: (() -> Void)?
 
-    private var isExecuting = false
-    private var isPaused = false
-    private var isCompleted = false
-    private var lastRenderedExecutionPhase: ExecutionPhase?
-    private var lastRenderedControlState: ExecutionControlState?
-    private var isStopTransitionLatched = false
+    private var renderedState: SelectionActionPanelViewState?
 
     private let executionControlButtonWidth: CGFloat = 72
     private let executionControlButtonHeight: CGFloat = 36
@@ -169,208 +164,153 @@ final class SelectionActionPanel: UIView {
     }
 
     @objc private func executeTapped() {
-        if isCompleted {
-            onCompleteTapped?()
-        } else if isExecuting {
-            if isPaused {
-                onResumeTapped?()
-            } else {
-                onPauseTapped?()
-            }
-        } else {
+        guard let renderedState else {
             onExecuteTapped?()
-        }
-    }
-
-    @objc private func stopTappedAction() { onStopTapped?() }
-
-    // MARK: - Selection Mode
-
-    func configure(backupCount: Int, downloadCount: Int, syncCount: Int) {
-        backupCategoryButton.isHidden = backupCount == 0
-        backupCategoryButton.configuration?.title = "\(backupCount)"
-        downloadCategoryButton.isHidden = downloadCount == 0
-        downloadCategoryButton.configuration?.title = "\(downloadCount)"
-        syncCategoryButton.isHidden = syncCount == 0
-        syncCategoryButton.configuration?.title = "\(syncCount)"
-    }
-
-    // MARK: - Execution Mode
-
-    func updateFailureSummary(menu: UIMenu?, title: String?) {
-        if let menu, let title {
-            failureSummaryButton.isHidden = false
-            failureSummaryButton.menu = menu
-            failureSummaryButton.configuration?.title = title
-        } else {
-            failureSummaryButton.isHidden = true
-            failureSummaryButton.menu = nil
-        }
-    }
-
-    func enterExecution(backupTotal: Int, downloadTotal: Int, syncTotal: Int) {
-        isExecuting = true
-        isPaused = false
-        isCompleted = false
-        lastRenderedExecutionPhase = nil
-        lastRenderedControlState = nil
-        isStopTransitionLatched = false
-
-        failureSummaryButton.isHidden = true
-        failureSummaryButton.menu = nil
-        backupCategoryButton.showsMenuAsPrimaryAction = false
-        backupCategoryButton.menu = nil
-        downloadCategoryButton.showsMenuAsPrimaryAction = false
-        downloadCategoryButton.menu = nil
-        syncCategoryButton.showsMenuAsPrimaryAction = false
-        syncCategoryButton.menu = nil
-
-        applyCategoryPhase(button: backupCategoryButton, phase: backupTotal > 0 ? .pending(total: backupTotal) : nil,
-                           iconName: "arrow.right", color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200))
-        applyCategoryPhase(button: downloadCategoryButton, phase: downloadTotal > 0 ? .pending(total: downloadTotal) : nil,
-                           iconName: "arrow.left", color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200))
-        applyCategoryPhase(button: syncCategoryButton, phase: syncTotal > 0 ? .pending(total: syncTotal) : nil,
-                           iconName: "arrow.left.arrow.right", color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200))
-
-        applyPauseAppearance()
-        stopButton.isHidden = false
-        applyStopDefaultAppearance()
-        stopButton.isEnabled = true
-    }
-
-    func updateExecution(
-        backupPhase: CategoryPhase?,
-        downloadPhase: CategoryPhase?,
-        syncPhase: CategoryPhase?,
-        phase: ExecutionPhase,
-        controlState: ExecutionControlState
-    ) {
-        if controlState == .stopping {
-            isStopTransitionLatched = true
-        }
-
-        applyCategoryPhase(button: backupCategoryButton, phase: backupPhase,
-                           iconName: "arrow.right", color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200))
-        applyCategoryPhase(button: downloadCategoryButton, phase: downloadPhase,
-                           iconName: "arrow.left", color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200))
-        applyCategoryPhase(button: syncCategoryButton, phase: syncPhase,
-                           iconName: "arrow.left.arrow.right", color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200))
-
-        if isStopTransitionLatched, controlState != .stopping {
             return
         }
 
-        guard lastRenderedExecutionPhase != phase || lastRenderedControlState != controlState else {
-            return
-        }
-        lastRenderedExecutionPhase = phase
-        lastRenderedControlState = controlState
-
-        isPaused = false
-        isCompleted = false
-        stopButton.isHidden = false
-        applyStopDefaultAppearance()
-        stopButton.isEnabled = true
-
-        switch controlState {
-        case .starting:
-            applyExecuteLoadingAppearance(
-                light: .Material.Green._600,
-                dark: .Material.Green._200,
-                onDark: .Material.Green._800
-            )
-            executeButton.isEnabled = false
-            stopButton.isEnabled = true
-            return
-        case .resuming:
-            applyExecuteLoadingAppearance(
-                light: .Material.Green._600,
-                dark: .Material.Green._200,
-                onDark: .Material.Green._800
-            )
-            executeButton.isEnabled = false
-            stopButton.isEnabled = true
-            return
-        case .pausing:
-            applyExecuteLoadingAppearance(
-                light: .Material.Orange._600,
-                dark: .Material.Orange._200,
-                onDark: .Material.Orange._800
-            )
-            executeButton.isEnabled = false
-            stopButton.isEnabled = true
-            return
-        case .stopping:
-            applyPrimaryAppearance(for: phase)
-            executeButton.isEnabled = false
-            applyStopLoadingAppearance()
-            stopButton.isEnabled = false
-            return
-        case .idle:
+        switch renderedState.primaryAction {
+        case .execute:
+            onExecuteTapped?()
+        case .pause:
+            onPauseTapped?()
+        case .resume:
+            onResumeTapped?()
+        case .complete:
+            onCompleteTapped?()
+        case .none:
             break
         }
-
-        switch phase {
-        case .uploading, .downloading:
-            applyPauseAppearance()
-            executeButton.isEnabled = true
-        case .uploadPaused, .downloadPaused:
-            isPaused = true
-            applyResumeAppearance()
-            executeButton.isEnabled = true
-        case .completed:
-            isCompleted = true
-            applyCompleteAppearance()
-            executeButton.isEnabled = true
-            stopButton.isHidden = true
-        case .failed:
-            applyFailedAppearance()
-            executeButton.isEnabled = false
-            stopButton.isEnabled = true
-        }
     }
 
-    func resetToSelection() {
-        isExecuting = false
-        isPaused = false
-        isCompleted = false
-        lastRenderedExecutionPhase = nil
-        lastRenderedControlState = nil
-        isStopTransitionLatched = false
+    @objc private func stopTappedAction() {
+        guard case .execution(let state) = renderedState, state.stopAction != nil else { return }
+        onStopTapped?()
+    }
 
-        failureSummaryButton.isHidden = true
-        failureSummaryButton.menu = nil
-        backupCategoryButton.showsMenuAsPrimaryAction = true
-        downloadCategoryButton.showsMenuAsPrimaryAction = true
-        syncCategoryButton.showsMenuAsPrimaryAction = true
+    func render(
+        state: SelectionActionPanelViewState,
+        menus: SelectionActionPanelMenus = .empty
+    ) {
+        applyMenus(menus, for: state)
+        guard renderedState != state else { return }
 
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-        for (button, iconName, color) in [
-            (backupCategoryButton, "arrow.right", UIColor.materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)),
-            (downloadCategoryButton, "arrow.left", UIColor.materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)),
-            (syncCategoryButton, "arrow.left.arrow.right", UIColor.materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)),
-        ] {
-            button.isUserInteractionEnabled = true
-            button.configuration?.showsActivityIndicator = false
-            button.configuration?.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
-            button.configuration?.baseForegroundColor = color
+        renderedState = state
+        switch state {
+        case .selection(let selectionState):
+            renderSelection(selectionState)
+        case .execution(let executionState):
+            renderExecution(executionState)
         }
-
-        let executeIconConfig = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
-        var cfg = UIButton.Configuration.filled()
-        cfg.image = UIImage(systemName: "play.fill", withConfiguration: executeIconConfig)
-        cfg.cornerStyle = .capsule
-        cfg.baseBackgroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
-        cfg.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
-        cfg.contentInsets = .init(top: 8, leading: 14, bottom: 8, trailing: 14)
-        executeButton.configuration = cfg
-        executeButton.isEnabled = true
-
-        stopButton.isHidden = true
-        applyStopDefaultAppearance()
     }
 
     // MARK: - Private Helpers
+
+    private func applyMenus(
+        _ menus: SelectionActionPanelMenus,
+        for state: SelectionActionPanelViewState
+    ) {
+        switch state {
+        case .selection:
+            failureSummaryButton.isHidden = true
+            failureSummaryButton.menu = nil
+
+            backupCategoryButton.showsMenuAsPrimaryAction = menus.backup != nil
+            backupCategoryButton.menu = menus.backup
+            downloadCategoryButton.showsMenuAsPrimaryAction = menus.download != nil
+            downloadCategoryButton.menu = menus.download
+            syncCategoryButton.showsMenuAsPrimaryAction = menus.sync != nil
+            syncCategoryButton.menu = menus.sync
+        case .execution(let executionState):
+            if let title = executionState.failureSummaryTitle,
+               let menu = menus.failureSummary {
+                failureSummaryButton.isHidden = false
+                failureSummaryButton.menu = menu
+                failureSummaryButton.configuration?.title = title
+            } else {
+                failureSummaryButton.isHidden = true
+                failureSummaryButton.menu = nil
+            }
+
+            backupCategoryButton.showsMenuAsPrimaryAction = false
+            backupCategoryButton.menu = nil
+            downloadCategoryButton.showsMenuAsPrimaryAction = false
+            downloadCategoryButton.menu = nil
+            syncCategoryButton.showsMenuAsPrimaryAction = false
+            syncCategoryButton.menu = nil
+        }
+    }
+
+    private func renderSelection(_ state: SelectionActionPanelSelectionState) {
+        applySelectionCategory(
+            button: backupCategoryButton,
+            count: state.backupCount,
+            iconName: "arrow.right",
+            color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
+        )
+        applySelectionCategory(
+            button: downloadCategoryButton,
+            count: state.downloadCount,
+            iconName: "arrow.left",
+            color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
+        )
+        applySelectionCategory(
+            button: syncCategoryButton,
+            count: state.syncCount,
+            iconName: "arrow.left.arrow.right",
+            color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
+        )
+
+        applyPrimaryButton(
+            SelectionActionPanelButtonState(
+                style: .execute,
+                isEnabled: true,
+                showsSpinner: false,
+                isHidden: false
+            )
+        )
+        applyStopButton(nil)
+    }
+
+    private func renderExecution(_ state: SelectionActionPanelExecutionState) {
+        applyCategoryPhase(
+            button: backupCategoryButton,
+            phase: state.backupPhase,
+            iconName: "arrow.right",
+            color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
+        )
+        applyCategoryPhase(
+            button: downloadCategoryButton,
+            phase: state.downloadPhase,
+            iconName: "arrow.left",
+            color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
+        )
+        applyCategoryPhase(
+            button: syncCategoryButton,
+            phase: state.syncPhase,
+            iconName: "arrow.left.arrow.right",
+            color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
+        )
+        applyPrimaryButton(state.primaryButton)
+        applyStopButton(state.stopButton)
+    }
+
+    private func applySelectionCategory(
+        button: UIButton,
+        count: Int,
+        iconName: String,
+        color: UIColor
+    ) {
+        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
+        button.isHidden = count == 0
+        guard count > 0 else { return }
+
+        button.isUserInteractionEnabled = true
+        button.configuration?.showsActivityIndicator = false
+        button.configuration?.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
+        button.configuration?.title = "\(count)"
+        button.configuration?.baseForegroundColor = color
+    }
 
     private func applyCategoryPhase(button: UIButton, phase: CategoryPhase?, iconName: String, color: UIColor) {
         let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
@@ -415,37 +355,93 @@ final class SelectionActionPanel: UIView {
         }
     }
 
-    private func applyPauseAppearance() {
-        applyExecuteButtonStyle(iconName: "pause.fill", light: .Material.Orange._600, dark: .Material.Orange._200, onDark: .Material.Orange._800)
+    private func applyPrimaryButton(_ state: SelectionActionPanelButtonState) {
+        executeButton.isEnabled = state.isEnabled
+        executeButton.isHidden = state.isHidden
+        if state.showsSpinner {
+            applyExecuteLoadingAppearance(style: state.style)
+            return
+        }
+
+        switch state.style {
+        case .execute:
+            applyExecuteButtonStyle(
+                iconName: "play.fill",
+                light: .Material.Green._600,
+                dark: .Material.Green._200,
+                onDark: .Material.Green._800
+            )
+        case .pause:
+            applyExecuteButtonStyle(
+                iconName: "pause.fill",
+                light: .Material.Orange._600,
+                dark: .Material.Orange._200,
+                onDark: .Material.Orange._800
+            )
+        case .resume:
+            applyExecuteButtonStyle(
+                iconName: "play.fill",
+                light: .Material.Green._600,
+                dark: .Material.Green._200,
+                onDark: .Material.Green._800
+            )
+        case .complete:
+            applyExecuteButtonStyle(
+                iconName: "checkmark",
+                light: .Material.Green._600,
+                dark: .Material.Green._200,
+                onDark: .Material.Green._800
+            )
+        case .failed:
+            applyExecuteButtonStyle(
+                iconName: "exclamationmark.triangle.fill",
+                light: .Material.Red._600,
+                dark: .Material.Red._200,
+                onDark: .Material.Red._800
+            )
+        case .stop:
+            applyExecuteButtonStyle(
+                iconName: "stop.fill",
+                light: .Material.Red._600,
+                dark: .Material.Red._200,
+                onDark: .Material.Red._800
+            )
+        }
     }
 
-    private func applyResumeAppearance() {
-        applyExecuteButtonStyle(iconName: "play.fill", light: .Material.Green._600, dark: .Material.Green._200, onDark: .Material.Green._800)
-    }
+    private func applyExecuteLoadingAppearance(style: SelectionActionPanelButtonStyle) {
+        let palette: (UIColor, UIColor, UIColor)
+        switch style {
+        case .pause:
+            palette = (.Material.Orange._600, .Material.Orange._200, .Material.Orange._800)
+        case .failed, .stop:
+            palette = (.Material.Red._600, .Material.Red._200, .Material.Red._800)
+        case .execute, .resume, .complete:
+            palette = (.Material.Green._600, .Material.Green._200, .Material.Green._800)
+        }
 
-    private func applyFailedAppearance() {
-        applyExecuteButtonStyle(iconName: "exclamationmark.triangle.fill", light: .Material.Red._600, dark: .Material.Red._200, onDark: .Material.Red._800)
-    }
-
-    private func applyCompleteAppearance() {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
-        var cfg = UIButton.Configuration.filled()
-        cfg.image = UIImage(systemName: "checkmark", withConfiguration: iconConfig)
-        cfg.cornerStyle = .capsule
-        cfg.baseBackgroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
-        cfg.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
-        cfg.contentInsets = .init(top: 8, leading: 14, bottom: 8, trailing: 14)
-        executeButton.configuration = cfg
-    }
-
-    private func applyExecuteLoadingAppearance(light: UIColor, dark: UIColor, onDark: UIColor) {
         var cfg = UIButton.Configuration.filled()
         cfg.showsActivityIndicator = true
         cfg.cornerStyle = .capsule
-        cfg.baseBackgroundColor = .materialPrimary(light: light, dark: dark)
-        cfg.baseForegroundColor = .materialOnPrimary(dark: onDark)
+        cfg.baseBackgroundColor = .materialPrimary(light: palette.0, dark: palette.1)
+        cfg.baseForegroundColor = .materialOnPrimary(dark: palette.2)
         cfg.contentInsets = .init(top: 8, leading: 16, bottom: 8, trailing: 16)
         executeButton.configuration = cfg
+    }
+
+    private func applyStopButton(_ state: SelectionActionPanelButtonState?) {
+        guard let state, !state.isHidden else {
+            stopButton.isHidden = true
+            return
+        }
+
+        stopButton.isHidden = false
+        stopButton.isEnabled = state.isEnabled
+        if state.showsSpinner {
+            applyStopLoadingAppearance()
+        } else {
+            applyStopDefaultAppearance()
+        }
     }
 
     private func applyStopDefaultAppearance() {
@@ -467,21 +463,6 @@ final class SelectionActionPanel: UIView {
         cfg.baseForegroundColor = .materialOnPrimary(dark: .Material.Red._800)
         cfg.contentInsets = .init(top: 8, leading: 14, bottom: 8, trailing: 14)
         stopButton.configuration = cfg
-    }
-
-    private func applyPrimaryAppearance(for phase: ExecutionPhase) {
-        switch phase {
-        case .uploading, .downloading:
-            applyPauseAppearance()
-        case .uploadPaused, .downloadPaused:
-            isPaused = true
-            applyResumeAppearance()
-        case .completed:
-            isCompleted = true
-            applyCompleteAppearance()
-        case .failed:
-            applyFailedAppearance()
-        }
     }
 
     private func applyExecuteButtonStyle(iconName: String, light: UIColor, dark: UIColor, onDark: UIColor) {

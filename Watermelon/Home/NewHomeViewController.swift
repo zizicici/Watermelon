@@ -393,16 +393,10 @@ final class NewHomeViewController: UIViewController {
 
     private func renderExecutionChange(changedMonths: Set<LibraryMonthKey>) {
         if let exec = store.executionState {
-            let isFirstTick = !hasEnteredExecution
             reconfigureMonths(changedMonths.isEmpty ? exec.executionMonths : changedMonths)
             updateActionPanelFromExecution(exec)
-            if isFirstTick {
-                updateSelectionInteraction()
-            }
+            updateSelectionInteraction()
         } else {
-            // Execution ended
-            hasEnteredExecution = false
-            actionPanel.resetToSelection()
             renderStructuralChange()
         }
     }
@@ -547,10 +541,19 @@ final class NewHomeViewController: UIViewController {
         }
 
         let counts = store.selection.counts()
-        actionPanel.configure(backupCount: counts.backup, downloadCount: counts.download, syncCount: counts.sync)
-        actionPanel.backupCategoryButton.menu = buildCategoryMenu(for: .toRemote)
-        actionPanel.downloadCategoryButton.menu = buildCategoryMenu(for: .toLocal)
-        actionPanel.syncCategoryButton.menu = buildCategoryMenu(for: .sync)
+        actionPanel.render(
+            state: SelectionActionPanelViewStateBuilder.selection(
+                backupCount: counts.backup,
+                downloadCount: counts.download,
+                syncCount: counts.sync
+            ),
+            menus: SelectionActionPanelMenus(
+                backup: buildCategoryMenu(for: .toRemote),
+                download: buildCategoryMenu(for: .toLocal),
+                sync: buildCategoryMenu(for: .sync),
+                failureSummary: nil
+            )
+        )
 
         let shouldShow = !store.selection.isEmpty
         if shouldShow && !isPanelShown {
@@ -566,11 +569,7 @@ final class NewHomeViewController: UIViewController {
         }
     }
 
-    private var hasEnteredExecution = false
-
     private func updateActionPanelFromExecution(_ exec: HomeExecutionState) {
-        let phases = exec.panelPhases()
-
         if !isPanelShown {
             isPanelShown = true
             panelHiddenConstraint?.deactivate()
@@ -578,28 +577,19 @@ final class NewHomeViewController: UIViewController {
             view.layoutIfNeeded()
         }
 
-        if !hasEnteredExecution {
-            hasEnteredExecution = true
-            actionPanel.enterExecution(
-                backupTotal: exec.uploadMonths.count,
-                downloadTotal: exec.downloadMonths.count,
-                syncTotal: exec.syncMonths.count
+        let failureSummary = buildFailureMenu(from: exec)
+        actionPanel.render(
+            state: SelectionActionPanelViewStateBuilder.execution(
+                from: exec,
+                failureSummaryTitle: failureSummary?.1
+            ),
+            menus: SelectionActionPanelMenus(
+                backup: nil,
+                download: nil,
+                sync: nil,
+                failureSummary: failureSummary?.0
             )
-        }
-
-        actionPanel.updateExecution(
-            backupPhase: phases.backup,
-            downloadPhase: phases.download,
-            syncPhase: phases.sync,
-            phase: exec.phase,
-            controlState: exec.controlState
         )
-
-        if let (menu, title) = buildFailureMenu(from: exec) {
-            actionPanel.updateFailureSummary(menu: menu, title: title)
-        } else {
-            actionPanel.updateFailureSummary(menu: nil, title: nil)
-        }
     }
 
     private func buildFailureMenu(from exec: HomeExecutionState) -> (UIMenu, String)? {

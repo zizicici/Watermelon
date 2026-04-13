@@ -158,7 +158,7 @@ struct MonthPlan {
         case (.downloading, .downloadPaused):
             phase = .downloadPaused
         case (.downloadPaused, .downloadResumed):
-            phase = .pending
+            phase = .downloading
         case (.downloading, .downloadCompleted):
             phase = .completed
         case (_, .failed(let reason)) where !isTerminal:
@@ -243,22 +243,11 @@ struct HomeExecutionState {
     }
 
     func progressPercent(for month: LibraryMonthKey, row: HomeMonthRow?, direction fallbackDirection: HomeArrowDirection?, matchedCount: Int) -> Double? {
-        guard let row, let direction = direction(for: month) ?? fallbackDirection else { return nil }
-
-        let localCount = row.local?.assetCount ?? 0
-        let remoteCount = row.remote?.assetCount ?? 0
-
-        let basePercent: Double?
-        switch direction {
-        case .toRemote:
-            basePercent = localCount > 0 ? Double(matchedCount) / Double(localCount) * 100 : nil
-        case .toLocal:
-            basePercent = remoteCount > 0 ? Double(matchedCount) / Double(remoteCount) * 100 : nil
-        case .sync:
-            let remoteOnly = max(0, remoteCount - matchedCount)
-            let total = localCount + remoteOnly
-            basePercent = total > 0 ? Double(matchedCount) / Double(total) * 100 : nil
-        }
+        let basePercent = HomeProgressCalculator.basePercent(
+            row: row,
+            direction: direction(for: month) ?? fallbackDirection,
+            matchedCount: matchedCount
+        )
 
         if monthPlans[month] != nil {
             if monthPlans[month]?.isFullyCompleted == true {
@@ -318,4 +307,28 @@ enum HomeChangeKind {
     case execution(Set<LibraryMonthKey>)
     case connection
     case structural
+}
+
+enum HomeProgressCalculator {
+    static func basePercent(
+        row: HomeMonthRow?,
+        direction: HomeArrowDirection?,
+        matchedCount: Int
+    ) -> Double? {
+        guard let row, let direction else { return nil }
+
+        let localCount = row.local?.assetCount ?? 0
+        let remoteCount = row.remote?.assetCount ?? 0
+
+        switch direction {
+        case .toRemote:
+            return localCount > 0 ? Double(matchedCount) / Double(localCount) * 100 : nil
+        case .toLocal:
+            return remoteCount > 0 ? Double(matchedCount) / Double(remoteCount) * 100 : nil
+        case .sync:
+            let remoteOnly = max(0, remoteCount - matchedCount)
+            let total = localCount + remoteOnly
+            return total > 0 ? Double(matchedCount) / Double(total) * 100 : nil
+        }
+    }
 }

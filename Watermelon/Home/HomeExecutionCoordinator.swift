@@ -35,7 +35,7 @@ final class HomeExecutionCoordinator {
     private var executionTask: Task<Void, Never>?
     private var transientControlState: ExecutionControlState?
     private var backupSessionController: BackupSessionController!
-    private var uploadHelper: UploadWorkflowHelper!
+    private var backupBridge: BackupSessionAsyncBridge!
     private var downloadHelper: DownloadWorkflowHelper!
 
     private static let syncThrottleInterval: CFAbsoluteTime = 2.0
@@ -60,11 +60,8 @@ final class HomeExecutionCoordinator {
         dataRefresher.reset()
         session.enter(upload: upload, download: download, sync: sync, localAssetIDs: dataAccess.localAssetIDs)
         backupSessionController = BackupSessionController(dependencies: dependencies)
-        uploadHelper = UploadWorkflowHelper(backupSessionController: backupSessionController)
-        downloadHelper = DownloadWorkflowHelper(
-            dependencies: dependencies,
-            backupSessionController: backupSessionController
-        )
+        backupBridge = BackupSessionAsyncBridge(backupSessionController: backupSessionController)
+        downloadHelper = DownloadWorkflowHelper(dependencies: dependencies)
         notifyStateChanged()
         startExecution()
     }
@@ -74,7 +71,7 @@ final class HomeExecutionCoordinator {
         executionTask = nil
         transientControlState = nil
         dataRefresher.cancel()
-        uploadHelper?.cancel()
+        backupBridge?.cancel()
         downloadHelper?.cancel()
         session.reset()
         notifyStateChanged()
@@ -89,13 +86,14 @@ final class HomeExecutionCoordinator {
         case .upload:
             executionTask?.cancel()
             executionTask = nil
-            uploadHelper.pause()
+            backupBridge.requestPause()
             notifyStateChanged()
         case .download:
             let taskToAwait = executionTask
             executionTask?.cancel()
             executionTask = nil
             transientControlState = .pausing
+            backupBridge.cancel()
             downloadHelper.cancel()
             notifyStateChanged()
             settleDownloadPause(after: taskToAwait)
@@ -113,15 +111,25 @@ final class HomeExecutionCoordinator {
     func stop() {
         switch session.currentPhase {
         case .uploading:
-            uploadHelper.stop()
+            transientControlState = .stopping
+            notifyStateChanged()
+            backupBridge.requestStop()
         case .uploadPaused:
             executionTask?.cancel()
             executionTask = nil
             exit()
-        case .downloading, .downloadPaused:
+        case .downloading:
+            let taskToAwait = executionTask
             executionTask?.cancel()
             executionTask = nil
+            transientControlState = .stopping
+            backupBridge.cancel()
             downloadHelper.cancel()
+            notifyStateChanged()
+            settleStop(after: taskToAwait)
+        case .downloadPaused:
+            executionTask?.cancel()
+            executionTask = nil
             exit()
         case .completed, .failed:
             exit()
@@ -143,8 +151,8 @@ final class HomeExecutionCoordinator {
         executionTask = nil
         transientControlState = nil
         dataRefresher.cancel()
-        uploadHelper?.stop()
-        uploadHelper?.cancel()
+        backupBridge?.requestStop()
+        backupBridge?.cancel()
         downloadHelper?.cancel()
 
         let alert = session.failExecutionForMissingConnection()
@@ -161,7 +169,7 @@ final class HomeExecutionCoordinator {
             if self.session.shouldRunUploadPhase {
                 guard !Task.isCancelled else { return }
                 let scope = self.session.consumePendingUploadScope()
-                let result = await self.uploadHelper.runUpload(scope: scope) { [weak self] progress in
+                let result = await self.backupBridge.runUpload(scope: scope) { [weak self] progress in
                     self?.handleUploadProgress(progress)
                 }
                 guard !Task.isCancelled else { return }
@@ -175,7 +183,7 @@ final class HomeExecutionCoordinator {
 
     // MARK: - Upload Phase
 
-    private func handleUploadProgress(_ progress: UploadWorkflowHelper.UploadProgress) {
+    private func handleUploadProgress(_ progress: BackupSessionAsyncBridge.UploadProgress) {
         let shouldSyncRemoteData = session.handleUploadProgress(
             progress,
             now: CFAbsoluteTimeGetCurrent(),
@@ -188,7 +196,7 @@ final class HomeExecutionCoordinator {
     }
 
     @discardableResult
-    private func handleUploadResult(_ result: UploadWorkflowHelper.UploadResult) async -> Bool {
+    private func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) async -> Bool {
         switch session.handleUploadResult(result) {
         case .continueToDownload:
             _ = await dataRefresher.syncRemoteDataAndWait()
@@ -257,7 +265,7 @@ final class HomeExecutionCoordinator {
 
         let assetIDs = dataAccess.localAssetIDs(month)
         if !assetIDs.isEmpty {
-            let ok = await downloadHelper.runScopedBackup(assetIDs: assetIDs) { [weak self] in
+            let ok = await backupBridge.runScopedBackup(assetIDs: assetIDs) { [weak self] in
                 self?.notifyStateChanged()
             }
             if Task.isCancelled { return }
@@ -333,6 +341,23 @@ final class HomeExecutionCoordinator {
                       self.session.currentPhase == .downloadPaused else { return }
                 self.transientControlState = nil
                 self.notifyStateChanged()
+            }
+        }
+    }
+
+    private func settleStop(after task: Task<Void, Never>?) {
+        guard let task else {
+            exit()
+            return
+        }
+
+        Task { [weak self] in
+            _ = await task.value
+            await MainActor.run {
+                guard let self,
+                      self.transientControlState == .stopping,
+                      self.session.isActive else { return }
+                self.exit()
             }
         }
     }

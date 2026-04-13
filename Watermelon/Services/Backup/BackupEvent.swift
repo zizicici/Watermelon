@@ -26,9 +26,9 @@ struct MonthChangeEvent: Sendable {
 
     enum MonthAction: Sendable {
         case started
+        case checkpointSaved
         case completed
-        case flushed
-        case flushFailed(String)
+        case checkpointFailed(String)
     }
 }
 

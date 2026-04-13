@@ -131,17 +131,17 @@ struct HomeExecutionSession {
     }
 
     mutating func handleUploadProgress(
-        _ progress: UploadWorkflowHelper.UploadProgress,
+        _ progress: BackupSessionAsyncBridge.UploadProgress,
         now: CFAbsoluteTime,
         syncThrottleInterval: CFAbsoluteTime
     ) -> Bool {
         let previousDoneCount = monthPlans.values.filter(\.isDone).count
 
-        for month in progress.startedMonths where monthPlans[month] != nil {
+        for month in progress.newlyStartedMonths where monthPlans[month] != nil {
             monthPlans[month]?.apply(.uploadStarted)
         }
 
-        for month in progress.completedMonths where monthPlans[month] != nil {
+        for month in progress.newlyCompletedMonths where monthPlans[month] != nil {
             monthPlans[month]?.apply(.uploadCompleted)
         }
 
@@ -161,7 +161,7 @@ struct HomeExecutionSession {
         return false
     }
 
-    mutating func handleUploadResult(_ result: UploadWorkflowHelper.UploadResult) -> UploadResultOutcome {
+    mutating func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) -> UploadResultOutcome {
         switch result {
         case .completed(let failedCountByMonth):
             uploadPhaseCompleted = true

@@ -5,6 +5,14 @@ private let homeLog = Logger(subsystem: "com.zizicici.watermelon", category: "Ho
 
 @MainActor
 final class HomeScreenStore {
+    private struct RefreshWork: OptionSet {
+        let rawValue: Int
+
+        static let reloadLocal = RefreshWork(rawValue: 1 << 0)
+        static let syncRemote = RefreshWork(rawValue: 1 << 1)
+        static let notifyConnection = RefreshWork(rawValue: 1 << 2)
+        static let notifyStructural = RefreshWork(rawValue: 1 << 3)
+    }
 
     // MARK: - Sub-controllers
 
@@ -40,7 +48,9 @@ final class HomeScreenStore {
 
     private var wasExecutionActive = false
     private var lastMonthPhases: [LibraryMonthKey: MonthPlan.Phase] = [:]
-    private var reloadTask: Task<Void, Never>?
+    private var bootstrapTask: Task<Void, Never>?
+    private var refreshTask: Task<Void, Never>?
+    private var pendingRefreshWork: RefreshWork = []
 
     // MARK: - Init
 
@@ -75,7 +85,8 @@ final class HomeScreenStore {
     }
 
     deinit {
-        reloadTask?.cancel()
+        bootstrapTask?.cancel()
+        refreshTask?.cancel()
     }
 
     // MARK: - Bind Sub-controllers
@@ -110,10 +121,11 @@ final class HomeScreenStore {
 
     func load() {
         connectionController.loadProfiles()
-        reloadTask?.cancel()
-        reloadTask = Task { [weak self] in
+        bootstrapTask?.cancel()
+        bootstrapTask = Task { [weak self] in
             guard let self else { return }
             await self.dataManager.ensureLocalIndexLoaded()
+            guard !Task.isCancelled else { return }
             self.connectionController.attemptAutoConnect()
             // Don't call syncRemoteDataIfNeeded here — if auto-connect is in progress,
             // connectionState is .connecting and hasActiveConnection would be false,
@@ -202,19 +214,11 @@ final class HomeScreenStore {
             return exec.progressPercent(for: month, row: row, direction: direction, matchedCount: matched)
         }
 
-        guard let row, let direction else { return nil }
-        let localCount = row.local?.assetCount ?? 0
-        let remoteCount = row.remote?.assetCount ?? 0
-        switch direction {
-        case .toRemote:
-            return localCount > 0 ? Double(matched) / Double(localCount) * 100 : nil
-        case .toLocal:
-            return remoteCount > 0 ? Double(matched) / Double(remoteCount) * 100 : nil
-        case .sync:
-            let remoteOnly = max(0, remoteCount - matched)
-            let total = localCount + remoteOnly
-            return total > 0 ? Double(matched) / Double(total) * 100 : nil
-        }
+        return HomeProgressCalculator.basePercent(
+            row: row,
+            direction: direction,
+            matchedCount: matched
+        )
     }
 
     // MARK: - Change Handlers
@@ -246,13 +250,7 @@ final class HomeScreenStore {
             let allPrevious = Set(lastMonthPhases.keys)
             lastMonthPhases.removeAll()
 
-            reloadTask?.cancel()
-            reloadTask = Task { [weak self] in
-                guard let self else { return }
-                await self.dataManager.reloadLocalIndex()
-                await self.syncRemoteDataIfNeeded()
-                self.refreshAllAndNotify()
-            }
+            scheduleRefresh([.reloadLocal, .syncRemote, .notifyStructural])
 
             onChange?(.execution(allPrevious))
             return
@@ -300,20 +298,8 @@ final class HomeScreenStore {
             executionCoordinator.failForMissingConnection()
         }
 
-        reloadTask?.cancel()
         selection.clear()
-
-        reloadTask = Task { [weak self] in
-            guard let self else { return }
-            let start = CFAbsoluteTimeGetCurrent()
-            await self.syncRemoteDataIfNeeded()
-            guard !Task.isCancelled else { return }
-            self.refreshRowLookup()
-            self.rebuildSections()
-            let elapsed = CFAbsoluteTimeGetCurrent() - start
-            homeLog.info("[HomeSync] handleConnectionChange: done, \(String(format: "%.3f", elapsed))s")
-            self.onChange?(.connection)
-        }
+        scheduleRefresh([.syncRemote, .notifyConnection])
     }
 
     // MARK: - Data Refresh
@@ -348,5 +334,62 @@ final class HomeScreenStore {
         refreshRowLookup()
         rebuildSections()
         onChange?(.structural)
+    }
+
+    private func scheduleRefresh(_ work: RefreshWork) {
+        pendingRefreshWork.formUnion(work)
+        guard refreshTask == nil else { return }
+
+        refreshTask = Task { [weak self] in
+            guard let self else { return }
+
+            while !Task.isCancelled {
+                // Coalesce new refresh intents behind the in-flight pass instead of cancelling it.
+                // This keeps reloadLocal/syncRemote consistent even when connection and execution events overlap.
+                let work = self.pendingRefreshWork
+                self.pendingRefreshWork = []
+
+                guard !work.isEmpty else {
+                    self.refreshTask = nil
+                    return
+                }
+
+                let start = CFAbsoluteTimeGetCurrent()
+
+                if work.contains(.reloadLocal) {
+                    await self.dataManager.reloadLocalIndex()
+                    guard !Task.isCancelled else { break }
+                }
+
+                if work.contains(.syncRemote) {
+                    await self.syncRemoteDataIfNeeded()
+                    guard !Task.isCancelled else { break }
+                }
+
+                self.refreshRowLookup()
+                self.rebuildSections()
+
+                let elapsed = CFAbsoluteTimeGetCurrent() - start
+                let workDesc = self.refreshWorkDescription(work)
+                homeLog.info("[HomeSync] scheduleRefresh: work=\(workDesc), \(String(format: "%.3f", elapsed))s")
+
+                if work.contains(.notifyConnection) {
+                    self.onChange?(.connection)
+                } else if work.contains(.notifyStructural) {
+                    self.onChange?(.structural)
+                }
+            }
+
+            self.refreshTask = nil
+        }
+    }
+
+    private func refreshWorkDescription(_ work: RefreshWork) -> String {
+        var parts: [String] = []
+        if work.contains(.reloadLocal) { parts.append("reloadLocal") }
+        if work.contains(.syncRemote) { parts.append("syncRemote") }
+        if work.contains(.notifyConnection) { parts.append("notifyConnection") }
+        if work.contains(.notifyStructural) { parts.append("notifyStructural") }
+        return parts.joined(separator: ",")
     }
 }

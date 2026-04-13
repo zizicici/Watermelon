@@ -31,15 +31,16 @@ final class BackupSessionController {
         let skipped: Int
         let total: Int
         let startedMonths: Set<LibraryMonthKey>
-        let flushedMonths: Set<LibraryMonthKey>
+        let checkpointedMonths: Set<LibraryMonthKey>
         let completedMonths: Set<LibraryMonthKey>
         let processedCountByMonth: [LibraryMonthKey: Int]
         let failedCountByMonth: [LibraryMonthKey: Int]
     }
 
-    private let connectionResolver: BackupSessionConnectionResolver
     private let resumePlanner: BackupResumePlanner
     private let runDriver: BackupRunDriver
+    private let appSession: AppSession
+    private let databaseManager: DatabaseManager
 
     private var session = BackupSessionState()
 
@@ -122,9 +123,9 @@ final class BackupSessionController {
         set { session.startedMonths = newValue }
     }
 
-    private(set) var flushedMonths: Set<LibraryMonthKey> {
-        get { session.flushedMonths }
-        set { session.flushedMonths = newValue }
+    private(set) var checkpointedMonths: Set<LibraryMonthKey> {
+        get { session.checkpointedMonths }
+        set { session.checkpointedMonths = newValue }
     }
 
     private(set) var completedMonths: Set<LibraryMonthKey> {
@@ -148,10 +149,8 @@ final class BackupSessionController {
         databaseManager: DatabaseManager,
         photoLibraryService: PhotoLibraryService
     ) {
-        self.connectionResolver = BackupSessionConnectionResolver(
-            appSession: appSession,
-            databaseManager: databaseManager
-        )
+        self.appSession = appSession
+        self.databaseManager = databaseManager
         self.resumePlanner = BackupResumePlanner(photoLibraryService: photoLibraryService)
         self.runDriver = BackupRunDriver(backupCoordinator: backupCoordinator)
     }
@@ -261,7 +260,7 @@ final class BackupSessionController {
             notifyObserversNow()
             return false
         }
-        guard let connection = connectionResolver.resolveActiveConnection() else {
+        guard let connection = resolveActiveConnection() else {
             session.failForMissingConnection()
             notifyObserversNow()
             return false
@@ -482,7 +481,7 @@ final class BackupSessionController {
 
         let phaseBeforeFailure = controlPhase
         let externalUnavailable = profile.isExternalStorageUnavailableError(error)
-        connectionResolver.handleExternalStorageUnavailableIfNeeded(error, for: profile)
+        handleExternalStorageUnavailableIfNeeded(error, for: profile)
         session.applyRunError(
             error,
             runMode: runMode,
@@ -506,7 +505,7 @@ final class BackupSessionController {
             notifyObserversNow()
             return false
         }
-        guard let connection = connectionResolver.resolveActiveConnection() else {
+        guard let connection = resolveActiveConnection() else {
             session.failForMissingConnection()
             notifyObservers()
             return false
@@ -599,6 +598,34 @@ final class BackupSessionController {
         notifyThrottleTask = nil
         hasPendingObserverNotification = false
         notifyObservers()
+    }
+
+    private func resolveActiveConnection() -> (profile: ServerProfileRecord, password: String)? {
+        guard let profile = appSession.activeProfile,
+              let password = resolvePassword(for: profile) else {
+            return nil
+        }
+        return (profile, password)
+    }
+
+    private func handleExternalStorageUnavailableIfNeeded(
+        _ error: Error,
+        for profile: ServerProfileRecord
+    ) {
+        guard profile.isExternalStorageUnavailableError(error),
+              appSession.activeProfile?.id == profile.id else { return }
+        try? databaseManager.setActiveServerProfileID(nil)
+        appSession.clear()
+    }
+
+    private func resolvePassword(for profile: ServerProfileRecord) -> String? {
+        if profile.storageProfile.requiresPassword {
+            guard let activePassword = appSession.activePassword, !activePassword.isEmpty else {
+                return nil
+            }
+            return activePassword
+        }
+        return appSession.activePassword ?? ""
     }
 
     private func canProcessStartCommand(_ kind: StartCommandKind) -> Bool {

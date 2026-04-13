@@ -558,30 +558,34 @@ final class BackupCoordinator: Sendable {
                     ))
                 }
 
-                let shouldForceFlush = workerState.paused && monthStore.dirty
+                let shouldFinishMonth = !workerState.paused
+                let hadDirtyManifestBeforeFinalize = monthStore.dirty
                 do {
-                    _ = try await monthStore.flushToRemote(ignoreCancellation: shouldForceFlush)
-                    if shouldForceFlush {
-                        eventStream.emit(.monthChanged(MonthChangeEvent(
-                            year: monthKey.year,
-                            month: monthKey.month,
-                            action: .flushed
-                        )))
-                        eventStream.emit(.log(
-                            "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) manifest flushed before exit."
-                        ))
-                    } else {
+                    let didSaveCheckpoint = try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
+                    if shouldFinishMonth {
                         eventStream.emit(.monthChanged(MonthChangeEvent(
                             year: monthKey.year,
                             month: monthKey.month,
                             action: .completed
                         )))
+                    } else {
+                        if didSaveCheckpoint {
+                            eventStream.emit(.monthChanged(MonthChangeEvent(
+                                year: monthKey.year,
+                                month: monthKey.month,
+                                action: .checkpointSaved
+                            )))
+                        }
+                        let pauseLog = hadDirtyManifestBeforeFinalize
+                            ? "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) manifest flushed before exit."
+                            : "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) paused before completion."
+                        eventStream.emit(.log(pauseLog))
                     }
                 } catch {
                     eventStream.emit(.monthChanged(MonthChangeEvent(
                         year: monthKey.year,
                         month: monthKey.month,
-                        action: .flushFailed(error.localizedDescription)
+                        action: .checkpointFailed(error.localizedDescription)
                     )))
                     throw error
                 }

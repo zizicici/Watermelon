@@ -1,9 +1,9 @@
 import Foundation
 
 /// Pure domain executor for download operations.
-/// Knows only how to run scoped backups and download remote items.
-/// Does NOT know about Home's data cache (syncRemoteData/refreshLocalIndex).
-/// The coordinator decides when and how to refresh caches between steps.
+/// Knows only how to restore remote items and write hash index entries.
+/// Does NOT know about Home's data cache (syncRemoteData/refreshLocalIndex) or BSC upload/scoped-backup control.
+/// The coordinator decides when and how to sequence scoped backup, remote sync and local refresh.
 @MainActor
 final class DownloadWorkflowHelper {
 
@@ -13,58 +13,9 @@ final class DownloadWorkflowHelper {
     }
 
     private let dependencies: DependencyContainer
-    private let backupSessionController: BackupSessionController
-    private var backupObserverID: UUID?
-    private var pendingScopedContinuation: CheckedContinuation<Bool, Never>?
 
-    init(dependencies: DependencyContainer, backupSessionController: BackupSessionController) {
+    init(dependencies: DependencyContainer) {
         self.dependencies = dependencies
-        self.backupSessionController = backupSessionController
-    }
-
-    // MARK: - Public Operations
-
-    /// Runs a scoped backup to populate the local hash index for the given assets.
-    /// Start readiness is handled inside BSC instead of helper-side polling.
-    func runScopedBackup(
-        assetIDs: Set<String>,
-        onProgress: @escaping () -> Void
-    ) async -> Bool {
-        let selection = BackupScopeSelection(
-            selectedAssetIDs: assetIDs,
-            selectedAssetCount: assetIDs.count,
-            selectedEstimatedBytes: nil,
-            totalAssetCount: assetIDs.count,
-            totalEstimatedBytes: nil
-        )
-
-        removeObserver()
-
-        let started = await backupSessionController.startBackupWhenReady(scope: selection)
-        guard started else { return false }
-
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            pendingScopedContinuation = continuation
-
-            let observerID = backupSessionController.addObserver { [weak self] snapshot in
-                guard let self, let cont = self.pendingScopedContinuation else { return }
-                onProgress()
-
-                let resolved: Bool?
-                switch snapshot.state {
-                case .completed:        resolved = true
-                case .failed, .stopped: resolved = false
-                default:                resolved = nil
-                }
-
-                if let resolved {
-                    self.pendingScopedContinuation = nil
-                    self.removeObserver()
-                    cont.resume(returning: resolved)
-                }
-            }
-            backupObserverID = observerID
-        }
     }
 
     /// Downloads remote-only items via RestoreService and writes hash index per item.
@@ -100,23 +51,7 @@ final class DownloadWorkflowHelper {
         }
     }
 
-    func cancel() {
-        backupSessionController.stopBackup()
-        removeObserver()
-        if let continuation = pendingScopedContinuation {
-            pendingScopedContinuation = nil
-            continuation.resume(returning: false)
-        }
-    }
-
-    // MARK: - Private
-
-    private func removeObserver() {
-        if let id = backupObserverID {
-            backupSessionController.removeObserver(id)
-            backupObserverID = nil
-        }
-    }
+    func cancel() {}
 
     private static func writeHashIndex(
         for result: RestoreService.IndexedRestoredAsset,

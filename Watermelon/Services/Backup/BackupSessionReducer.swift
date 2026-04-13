@@ -51,7 +51,7 @@ struct BackupSessionState {
     var total: Int = 0
     var completedAssetIDsForResume: Set<String> = []
     var startedMonths = Set<LibraryMonthKey>()
-    var flushedMonths = Set<LibraryMonthKey>()
+    var checkpointedMonths = Set<LibraryMonthKey>()
     var completedMonths = Set<LibraryMonthKey>()
     var processedCountByMonth: [LibraryMonthKey: Int] = [:]
     var failedCountByMonth: [LibraryMonthKey: Int] = [:]
@@ -76,7 +76,7 @@ struct BackupSessionState {
             skipped: skipped,
             total: total,
             startedMonths: startedMonths,
-            flushedMonths: flushedMonths,
+            checkpointedMonths: checkpointedMonths,
             completedMonths: completedMonths,
             processedCountByMonth: processedCountByMonth,
             failedCountByMonth: failedCountByMonth
@@ -108,7 +108,7 @@ struct BackupSessionState {
         completedAssetIDsForResume.removeAll()
         if shouldResetSessionItems {
             startedMonths.removeAll()
-            flushedMonths.removeAll()
+            checkpointedMonths.removeAll()
             completedMonths.removeAll()
             processedCountByMonth.removeAll()
             failedCountByMonth.removeAll()
@@ -272,12 +272,11 @@ struct BackupSessionState {
             switch change.action {
             case .started:
                 startedMonths.insert(monthKey)
+            case .checkpointSaved:
+                checkpointedMonths.insert(monthKey)
             case .completed:
-                flushedMonths.insert(monthKey)
                 completedMonths.insert(monthKey)
-            case .flushed:
-                flushedMonths.insert(monthKey)
-            case .flushFailed:
+            case .checkpointFailed:
                 break
             }
             return BackupSessionReductionOutcome(shouldStop: false, notification: .throttled)
