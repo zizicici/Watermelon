@@ -33,12 +33,16 @@ final class BackupSessionAsyncBridge {
 
     func runUpload(
         scope: BackupScopeSelection? = nil,
+        onMonthUploaded: BackupMonthFinalizer? = nil,
         onProgress: @escaping (UploadProgress) -> Void
     ) async -> UploadResult {
         resetUploadReporting()
         removeObserver()
 
-        let started = await backupSessionController.startBackupWhenReady(scope: scope)
+        let started = await backupSessionController.startBackupWhenReady(
+            scope: scope,
+            onMonthUploaded: onMonthUploaded
+        )
         guard started else {
             return Task.isCancelled ? .paused : .startFailed
         }
@@ -59,6 +63,10 @@ final class BackupSessionAsyncBridge {
 
     func requestStop() {
         backupSessionController.stopBackup()
+    }
+
+    func markAssetIDsPendingForResume(_ assetIDs: Set<String>) {
+        backupSessionController.markAssetIDsPendingForResume(assetIDs)
     }
 
     func runScopedBackup(

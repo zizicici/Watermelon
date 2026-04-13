@@ -7,7 +7,7 @@ enum StorageType: String, Codable {
     case externalVolume
 }
 
-struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, Identifiable {
+struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, Identifiable, Sendable {
     static let databaseTableName = "server_profiles"
 
     var id: Int64?

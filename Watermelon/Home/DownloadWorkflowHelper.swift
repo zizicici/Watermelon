@@ -7,7 +7,7 @@ import Foundation
 @MainActor
 final class DownloadWorkflowHelper {
 
-    struct Context {
+    struct Context: Sendable {
         let profile: ServerProfileRecord
         let password: String
     }

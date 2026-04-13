@@ -30,22 +30,33 @@ enum BackupTerminationIntent: Sendable {
     case stop
 }
 
+enum BackupMonthFinalizationResult: Sendable {
+    case success
+    case failed(String)
+    case cancelled
+}
+
+typealias BackupMonthFinalizer = @Sendable @MainActor (LibraryMonthKey) async -> BackupMonthFinalizationResult
+
 struct BackupRunRequest: Sendable {
     let profile: ServerProfileRecord
     let password: String
     let onlyAssetLocalIdentifiers: Set<String>?
     let workerCountOverride: Int?
+    let onMonthUploaded: BackupMonthFinalizer?
 
     init(
         profile: ServerProfileRecord,
         password: String,
         onlyAssetLocalIdentifiers: Set<String>?,
-        workerCountOverride: Int? = nil
+        workerCountOverride: Int? = nil,
+        onMonthUploaded: BackupMonthFinalizer? = nil
     ) {
         self.profile = profile
         self.password = password
         self.onlyAssetLocalIdentifiers = onlyAssetLocalIdentifiers
         self.workerCountOverride = workerCountOverride
+        self.onMonthUploaded = onMonthUploaded
     }
 }
 

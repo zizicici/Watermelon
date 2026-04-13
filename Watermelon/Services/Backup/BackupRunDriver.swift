@@ -40,6 +40,7 @@ final class BackupRunDriver {
         mode: BackupRunMode,
         displayMode: BackupRunMode,
         workerCountOverride: Int?,
+        onMonthUploaded: BackupMonthFinalizer? = nil,
         terminalIntentProvider: @escaping TerminalIntentProvider,
         onEvent: @escaping EventHandler,
         onError: @escaping ErrorHandler
@@ -82,7 +83,8 @@ final class BackupRunDriver {
                     profile: profile,
                     password: password,
                     onlyAssetLocalIdentifiers: mode.targetAssetIdentifiers,
-                    workerCountOverride: workerCountOverride
+                    workerCountOverride: workerCountOverride,
+                    onMonthUploaded: onMonthUploaded
                 )
                 _ = try await self.backupCoordinator.runBackup(request: request, eventStream: eventStream)
             } catch {

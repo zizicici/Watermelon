@@ -84,8 +84,11 @@ final class HomeExecutionCoordinator {
     func pause() {
         switch session.pause() {
         case .upload:
+            backupBridge.markAssetIDsPendingForResume(assetIDsAwaitingInlineSyncResume())
             executionTask?.cancel()
             executionTask = nil
+            dataRefresher.cancel()
+            downloadHelper.cancel()
             backupBridge.requestPause()
             notifyStateChanged()
         case .download:
@@ -103,6 +106,7 @@ final class HomeExecutionCoordinator {
     }
 
     func resume() {
+        guard currentControlState == .idle else { return }
         guard session.resume() != nil else { return }
         notifyStateChanged()
         startExecution()
@@ -111,9 +115,15 @@ final class HomeExecutionCoordinator {
     func stop() {
         switch session.phase {
         case .uploading:
+            let taskToAwait = executionTask
+            executionTask?.cancel()
+            executionTask = nil
             transientControlState = .stopping
+            dataRefresher.cancel()
+            downloadHelper.cancel()
             notifyStateChanged()
             backupBridge.requestStop()
+            settleStop(after: taskToAwait)
         case .uploadPaused:
             executionTask?.cancel()
             executionTask = nil
@@ -169,7 +179,10 @@ final class HomeExecutionCoordinator {
             if self.session.shouldRunUploadPhase {
                 guard !Task.isCancelled else { return }
                 let scope = self.session.consumePendingUploadScope()
-                let result = await self.backupBridge.runUpload(scope: scope) { [weak self] progress in
+                let result = await self.backupBridge.runUpload(
+                    scope: scope,
+                    onMonthUploaded: self.makeUploadMonthFinalizer()
+                ) { [weak self] progress in
                     self?.handleUploadProgress(progress)
                 }
                 guard !Task.isCancelled else { return }
@@ -231,8 +244,7 @@ final class HomeExecutionCoordinator {
             return
         }
 
-        guard let profile = dependencies.appSession.activeProfile,
-              let password = profile.resolvedSessionPassword(from: dependencies.appSession) else {
+        guard let context = makeDownloadContext() else {
             let alert = session.failForMissingConnection()
             notifyStateChanged()
             onAlert?(alert.title, alert.message)
@@ -241,8 +253,6 @@ final class HomeExecutionCoordinator {
 
         session.beginDownloadPhase()
         notifyStateChanged()
-
-        let context = DownloadWorkflowHelper.Context(profile: profile, password: password)
 
         for month in remaining {
             if Task.isCancelled { return }
@@ -277,34 +287,112 @@ final class HomeExecutionCoordinator {
             }
         }
 
-        _ = await dataRefresher.syncRemoteDataAndWait()
-        if Task.isCancelled { return }
-        if !assetIDs.isEmpty {
-            await dataRefresher.refreshLocalIndexAndNotify(assetIDs)
-            if Task.isCancelled { return }
-        }
-
-        let remoteItems = dataAccess.remoteOnlyItems(month)
-        let result = await downloadHelper.downloadItems(remoteItems, context: context) { [weak self] assetID in
-            guard let self else { return }
-            await self.dataRefresher.refreshLocalIndexAndNotify([assetID])
-        }
-
-        switch result {
-        case .success:
-            session.completeDownloadMonth(month)
-            notifyStateChanged()
-        case .failed(let message):
-            session.failDownloadMonth(month, reason: message)
-            notifyStateChanged()
-            onAlert?("\(phaseLabel)失败", "\(month.displayText): \(message)")
-        case .cancelled:
-            break
-        }
+        let result = await downloadRemoteMonth(month, assetIDs: assetIDs, context: context)
+        _ = applyDownloadResult(result, month: month, phaseLabel: phaseLabel)
     }
 
     private func notifyStateChanged() {
         onStateChanged?()
+    }
+
+    private func makeUploadMonthFinalizer() -> BackupMonthFinalizer? {
+        guard session.hasSyncMonths else { return nil }
+        let context = makeDownloadContext()
+        return { [weak self] month in
+            guard let self else { return .cancelled }
+            return await self.finalizeUploadedMonth(month, context: context)
+        }
+    }
+
+    private func makeDownloadContext() -> DownloadWorkflowHelper.Context? {
+        guard let profile = dependencies.appSession.activeProfile,
+              let password = profile.resolvedSessionPassword(from: dependencies.appSession) else {
+            return nil
+        }
+        return DownloadWorkflowHelper.Context(profile: profile, password: password)
+    }
+
+    private func finalizeUploadedMonth(
+        _ month: LibraryMonthKey,
+        context: DownloadWorkflowHelper.Context?
+    ) async -> BackupMonthFinalizationResult {
+        guard session.monthPlans[month]?.needsUpload == true,
+              session.monthPlans[month]?.needsDownload == true,
+              session.monthPlans[month]?.isTerminal != true else {
+            return .success
+        }
+        guard !Task.isCancelled else { return .cancelled }
+
+        let phaseLabel = session.phaseLabel(for: month)
+        session.completeSyncMonthUpload(month)
+        session.beginDownloadMonth(month)
+        notifyStateChanged()
+
+        guard let context else {
+            let message = "未连接远端存储"
+            session.failDownloadMonth(month, reason: message)
+            notifyStateChanged()
+            onAlert?("\(phaseLabel)失败", "\(month.displayText): \(message)")
+            return .failed(message)
+        }
+
+        let assetIDs = dataAccess.localAssetIDs(month)
+        let result = await downloadRemoteMonth(month, assetIDs: assetIDs, context: context)
+        return applyDownloadResult(result, month: month, phaseLabel: phaseLabel)
+    }
+
+    private func downloadRemoteMonth(
+        _ month: LibraryMonthKey,
+        assetIDs: Set<String>,
+        context: DownloadWorkflowHelper.Context
+    ) async -> DownloadMonthResult {
+        _ = await dataRefresher.syncRemoteDataAndWait()
+        if Task.isCancelled { return .cancelled }
+        if !assetIDs.isEmpty {
+            await dataRefresher.refreshLocalIndexAndNotify(assetIDs)
+            if Task.isCancelled { return .cancelled }
+        }
+
+        let remoteItems = dataAccess.remoteOnlyItems(month)
+        return await downloadHelper.downloadItems(remoteItems, context: context) { [weak self] assetID in
+            guard let self else { return }
+            await self.dataRefresher.refreshLocalIndexAndNotify([assetID])
+        }
+    }
+
+    @discardableResult
+    private func applyDownloadResult(
+        _ result: DownloadMonthResult,
+        month: LibraryMonthKey,
+        phaseLabel: String
+    ) -> BackupMonthFinalizationResult {
+        switch result {
+        case .success:
+            session.completeDownloadMonth(month)
+            notifyStateChanged()
+            return .success
+        case .failed(let message):
+            session.failDownloadMonth(month, reason: message)
+            notifyStateChanged()
+            onAlert?("\(phaseLabel)失败", "\(month.displayText): \(message)")
+            return .failed(message)
+        case .cancelled:
+            return .cancelled
+        }
+    }
+
+    private func assetIDsAwaitingInlineSyncResume() -> Set<String> {
+        var assetIDs = Set<String>()
+        for (month, plan) in session.monthPlans {
+            guard plan.needsUpload && plan.needsDownload else { continue }
+            switch plan.phase {
+            case .uploadDone, .downloadPaused:
+                assetIDs.formUnion(session.uploadAssetIDsByMonth[month] ?? [])
+            default:
+                break
+            }
+        }
+        return assetIDs
     }
 
     private var currentControlState: ExecutionControlState {

@@ -17,7 +17,8 @@ struct BackupParallelExecutor: Sendable {
         preparedRun: BackupPreparedRun,
         profile: ServerProfileRecord,
         workerCountOverride: Int?,
-        eventStream: BackupEventStream
+        eventStream: BackupEventStream,
+        onMonthUploaded: BackupMonthFinalizer? = nil
     ) async throws -> BackupExecutionResult {
         guard preparedRun.totalAssetCount > 0 else {
             let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
@@ -57,7 +58,8 @@ struct BackupParallelExecutor: Sendable {
                             snapshotSeedLookup: preparedRun.snapshotSeedLookup,
                             eventStream: eventStream,
                             aggregator: aggregator,
-                            clientPool: clientPool
+                            clientPool: clientPool,
+                            onMonthUploaded: onMonthUploaded
                         )
                     }
                 }
@@ -98,7 +100,8 @@ struct BackupParallelExecutor: Sendable {
         snapshotSeedLookup: MonthSeedLookup?,
         eventStream: BackupEventStream,
         aggregator: ParallelBackupProgressAggregator,
-        clientPool: StorageClientPool
+        clientPool: StorageClientPool,
+        onMonthUploaded: BackupMonthFinalizer? = nil
     ) async throws -> WorkerRunState {
         var workerState = WorkerRunState()
         let client = try await clientPool.acquire()
@@ -275,7 +278,7 @@ struct BackupParallelExecutor: Sendable {
                     ))
                 }
 
-                let shouldFinishMonth = !workerState.paused
+                let shouldFinishMonth = !workerState.paused && monthFatalError == nil
                 let hadDirtyManifestBeforeFinalize = monthStore.dirty
                 do {
                     try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
@@ -285,11 +288,35 @@ struct BackupParallelExecutor: Sendable {
                             month: monthKey.month,
                             action: .completed
                         )))
+                        if let onMonthUploaded {
+                            switch await onMonthUploaded(monthKey) {
+                            case .success:
+                                break
+                            case .failed(let message):
+                                eventStream.emit(.log(
+                                    "Worker\(workerID + 1) month \(monthKey.text) finalization failed: \(message)"
+                                ))
+                            case .cancelled:
+                                workerState.paused = true
+                                eventStream.emit(.log(
+                                    "Worker\(workerID + 1): cancellation requested during month \(monthKey.text) finalization."
+                                ))
+                            }
+                            if workerState.paused {
+                                break
+                            }
+                        }
                     } else {
-                        let pauseLog = hadDirtyManifestBeforeFinalize
-                            ? "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) manifest flushed before exit."
-                            : "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) paused before completion."
-                        eventStream.emit(.log(pauseLog))
+                        if monthFatalError != nil {
+                            eventStream.emit(.log(
+                                "Worker\(workerID + 1): month \(monthKey.text) aborted before completion due to fatal upload error."
+                            ))
+                        } else {
+                            let pauseLog = hadDirtyManifestBeforeFinalize
+                                ? "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) manifest flushed before exit."
+                                : "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) paused before completion."
+                            eventStream.emit(.log(pauseLog))
+                        }
                     }
                 } catch {
                     throw error

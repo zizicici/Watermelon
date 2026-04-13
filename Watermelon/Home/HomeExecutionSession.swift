@@ -24,6 +24,7 @@ struct HomeExecutionSession {
     private(set) var monthPlans: [LibraryMonthKey: MonthPlan] = [:]
     private(set) var assetCountByMonth: [LibraryMonthKey: Int] = [:]
     private(set) var processedCountByMonth: [LibraryMonthKey: Int] = [:]
+    private(set) var uploadAssetIDsByMonth: [LibraryMonthKey: Set<String>] = [:]
     private(set) var uploadMonths: [LibraryMonthKey] = []
     private(set) var downloadMonths: [LibraryMonthKey] = []
     private(set) var syncMonths: [LibraryMonthKey] = []
@@ -33,6 +34,7 @@ struct HomeExecutionSession {
     private var lastSyncTime: CFAbsoluteTime = 0
 
     var isActive: Bool { phase != nil }
+    var hasSyncMonths: Bool { !syncMonths.isEmpty }
 
     func currentState(controlState: ExecutionControlState) -> HomeExecutionState? {
         guard let phase else { return nil }
@@ -85,6 +87,7 @@ struct HomeExecutionSession {
         monthPlans.removeAll()
         assetCountByMonth.removeAll()
         processedCountByMonth.removeAll()
+        uploadAssetIDsByMonth.removeAll()
         uploadMonths.removeAll()
         downloadMonths.removeAll()
         syncMonths.removeAll()
@@ -96,7 +99,7 @@ struct HomeExecutionSession {
     mutating func pause() -> RuntimeTransition? {
         switch phase {
         case .uploading:
-            applyEvent(.uploadPaused, where: { $0.isActive })
+            pauseUploadPhaseMonths()
             phase = .uploadPaused
             return .upload
         case .downloading:
@@ -111,7 +114,7 @@ struct HomeExecutionSession {
     mutating func resume() -> RuntimeTransition? {
         switch phase {
         case .uploadPaused:
-            applyEvent(.uploadResumed, where: { $0.phase == .uploadPaused })
+            resumeUploadPhaseMonths()
             phase = .uploading
             lastSyncTime = 0
             return .upload
@@ -178,7 +181,7 @@ struct HomeExecutionSession {
 
         case .paused:
             phase = .uploadPaused
-            applyEvent(.uploadPaused, where: { $0.isActive })
+            pauseUploadPhaseMonths()
             return .paused
 
         case .failed(let message):
@@ -213,9 +216,17 @@ struct HomeExecutionSession {
     }
 
     mutating func beginDownloadMonth(_ month: LibraryMonthKey) {
-        monthPlans[month]?.apply(.downloadStarted)
+        if monthPlans[month]?.phase == .downloadPaused {
+            monthPlans[month]?.apply(.downloadResumed)
+        } else {
+            monthPlans[month]?.apply(.downloadStarted)
+        }
         assetCountByMonth.removeValue(forKey: month)
         processedCountByMonth.removeValue(forKey: month)
+    }
+
+    mutating func completeSyncMonthUpload(_ month: LibraryMonthKey) {
+        monthPlans[month]?.apply(.uploadCompleted)
     }
 
     mutating func completeDownloadMonth(_ month: LibraryMonthKey) {
@@ -242,9 +253,11 @@ struct HomeExecutionSession {
     ) -> BackupScopeSelection {
         let syncMonthSet = Set(syncMonths)
         var allAssetIDs = Set<String>()
+        uploadAssetIDsByMonth.removeAll(keepingCapacity: true)
 
         for month in uploadMonths + syncMonths {
             let ids = localAssetIDs(month)
+            uploadAssetIDsByMonth[month] = ids
             allAssetIDs.formUnion(ids)
             if !syncMonthSet.contains(month) {
                 assetCountByMonth[month] = ids.count
@@ -267,6 +280,30 @@ struct HomeExecutionSession {
             let phase = monthPlans[month]?.phase
             guard phase != .uploadDone && phase != .completed && phase != .partiallyFailed else { continue }
             monthPlans[month]?.apply(.failed(reason: reason))
+        }
+    }
+
+    private mutating func pauseUploadPhaseMonths() {
+        for key in monthPlans.keys {
+            switch monthPlans[key]?.phase {
+            case .uploading:
+                monthPlans[key]?.apply(.uploadPaused)
+            case .downloading:
+                monthPlans[key]?.apply(.downloadPaused)
+            default:
+                break
+            }
+        }
+    }
+
+    private mutating func resumeUploadPhaseMonths() {
+        for key in monthPlans.keys {
+            switch monthPlans[key]?.phase {
+            case .uploadPaused:
+                monthPlans[key]?.apply(.uploadResumed)
+            default:
+                break
+            }
         }
     }
 

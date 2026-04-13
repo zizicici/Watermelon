@@ -41,7 +41,8 @@ final class BackupCoordinator: Sendable {
             preparedRun: preparedRun,
             profile: request.profile,
             workerCountOverride: request.workerCountOverride,
-            eventStream: eventStream
+            eventStream: eventStream,
+            onMonthUploaded: request.onMonthUploaded
         )
     }
 

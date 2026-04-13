@@ -188,14 +188,14 @@ final class BackupSessionController {
     }
 
     @discardableResult
-    func startBackup() -> Bool {
+    func startBackup(onMonthUploaded: BackupMonthFinalizer? = nil) -> Bool {
         if state == .paused {
-            return resumeFromPause()
+            return resumeFromPause(onMonthUploaded: onMonthUploaded)
         }
         if let selectedAssetIDs = backupScopeSelection.selectedAssetIDs {
-            return startBackup(mode: .scoped(assetIDs: selectedAssetIDs))
+            return startBackup(mode: .scoped(assetIDs: selectedAssetIDs), onMonthUploaded: onMonthUploaded)
         }
-        return startBackup(mode: .full)
+        return startBackup(mode: .full, onMonthUploaded: onMonthUploaded)
     }
 
     @discardableResult
@@ -210,7 +210,10 @@ final class BackupSessionController {
     /// appropriate start command exactly once. This avoids helper-side polling and
     /// keeps the readiness rules inside BSC.
     @discardableResult
-    func startBackupWhenReady(scope: BackupScopeSelection? = nil) async -> Bool {
+    func startBackupWhenReady(
+        scope: BackupScopeSelection? = nil,
+        onMonthUploaded: BackupMonthFinalizer? = nil
+    ) async -> Bool {
         if let scope {
             if state == .paused {
                 return false
@@ -223,7 +226,7 @@ final class BackupSessionController {
             }
             guard !Task.isCancelled else { return false }
             guard updateScopeSelection(scope) else { return false }
-            return startBackup()
+            return startBackup(onMonthUploaded: onMonthUploaded)
         }
 
         if state == .paused {
@@ -231,7 +234,7 @@ final class BackupSessionController {
                 await waitUntilReadyForStartCommand(.resume)
                 guard !Task.isCancelled else { return false }
             }
-            return startBackup()
+            return startBackup(onMonthUploaded: onMonthUploaded)
         }
 
         if state == .running, controlPhase == .idle {
@@ -241,11 +244,14 @@ final class BackupSessionController {
             await waitUntilReadyForStartCommand(.newRun)
         }
         guard !Task.isCancelled else { return false }
-        return startBackup()
+        return startBackup(onMonthUploaded: onMonthUploaded)
     }
 
     @discardableResult
-    private func startBackup(mode: BackupRunMode) -> Bool {
+    private func startBackup(
+        mode: BackupRunMode,
+        onMonthUploaded: BackupMonthFinalizer?
+    ) -> Bool {
         guard state != .running else {
             notifyObserversNow()
             return false
@@ -296,7 +302,8 @@ final class BackupSessionController {
                 password: connection.password,
                 mode: mode,
                 displayMode: mode,
-                workerCountOverride: workerCountOverride
+                workerCountOverride: workerCountOverride,
+                onMonthUploaded: onMonthUploaded
             )
 
             self.startCommandTask = nil
@@ -369,6 +376,11 @@ final class BackupSessionController {
         notifyObserversNow()
     }
 
+    func markAssetIDsPendingForResume(_ assetIDs: Set<String>) {
+        guard !assetIDs.isEmpty else { return }
+        completedAssetIDsForResume.subtract(assetIDs)
+    }
+
     // MARK: - Run lifecycle
 
     private func startRun(
@@ -376,7 +388,8 @@ final class BackupSessionController {
         password: String,
         mode: BackupRunMode,
         displayMode: BackupRunMode,
-        workerCountOverride: Int?
+        workerCountOverride: Int?,
+        onMonthUploaded: BackupMonthFinalizer? = nil
     ) -> UInt64? {
         activeTerminationIntent = .none
         let runToken = runDriver.startRun(
@@ -385,6 +398,7 @@ final class BackupSessionController {
             mode: mode,
             displayMode: displayMode,
             workerCountOverride: workerCountOverride,
+            onMonthUploaded: onMonthUploaded,
             terminalIntentProvider: { [weak self] in
                 self?.activeTerminationIntent ?? .none
             },
@@ -490,7 +504,7 @@ final class BackupSessionController {
     // MARK: - Resume
 
     @discardableResult
-    private func resumeFromPause() -> Bool {
+    private func resumeFromPause(onMonthUploaded: BackupMonthFinalizer? = nil) -> Bool {
         guard state != .running else {
             notifyObserversNow()
             return false
@@ -535,7 +549,8 @@ final class BackupSessionController {
                     password: connection.password,
                     mode: resumedExecutionMode,
                     displayMode: resumeContext.pausedDisplayMode,
-                    workerCountOverride: workerCountOverride ?? self.runDriver.activeWorkerCountOverride
+                    workerCountOverride: workerCountOverride ?? self.runDriver.activeWorkerCountOverride,
+                    onMonthUploaded: onMonthUploaded
                 )
 
                 if runToken != nil {
