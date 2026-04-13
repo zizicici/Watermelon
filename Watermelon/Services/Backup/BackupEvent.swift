@@ -5,18 +5,8 @@ enum BackupEvent: Sendable {
     case log(String)
     case transferState(BackupTransferState)
     case monthChanged(MonthChangeEvent)
-    case remoteIndexSynced(RemoteIndexSyncEvent)
     case started(totalAssets: Int)
     case finished(BackupExecutionResult)
-
-    var isTerminal: Bool {
-        switch self {
-        case .finished:
-            return true
-        default:
-            return false
-        }
-    }
 }
 
 struct MonthChangeEvent: Sendable {
@@ -26,13 +16,6 @@ struct MonthChangeEvent: Sendable {
 
     enum MonthAction: Sendable {
         case started
-        case checkpointSaved
         case completed
-        case checkpointFailed(String)
     }
-}
-
-struct RemoteIndexSyncEvent: Sendable {
-    let resourceCount: Int
-    let assetCount: Int
 }

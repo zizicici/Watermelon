@@ -183,11 +183,6 @@ final class RemoteIndexSyncService: Sendable {
         let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
         syncLog.info("[SyncTiming] Sync complete. Total: \(Self.ms(totalElapsed))s, changed: \(appliedChangedMonths), removed: \(appliedRemovedMonths)")
 
-        eventStream?.emit(.remoteIndexSynced(RemoteIndexSyncEvent(
-            resourceCount: snapshot.totalResourceCount,
-            assetCount: snapshot.totalCount
-        )))
-
         return snapshot
     }
 

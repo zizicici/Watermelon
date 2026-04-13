@@ -51,7 +51,6 @@ struct BackupSessionState {
     var total: Int = 0
     var completedAssetIDsForResume: Set<String> = []
     var startedMonths = Set<LibraryMonthKey>()
-    var checkpointedMonths = Set<LibraryMonthKey>()
     var completedMonths = Set<LibraryMonthKey>()
     var processedCountByMonth: [LibraryMonthKey: Int] = [:]
     var failedCountByMonth: [LibraryMonthKey: Int] = [:]
@@ -76,7 +75,6 @@ struct BackupSessionState {
             skipped: skipped,
             total: total,
             startedMonths: startedMonths,
-            checkpointedMonths: checkpointedMonths,
             completedMonths: completedMonths,
             processedCountByMonth: processedCountByMonth,
             failedCountByMonth: failedCountByMonth
@@ -108,7 +106,6 @@ struct BackupSessionState {
         completedAssetIDsForResume.removeAll()
         if shouldResetSessionItems {
             startedMonths.removeAll()
-            checkpointedMonths.removeAll()
             completedMonths.removeAll()
             processedCountByMonth.removeAll()
             failedCountByMonth.removeAll()
@@ -272,16 +269,9 @@ struct BackupSessionState {
             switch change.action {
             case .started:
                 startedMonths.insert(monthKey)
-            case .checkpointSaved:
-                checkpointedMonths.insert(monthKey)
             case .completed:
                 completedMonths.insert(monthKey)
-            case .checkpointFailed:
-                break
             }
-            return BackupSessionReductionOutcome(shouldStop: false, notification: .throttled)
-
-        case .remoteIndexSynced:
             return BackupSessionReductionOutcome(shouldStop: false, notification: .throttled)
 
         case .started(let totalAssets):

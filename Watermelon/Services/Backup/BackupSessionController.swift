@@ -31,7 +31,6 @@ final class BackupSessionController {
         let skipped: Int
         let total: Int
         let startedMonths: Set<LibraryMonthKey>
-        let checkpointedMonths: Set<LibraryMonthKey>
         let completedMonths: Set<LibraryMonthKey>
         let processedCountByMonth: [LibraryMonthKey: Int]
         let failedCountByMonth: [LibraryMonthKey: Int]
@@ -121,11 +120,6 @@ final class BackupSessionController {
     private(set) var startedMonths: Set<LibraryMonthKey> {
         get { session.startedMonths }
         set { session.startedMonths = newValue }
-    }
-
-    private(set) var checkpointedMonths: Set<LibraryMonthKey> {
-        get { session.checkpointedMonths }
-        set { session.checkpointedMonths = newValue }
     }
 
     private(set) var completedMonths: Set<LibraryMonthKey> {

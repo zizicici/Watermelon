@@ -2,22 +2,7 @@ import Foundation
 import Photos
 
 struct BackupResumePlan {
-    let pendingAssetIDs: Set<String>
-
-    var resumedExecutionMode: BackupRunMode? {
-        guard !pendingAssetIDs.isEmpty else { return nil }
-        return executionModeFactory(pendingAssetIDs)
-    }
-
-    private let executionModeFactory: (Set<String>) -> BackupRunMode
-
-    init(
-        pendingAssetIDs: Set<String>,
-        executionModeFactory: @escaping (Set<String>) -> BackupRunMode
-    ) {
-        self.pendingAssetIDs = pendingAssetIDs
-        self.executionModeFactory = executionModeFactory
-    }
+    let resumedExecutionMode: BackupRunMode?
 }
 
 final class BackupResumePlanner {
@@ -34,15 +19,21 @@ final class BackupResumePlanner {
         switch pausedMode {
         case .retry(let assetIDs):
             let pendingAssetIDs = assetIDs.subtracting(completedAssetIDs)
-            return BackupResumePlan(pendingAssetIDs: pendingAssetIDs) { .retry(assetIDs: $0) }
+            return BackupResumePlan(
+                resumedExecutionMode: pendingAssetIDs.isEmpty ? nil : .retry(assetIDs: pendingAssetIDs)
+            )
 
         case .scoped(let assetIDs):
             let pendingAssetIDs = assetIDs.subtracting(completedAssetIDs)
-            return BackupResumePlan(pendingAssetIDs: pendingAssetIDs) { .scoped(assetIDs: $0) }
+            return BackupResumePlan(
+                resumedExecutionMode: pendingAssetIDs.isEmpty ? nil : .scoped(assetIDs: pendingAssetIDs)
+            )
 
         case .full:
             let pendingAssetIDs = try await computePendingAssetIDsForFullRun(excluding: completedAssetIDs)
-            return BackupResumePlan(pendingAssetIDs: pendingAssetIDs) { .scoped(assetIDs: $0) }
+            return BackupResumePlan(
+                resumedExecutionMode: pendingAssetIDs.isEmpty ? nil : .scoped(assetIDs: pendingAssetIDs)
+            )
         }
     }
 

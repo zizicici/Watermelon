@@ -99,24 +99,6 @@ final class MonthManifestStore {
         existingFileNameSet
     }
 
-    func allItems() -> [RemoteManifestResource] {
-        itemsByFileName.values.sorted { lhs, rhs in
-            if lhs.backedUpAtNs == rhs.backedUpAtNs {
-                return lhs.fileName < rhs.fileName
-            }
-            return lhs.backedUpAtNs < rhs.backedUpAtNs
-        }
-    }
-
-    func allAssets() -> [RemoteManifestAsset] {
-        assetsByFingerprint.values.sorted { lhs, rhs in
-            if lhs.backedUpAtNs == rhs.backedUpAtNs {
-                return lhs.assetFingerprintHex < rhs.assetFingerprintHex
-            }
-            return lhs.backedUpAtNs < rhs.backedUpAtNs
-        }
-    }
-
     /// Unsorted bulk export for snapshotCache — avoids sorting overhead
     /// since replaceMonth builds its own dictionaries by key.
     func unsortedSnapshot() -> (resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink]) {

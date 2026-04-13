@@ -12,15 +12,6 @@ enum BackupRunMode: Sendable {
         return false
     }
 
-    var targetCount: Int {
-        switch self {
-        case .full:
-            return 0
-        case .scoped(let assetIDs), .retry(let assetIDs):
-            return assetIDs.count
-        }
-    }
-
     var targetAssetIdentifiers: Set<String>? {
         switch self {
         case .full:
