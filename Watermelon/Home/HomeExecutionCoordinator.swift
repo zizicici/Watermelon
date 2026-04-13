@@ -264,7 +264,7 @@ final class HomeExecutionCoordinator {
         notifyStateChanged()
 
         let assetIDs = dataAccess.localAssetIDs(month)
-        if !assetIDs.isEmpty {
+        if !assetIDs.isEmpty && session.monthPlans[month]?.needsUpload == true {
             let ok = await backupBridge.runScopedBackup(assetIDs: assetIDs) { [weak self] in
                 self?.notifyStateChanged()
             }
