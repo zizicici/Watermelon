@@ -280,6 +280,7 @@ final class HomeScreenStore {
             for month in changedMonths {
                 rowLookup[month] = dataManager.monthRow(for: month)
             }
+            rebuildSections()
         }
 
         onChange?(.execution(changedMonths))
