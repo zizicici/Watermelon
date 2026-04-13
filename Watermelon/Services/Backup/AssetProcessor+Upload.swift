@@ -121,7 +121,8 @@ extension AssetProcessor {
         var attemptedFileNames: Set<String> = [targetFileName]
 
         let existingFileNames = monthStore.existingFileNames()
-        if Self.containsOccupiedFileName(targetFileName, in: existingFileNames) {
+        let existingCollisionKeys = Self.collisionKeySet(from: existingFileNames)
+        if existingCollisionKeys.contains(Self.collisionKey(for: targetFileName)) {
             let existingManifestResource = monthStore.findByFileName(targetFileName)
             let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: targetFileName)
             if localFileSize < Self.smallFileThresholdBytes {
@@ -145,7 +146,7 @@ extension AssetProcessor {
             if skipReason == nil {
                 targetFileName = Self.resolveNextAvailableName(
                     baseName: baseFileName,
-                    occupiedNames: existingFileNames
+                    collisionKeys: existingCollisionKeys
                 )
                 attemptedFileNames.insert(targetFileName)
             }
@@ -338,8 +339,11 @@ extension AssetProcessor {
     }
 
     private static func resolveNextAvailableName(baseName: String, occupiedNames: Set<String>) -> String {
-        let occupiedKeys = Set(occupiedNames.map(Self.collisionKey(for:)))
-        guard occupiedKeys.contains(Self.collisionKey(for: baseName)) else {
+        resolveNextAvailableName(baseName: baseName, collisionKeys: collisionKeySet(from: occupiedNames))
+    }
+
+    private static func resolveNextAvailableName(baseName: String, collisionKeys: Set<String>) -> String {
+        guard collisionKeys.contains(collisionKey(for: baseName)) else {
             return baseName
         }
 
@@ -350,22 +354,16 @@ extension AssetProcessor {
         var suffix = 1
         while true {
             let candidateStem = "\(stem)_\(suffix)"
-            let candidate: String
-            if ext.isEmpty {
-                candidate = candidateStem
-            } else {
-                candidate = "\(candidateStem).\(ext)"
-            }
-            if !occupiedKeys.contains(Self.collisionKey(for: candidate)) {
+            let candidate = ext.isEmpty ? candidateStem : "\(candidateStem).\(ext)"
+            if !collisionKeys.contains(collisionKey(for: candidate)) {
                 return candidate
             }
             suffix += 1
         }
     }
 
-    private static func containsOccupiedFileName(_ fileName: String, in occupiedNames: Set<String>) -> Bool {
-        let targetKey = collisionKey(for: fileName)
-        return occupiedNames.contains { collisionKey(for: $0) == targetKey }
+    private static func collisionKeySet(from fileNames: Set<String>) -> Set<String> {
+        Set(fileNames.map(collisionKey(for:)))
     }
 
     private static func collisionKey(for fileName: String) -> String {

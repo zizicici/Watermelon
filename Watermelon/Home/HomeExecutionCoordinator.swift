@@ -5,7 +5,7 @@ final class HomeExecutionCoordinator {
 
     // MARK: - Public State
 
-    var phase: ExecutionPhase? { session.currentPhase }
+    var phase: ExecutionPhase? { session.phase }
     var isActive: Bool { session.isActive }
     var currentState: HomeExecutionState? { session.currentState(controlState: currentControlState) }
 
@@ -109,7 +109,7 @@ final class HomeExecutionCoordinator {
     }
 
     func stop() {
-        switch session.currentPhase {
+        switch session.phase {
         case .uploading:
             transientControlState = .stopping
             notifyStateChanged()
@@ -139,7 +139,7 @@ final class HomeExecutionCoordinator {
     }
 
     func failForMissingConnection() {
-        guard let phase = session.currentPhase else { return }
+        guard let phase = session.phase else { return }
         switch phase {
         case .completed, .failed:
             return
@@ -155,7 +155,7 @@ final class HomeExecutionCoordinator {
         backupBridge?.cancel()
         downloadHelper?.cancel()
 
-        let alert = session.failExecutionForMissingConnection()
+        let alert = session.failForMissingConnection()
         notifyStateChanged()
         onAlert?(alert.title, alert.message)
     }
@@ -233,7 +233,7 @@ final class HomeExecutionCoordinator {
 
         guard let profile = dependencies.appSession.activeProfile,
               let password = profile.resolvedSessionPassword(from: dependencies.appSession) else {
-            let alert = session.failRemainingDownloadsForMissingConnection()
+            let alert = session.failForMissingConnection()
             notifyStateChanged()
             onAlert?(alert.title, alert.message)
             return
@@ -338,7 +338,7 @@ final class HomeExecutionCoordinator {
             await MainActor.run {
                 guard let self,
                       self.transientControlState == .pausing,
-                      self.session.currentPhase == .downloadPaused else { return }
+                      self.session.phase == .downloadPaused else { return }
                 self.transientControlState = nil
                 self.notifyStateChanged()
             }

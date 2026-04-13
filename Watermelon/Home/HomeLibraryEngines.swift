@@ -20,8 +20,6 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         let mediaKind: AlbumMediaKind
     }
 
-    private let calendar = Calendar(identifier: .gregorian)
-
     private(set) var localFetchResult: PHFetchResult<PHAsset>?
     private var localStatesByAssetID: [String: LocalState] = [:]
     private var localAssetIDsByMonth: [LibraryMonthKey: Set<String>] = [:]
@@ -59,7 +57,7 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
             let assetID = asset.localIdentifier
             let hashes = hashMapByAsset[assetID] ?? []
             let fingerprint = fingerprintByAsset[assetID]
-            let month = monthKey(for: asset.creationDate)
+            let month = LibraryMonthKey.from(date: asset.creationDate)
             let isBackedUp = fingerprint.map { remoteFingerprintSet.contains($0) } ?? false
             let mediaKind = Self.mediaKind(for: asset)
             let creationDate = asset.creationDate ?? Date(timeIntervalSince1970: 0)
@@ -407,7 +405,7 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         remoteFingerprintSet: Set<Data>
     ) -> Set<LibraryMonthKey> {
         let assetID = asset.localIdentifier
-        let month = monthKey(for: asset.creationDate)
+        let month = LibraryMonthKey.from(date: asset.creationDate)
         let isBackedUp = fingerprint.map { remoteFingerprintSet.contains($0) } ?? false
         let mediaKind = Self.mediaKind(for: asset)
         let creationDate = asset.creationDate ?? Date(timeIntervalSince1970: 0)
@@ -484,12 +482,6 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         }
     }
 
-    private func monthKey(for date: Date?) -> LibraryMonthKey {
-        let actualDate = date ?? Date(timeIntervalSince1970: 0)
-        let comps = calendar.dateComponents([.year, .month], from: actualDate)
-        return LibraryMonthKey(year: comps.year ?? 1970, month: comps.month ?? 1)
-    }
-
     private static func mediaKind(for asset: PHAsset) -> AlbumMediaKind {
         if PhotoLibraryService.isLivePhoto(asset) {
             return .livePhoto
@@ -506,6 +498,7 @@ private final class HomeRemoteIndexEngine: @unchecked Sendable {
     private var remoteItemsByMonth: [LibraryMonthKey: [RemoteAlbumItem]] = [:]
     private var remoteFingerprintsByMonth: [LibraryMonthKey: Set<Data>] = [:]
     private var remoteFingerprintRefCount: [Data: Int] = [:]
+    private var cachedFingerprintSet: Set<Data>?
 
     private(set) var snapshotRevision: UInt64?
 
@@ -514,7 +507,10 @@ private final class HomeRemoteIndexEngine: @unchecked Sendable {
     }
 
     var assetFingerprintSet: Set<Data> {
-        Set(remoteFingerprintRefCount.keys)
+        if let cached = cachedFingerprintSet { return cached }
+        let set = Set(remoteFingerprintRefCount.keys)
+        cachedFingerprintSet = set
+        return set
     }
 
     func apply(
@@ -592,6 +588,7 @@ private final class HomeRemoteIndexEngine: @unchecked Sendable {
             }
         }
 
+        if !changedFingerprints.isEmpty { cachedFingerprintSet = nil }
         snapshotRevision = state.revision
         return HomeRemoteDelta(changedMonths: changedMonths, changedFingerprints: changedFingerprints)
     }
@@ -641,6 +638,7 @@ private final class HomeRemoteIndexEngine: @unchecked Sendable {
         remoteItemsByMonth.removeAll()
         remoteFingerprintsByMonth.removeAll()
         remoteFingerprintRefCount.removeAll()
+        cachedFingerprintSet = nil
     }
 
     private static func sameRemoteItems(lhs: [RemoteAlbumItem], rhs: [RemoteAlbumItem]) -> Bool {
@@ -730,7 +728,7 @@ private final class HomeReconcileEngine: @unchecked Sendable {
             }
         }
 
-        return hashToAssetSet.mapValues { Array($0).sorted() }
+        return hashToAssetSet.mapValues { Array($0) }
     }
 }
 
@@ -1157,23 +1155,18 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     private func rescanFileSizes(for months: Set<LibraryMonthKey>) {
-        let cachedSizes = (try? contentHashIndexRepository.fetchFileSizeByAsset()) ?? [:]
-        Task { [weak self] in
-            for month in months {
-                guard let self, !Task.isCancelled else { return }
-                await self.processingWorker.updateFileSize(for: month, cachedSizes: cachedSizes)
-                guard !Task.isCancelled else { return }
-                self.onFileSizesUpdated?([month])
-                await Task.yield()
-            }
-        }
+        scanFileSizes(months: Array(months), tracked: false)
     }
 
     private func startFileSizeScan() {
         fileSizeScanTask?.cancel()
         let months = processingWorker.localMonthsForFileSizeScan()
+        scanFileSizes(months: months, tracked: true)
+    }
+
+    private func scanFileSizes(months: [LibraryMonthKey], tracked: Bool) {
         let cachedSizes = (try? contentHashIndexRepository.fetchFileSizeByAsset()) ?? [:]
-        fileSizeScanTask = Task { [weak self] in
+        let task = Task { [weak self] in
             for month in months {
                 guard let self, !Task.isCancelled else { return }
                 await self.processingWorker.updateFileSize(for: month, cachedSizes: cachedSizes)
@@ -1182,6 +1175,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
                 await Task.yield()
             }
         }
+        if tracked { fileSizeScanTask = task }
     }
 
     private func registerPhotoLibraryObserverIfNeeded() {

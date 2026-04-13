@@ -127,7 +127,7 @@ struct BackupRunPreparationService: Sendable {
                 }
             )
         } catch {
-            await disconnectClient(client)
+            await client.disconnectSafely()
             throw error
         }
     }
@@ -151,10 +151,10 @@ struct BackupRunPreparationService: Sendable {
             eventStream?.emit(.log(
                 "Remote index reloaded. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s)."
             ))
-            await disconnectClient(client)
+            await client.disconnectSafely()
             return snapshot
         } catch {
-            await disconnectClient(client)
+            await client.disconnectSafely()
             throw error
         }
     }
@@ -174,17 +174,6 @@ struct BackupRunPreparationService: Sendable {
         password: String
     ) throws -> any RemoteStorageClientProtocol {
         try storageClientFactory.makeClient(profile: profile, password: password)
-    }
-
-    private func disconnectClient(_ client: any RemoteStorageClientProtocol) async {
-        if Task.isCancelled {
-            let cleanupTask = Task.detached(priority: .utility) {
-                await client.disconnect()
-            }
-            _ = await cleanupTask.value
-            return
-        }
-        await client.disconnect()
     }
 
     private func loadRetryAssets(from onlyAssetLocalIdentifiers: Set<String>?) -> [PHAsset] {

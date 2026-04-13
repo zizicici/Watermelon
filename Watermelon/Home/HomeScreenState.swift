@@ -204,26 +204,7 @@ struct HomeExecutionState {
     let downloadMonths: [LibraryMonthKey]
     let syncMonths: [LibraryMonthKey]
 
-    let executionMonths: Set<LibraryMonthKey>
-
-    init(monthPlans: [LibraryMonthKey: MonthPlan],
-         phase: ExecutionPhase,
-         controlState: ExecutionControlState,
-         processedCountByMonth: [LibraryMonthKey: Int],
-         assetCountByMonth: [LibraryMonthKey: Int],
-         uploadMonths: [LibraryMonthKey],
-         downloadMonths: [LibraryMonthKey],
-         syncMonths: [LibraryMonthKey]) {
-        self.monthPlans = monthPlans
-        self.phase = phase
-        self.controlState = controlState
-        self.processedCountByMonth = processedCountByMonth
-        self.assetCountByMonth = assetCountByMonth
-        self.uploadMonths = uploadMonths
-        self.downloadMonths = downloadMonths
-        self.syncMonths = syncMonths
-        self.executionMonths = Set(monthPlans.keys)
-    }
+    var executionMonths: Set<LibraryMonthKey> { Set(monthPlans.keys) }
 
     var failedMonthInfos: [MonthFailureInfo] {
         monthPlans.compactMap { month, plan in

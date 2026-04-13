@@ -104,4 +104,15 @@ extension RemoteStorageClientProtocol {
     func shouldSetModificationDate() -> Bool {
         true
     }
+
+    func disconnectSafely() async {
+        if Task.isCancelled {
+            let cleanupTask = Task.detached(priority: .utility) {
+                await self.disconnect()
+            }
+            _ = await cleanupTask.value
+            return
+        }
+        await disconnect()
+    }
 }

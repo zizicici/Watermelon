@@ -48,7 +48,6 @@ struct HomeExecutionSession {
         )
     }
 
-    var currentPhase: ExecutionPhase? { phase }
     var shouldRunUploadPhase: Bool { !uploadPhaseCompleted }
 
     mutating func enter(
@@ -206,14 +205,7 @@ struct HomeExecutionSession {
         phase = .downloading
     }
 
-    mutating func failRemainingDownloadsForMissingConnection() -> AlertMessage {
-        let message = "未连接远端存储"
-        applyEvent(.failed(reason: message), where: { !$0.isTerminal })
-        phase = .failed(message)
-        return AlertMessage(title: "错误", message: message)
-    }
-
-    mutating func failExecutionForMissingConnection() -> AlertMessage {
+    mutating func failForMissingConnection() -> AlertMessage {
         let message = "未连接远端存储"
         applyEvent(.failed(reason: message), where: { !$0.isTerminal })
         phase = .failed(message)

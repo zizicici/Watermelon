@@ -22,7 +22,7 @@ struct BackupParallelExecutor: Sendable {
         guard preparedRun.totalAssetCount > 0 else {
             let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
             eventStream.emit(.finished(result))
-            await disconnectClient(preparedRun.initialClient)
+            await preparedRun.initialClient.disconnectSafely()
             return result
         }
 
@@ -45,54 +45,50 @@ struct BackupParallelExecutor: Sendable {
         await clientPool.seedConnectedClient(preparedRun.initialClient)
 
         do {
-            do {
-                try await withThrowingTaskGroup(of: WorkerRunState.self) { group in
-                    let monthQueue = MonthWorkQueue(months: preparedRun.monthPlans)
+            try await withThrowingTaskGroup(of: WorkerRunState.self) { group in
+                let monthQueue = MonthWorkQueue(months: preparedRun.monthPlans)
 
-                    for workerID in 0 ..< preparedRun.workerCount {
-                        group.addTask {
-                            try await runParallelMonthWorker(
-                                workerID: workerID,
-                                monthQueue: monthQueue,
-                                profile: profile,
-                                snapshotSeedLookup: preparedRun.snapshotSeedLookup,
-                                eventStream: eventStream,
-                                aggregator: aggregator,
-                                clientPool: clientPool
-                            )
-                        }
-                    }
-
-                    for try await workerState in group where workerState.paused {
-                        await aggregator.markPaused()
+                for workerID in 0 ..< preparedRun.workerCount {
+                    group.addTask {
+                        try await runParallelMonthWorker(
+                            workerID: workerID,
+                            monthQueue: monthQueue,
+                            profile: profile,
+                            snapshotSeedLookup: preparedRun.snapshotSeedLookup,
+                            eventStream: eventStream,
+                            aggregator: aggregator,
+                            clientPool: clientPool
+                        )
                     }
                 }
-            } catch {
-                await clientPool.shutdown()
-                if profile.isExternalStorageUnavailableError(error) {
-                    eventStream.emit(.log("External storage unavailable. Stop backup immediately."))
+
+                for try await workerState in group where workerState.paused {
+                    await aggregator.markPaused()
                 }
-                throw error
             }
-
-            await clientPool.shutdown()
-
-            if let finalStageTimingSummary = await aggregator.finalTimingSummary() {
-                eventStream.emit(.log(finalStageTimingSummary))
-            }
-            let state = await aggregator.snapshot()
-            let result = BackupExecutionResult(
-                total: state.total,
-                succeeded: state.succeeded,
-                failed: state.failed,
-                skipped: state.skipped,
-                paused: state.paused
-            )
-            eventStream.emit(.finished(result))
-            return result
         } catch {
+            await clientPool.shutdown()
+            if profile.isExternalStorageUnavailableError(error) {
+                eventStream.emit(.log("External storage unavailable. Stop backup immediately."))
+            }
             throw error
         }
+
+        await clientPool.shutdown()
+
+        if let finalStageTimingSummary = await aggregator.finalTimingSummary() {
+            eventStream.emit(.log(finalStageTimingSummary))
+        }
+        let state = await aggregator.snapshot()
+        let result = BackupExecutionResult(
+            total: state.total,
+            succeeded: state.succeeded,
+            failed: state.failed,
+            skipped: state.skipped,
+            paused: state.paused
+        )
+        eventStream.emit(.finished(result))
+        return result
     }
 
     private func runParallelMonthWorker(
@@ -327,26 +323,20 @@ struct BackupParallelExecutor: Sendable {
         asset: PHAsset
     ) {
         let message = Self.message(for: result, position: position, total: state.total)
-        let event = BackupItemEvent(
-            assetLocalIdentifier: asset.localIdentifier,
-            assetFingerprint: result.assetFingerprint,
-            displayName: result.displayName,
-            resourceDate: asset.creationDate,
-            status: result.status,
-            reason: result.reason,
-            resourceSummary: result.resourceSummary,
-            updatedAt: Date()
-        )
-        let progress = BackupProgress(
-            succeeded: state.succeeded,
-            failed: state.failed,
-            skipped: state.skipped,
-            total: state.total,
+        eventStream.emit(.progress(BackupProgress(
+            succeeded: state.succeeded, failed: state.failed,
+            skipped: state.skipped, total: state.total,
             message: message,
-            itemEvent: event,
+            itemEvent: BackupItemEvent(
+                assetLocalIdentifier: asset.localIdentifier,
+                assetFingerprint: result.assetFingerprint,
+                displayName: result.displayName,
+                resourceDate: asset.creationDate,
+                status: result.status, reason: result.reason,
+                resourceSummary: result.resourceSummary, updatedAt: Date()
+            ),
             transferState: nil
-        )
-        eventStream.emit(.progress(progress))
+        )))
     }
 
     private func emitFailureProgress(
@@ -357,27 +347,20 @@ struct BackupParallelExecutor: Sendable {
         errorMessage: String,
         position: Int
     ) {
-        let message = "[\(position)/\(state.total)] Failed asset \(displayName)"
-        let event = BackupItemEvent(
-            assetLocalIdentifier: asset.localIdentifier,
-            assetFingerprint: nil,
-            displayName: displayName,
-            resourceDate: asset.creationDate,
-            status: .failed,
-            reason: errorMessage,
-            resourceSummary: "资源处理失败",
-            updatedAt: Date()
-        )
-        let progress = BackupProgress(
-            succeeded: state.succeeded,
-            failed: state.failed,
-            skipped: state.skipped,
-            total: state.total,
-            message: message,
-            itemEvent: event,
+        eventStream.emit(.progress(BackupProgress(
+            succeeded: state.succeeded, failed: state.failed,
+            skipped: state.skipped, total: state.total,
+            message: "[\(position)/\(state.total)] Failed asset \(displayName)",
+            itemEvent: BackupItemEvent(
+                assetLocalIdentifier: asset.localIdentifier,
+                assetFingerprint: nil,
+                displayName: displayName,
+                resourceDate: asset.creationDate,
+                status: .failed, reason: errorMessage,
+                resourceSummary: "资源处理失败", updatedAt: Date()
+            ),
             transferState: nil
-        )
-        eventStream.emit(.progress(progress))
+        )))
     }
 
     private static func message(for result: AssetProcessResult, position: Int, total: Int) -> String {
@@ -395,14 +378,4 @@ struct BackupParallelExecutor: Sendable {
         }
     }
 
-    private func disconnectClient(_ client: any RemoteStorageClientProtocol) async {
-        if Task.isCancelled {
-            let cleanupTask = Task.detached(priority: .utility) {
-                await client.disconnect()
-            }
-            _ = await cleanupTask.value
-            return
-        }
-        await client.disconnect()
-    }
 }
