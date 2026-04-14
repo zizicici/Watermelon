@@ -110,9 +110,11 @@ final class AddSMBServerViewController: UIViewController {
         let normalizedPath = RemotePathBuilder.normalizePath(context.basePath)
         let existing = try dependencies.databaseManager.findServerProfile(
             host: context.auth.host,
+            port: context.auth.port,
             shareName: context.shareName,
             basePath: normalizedPath,
-            username: context.auth.username
+            username: context.auth.username,
+            domain: context.auth.domain
         )
 
         if let editingProfile,
@@ -125,7 +127,14 @@ final class AddSMBServerViewController: UIViewController {
             )
         }
 
-        let credentialRef = "\(context.auth.host)|\(context.shareName)|\(context.auth.username)"
+        let credentialRef = [
+            "smb",
+            context.auth.host,
+            String(context.auth.port),
+            context.shareName,
+            context.auth.domain ?? "",
+            context.auth.username
+        ].joined(separator: "|")
         let baseProfile = editingProfile ?? existing
 
         var profile = ServerProfileRecord(
@@ -147,7 +156,7 @@ final class AddSMBServerViewController: UIViewController {
 
         try dependencies.databaseManager.saveServerProfile(&profile)
         try dependencies.keychainService.save(password: context.auth.password, account: credentialRef)
-        if let oldRef = editingProfile?.credentialRef,
+        if let oldRef = baseProfile?.credentialRef,
            oldRef != credentialRef {
             try? dependencies.keychainService.delete(account: oldRef)
         }

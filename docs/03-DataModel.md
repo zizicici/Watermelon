@@ -28,7 +28,7 @@ CREATE TABLE server_profiles (
 );
 
 CREATE UNIQUE INDEX idx_server_profiles_unique_smb
-ON server_profiles(host, shareName, basePath, username)
+ON server_profiles(host, port, shareName, basePath, username, IFNULL(domain, ''))
 WHERE storageType = 'smb';
 ```
 

@@ -298,13 +298,12 @@ extension AssetProcessor {
                 if cancellationController?.isCancelled == true {
                     throw CancellationError()
                 }
-                if profile.isExternalStorageUnavailableError(error) {
+                if profile.isConnectionUnavailableError(error) {
                     throw error
                 }
                 lastError = error
 
-                let message = error.localizedDescription
-                if message.contains("STATUS_OBJECT_NAME_COLLISION") {
+                if SMBErrorClassifier.isNameCollision(error) {
                     var occupiedNames = monthStore.existingFileNames()
                     occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
                     occupiedNames.insert(uploadPreparation.targetFileName)

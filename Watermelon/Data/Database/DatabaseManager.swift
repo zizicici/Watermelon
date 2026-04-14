@@ -39,7 +39,7 @@ final class DatabaseManager {
             try db.execute(
                 sql: """
                 CREATE UNIQUE INDEX idx_server_profiles_unique_smb
-                ON \(ServerProfileRecord.databaseTableName)(host, shareName, basePath, username)
+                ON \(ServerProfileRecord.databaseTableName)(host, port, shareName, basePath, username, IFNULL(domain, ''))
                 WHERE storageType = 'smb'
                 """
             )
@@ -71,6 +71,17 @@ final class DatabaseManager {
             try db.create(index: "idx_local_asset_resources_hash", on: LocalAssetResourceRecord.databaseTableName, columns: ["contentHash"])
         }
 
+        migrator.registerMigration("v8_server_profiles_smb_identity") { db in
+            try db.execute(sql: "DROP INDEX IF EXISTS idx_server_profiles_unique_smb")
+            try db.execute(
+                sql: """
+                CREATE UNIQUE INDEX idx_server_profiles_unique_smb
+                ON \(ServerProfileRecord.databaseTableName)(host, port, shareName, basePath, username, IFNULL(domain, ''))
+                WHERE storageType = 'smb'
+                """
+            )
+        }
+
         return migrator
     }
 
@@ -92,19 +103,23 @@ final class DatabaseManager {
 
     func findServerProfile(
         host: String,
+        port: Int,
         shareName: String,
         basePath: String,
         username: String,
+        domain: String?,
         storageType: String = StorageType.smb.rawValue
     ) throws -> ServerProfileRecord? {
         try read { db in
-            try ServerProfileRecord
+            let request = ServerProfileRecord
                 .filter(Column("storageType") == storageType)
                 .filter(Column("host") == host)
+                .filter(Column("port") == port)
                 .filter(Column("shareName") == shareName)
                 .filter(Column("basePath") == basePath)
                 .filter(Column("username") == username)
-                .fetchOne(db)
+                .filter(sql: "IFNULL(domain, '') = ?", arguments: [domain ?? ""])
+            return try request.fetchOne(db)
         }
     }
 

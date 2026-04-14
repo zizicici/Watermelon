@@ -109,9 +109,23 @@ extension ServerProfileRecord {
         resolvedStorageType == .externalVolume && RemoteStorageClientError.isLikelyExternalStorageUnavailable(error)
     }
 
+    func isConnectionUnavailableError(_ error: Error) -> Bool {
+        switch resolvedStorageType {
+        case .externalVolume:
+            return RemoteStorageClientError.isLikelyExternalStorageUnavailable(error)
+        case .smb:
+            return SMBErrorClassifier.isConnectionUnavailable(error)
+        case .webdav:
+            return false
+        }
+    }
+
     func userFacingStorageErrorMessage(_ error: Error) -> String {
         if isExternalStorageUnavailableError(error) {
             return "外接存储不可用，可能已拔出。请重新连接硬盘后再试。"
+        }
+        if resolvedStorageType == .smb, SMBErrorClassifier.isConnectionUnavailable(error) {
+            return "SMB 连接不可用，可能已断开或超时。请检查网络与服务器状态后再试。"
         }
         if resolvedStorageType == .webdav {
             if let statusCode = Self.webDAVErrorCode(from: error), statusCode == 401 {

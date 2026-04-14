@@ -327,7 +327,7 @@ final class MonthManifestStore {
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
-            let finalExists = (try? await client.exists(path: finalPath)) ?? false
+            let finalExists = try await client.exists(path: finalPath)
             guard finalExists else {
                 throw error
             }

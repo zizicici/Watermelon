@@ -70,8 +70,8 @@ struct BackupParallelExecutor: Sendable {
             }
         } catch {
             await clientPool.shutdown()
-            if profile.isExternalStorageUnavailableError(error) {
-                eventStream.emit(.log("External storage unavailable. Stop backup immediately."))
+            if profile.isConnectionUnavailableError(error) {
+                eventStream.emit(.log("Remote storage unavailable. Stop backup immediately."))
             }
             throw error
         }
@@ -235,7 +235,7 @@ struct BackupParallelExecutor: Sendable {
                                 workerState.paused = true
                                 break
                             }
-                            if profile.isExternalStorageUnavailableError(error) {
+                            if profile.isConnectionUnavailableError(error) {
                                 clientReusable = false
                                 monthFatalError = error
                                 break
@@ -280,11 +280,11 @@ struct BackupParallelExecutor: Sendable {
 
                 let shouldFinishMonth = !workerState.paused && monthFatalError == nil
                 let hadDirtyManifestBeforeFinalize = monthStore.dirty
-                let skipFlushDueToExternalUnavailable = monthFatalError.map(profile.isExternalStorageUnavailableError) ?? false
+                let skipFlushDueToUnavailable = monthFatalError.map(profile.isConnectionUnavailableError) ?? false
 
-                if skipFlushDueToExternalUnavailable {
+                if skipFlushDueToUnavailable {
                     eventStream.emit(.log(
-                        "Worker\(workerID + 1): month \(monthKey.text) aborted before completion because external storage became unavailable. Skip manifest flush."
+                        "Worker\(workerID + 1): month \(monthKey.text) aborted before completion because remote storage became unavailable. Skip manifest flush."
                     ))
                 } else {
                     do {
@@ -342,7 +342,7 @@ struct BackupParallelExecutor: Sendable {
             await clientPool.release(client, reusable: clientReusable)
             return workerState
         } catch {
-            if profile.isExternalStorageUnavailableError(error) {
+            if profile.isConnectionUnavailableError(error) {
                 clientReusable = false
             }
             await clientPool.release(client, reusable: clientReusable)

@@ -202,7 +202,16 @@ final class RemoteIndexSyncService: Sendable {
     }
 
     private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {
-        "\(profile.id ?? 0):\(profile.storageType):\(profile.host):\(profile.basePath)"
+        [
+            String(profile.id ?? 0),
+            profile.storageType,
+            profile.host,
+            String(profile.port),
+            profile.shareName,
+            profile.basePath,
+            profile.username,
+            profile.domain ?? ""
+        ].joined(separator: "|")
     }
 
     private func scanManifestDigests(

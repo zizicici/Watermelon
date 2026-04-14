@@ -59,7 +59,7 @@ struct BackupRunPreparationService: Sendable {
                     "Remote index synced. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s)."
                 ))
             } catch {
-                if profile.isExternalStorageUnavailableError(error) {
+                if profile.isConnectionUnavailableError(error) {
                     throw error
                 }
                 eventStream.emit(.log("Remote index scan warning: \(error.localizedDescription)"))
