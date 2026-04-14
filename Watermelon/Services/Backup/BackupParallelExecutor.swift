@@ -280,46 +280,54 @@ struct BackupParallelExecutor: Sendable {
 
                 let shouldFinishMonth = !workerState.paused && monthFatalError == nil
                 let hadDirtyManifestBeforeFinalize = monthStore.dirty
-                do {
-                    try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
-                    if shouldFinishMonth {
-                        eventStream.emit(.monthChanged(MonthChangeEvent(
-                            year: monthKey.year,
-                            month: monthKey.month,
-                            action: .completed
-                        )))
-                        if let onMonthUploaded {
-                            switch await onMonthUploaded(monthKey) {
-                            case .success:
-                                break
-                            case .failed(let message):
-                                eventStream.emit(.log(
-                                    "Worker\(workerID + 1) month \(monthKey.text) finalization failed: \(message)"
-                                ))
-                            case .cancelled:
-                                workerState.paused = true
-                                eventStream.emit(.log(
-                                    "Worker\(workerID + 1): cancellation requested during month \(monthKey.text) finalization."
-                                ))
+                let skipFlushDueToExternalUnavailable = monthFatalError.map(profile.isExternalStorageUnavailableError) ?? false
+
+                if skipFlushDueToExternalUnavailable {
+                    eventStream.emit(.log(
+                        "Worker\(workerID + 1): month \(monthKey.text) aborted before completion because external storage became unavailable. Skip manifest flush."
+                    ))
+                } else {
+                    do {
+                        try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
+                        if shouldFinishMonth {
+                            eventStream.emit(.monthChanged(MonthChangeEvent(
+                                year: monthKey.year,
+                                month: monthKey.month,
+                                action: .completed
+                            )))
+                            if let onMonthUploaded {
+                                switch await onMonthUploaded(monthKey) {
+                                case .success:
+                                    break
+                                case .failed(let message):
+                                    eventStream.emit(.log(
+                                        "Worker\(workerID + 1) month \(monthKey.text) finalization failed: \(message)"
+                                    ))
+                                case .cancelled:
+                                    workerState.paused = true
+                                    eventStream.emit(.log(
+                                        "Worker\(workerID + 1): cancellation requested during month \(monthKey.text) finalization."
+                                    ))
+                                }
+                                if workerState.paused {
+                                    break
+                                }
                             }
-                            if workerState.paused {
-                                break
-                            }
-                        }
-                    } else {
-                        if monthFatalError != nil {
-                            eventStream.emit(.log(
-                                "Worker\(workerID + 1): month \(monthKey.text) aborted before completion due to fatal upload error."
-                            ))
                         } else {
-                            let pauseLog = hadDirtyManifestBeforeFinalize
-                                ? "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) manifest flushed before exit."
-                                : "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) paused before completion."
-                            eventStream.emit(.log(pauseLog))
+                            if monthFatalError != nil {
+                                eventStream.emit(.log(
+                                    "Worker\(workerID + 1): month \(monthKey.text) aborted before completion due to fatal upload error."
+                                ))
+                            } else {
+                                let pauseLog = hadDirtyManifestBeforeFinalize
+                                    ? "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) manifest flushed before exit."
+                                    : "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) paused before completion."
+                                eventStream.emit(.log(pauseLog))
+                            }
                         }
+                    } catch {
+                        throw error
                     }
-                } catch {
-                    throw error
                 }
 
                 if let monthFatalError {

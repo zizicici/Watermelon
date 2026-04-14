@@ -57,22 +57,7 @@ enum RemoteStorageClientError: LocalizedError {
             case .underlying(let underlying):
                 return isLikelyExternalStorageUnavailable(underlying)
             default:
-                break
-            }
-        }
-
-        let nsError = error as NSError
-        if nsError.domain == NSCocoaErrorDomain {
-            let unavailableCodes: Set<Int> = [
-                NSFileNoSuchFileError,
-                NSFileReadNoSuchFileError,
-                NSFileReadNoPermissionError,
-                NSFileWriteNoPermissionError,
-                NSFileReadUnknownError,
-                NSFileWriteUnknownError
-            ]
-            if unavailableCodes.contains(nsError.code) {
-                return true
+                return false
             }
         }
         return false

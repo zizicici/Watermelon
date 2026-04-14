@@ -50,6 +50,9 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         do {
             resolved = try bookmarkStore.resolveBookmarkData(config.rootBookmarkData)
         } catch {
+            if isLikelyBookmarkAccessFailure(error) {
+                throw RemoteStorageClientError.externalStorageUnavailable
+            }
             throw mapStorageError(error)
         }
         if let refreshed = resolved.refreshedBookmarkData {
@@ -137,6 +140,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         onProgress: ((Double) -> Void)?
     ) async throws {
         var destinationURLForCleanup: URL?
+        var shouldCleanupDestinationOnFailure = false
         let root = try requireRootURL()
         do {
             if respectTaskCancellation {
@@ -149,21 +153,30 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: destinationURL.path) {
                 try FileManager.default.removeItem(at: destinationURL)
+                shouldCleanupDestinationOnFailure = true
             }
 
-            // Fast path: prefer system copy path regardless of progress callback.
-            // For security-scoped external volumes this is generally much faster than manual chunk copy.
-            do {
-                try FileManager.default.copyItem(at: localURL, to: destinationURL)
-                if respectTaskCancellation {
-                    try Task.checkCancellation()
+            if !respectTaskCancellation {
+                // Fast path: prefer system copy path only when cancellation responsiveness
+                // does not matter. Large external-volume copies are otherwise impossible to interrupt.
+                do {
+                    shouldCleanupDestinationOnFailure = true
+                    try FileManager.default.copyItem(at: localURL, to: destinationURL)
+                    onProgress?(1)
+                    return
+                } catch {
+                    let mappedError = mapStorageError(error)
+                    if shouldAbortChunkedFallback(after: mappedError) {
+                        throw mappedError
+                    }
+
+                    if FileManager.default.fileExists(atPath: destinationURL.path) {
+                        try? FileManager.default.removeItem(at: destinationURL)
+                    }
                 }
-                onProgress?(1)
-                return
-            } catch {
-                // Some providers may fail optimized copy unexpectedly; fall back to chunked copy path.
             }
 
+            shouldCleanupDestinationOnFailure = true
             guard FileManager.default.createFile(atPath: destinationURL.path, contents: nil) else {
                 throw NSError(
                     domain: NSCocoaErrorDomain,
@@ -208,7 +221,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             }
             onProgress?(1)
         } catch {
-            if respectTaskCancellation, error is CancellationError, let destinationURLForCleanup {
+            if shouldCleanupDestinationOnFailure, let destinationURLForCleanup {
                 try? FileManager.default.removeItem(at: destinationURLForCleanup)
             }
             throw mapStorageError(error)
@@ -287,7 +300,13 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             let destinationParent = destinationURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: destinationParent, withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: destinationURL.path) {
-                try FileManager.default.removeItem(at: destinationURL)
+                _ = try FileManager.default.replaceItemAt(
+                    destinationURL,
+                    withItemAt: sourceURL,
+                    backupItemName: nil,
+                    options: []
+                )
+                return
             }
             try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
         } catch {
@@ -310,7 +329,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
 
         let relative = String(normalized.dropFirst())
         let components = relative.split(separator: "/")
-        guard !components.contains(where: { $0 == ".." }) else {
+        guard !components.contains(where: { $0 == ".." || $0 == "." }) else {
             throw RemoteStorageClientError.invalidConfiguration
         }
 
@@ -337,7 +356,8 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     private func normalizedRemotePath(for fileURL: URL, rootURL: URL) -> String {
         let rootPath = rootURL.standardizedFileURL.path
         let fullPath = fileURL.standardizedFileURL.path
-        guard fullPath.hasPrefix(rootPath) else {
+        let rootPathWithSeparator = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard fullPath == rootPath || fullPath.hasPrefix(rootPathWithSeparator) else {
             return "/"
         }
 
@@ -355,9 +375,87 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         if let storageError = error as? RemoteStorageClientError {
             return storageError
         }
-        if RemoteStorageClientError.isLikelyExternalStorageUnavailable(error) {
+        if hasLostAccessToExternalVolume(after: error) {
             return RemoteStorageClientError.externalStorageUnavailable
         }
         return RemoteStorageClientError.underlying(error)
+    }
+
+    private func shouldAbortChunkedFallback(after error: Error) -> Bool {
+        if let storageError = error as? RemoteStorageClientError {
+            switch storageError {
+            case .externalStorageUnavailable, .invalidConfiguration:
+                return true
+            case .underlying(let underlying):
+                return shouldAbortChunkedFallback(after: underlying)
+            default:
+                return false
+            }
+        }
+
+        let nsError = error as NSError
+        guard nsError.domain == NSCocoaErrorDomain else { return false }
+        let fatalCodes: Set<Int> = [
+            NSFileNoSuchFileError,
+            NSFileReadNoSuchFileError,
+            NSFileReadNoPermissionError,
+            NSFileWriteNoPermissionError,
+            NSFileWriteOutOfSpaceError,
+            NSFileWriteVolumeReadOnlyError
+        ]
+        return fatalCodes.contains(nsError.code)
+    }
+
+    private func isLikelyBookmarkAccessFailure(_ error: Error) -> Bool {
+        if let storageError = error as? RemoteStorageClientError {
+            switch storageError {
+            case .externalStorageUnavailable:
+                return true
+            case .underlying(let underlying):
+                return isLikelyBookmarkAccessFailure(underlying)
+            default:
+                return false
+            }
+        }
+
+        let nsError = error as NSError
+        guard nsError.domain == NSCocoaErrorDomain else { return false }
+        let candidateCodes: Set<Int> = [
+            NSFileNoSuchFileError,
+            NSFileReadNoSuchFileError,
+            NSFileReadNoPermissionError,
+            NSFileWriteNoPermissionError,
+            NSFileReadUnknownError,
+            NSFileWriteUnknownError
+        ]
+        return candidateCodes.contains(nsError.code)
+    }
+
+    private func hasLostAccessToExternalVolume(after error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == NSCocoaErrorDomain else { return false }
+
+        let candidateCodes: Set<Int> = [
+            NSFileNoSuchFileError,
+            NSFileReadNoSuchFileError,
+            NSFileReadNoPermissionError,
+            NSFileWriteNoPermissionError,
+            NSFileReadUnknownError,
+            NSFileWriteUnknownError
+        ]
+        guard candidateCodes.contains(nsError.code) else { return false }
+        guard let rootURL else { return false }
+
+        var isDirectory: ObjCBool = false
+        if !FileManager.default.fileExists(atPath: rootURL.path, isDirectory: &isDirectory) {
+            return true
+        }
+
+        do {
+            _ = try rootURL.resourceValues(forKeys: [.isDirectoryKey])
+            return false
+        } catch {
+            return true
+        }
     }
 }
