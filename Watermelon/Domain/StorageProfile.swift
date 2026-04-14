@@ -114,15 +114,34 @@ extension ServerProfileRecord {
             return "外接存储不可用，可能已拔出。请重新连接硬盘后再试。"
         }
         if resolvedStorageType == .webdav {
-            let nsError = error as NSError
-            if nsError.domain == "WebDAVClient", nsError.code == 401 {
+            if let statusCode = Self.webDAVErrorCode(from: error), statusCode == 401 {
                 return "WebDAV 认证失败（401）。请检查用户名/密码，并确认 Endpoint URL 与备份根路径有访问权限。建议 Endpoint 填 WebDAV 根地址，目录放到“备份根路径”里。"
             }
-            if nsError.domain == "WebDAVClient", nsError.code == 403 {
+            if let statusCode = Self.webDAVErrorCode(from: error), statusCode == 403 {
                 return "WebDAV 权限不足（403）。请确认该账号对 Endpoint 与备份根路径有 PROPFIND/MKCOL/PUT/MOVE/DELETE 权限。"
             }
         }
         return error.localizedDescription
+    }
+
+    private static func webDAVErrorCode(from error: Error) -> Int? {
+        if let storageError = error as? RemoteStorageClientError {
+            switch storageError {
+            case .underlying(let underlying):
+                return webDAVErrorCode(from: underlying)
+            default:
+                return nil
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == "WebDAVClient" {
+            return nsError.code
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return webDAVErrorCode(from: underlying)
+        }
+        return nil
     }
 
     func resolvedSessionPassword(from session: AppSession) -> String? {

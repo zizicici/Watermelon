@@ -17,7 +17,12 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         var modificationDate: Date?
         var hasAnyStatus = false
         var hasSuccessStatus = false
+        var statusCodes: [Int] = []
         var isDirectory = false
+
+        var firstFailureStatusCode: Int? {
+            statusCodes.first(where: { !(200 ... 299).contains($0) })
+        }
     }
 
     nonisolated func shouldSetModificationDate() -> Bool {
@@ -122,6 +127,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             case "status":
                 if let statusCode = WebDAVClient.parseHTTPStatusCode(value) {
                     entry.hasAnyStatus = true
+                    entry.statusCodes.append(statusCode)
                     if (200 ... 299).contains(statusCode) {
                         entry.hasSuccessStatus = true
                     }
@@ -149,6 +155,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
     }
 
+    private static let formatterLock = NSLock()
+    private static let percentEscapeRegex = try! NSRegularExpression(pattern: "%[0-9A-Fa-f]{2}")
     private static let rfc1123Formatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -163,11 +171,12 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     private let session: URLSession
     private let endpointPathPrefix: String
     private var isConnected = false
+    private var pendingCancelledUploadCleanupPaths: [String] = []
 
     init(config: Config) {
         self.config = config
         let normalizedEndpoint = Self.normalizedEndpointURL(config.endpointURL)
-        let normalizedPath = normalizedEndpoint.path
+        let normalizedPath = Self.normalizedPercentEncodedPath(of: normalizedEndpoint)
         let trimmed = normalizedPath == "/" ? "" : normalizedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         endpointPathPrefix = trimmed.isEmpty ? "/" : "/" + trimmed
 
@@ -180,7 +189,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     func connect() async throws {
         if isConnected { return }
         let request = makeRequest(
-            url: Self.normalizedEndpointURL(config.endpointURL),
+            url: Self.directoryURL(from: Self.normalizedEndpointURL(config.endpointURL)),
             method: "PROPFIND",
             headers: [
                 "Depth": "0",
@@ -217,12 +226,14 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     }
 
     func disconnect() async {
+        await drainPendingCancelledUploadCleanup()
         isConnected = false
     }
 
     func storageCapacity() async throws -> RemoteStorageCapacity? {
         try requireConnected()
-        let targetURL = try remoteURL(forRemotePath: "/")
+        await drainPendingCancelledUploadCleanup()
+        let targetURL = try remoteCollectionURL(forRemotePath: "/")
         let request = makeRequest(
             url: targetURL,
             method: "PROPFIND",
@@ -242,10 +253,12 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
 
         let parsedEntries = try PropfindXMLParser().parse(data)
+        let baseURL = Self.directoryURL(from: response.url ?? targetURL)
+        let normalizedRoot = try Self.canonicalRemotePath("/")
         let targetEntry = parsedEntries.first { entry in
             guard !entry.hasAnyStatus || entry.hasSuccessStatus else { return false }
-            guard let path = remotePath(fromHref: entry.href) else { return false }
-            return path == "/"
+            guard let path = remotePath(fromHref: entry.href, relativeTo: baseURL) else { return false }
+            return path == normalizedRoot
         } ?? parsedEntries.first(where: { !$0.hasAnyStatus || $0.hasSuccessStatus })
 
         guard let targetEntry else { return nil }
@@ -265,8 +278,9 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
 
     func list(path: String) async throws -> [RemoteStorageEntry] {
         try requireConnected()
+        await drainPendingCancelledUploadCleanup()
         let normalizedTarget = RemotePathBuilder.normalizePath(path)
-        let targetURL = try remoteURL(forRemotePath: normalizedTarget)
+        let targetURL = try remoteCollectionURL(forRemotePath: normalizedTarget)
         let request = makeRequest(
             url: targetURL,
             method: "PROPFIND",
@@ -283,6 +297,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
 
         let parsedEntries = try PropfindXMLParser().parse(data)
+        let baseURL = Self.directoryURL(from: response.url ?? targetURL)
+        let normalizedTargetKey = try Self.canonicalRemotePath(normalizedTarget)
         var entries: [RemoteStorageEntry] = []
         entries.reserveCapacity(parsedEntries.count)
 
@@ -290,13 +306,13 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
                 continue
             }
-            guard let remotePath = remotePath(fromHref: parsed.href) else { continue }
-            if remotePath == normalizedTarget { continue }
-            let name = parsed.displayName ?? (remotePath as NSString).lastPathComponent
+            guard let remotePath = remotePath(fromHref: parsed.href, relativeTo: baseURL) else { continue }
+            if remotePath == normalizedTargetKey { continue }
+            let name = Self.entryName(forRemotePath: remotePath, displayName: parsed.displayName, href: parsed.href)
             entries.append(
                 RemoteStorageEntry(
-                    path: remotePath,
-                    name: name.isEmpty ? parsed.href : name,
+                    path: Self.decodedEntryPath(fromRemotePath: remotePath),
+                    name: name,
                     isDirectory: parsed.isDirectory,
                     size: parsed.contentLength ?? 0,
                     creationDate: parsed.creationDate,
@@ -308,9 +324,14 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     }
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {
+        try await metadata(path: path, requestCollectionURL: false)
+    }
+
+    private func metadata(path: String, requestCollectionURL: Bool) async throws -> RemoteStorageEntry? {
         try requireConnected()
+        await drainPendingCancelledUploadCleanup()
         let normalizedTarget = RemotePathBuilder.normalizePath(path)
-        let targetURL = try remoteURL(forRemotePath: normalizedTarget)
+        let targetURL = try requestURL(forRemotePath: normalizedTarget, requestCollectionURL: requestCollectionURL)
         let request = makeRequest(
             url: targetURL,
             method: "PROPFIND",
@@ -330,18 +351,22 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
 
         let parsedEntries = try PropfindXMLParser().parse(data)
+        let baseURL = requestCollectionURL
+            ? Self.directoryURL(from: response.url ?? targetURL)
+            : (response.url ?? targetURL)
+        let normalizedTargetKey = try Self.canonicalRemotePath(normalizedTarget)
         for parsed in parsedEntries {
             if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
                 continue
             }
-            guard let remotePath = remotePath(fromHref: parsed.href),
-                  remotePath == normalizedTarget else {
+            guard let remotePath = remotePath(fromHref: parsed.href, relativeTo: baseURL),
+                  remotePath == normalizedTargetKey else {
                 continue
             }
-            let name = parsed.displayName ?? (remotePath as NSString).lastPathComponent
+            let name = Self.entryName(forRemotePath: remotePath, displayName: parsed.displayName, href: parsed.href)
             return RemoteStorageEntry(
-                path: remotePath,
-                name: name.isEmpty ? parsed.href : name,
+                path: Self.decodedEntryPath(fromRemotePath: remotePath),
+                name: name,
                 isDirectory: parsed.isDirectory,
                 size: parsed.contentLength ?? 0,
                 creationDate: parsed.creationDate,
@@ -358,6 +383,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         onProgress: ((Double) -> Void)?
     ) async throws {
         try requireConnected()
+        await drainPendingCancelledUploadCleanup()
         if respectTaskCancellation {
             try Task.checkCancellation()
         }
@@ -365,24 +391,33 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         let targetURL = try remoteURL(forRemotePath: remotePath)
         var request = makeRequest(url: targetURL, method: "PUT")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        let (_, response) = try await sendUpload(request, fromFile: localURL)
-        guard (200 ... 299).contains(response.statusCode) else {
-            throw Self.statusError(response.statusCode, method: "PUT", url: request.url)
+        do {
+            let (_, response) = try await sendUpload(request, fromFile: localURL)
+            guard (200 ... 299).contains(response.statusCode) else {
+                throw Self.statusError(response.statusCode, method: "PUT", url: request.url)
+            }
+            if respectTaskCancellation {
+                try Task.checkCancellation()
+            }
+            onProgress?(1)
+        } catch {
+            if Self.isCancellationError(error) {
+                enqueueCancelledUploadCleanup(for: remotePath)
+                throw CancellationError()
+            }
+            throw error
         }
-
-        if respectTaskCancellation {
-            try Task.checkCancellation()
-        }
-        onProgress?(1)
     }
 
     func setModificationDate(_ date: Date, forPath path: String) async throws {
         try requireConnected()
+        await drainPendingCancelledUploadCleanup()
 
         let targetURL = try remoteURL(forRemotePath: path)
         let davBody = Self.proppatchGetLastModifiedBody(date: date)
         let msBody = Self.proppatchWin32LastModifiedBody(date: date)
         let bodies = [davBody, msBody]
+        var sawUnknownMultiStatus = false
 
         for body in bodies {
             let request = makeRequest(
@@ -391,8 +426,26 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 headers: ["Content-Type": "application/xml; charset=utf-8"],
                 body: body
             )
-            let status = try await sendStatus(request)
+            let (data, response) = try await sendData(request)
+            let status = response.statusCode
             if status == 207 || (200 ... 299).contains(status) {
+                if status == 207 {
+                    switch evaluateMultiStatus(data, relativeTo: response.url ?? targetURL, targetPath: path) {
+                    case .success:
+                        return
+                    case .failure(let failureStatus):
+                        if failureStatus == 401 || failureStatus == 403 {
+                            throw Self.authenticationError(failureStatus, url: request.url)
+                        }
+                        if Self.isMtimeUnsupportedStatus(failureStatus) {
+                            continue
+                        }
+                        throw Self.statusError(failureStatus, method: "PROPPATCH", url: request.url)
+                    case .unknown:
+                        sawUnknownMultiStatus = true
+                        continue
+                    }
+                }
                 return
             }
             if status == 401 || status == 403 {
@@ -403,12 +456,16 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             }
             throw Self.statusError(status, method: "PROPPATCH", url: request.url)
         }
+        if sawUnknownMultiStatus {
+            throw Self.statusError(207, method: "PROPPATCH", url: targetURL)
+        }
         // Best-effort metadata update: if all attempts are unsupported, keep backup success.
         return
     }
 
     func download(remotePath: String, localURL: URL) async throws {
         try requireConnected()
+        await drainPendingCancelledUploadCleanup()
         try Task.checkCancellation()
 
         let targetURL = try remoteURL(forRemotePath: remotePath)
@@ -429,6 +486,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
 
     func exists(path: String) async throws -> Bool {
         try requireConnected()
+        await drainPendingCancelledUploadCleanup()
 
         let targetURL = try remoteURL(forRemotePath: path)
         let headRequest = makeRequest(url: targetURL, method: "HEAD")
@@ -439,33 +497,30 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         if headResponse == 404 {
             return false
         }
-        if headResponse != 405 {
-            throw Self.statusError(headResponse, method: "HEAD", url: headRequest.url)
+        if [301, 302, 307, 308, 405, 501].contains(headResponse) {
+            if try await metadata(path: path, requestCollectionURL: true) != nil {
+                return true
+            }
+            return try await metadata(path: path, requestCollectionURL: false) != nil
         }
-        return try await metadata(path: path) != nil
+        throw Self.statusError(headResponse, method: "HEAD", url: headRequest.url)
     }
 
     func delete(path: String) async throws {
         try requireConnected()
+        await drainPendingCancelledUploadCleanup()
 
         let normalized = RemotePathBuilder.normalizePath(path)
         guard normalized != "/" else {
             throw RemoteStorageClientError.invalidConfiguration
         }
 
-        let targetURL = try remoteURL(forRemotePath: normalized)
-        let request = makeRequest(url: targetURL, method: "DELETE")
-        let status = try await sendStatus(request)
-        if status == 404 {
-            return
-        }
-        guard status == 207 || (200 ... 299).contains(status) else {
-            throw Self.statusError(status, method: "DELETE", url: request.url)
-        }
+        try await deleteWithoutPendingCleanup(path: normalized)
     }
 
     func createDirectory(path: String) async throws {
         try requireConnected()
+        await drainPendingCancelledUploadCleanup()
 
         let normalized = RemotePathBuilder.normalizePath(path)
         guard normalized != "/" else { return }
@@ -474,13 +529,21 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         let components = normalized.split(separator: "/")
         for component in components where !component.isEmpty {
             runningPath += "/\(component)"
-            let targetURL = try remoteURL(forRemotePath: runningPath)
+            let targetURL = try remoteCollectionURL(forRemotePath: runningPath)
             let request = makeRequest(url: targetURL, method: "MKCOL")
             let status = try await sendStatus(request)
-            if (200 ... 299).contains(status) || status == 405 {
+            if (200 ... 299).contains(status) {
                 continue
             }
-            if status == 301 || status == 302 {
+            if status == 405 {
+                if let entry = try await metadata(path: runningPath, requestCollectionURL: true), entry.isDirectory {
+                    continue
+                }
+                if let entry = try await metadata(path: runningPath, requestCollectionURL: false), entry.isDirectory {
+                    continue
+                }
+            }
+            if [301, 302, 307, 308].contains(status) {
                 if try await exists(path: runningPath) { continue }
             }
             throw Self.statusError(status, method: "MKCOL", url: request.url)
@@ -489,6 +552,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
 
     func move(from sourcePath: String, to destinationPath: String) async throws {
         try requireConnected()
+        await drainPendingCancelledUploadCleanup()
 
         let sourceURL = try remoteURL(forRemotePath: sourcePath)
         let destinationURL = try remoteURL(forRemotePath: destinationPath)
@@ -501,7 +565,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             ]
         )
         let status = try await sendStatus(request)
-        guard status == 201 || status == 204 else {
+        guard (200 ... 299).contains(status) else {
             throw Self.statusError(status, method: "MOVE", url: request.url)
         }
     }
@@ -534,6 +598,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     )
 
     private static func proppatchGetLastModifiedBody(date: Date) -> Data {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
         let value = rfc1123Formatter.string(from: date)
         return Data(
             """
@@ -550,6 +616,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     }
 
     private static func proppatchWin32LastModifiedBody(date: Date) -> Data {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
         let value = iso8601Formatter.string(from: date)
         return Data(
             """
@@ -603,9 +671,10 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 )
             }
             return (data, http)
-        } catch is CancellationError {
-            throw CancellationError()
         } catch {
+            if Self.isCancellationError(error) {
+                throw CancellationError()
+            }
             throw RemoteStorageClientError.underlying(error)
         }
     }
@@ -621,9 +690,10 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 )
             }
             return (data, http)
-        } catch is CancellationError {
-            throw CancellationError()
         } catch {
+            if Self.isCancellationError(error) {
+                throw CancellationError()
+            }
             throw RemoteStorageClientError.underlying(error)
         }
     }
@@ -639,9 +709,10 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 )
             }
             return (fileURL, http)
-        } catch is CancellationError {
-            throw CancellationError()
         } catch {
+            if Self.isCancellationError(error) {
+                throw CancellationError()
+            }
             throw RemoteStorageClientError.underlying(error)
         }
     }
@@ -651,40 +722,82 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         return response.statusCode
     }
 
-    private func remoteURL(forRemotePath remotePath: String) throws -> URL {
-        let normalized = RemotePathBuilder.normalizePath(remotePath)
-        if normalized == "/" {
-            return Self.normalizedEndpointURL(config.endpointURL)
-        }
-
-        let relative = String(normalized.dropFirst())
-        let components = relative.split(separator: "/")
-        guard !components.contains(where: { $0 == ".." }) else {
-            throw RemoteStorageClientError.invalidConfiguration
-        }
-
-        var url = Self.normalizedEndpointURL(config.endpointURL)
-        for component in components where !component.isEmpty {
-            url.appendPathComponent(String(component), isDirectory: false)
-        }
-        return url
+    private enum MultiStatusOutcome {
+        case success
+        case failure(Int)
+        case unknown
     }
 
-    private func remotePath(fromHref href: String) -> String? {
-        let decodedHref = href.removingPercentEncoding ?? href
+    private func evaluateMultiStatus(_ data: Data, relativeTo baseURL: URL, targetPath: String) -> MultiStatusOutcome {
+        guard let entries = try? PropfindXMLParser().parse(data) else {
+            return .unknown
+        }
+        guard let targetKey = try? Self.canonicalRemotePath(targetPath) else {
+            return .unknown
+        }
+        guard let targetEntry = entries.first(where: { entry in
+            guard let entryPath = remotePath(fromHref: entry.href, relativeTo: baseURL) else { return false }
+            return entryPath == targetKey
+        }) else {
+            return .unknown
+        }
+        if targetEntry.hasSuccessStatus {
+            return .success
+        }
+        if let failureStatus = targetEntry.firstFailureStatusCode {
+            return .failure(failureStatus)
+        }
+        return .unknown
+    }
+
+    private func requestURL(forRemotePath remotePath: String, requestCollectionURL: Bool) throws -> URL {
+        if requestCollectionURL {
+            return try remoteCollectionURL(forRemotePath: remotePath)
+        }
+        return try remoteURL(forRemotePath: remotePath)
+    }
+
+    private func remoteURL(forRemotePath remotePath: String) throws -> URL {
+        let normalized = RemotePathBuilder.normalizePath(remotePath)
+        let baseURL = Self.normalizedEndpointURL(config.endpointURL)
+        guard var urlComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            return baseURL
+        }
+        let basePath = endpointPathPrefix == "/" ? "" : endpointPathPrefix
+        if normalized == "/" {
+            urlComponents.percentEncodedPath = basePath.isEmpty ? "/" : basePath
+            return urlComponents.url ?? baseURL
+        }
+
+        let components = try Self.validatedRemotePathComponents(for: normalized)
+
+        let encodedRelative = components
+            .map(Self.encodePathComponent)
+            .joined(separator: "/")
+        urlComponents.percentEncodedPath = basePath + "/" + encodedRelative
+        return urlComponents.url ?? baseURL
+    }
+
+    private func remoteCollectionURL(forRemotePath remotePath: String) throws -> URL {
+        Self.directoryURL(from: try remoteURL(forRemotePath: remotePath))
+    }
+
+    private func remotePath(fromHref href: String, relativeTo baseURL: URL) -> String? {
+        let rawHref = href.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawHref.isEmpty else { return nil }
         let resolvedURL: URL?
-        if let absolute = URL(string: decodedHref), absolute.scheme != nil {
-            resolvedURL = absolute
+        if let absolute = URL(string: rawHref), absolute.scheme != nil {
+            resolvedURL = absolute.absoluteURL
         } else {
-            resolvedURL = URL(string: decodedHref, relativeTo: Self.normalizedEndpointURL(config.endpointURL))?.absoluteURL
+            resolvedURL = URL(string: rawHref, relativeTo: baseURL)?.absoluteURL
         }
 
         guard let resolvedURL else { return nil }
-        let fullPath = resolvedURL.path
+        let fullPath = Self.normalizedPercentEncodedPath(of: resolvedURL)
         let prefix = endpointPathPrefix
 
         if prefix == "/" {
-            return RemotePathBuilder.normalizePath(fullPath)
+            return Self.normalizePercentEncodedRemotePath(fullPath)
         }
 
         if fullPath == prefix || fullPath == prefix + "/" {
@@ -696,7 +809,36 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
 
         let suffix = String(fullPath.dropFirst(prefix.count))
-        return RemotePathBuilder.normalizePath(suffix)
+        return Self.normalizePercentEncodedRemotePath(suffix)
+    }
+
+    private func enqueueCancelledUploadCleanup(for remotePath: String) {
+        let normalized = RemotePathBuilder.normalizePath(remotePath)
+        guard normalized != "/" else { return }
+        if !pendingCancelledUploadCleanupPaths.contains(normalized) {
+            pendingCancelledUploadCleanupPaths.append(normalized)
+        }
+    }
+
+    private func drainPendingCancelledUploadCleanup() async {
+        guard !pendingCancelledUploadCleanupPaths.isEmpty else { return }
+        let paths = pendingCancelledUploadCleanupPaths
+        pendingCancelledUploadCleanupPaths.removeAll()
+        for path in paths {
+            try? await deleteWithoutPendingCleanup(path: path)
+        }
+    }
+
+    private func deleteWithoutPendingCleanup(path: String) async throws {
+        let targetURL = try remoteURL(forRemotePath: path)
+        let request = makeRequest(url: targetURL, method: "DELETE")
+        let status = try await sendStatus(request)
+        if status == 404 {
+            return
+        }
+        guard status == 207 || (200 ... 299).contains(status) else {
+            throw Self.statusError(status, method: "DELETE", url: request.url)
+        }
     }
 
     private static func basicAuthValue(username: String, password: String) -> String {
@@ -721,8 +863,115 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         return components.url ?? url
     }
 
+    private static func normalizedPercentEncodedPath(of url: URL) -> String {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.path.isEmpty ? "/" : url.path
+        }
+        let path = uppercasedPercentEscapes(in: components.percentEncodedPath)
+        if path.isEmpty {
+            return "/"
+        }
+        if path.count > 1, path.hasSuffix("/") {
+            return String(path.dropLast())
+        }
+        return path
+    }
+
+    private static func directoryURL(from url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        var path = components.percentEncodedPath
+        if path.isEmpty {
+            path = "/"
+        } else if !path.hasSuffix("/") {
+            path += "/"
+        }
+        components.percentEncodedPath = path
+        return components.url ?? url
+    }
+
+    private static func normalizePercentEncodedRemotePath(_ path: String) -> String? {
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if trimmed.isEmpty {
+            return "/"
+        }
+
+        let components = trimmed
+            .split(separator: "/")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        guard components.allSatisfy({ component in
+            let decoded = component.removingPercentEncoding ?? component
+            return decoded != "." && decoded != ".."
+        }) else {
+            return nil
+        }
+        return uppercasedPercentEscapes(in: "/" + components.joined(separator: "/"))
+    }
+
+    private static func canonicalRemotePath(_ path: String) throws -> String {
+        let normalized = RemotePathBuilder.normalizePath(path)
+        if normalized == "/" {
+            return "/"
+        }
+        let encodedComponents = try validatedRemotePathComponents(for: normalized)
+            .map(Self.encodePathComponent)
+        return "/" + encodedComponents.joined(separator: "/")
+    }
+
+    private static func validatedRemotePathComponents(for normalizedPath: String) throws -> [String] {
+        let relative = String(normalizedPath.dropFirst())
+        let components = relative
+            .split(separator: "/")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        for component in components {
+            let decoded = component.removingPercentEncoding ?? component
+            if decoded == "." || decoded == ".." {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+        }
+        return components
+    }
+
+    private static func encodePathComponent(_ component: String) -> String {
+        let allowedCharacters = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
+        let encoded = component.addingPercentEncoding(withAllowedCharacters: allowedCharacters) ?? component
+        return uppercasedPercentEscapes(in: encoded)
+    }
+
+    private static func uppercasedPercentEscapes(in value: String) -> String {
+        let nsRange = NSRange(value.startIndex..<value.endIndex, in: value)
+        var result = value
+        for match in percentEscapeRegex.matches(in: value, range: nsRange).reversed() {
+            guard let range = Range(match.range, in: result) else { continue }
+            result.replaceSubrange(range, with: result[range].uppercased())
+        }
+        return result
+    }
+
+    private static func entryName(forRemotePath remotePath: String, displayName: String?, href: String) -> String {
+        let encodedName = (remotePath as NSString).lastPathComponent
+        let decodedName = encodedName.removingPercentEncoding ?? encodedName
+        if !decodedName.isEmpty {
+            return decodedName
+        }
+        if let displayName, !displayName.isEmpty {
+            return displayName
+        }
+        let decodedHref = href.removingPercentEncoding ?? href
+        return decodedHref.isEmpty ? href : decodedHref
+    }
+
+    private static func decodedEntryPath(fromRemotePath remotePath: String) -> String {
+        remotePath.removingPercentEncoding ?? remotePath
+    }
+
     private static func parseDate(_ value: String) -> Date? {
         if value.isEmpty { return nil }
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
         if let date = rfc1123Formatter.date(from: value) {
             return date
         }
@@ -736,6 +985,29 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         let parts = statusLine.split(separator: " ")
         guard parts.count >= 2 else { return nil }
         return Int(parts[1])
+    }
+
+    private static func isCancellationError(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+        if let storageError = error as? RemoteStorageClientError {
+            switch storageError {
+            case .underlying(let underlying):
+                return isCancellationError(underlying)
+            default:
+                return false
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isCancellationError(underlying)
+        }
+        return false
     }
 
     private static func statusError(_ statusCode: Int, method: String, url: URL?) -> RemoteStorageClientError {
