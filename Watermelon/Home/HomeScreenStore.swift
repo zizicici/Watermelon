@@ -135,6 +135,11 @@ final class HomeScreenStore {
         }
     }
 
+    func reloadProfiles() {
+        connectionController.loadProfiles()
+        onChange?(.connection)
+    }
+
     // MARK: - Selection Actions
 
     func toggleMonth(_ month: LibraryMonthKey, side: SelectionSide) {

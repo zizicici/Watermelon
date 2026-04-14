@@ -4,6 +4,7 @@ import UIKit
 
 final class HomeViewController: UIViewController {
 
+    private let dependencies: DependencyContainer
     private let store: HomeScreenStore
 
     private enum Section: Hashable {
@@ -29,6 +30,8 @@ final class HomeViewController: UIViewController {
     private var dataSource: DataSource!
     private var panelShownConstraint: Constraint?
     private var panelHiddenConstraint: Constraint?
+    private var settingsFABBottomToSafeArea: Constraint?
+    private var settingsFABBottomToActionPanel: Constraint?
     private let leftHeaderLabel: MarqueeLabel = {
         let label = MarqueeLabel(frame: .zero, rate: 30, fadeLength: 8)
         label.animationDelay = 2
@@ -48,6 +51,7 @@ final class HomeViewController: UIViewController {
     private let rightHeaderButton = UIButton(type: .system)
     private let rightToggle = UIButton(type: .system)
     private let actionPanel = SelectionActionPanel()
+    private let settingsFAB = UIButton(type: .system)
     private var collectionBottomToActionPanel: Constraint?
 
     private let remoteOverlay = UIView()
@@ -68,6 +72,7 @@ final class HomeViewController: UIViewController {
     }
 
     init(dependencies: DependencyContainer) {
+        self.dependencies = dependencies
         self.store = HomeScreenStore(dependencies: dependencies)
         super.init(nibName: nil, bundle: nil)
     }
@@ -309,6 +314,17 @@ final class HomeViewController: UIViewController {
             make.top.equalTo(rightHeaderBg.snp.bottom)
             make.bottom.equalTo(actionPanel.snp.top)
         }
+
+        configureSettingsFAB()
+        view.addSubview(settingsFAB)
+        settingsFAB.snp.makeConstraints { make in
+            make.width.height.equalTo(48)
+            make.trailing.equalTo(view.safeAreaLayoutGuide.snp.trailing).inset(20)
+            self.settingsFABBottomToSafeArea = make.bottom.equalTo(view.safeAreaLayoutGuide.snp.bottom).inset(20).constraint
+            self.settingsFABBottomToActionPanel = make.bottom.equalTo(actionPanel.snp.top).offset(-16).constraint
+        }
+        settingsFABBottomToActionPanel?.deactivate()
+        view.bringSubviewToFront(settingsFAB)
     }
 
     // MARK: - Data Source
@@ -709,6 +725,39 @@ final class HomeViewController: UIViewController {
         return result
     }
 
+    private func configureSettingsFAB() {
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
+        var configuration = UIButton.Configuration.glass()
+        configuration.image = UIImage(systemName: "ellipsis", withConfiguration: symbolConfig)
+        configuration.cornerStyle = .capsule
+        configuration.contentInsets = .zero
+        settingsFAB.configuration = configuration
+        settingsFAB.accessibilityLabel = String(localized: "controller.more.title")
+        settingsFAB.addTarget(self, action: #selector(openSettings), for: .touchUpInside)
+    }
+
+    @objc
+    private func openSettings() {
+        let moreViewController = MoreViewController(dependencies: dependencies) { [weak self] in
+            self?.reloadProfiles()
+        }
+
+        if let navigationController {
+            navigationController.pushViewController(moreViewController, animated: ConsideringUser.pushAnimated)
+            return
+        }
+
+        let container = UINavigationController(rootViewController: moreViewController)
+        if let presentation = container.sheetPresentationController {
+            presentation.prefersGrabberVisible = true
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
+    private func reloadProfiles() {
+        store.reloadProfiles()
+    }
+
     private func updateActionPanel() {
         if let exec = store.executionState {
             updateActionPanelFromExecution(exec)
@@ -732,24 +781,15 @@ final class HomeViewController: UIViewController {
 
         let shouldShow = !store.selection.isEmpty
         if shouldShow && !isPanelShown {
-            isPanelShown = true
-            panelHiddenConstraint?.deactivate()
-            panelShownConstraint?.activate()
-            UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseOut) { self.view.layoutIfNeeded() }
+            setActionPanelVisible(true, animated: true)
         } else if !shouldShow && isPanelShown {
-            isPanelShown = false
-            panelShownConstraint?.deactivate()
-            panelHiddenConstraint?.activate()
-            UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseIn) { self.view.layoutIfNeeded() }
+            setActionPanelVisible(false, animated: true)
         }
     }
 
     private func updateActionPanelFromExecution(_ exec: HomeExecutionState) {
         if !isPanelShown {
-            isPanelShown = true
-            panelHiddenConstraint?.deactivate()
-            panelShownConstraint?.activate()
-            view.layoutIfNeeded()
+            setActionPanelVisible(true, animated: false)
         }
 
         let failureSummary = buildFailureMenu(from: exec)
@@ -765,6 +805,34 @@ final class HomeViewController: UIViewController {
                 failureSummary: failureSummary?.0
             )
         )
+    }
+
+    private func setActionPanelVisible(_ visible: Bool, animated: Bool) {
+        isPanelShown = visible
+
+        if visible {
+            panelHiddenConstraint?.deactivate()
+            panelShownConstraint?.activate()
+            settingsFABBottomToSafeArea?.deactivate()
+            settingsFABBottomToActionPanel?.activate()
+        } else {
+            panelShownConstraint?.deactivate()
+            panelHiddenConstraint?.activate()
+            settingsFABBottomToActionPanel?.deactivate()
+            settingsFABBottomToSafeArea?.activate()
+        }
+
+        let animations = { self.view.layoutIfNeeded() }
+        if animated {
+            UIView.animate(
+                withDuration: visible ? 0.3 : 0.25,
+                delay: 0,
+                options: visible ? .curveEaseOut : .curveEaseIn,
+                animations: animations
+            )
+        } else {
+            animations()
+        }
     }
 
     private func buildFailureMenu(from exec: HomeExecutionState) -> (UIMenu, String)? {
