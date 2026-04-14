@@ -2,7 +2,7 @@
 
 ## 1. 一句话现状
 
-项目当前主线是：`Home` 单页 + `BackupView` 备份状态页 + `More` 配置页；备份支持 `SMB / WebDAV / 外接存储`，并已实现按月份分桶的多 worker 上传。
+项目当前主线是：`Home` 单页 + `More` 配置页；备份支持 `SMB / WebDAV / 外接存储`，并已实现按月份分桶的多 worker 上传。
 
 ## 2. 先看哪些文件
 
@@ -34,7 +34,7 @@
 3. 全量或范围资产会按“月份”分桶，worker 动态领取月份任务（非静态切片）。
 4. 存储连接使用 `StorageClientPool`（网络协议连接池上限为 2，本地盘按 worker 数）。
 5. 单 Asset 由 `AssetProcessor` 处理：导出+hash、碰名处理、上传、写 manifest、写本地索引、更新远端快照缓存。
-6. `MonthManifestStore.flushToRemote` 失败默认中断 run（`ManifestFlushFailurePolicy.failRun`）。
+6. `MonthManifestStore.flushToRemote` 失败抛出异常，默认终止 run。
 7. 暂停/停止是协作取消，不会强杀正在进行的单次 I/O。
 
 ## 5. 数据存储（真实）

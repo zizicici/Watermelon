@@ -61,7 +61,7 @@
 2. 同名冲突处理：
 3. 小文件（<5 MiB）且 size 未知或一致时，下载远端同名文件比 hash。
 4. hash 相同则 `skipped(name_same_hash)`。
-5. 否则用 `RemoteNameCollisionResolver` 生成 `_n` 新文件名。
+5. 否则使用 `AssetProcessor` 内联方法 `resolveNextAvailableName` 生成 `_n` 新文件名。
 6. 上传重试最多 3 次（含碰名重试）。
 7. 上传成功后调用 `setModificationDate`（按各 client 实现；WebDAV 会尝试 PROPPATCH）。
 8. 写入 manifest `resources` 与远端快照缓存。
@@ -70,9 +70,8 @@
 
 1. `upsertResource/upsertAsset` 先写本地月 sqlite 并标记 `dirty`。
 2. 月末或任务收尾调用 `flushToRemote` 同步远端 manifest 文件。
-3. flush 失败行为由 `ManifestFlushFailurePolicy` 控制。
-4. 当前默认策略：`failRun`（flush 失败中断 run）。
-5. 暂停/停止收尾时会对当前月使用 `ignoreCancellation`，尽量完成 flush。
+3. flush 失败抛出异常，默认终止 run。外接硬盘断开时跳过 flush。
+4. 暂停/停止收尾时会对当前月使用 `ignoreCancellation`，尽量完成 flush。
 
 ## 7. 暂停 / 停止 / 恢复
 

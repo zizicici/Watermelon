@@ -15,10 +15,9 @@
 3. `AppSession`
 4. `StorageClientFactory`
 5. `PhotoLibraryService`
-6. `MetadataService`
-7. `ContentHashIndexRepository`
-8. `BackupCoordinator`
-9. `RestoreService`
+6. `ContentHashIndexRepository`
+7. `BackupCoordinator`
+8. `RestoreService`
 
 说明：
 
@@ -96,7 +95,7 @@
 
 职责：
 
-1. 基于 `RemoteManifestIndexScanner` 扫描摘要
+1. 直接扫描远端年/月目录的 manifest 摘要（大小、修改时间）
 2. 比较上次 digest，增量替换/移除月份
 3. 驱动 `RemoteLibrarySnapshotCache` 更新
 

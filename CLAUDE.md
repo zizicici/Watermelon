@@ -13,26 +13,34 @@ Build with `Watermelon.xcodeproj`. There is no package manager CLI or test runne
 ```
 Watermelon/
   App/          # AppDelegate, SceneDelegate, AppCoordinator, AppSession, DependencyContainer
-  Home/         # NewHomeViewController, HomeAlbumMatching, HomeLibraryEngines
+  Home/         # NewHomeViewController, HomeAlbumMatching, HomeLibraryEngines,
+                # HomeExecutionCoordinator, HomeExecutionSession, HomeScreenStore,
+                # HomeConnectionController, DownloadWorkflowHelper, SelectionActionPanel
   Services/
-    Backup/     # BackupCoordinator, AssetProcessor, BackupAssetResourcePlanner,
-                # MonthManifestStore, RemoteIndexSyncService,
-                # RemoteManifestIndexScanner, RemoteLibrarySnapshotCache,
-                # ContentHashIndexRepository, BackupCancellationController,
-                # RemoteNameCollisionResolver
-    SMB/        # AMSMB2Client, SMBSetupService
-    Storage/    # RemoteStorageClientProtocol, StorageClientFactory,
-                # WebDAVClient, LocalVolumeClient, SecurityScopedBookmarkStore
-    Discovery/  # SMBDiscoveryService (Bonjour, _smb._tcp)
-    PhotoLibrary/ Restore/ Metadata/
+    Backup/     # BackupCoordinator, BackupRunPreparation, BackupParallelExecutor,
+                # BackupMonthScheduler, StorageClientPool,
+                # AssetProcessor (+Upload, +Naming), BackupAssetResourcePlanner,
+                # MonthManifestStore (+Loading, +Schema),
+                # RemoteIndexSyncService, RemoteLibrarySnapshotCache,
+                # BackupSessionController, BackupSessionReducer,
+                # BackupCancellationController, BackupEventStream,
+                # BackupRunModels, BackupRunDriver, BackupResumePlanner
+    SMB/        # AMSMB2Client, SMBSetupService, SMBErrorClassifier,
+                # SMBClientProtocol (RemoteStorageClientProtocol, RemoteStorageClientError)
+    Storage/    # StorageClientFactory, WebDAVClient, LocalVolumeClient,
+                # SecurityScopedBookmarkStore
+    HashIndex/  # ContentHashIndexRepository
+    PhotoLibrary/ Restore/
   UI/
-    Backup/     # BackupSessionController, BackupViewController
-    Album/      # AlbumGridCell, AlbumSectionHeaderView
-    Auth/ Settings/ Browser/ Common/
+    Auth/       # AddSMBServerLoginViewController, SMBSharePathPickerViewController,
+                # AddSMBServerViewController, AddWebDAVStorageViewController,
+                # AddExternalStorageViewController, ManageStorageProfilesViewController
+    More/       # MoreViewController, SettingOptionsViewController, Settings
+    Common/     # FormRowView, UIColor+App
   Data/
     Database/   # DatabaseManager, Records
     Security/   # KeychainService
-  Domain/       # BackupDomain, RemoteLibraryDomain, RemotePathBuilder
+  Domain/       # BackupDomain, RemoteLibraryDomain, RemotePathBuilder, StorageProfile
 ```
 
 ## Architecture
@@ -40,12 +48,12 @@ Watermelon/
 ### App Startup
 
 `SceneDelegate` → `AppCoordinator.start()` → `showHome()` → `NewHomeViewController`.
-No TabBar. `ServerSelectionViewController` and `SettingsViewController` exist in the codebase but are **not** in the current startup path.
+No TabBar. Single-screen architecture centered on `NewHomeViewController`.
 
 ### Dependency Injection
 
 Single `DependencyContainer` created at startup holds all top-level singletons:
-`DatabaseManager`, `KeychainService`, `AppSession`, `StorageClientFactory`, `PhotoLibraryService`, `MetadataService`, `BackupCoordinator`, `RestoreService`.
+`DatabaseManager`, `KeychainService`, `AppSession`, `StorageClientFactory`, `PhotoLibraryService`, `ContentHashIndexRepository`, `BackupCoordinator`, `RestoreService`.
 
 `AppSession` holds the active `ServerProfileRecord` and in-memory password (SMB/WebDAV require it; external-volume does not).
 
@@ -60,35 +68,41 @@ Single `DependencyContainer` created at startup holds all top-level singletons:
 
 ### Backup Execution Plane
 
-The execution flow runs inside `BackupCoordinator.runBackup(..., context: BackupRunContext)`:
+`BackupCoordinator.runBackup(request: BackupRunRequest, eventStream: BackupEventStream)` delegates to two services:
+
+**Phase 1 — Preparation** (`BackupRunPreparationService.prepareRun`):
 
 1. Request photo permission.
 2. Build storage client via `StorageClientFactory`, connect, ensure `basePath` exists.
 3. `RemoteIndexSyncService.syncIndex` scans month manifest digests and applies deltas to `RemoteLibrarySnapshotCache`.
-4. Iterate `PHAsset` sorted by `creationDate ASC`.
-5. Per-asset processing is delegated to `AssetProcessor`.
-6. Month boundary: flush previous month manifest, load/create new month store.
-7. End: flush current month manifest and emit terminal event.
+4. Group `PHAsset` items by month via `BackupMonthScheduler.buildMonthAssetIDsByMonth`.
+5. Build month plans sorted by estimated bytes DESC (largest months first).
+6. Resolve worker count (SMB/WebDAV: 2, external-volume: 3, max 4) and connection pool size.
+7. Return `BackupPreparedRun` with initial client, month plans, worker config, and a client factory closure.
 
-`BackupRunContext` carries run-scoped dependencies:
+**Phase 2 — Parallel execution** (`BackupParallelExecutor.execute`):
 
-- `eventSink: BackupEventStream`
-- `cancellationController: BackupCancellationController`
+1. Create `StorageClientPool` (actor) with max connections; seed the initial client.
+2. Spawn `N` workers in a `TaskGroup`, each pulling months from `MonthWorkQueue` (actor, dynamic pull).
+3. Per month per worker: load/create `MonthManifestStore`, process assets in batches of 500.
+4. Per-asset processing is delegated to `AssetProcessor`.
+5. After each month: flush manifest to remote via atomic temp+move.
+6. On error: external-storage errors skip manifest flush and propagate immediately; other fatal errors terminate all workers via the task group.
 
-`BackupCoordinator` no longer exposes global `eventStream` or `cancelActiveBackup` APIs.
+`BackupRunRequest` carries run-scoped parameters: `profile`, `password`, `onlyAssetLocalIdentifiers` (retry mode), `workerCountOverride`, `onMonthUploaded` (finalizer callback).
 
 ### Data Storage
 
-**Local SQLite** (GRDB, `DatabaseManager`), migrations `v3_dev_reset_schema`, `v4_server_profiles_storage_type`, `v5_server_profiles_sort_order`, `v6_server_profiles_partial_unique_smb`:
+**Local SQLite** (GRDB, `DatabaseManager`), migrations `v7_dev_schema_reset`, `v8_server_profiles_smb_identity`:
 
 - `server_profiles` — saved storage profiles (`storageType`, `connectionParams`, `sortOrder`)
 - `sync_state` — key/value store (e.g. `active_server_profile_id`)
 - `local_assets` — per-asset fingerprint cache
 - `local_asset_resources` — per-resource content hash by `(assetLocalIdentifier, role, slot)`
 
-`server_profiles` uniqueness is SMB-only via partial unique index on `(host, shareName, basePath, username)` with `WHERE storageType = 'smb'`.
+`server_profiles` uniqueness is SMB-only via partial unique index on `(host, port, shareName, basePath, username, IFNULL(domain, ''))` with `WHERE storageType = 'smb'`.
 
-**Remote monthly manifest** (`MonthManifestStore`), path `/{YYYY}/{MM}/.watermelon_manifest.sqlite`, migrations `month_manifest_v2_reset_schema` + `month_manifest_v2_schema_baseline` (idempotent baseline, non-destructive):
+**Remote monthly manifest** (`MonthManifestStore`), path `/{YYYY}/{MM}/.watermelon_manifest.sqlite`, migration `month_manifest_v3_dev_schema_reset` (dev-phase drop+recreate):
 
 - `resources`
 - `assets`
@@ -130,9 +144,15 @@ Three-engine architecture in `HomeLibraryEngines.swift`:
 
 **Pause/Stop**: upload phase → `backupSessionController.stopBackup()` (cooperative cancellation). Download phase → `downloadTask.cancel()` + `backupSessionController.stopBackup()` + `Task.checkCancellation` in `RestoreService.restoreItems` loop.
 
-### Remote Thumbnails
+### Storage Clients
 
-`RemoteThumbnailService` downloads full remote files and downsamples locally (actor-based concurrency limiting). Cache key includes `StorageProfile.identityKey` to avoid cross-storage collisions.
+Three implementations of `RemoteStorageClientProtocol`:
+
+- **`AMSMB2Client`** — wraps AMSMB2 library (`SMB2Manager`). `@unchecked Sendable` class. Uses `SMBErrorClassifier` for NT_STATUS hex matching (not-found, collision, connection-unavailable) and POSIX error code extraction.
+- **`WebDAVClient`** — `actor`. Custom XML parser for PROPFIND/PROPPATCH. Percent-encoded path handling with case normalization. Supports RFC 1123 and Win32 modification date formats.
+- **`LocalVolumeClient`** — `actor`. Security-scoped bookmark lifecycle. Fast-path `copyItem` with chunked fallback. `hasLostAccessToExternalVolume` probes root URL to confirm disconnection rather than relying on error code heuristics.
+
+`StorageClientPool` (actor) manages connection pooling: `acquire()` blocks when pool exhausted, `release(reusable:)` recycles or replaces connections, `shutdown()` disconnects all and fails pending waiters.
 
 ## Key Rules & Invariants
 
@@ -149,5 +169,5 @@ Three-engine architecture in `HomeLibraryEngines.swift`:
 
 - No automated tests; critical paths rely on manual regression.
 - Full backup resume still recomputes pending set by rescanning photo library.
-- Manifest flush is month-boundary + run-end; force-kill can still lose unflushed delta.
-- `RemoteIndexSyncService` currently has Sendable warnings that should be resolved before Swift 6 strict mode.
+- Manifest flush is per-worker-per-month + run-end; force-kill can still lose unflushed delta.
+- WebDAV `RemoteStorageEntry.path` is returned percent-encoded from `list()`/`metadata()`, while SMB and LocalVolume return decoded paths. Callers that feed `entry.path` back into client methods (e.g. `RemoteIndexSyncService`) may double-encode non-ASCII characters on WebDAV.
