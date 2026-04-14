@@ -3,7 +3,7 @@
 ## 1. App 入口
 
 1. `SceneDelegate` -> `AppCoordinator.start()`
-2. `AppCoordinator` 当前只路由到 `NewHomeViewController`
+2. `AppCoordinator` 当前只路由到 `HomeViewController`
 3. 非 TabBar 结构，根是单 `UINavigationController`
 
 ## 2. DependencyContainer
@@ -105,7 +105,7 @@
 
 ## 6. Home UI 层
 
-### NewHomeViewController
+### HomeViewController
 
 1. 左右双栏布局：左侧"本地相册"、右侧"远端存储"（下拉菜单切换连接）
 2. 按年-月 section 展示，每月一行左右各一个 cell

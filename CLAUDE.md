@@ -13,7 +13,7 @@ Build with `Watermelon.xcodeproj`. There is no package manager CLI or test runne
 ```
 Watermelon/
   App/          # AppDelegate, SceneDelegate, AppCoordinator, AppSession, DependencyContainer
-  Home/         # NewHomeViewController, HomeAlbumMatching, HomeLibraryEngines,
+  Home/         # HomeViewController, HomeAlbumMatching, HomeLibraryEngines,
                 # HomeExecutionCoordinator, HomeExecutionSession, HomeScreenStore,
                 # HomeConnectionController, DownloadWorkflowHelper, SelectionActionPanel
   Services/
@@ -47,8 +47,8 @@ Watermelon/
 
 ### App Startup
 
-`SceneDelegate` → `AppCoordinator.start()` → `showHome()` → `NewHomeViewController`.
-No TabBar. Single-screen architecture centered on `NewHomeViewController`.
+`SceneDelegate` → `AppCoordinator.start()` → `showHome()` → `HomeViewController`.
+No TabBar. Single-screen architecture centered on `HomeViewController`.
 
 ### Dependency Injection
 
@@ -128,7 +128,7 @@ Three-engine architecture in `HomeLibraryEngines.swift`:
 
 ### Home Page — Execution Mode
 
-`NewHomeViewController` manages a three-phase execution flow:
+`HomeViewController` manages a three-phase execution flow:
 
 1. **Selection phase** — user selects months on left (local) / right (remote) columns. Arrow direction per month: local-only → upload (→), remote-only → download (←), both → sync (↔). `SelectionActionPanel` shows counts and "执行" button.
 

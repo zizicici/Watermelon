@@ -10,7 +10,7 @@ final class AppCoordinator {
     }
 
     func start() {
-        window.rootViewController = NewHomeViewController(dependencies: dependencies)
+        window.rootViewController = HomeViewController(dependencies: dependencies)
         window.makeKeyAndVisible()
     }
 }

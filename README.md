@@ -17,7 +17,7 @@
 
 ## 启动与主流程
 
-- App 启动入口：`AppCoordinator.start()` -> `NewHomeViewController`
+- App 启动入口：`AppCoordinator.start()` -> `HomeViewController`
 - Home 是左右双栏布局（本地相册 / 远端存储），用户选中月份后执行上传、下载或同步
 - 执行三阶段：上传阶段 → 下载阶段 → 完成（支持暂停/停止）
 - 进度基于 reconciliation `matchedCount`（content-hash 匹配），百分比单调递增不回退
@@ -71,7 +71,7 @@
 
 ## 首页月份选择与执行
 
-`NewHomeViewController` 提供月份级操作：
+`HomeViewController` 提供月份级操作：
 
 - 左右双栏：本地相册 / 远端存储，按年-月 section 展示
 - 月份选择：点击 cell 选中，箭头方向自动判定（→上传 / ←下载 / ↔同步）

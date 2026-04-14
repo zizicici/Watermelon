@@ -2,7 +2,7 @@
 
 ## Project Background
 
-iOS photo backup app ("Watermelon"). The home page (`NewHomeViewController`) displays a two-column layout:
+iOS photo backup app ("Watermelon"). The home page (`HomeViewController`) displays a two-column layout:
 - **Left column**: Local photo library months (from `PHAsset`)
 - **Right column**: Remote storage months (from backup manifests)
 
@@ -28,7 +28,7 @@ Users select months on either/both sides, then execute upload/download/sync oper
 
 ### View Layer
 
-- **`NewHomeViewController`**: UICollectionView with `UICollectionViewCompositionalLayout` (two items per group = two columns), `UICollectionViewDiffableDataSource`, section headers per year, direction arrow badges between columns
+- **`HomeViewController`**: UICollectionView with `UICollectionViewCompositionalLayout` (two items per group = two columns), `UICollectionViewDiffableDataSource`, section headers per year, direction arrow badges between columns
 - **`SelectionActionPanel`**: Bottom bar showing selection counts and execution controls (pause/resume/stop/complete)
 
 ## Changes Made
@@ -190,5 +190,5 @@ The overlay is updated via `updateRemoteOverlay()` called from `updateUI()` and 
 | File | Changes |
 |---|---|
 | `HomeExecutionCoordinator.swift` | `MonthPlan` struct, replace flat sets, callback merge, download resume fix |
-| `NewHomeViewController.swift` | Unified `updateUI`, overlay view, selection guard, binding updates |
+| `HomeViewController.swift` | Unified `updateUI`, overlay view, selection guard, binding updates |
 | `HomeLibraryEngines.swift` | `Task.detached` → `Task`, callbacks return `Set<LibraryMonthKey>` instead of `Bool`/`Void` |

@@ -2,7 +2,7 @@ import MarqueeLabel
 import SnapKit
 import UIKit
 
-final class NewHomeViewController: UIViewController {
+final class HomeViewController: UIViewController {
 
     private let store: HomeScreenStore
 
@@ -967,7 +967,7 @@ final class NewHomeViewController: UIViewController {
 
 // MARK: - UICollectionViewDelegate
 
-extension NewHomeViewController: UICollectionViewDelegate {
+extension HomeViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
         guard let item = dataSource.itemIdentifier(for: indexPath) else { return }

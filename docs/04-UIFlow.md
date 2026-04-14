@@ -2,7 +2,7 @@
 
 ## 1. 启动与 Home
 
-App 启动后直接进入 `NewHomeViewController`。
+App 启动后直接进入 `HomeViewController`。
 
 ### 顶部区域
 

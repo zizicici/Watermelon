@@ -7,7 +7,7 @@
 ## 2. 先看哪些文件
 
 1. `Watermelon/App/DependencyContainer.swift`
-2. `Watermelon/Home/NewHomeViewController.swift`
+2. `Watermelon/Home/HomeViewController.swift`
 3. `Watermelon/Home/HomeLibraryEngines.swift`
 4. `Watermelon/Home/HomeAlbumMatching.swift`
 5. `Watermelon/Services/Backup/BackupSessionController.swift`
@@ -19,7 +19,7 @@
 
 ## 3. 主流程（运行时）
 
-1. `AppCoordinator.start()` 直接进入 `NewHomeViewController`。
+1. `AppCoordinator.start()` 直接进入 `HomeViewController`。
 2. Home 顶部左右分栏：左侧”本地相册”、右侧”远端存储”（下拉菜单切换连接）。
 3. 连接成功时先执行 `backupCoordinator.reloadRemoteIndex(...)`，再刷新 Home 数据。
 4. 用户选中月份后，底部面板显示备份/下载/同步计数，点”执行”进入三阶段执行模式。
