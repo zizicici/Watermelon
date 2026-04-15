@@ -6,14 +6,17 @@
 //
 
 import UIKit
+import MoreKit
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
-
-
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        MoreKit.configure(
+            productIDs: ["com.zizicici.watermelon.pro"],
+            membershipKey: "com.zizicici.watermelon.membership.lifetime"
+        )
+        MoreKitAppearance.shared.tintColor = .systemGreen
         return true
     }
 

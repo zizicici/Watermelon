@@ -1,4 +1,6 @@
+import AppInfo
 import MarqueeLabel
+import MoreKit
 import SnapKit
 import UIKit
 
@@ -738,9 +740,50 @@ final class HomeViewController: UIViewController {
 
     @objc
     private func openSettings() {
-        let moreViewController = MoreViewController(dependencies: dependencies) { [weak self] in
+        let configuration = MoreViewControllerConfiguration(
+            title: String(localized: "controller.more.title"),
+            promotionConfig: PromotionCellConfiguration(
+                title: String(localized: "store.promotion.title"),
+                titleHighlight: "Pro",
+                features: [
+                    String(localized: "store.promotion.feature.1"),
+                    String(localized: "store.promotion.feature.2"),
+                ]
+            ),
+            gratefulConfig: GratefulCellConfiguration(
+                title: String(localized: "store.grateful.title"),
+                titleHighlight: "Pro",
+                content: String(localized: "store.grateful.content")
+            ),
+            email: "watermelon@zi.ci",
+            appStoreId: "6762260596",
+            privacyPolicyURL: "https://zizicici.medium.com/privacy-policy-for-off-day-app-6f7f26f68c7c",
+            specificationsConfig: SpecificationsConfiguration(
+                summaryItems: [
+                    .init(type: .name, value: SpecificationsViewController.getAppName() ?? ""),
+                    .init(type: .version, value: SpecificationsViewController.getAppVersion() ?? ""),
+                    .init(type: .manufacturer, value: "@App君"),
+                    .init(type: .publisher, value: "ZIZICICI LIMITED"),
+                    .init(type: .dateOfProduction, value: "2026/01/28"),
+                    .init(type: .license, value: "闽ICP备2023015823号-8A"),
+                ],
+                thirdPartyLibraries: [
+                    .init(name: "SnapKit", version: "5.7.1", urlString: "https://github.com/SnapKit/SnapKit"),
+                    .init(name: "GRDB", version: "7.9.0", urlString: "https://github.com/groue/GRDB.swift"),
+                    .init(name: "Toast", version: "5.1.1", urlString: "https://github.com/scalessec/Toast-Swift"),
+                    .init(name: "MarqueeLabel", version: "4.5.3", urlString: "https://github.com/cbpowell/MarqueeLabel"),
+                    .init(name: "ZipArchive", version: "2.6.0", urlString: "https://github.com/ZipArchive/ZipArchive"),
+                ]
+            ),
+            otherApps: [.moontake, .lemon, .offDay, .one, .pigeon, .pin, .coconut, .tagDay],
+            otherAppsDisplayCount: 3
+        )
+
+        let dataSource = WatermelonMoreDataSource(dependencies: dependencies) { [weak self] in
             self?.reloadProfiles()
         }
+
+        let moreViewController = MoreViewController(configuration: configuration, dataSource: dataSource)
 
         if let navigationController {
             navigationController.pushViewController(moreViewController, animated: ConsideringUser.pushAnimated)
