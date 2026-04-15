@@ -1,4 +1,5 @@
 import Foundation
+import Photos
 
 struct RemoteManifestAsset: Hashable, Identifiable {
     let year: Int
@@ -70,6 +71,29 @@ struct RemoteManifestResource: Hashable, Identifiable {
 
     var contentHashHex: String {
         contentHash.hexString
+    }
+}
+
+struct RemoteAssetResourceInstance: Hashable, Identifiable, Sendable {
+    let role: Int
+    let slot: Int
+    let resourceHash: Data
+    let fileName: String
+    let fileSize: Int64
+    let remoteRelativePath: String
+    let creationDateNs: Int64?
+
+    var id: String {
+        "\(role)|\(slot)|\(resourceHash.hexString)"
+    }
+
+    var resourceType: PHAssetResourceType? {
+        guard role > 0 else { return nil }
+        return PHAssetResourceType(rawValue: role)
+    }
+
+    var contentHashHex: String {
+        resourceHash.hexString
     }
 }
 

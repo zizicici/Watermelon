@@ -12,13 +12,13 @@ final class RestoreService {
     }
 
     struct RestoreItemDescriptor: Sendable {
-        let resources: [RemoteManifestResource]
+        let instances: [RemoteAssetResourceInstance]
         let identity: Data
     }
 
     struct RestoredAsset {
         let localIdentifier: String
-        let resources: [RemoteManifestResource]
+        let importedInstances: [RemoteAssetResourceInstance]
     }
 
     struct RestoredItem: Sendable {
@@ -44,11 +44,11 @@ final class RestoreService {
         var results: [RestoredItem] = []
         for (index, item) in items.enumerated() {
             try Task.checkCancellation()
-            let creationDate = item.resources
+            let creationDate = item.instances
                 .compactMap(\.creationDateNs)
                 .min()
                 .map { Date(nanosecondsSinceEpoch: $0) }
-            let group = RestoreGroup(creationDate: creationDate, resources: item.resources)
+            let group = RestoreGroup(creationDate: creationDate, instances: item.instances)
             var restoredItem: RestoredItem?
             if let asset = try await restoreGroup(group, profile: profile, storageClient: storageClient) {
                 let restored = RestoredItem(identity: item.identity, asset: asset)
@@ -65,52 +65,67 @@ final class RestoreService {
         profile: ServerProfileRecord,
         storageClient: RemoteStorageClientProtocol
     ) async throws -> RestoredAsset? {
-        let resourceDesc = group.resources.map { r in
-            let mapped = Self.mapResourceType(code: r.resourceType)
+        let resourceDesc = group.instances.map { instance in
+            let mapped = instance.resourceType
             let typeStr = mapped.map { String($0.rawValue) } ?? "skip"
-            return "\(r.fileName) (type=\(r.resourceType)→\(typeStr), size=\(r.fileSize), hash=\(r.contentHashHex.prefix(8)))"
+            return "\(instance.fileName) (role=\(instance.role), slot=\(instance.slot), type=\(typeStr), size=\(instance.fileSize), hash=\(instance.contentHashHex.prefix(8)))"
         }.joined(separator: ", ")
-        print("[RestoreService] restoreGroup: \(group.resources.count) resource(s), creationDate=\(group.creationDate?.description ?? "nil") — [\(resourceDesc)]")
+        print("[RestoreService] restoreGroup: \(group.instances.count) instance(s), creationDate=\(group.creationDate?.description ?? "nil") — [\(resourceDesc)]")
 
-        var downloaded: [(RemoteManifestResource, URL)] = []
-        for resource in group.resources {
+        var downloadedURLsByHash: [Data: URL] = [:]
+        downloadedURLsByHash.reserveCapacity(group.instances.count)
+        var downloaded: [(RemoteAssetResourceInstance, URL)] = []
+        downloaded.reserveCapacity(group.instances.count)
+
+        for instance in group.instances {
             try Task.checkCancellation()
+            if let cachedURL = downloadedURLsByHash[instance.resourceHash] {
+                downloaded.append((instance, cachedURL))
+                continue
+            }
+
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "restore_\(UUID().uuidString)_\(resource.fileName)"
+                "restore_\(UUID().uuidString)_\(instance.fileName)"
             )
             try? FileManager.default.removeItem(at: tempURL)
 
             let remotePath = RemotePathBuilder.absolutePath(
                 basePath: profile.basePath,
-                remoteRelativePath: resource.remoteRelativePath
+                remoteRelativePath: instance.remoteRelativePath
             )
             do {
                 try await storageClient.download(remotePath: remotePath, localURL: tempURL)
             } catch {
-                print("[RestoreService]   download FAILED: \(resource.fileName), remotePath=\(remotePath), reason=\(error.localizedDescription)")
+                print("[RestoreService]   download FAILED: \(instance.fileName), remotePath=\(remotePath), reason=\(error.localizedDescription)")
                 throw error
             }
 
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? -1
             let fileExists = FileManager.default.fileExists(atPath: tempURL.path)
-            print("[RestoreService]   downloaded: \(resource.fileName) → \(tempURL.lastPathComponent), exists=\(fileExists), localSize=\(fileSize), expectedSize=\(resource.fileSize)")
-            downloaded.append((resource, tempURL))
+            print("[RestoreService]   downloaded: \(instance.fileName) → \(tempURL.lastPathComponent), exists=\(fileExists), localSize=\(fileSize), expectedSize=\(instance.fileSize)")
+            downloadedURLsByHash[instance.resourceHash] = tempURL
+            downloaded.append((instance, tempURL))
         }
 
+        let acceptedDownloaded = acceptedDownloadedResources(from: downloaded)
+        let uniqueDownloadedURLs = Set(downloaded.map(\.1))
         do {
             try Task.checkCancellation()
-            let localID = try await saveToPhotoLibrary(downloaded: downloaded, creationDate: group.creationDate)
+            let localID = try await saveToPhotoLibrary(downloaded: acceptedDownloaded, creationDate: group.creationDate)
             print("[RestoreService]   saveToPhotoLibrary succeeded, localID=\(localID ?? "nil")")
 
-            for (_, url) in downloaded {
+            for url in uniqueDownloadedURLs {
                 try? FileManager.default.removeItem(at: url)
             }
 
             guard let localID else { return nil }
-            return RestoredAsset(localIdentifier: localID, resources: group.resources)
+            return RestoredAsset(
+                localIdentifier: localID,
+                importedInstances: acceptedDownloaded.map(\.0)
+            )
         } catch {
             print("[RestoreService]   saveToPhotoLibrary FAILED: \(error)")
-            for (_, url) in downloaded {
+            for url in uniqueDownloadedURLs {
                 try? FileManager.default.removeItem(at: url)
             }
             throw error
@@ -119,44 +134,30 @@ final class RestoreService {
 
     private struct RestoreGroup {
         let creationDate: Date?
-        let resources: [RemoteManifestResource]
+        let instances: [RemoteAssetResourceInstance]
     }
 
-    private static func groupResourcesForRestore(_ resources: [RemoteManifestResource]) -> [RestoreGroup] {
-        let grouped = Dictionary(grouping: resources) { resource -> String in
-            let base = (resource.fileName as NSString).deletingPathExtension.lowercased()
-            return "\(resource.creationDateNs ?? -1)|\(base)|\(resource.monthKey)"
-        }
+    private func acceptedDownloadedResources(
+        from downloaded: [(RemoteAssetResourceInstance, URL)]
+    ) -> [(RemoteAssetResourceInstance, URL)] {
+        var accepted: [(RemoteAssetResourceInstance, URL)] = []
+        accepted.reserveCapacity(downloaded.count)
+        var addedResourceTypes = Set<PHAssetResourceType>()
 
-        var result: [RestoreGroup] = []
-        result.reserveCapacity(grouped.count)
-
-        for group in grouped.values {
-            let hasPhotoLike = group.contains { ResourceTypeCode.isPhotoLike($0.resourceType) }
-            let hasPairedVideo = group.contains { $0.resourceType == ResourceTypeCode.pairedVideo }
-
-            if hasPhotoLike, hasPairedVideo {
-                let creationDate = group
-                    .compactMap(\.creationDateNs)
-                    .min()
-                    .map { Date(nanosecondsSinceEpoch: $0) }
-                result.append(RestoreGroup(creationDate: creationDate, resources: group))
+        for entry in downloaded {
+            let instance = entry.0
+            guard let type = instance.resourceType else { continue }
+            if !addedResourceTypes.insert(type).inserted {
+                print("[RestoreService]   duplicate resource type skipped: role=\(instance.role), slot=\(instance.slot), file=\(instance.fileName)")
                 continue
             }
-
-            for resource in group {
-                let creationDate = resource.creationDateNs
-                    .map { Date(nanosecondsSinceEpoch: $0) }
-                result.append(RestoreGroup(creationDate: creationDate, resources: [resource]))
-            }
+            accepted.append(entry)
         }
 
-        return result.sorted { lhs, rhs in
-            (lhs.creationDate ?? .distantPast) < (rhs.creationDate ?? .distantPast)
-        }
+        return accepted
     }
 
-    private func saveToPhotoLibrary(downloaded: [(RemoteManifestResource, URL)], creationDate: Date?) async throws -> String? {
+    private func saveToPhotoLibrary(downloaded: [(RemoteAssetResourceInstance, URL)], creationDate: Date?) async throws -> String? {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String?, Error>) in
             var placeholderID: String?
             PHPhotoLibrary.shared().performChanges {
@@ -164,12 +165,10 @@ final class RestoreService {
                 request.creationDate = creationDate
                 placeholderID = request.placeholderForCreatedAsset?.localIdentifier
 
-                var addedTypes = Set<PHAssetResourceType>()
-                for (resource, url) in downloaded {
-                    guard let type = Self.mapResourceType(code: resource.resourceType) else { continue }
-                    guard addedTypes.insert(type).inserted else { continue }
+                for (instance, url) in downloaded {
+                    guard let type = instance.resourceType else { continue }
                     let options = PHAssetResourceCreationOptions()
-                    options.originalFilename = resource.fileName
+                    options.originalFilename = instance.fileName
                     request.addResource(with: type, fileURL: url, options: options)
                 }
             } completionHandler: { success, error in
@@ -187,10 +186,4 @@ final class RestoreService {
             }
         }
     }
-
-    private static func mapResourceType(code: Int) -> PHAssetResourceType? {
-        guard code > 0 else { return nil }
-        return PHAssetResourceType(rawValue: code)
-    }
-
 }

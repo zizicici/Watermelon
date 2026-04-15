@@ -28,7 +28,7 @@ struct RemoteAlbumItem {
     let assetFingerprint: Data
     let creationDate: Date
     let resources: [RemoteManifestResource]
-    let resourceLinks: [RemoteAssetResourceLink]
+    let instances: [RemoteAssetResourceInstance]
     let representative: RemoteManifestResource
     let mediaKind: AlbumMediaKind
     let contentHashes: [Data]
@@ -88,17 +88,32 @@ enum HomeAlbumMatching {
 
             var groupedResources: [RemoteManifestResource] = []
             groupedResources.reserveCapacity(sortedLinks.count)
+            var instances: [RemoteAssetResourceInstance] = []
+            instances.reserveCapacity(sortedLinks.count)
             var contentHashes: [Data] = []
             contentHashes.reserveCapacity(sortedLinks.count)
             var seenHashes = Set<Data>()
 
             for link in sortedLinks {
-                guard seenHashes.insert(link.resourceHash).inserted else { continue }
                 let key = ResourceLookupKey(year: asset.year, month: asset.month, hash: link.resourceHash)
-                if let resource = resourcesByMonthHash[key] {
+                guard let resource = resourcesByMonthHash[key] else { continue }
+
+                if seenHashes.insert(link.resourceHash).inserted {
                     groupedResources.append(resource)
+                    contentHashes.append(link.resourceHash)
                 }
-                contentHashes.append(link.resourceHash)
+
+                instances.append(
+                    RemoteAssetResourceInstance(
+                        role: link.role,
+                        slot: link.slot,
+                        resourceHash: link.resourceHash,
+                        fileName: resource.fileName,
+                        fileSize: resource.fileSize,
+                        remoteRelativePath: resource.remoteRelativePath,
+                        creationDateNs: resource.creationDateNs
+                    )
+                )
             }
 
             guard let representative = chooseRepresentativeResource(groupedResources) else { continue }
@@ -108,7 +123,7 @@ enum HomeAlbumMatching {
                     assetFingerprint: asset.assetFingerprint,
                     creationDate: asset.creationDate,
                     resources: groupedResources,
-                    resourceLinks: sortedLinks,
+                    instances: instances,
                     representative: representative,
                     mediaKind: detectMediaKind(from: groupedResources),
                     contentHashes: contentHashes
@@ -290,4 +305,3 @@ enum HomeAlbumMatching {
         }
     }
 }
-

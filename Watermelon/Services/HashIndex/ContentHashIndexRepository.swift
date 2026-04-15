@@ -374,21 +374,18 @@ final class ContentHashIndexRepository: @unchecked Sendable {
     func writeHashIndex(
         assetLocalIdentifier: String,
         remoteAssetFingerprint: Data,
-        resourceLinks: [RemoteAssetResourceLink],
-        resources: [RemoteManifestResource]
+        instances: [RemoteAssetResourceInstance]
     ) throws {
-        var records: [LocalAssetResourceHashRecord] = []
-        var totalSize: Int64 = 0
-        for link in resourceLinks {
-            if let resource = resources.first(where: { $0.contentHash == link.resourceHash }) {
-                records.append(LocalAssetResourceHashRecord(
-                    role: link.role,
-                    slot: link.slot,
-                    contentHash: link.resourceHash,
-                    fileSize: resource.fileSize
-                ))
-                totalSize += resource.fileSize
-            }
+        let records = instances.map { instance in
+            LocalAssetResourceHashRecord(
+                role: instance.role,
+                slot: instance.slot,
+                contentHash: instance.resourceHash,
+                fileSize: instance.fileSize
+            )
+        }
+        let totalSize = instances.reduce(Int64(0)) { partial, instance in
+            partial + instance.fileSize
         }
         try upsertAssetHashSnapshot(
             assetLocalIdentifier: assetLocalIdentifier,

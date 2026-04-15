@@ -31,23 +31,20 @@ final class DownloadWorkflowHelper {
         do {
             let descriptors = remoteItems.map { item in
                 RestoreService.RestoreItemDescriptor(
-                    resources: item.resources,
+                    instances: item.instances,
                     identity: item.assetFingerprint
                 )
             }
-            let remoteItemByFingerprint = Dictionary(uniqueKeysWithValues: remoteItems.map {
-                ($0.assetFingerprint, $0)
-            })
-
             _ = try await dependencies.restoreService.restoreItems(
                 items: descriptors,
                 profile: context.profile,
                 password: context.password,
                 onItemCompleted: { _, _, restoredItem in
-                    if let restoredItem, let remoteItem = remoteItemByFingerprint[restoredItem.identity] {
+                    if let restoredItem {
                         try await Self.writeHashIndex(
                             assetLocalIdentifier: restoredItem.asset.localIdentifier,
-                            remoteItem: remoteItem,
+                            remoteAssetFingerprint: restoredItem.identity,
+                            instances: restoredItem.asset.importedInstances,
                             repository: hashIndexRepository
                         )
                         await onItemRestored(restoredItem.asset.localIdentifier)
@@ -66,15 +63,15 @@ final class DownloadWorkflowHelper {
 
     private static func writeHashIndex(
         assetLocalIdentifier: String,
-        remoteItem: RemoteAlbumItem,
+        remoteAssetFingerprint: Data,
+        instances: [RemoteAssetResourceInstance],
         repository: ContentHashIndexRepository
     ) async throws {
         try await Task.detached(priority: .utility) {
             try repository.writeHashIndex(
                 assetLocalIdentifier: assetLocalIdentifier,
-                remoteAssetFingerprint: remoteItem.assetFingerprint,
-                resourceLinks: remoteItem.resourceLinks,
-                resources: remoteItem.resources
+                remoteAssetFingerprint: remoteAssetFingerprint,
+                instances: instances
             )
         }.value
     }
