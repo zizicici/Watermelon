@@ -63,7 +63,11 @@ extension MonthManifestStore {
         do {
             let queue = try DatabaseQueue(path: localURL.path)
             dbQueue = queue
-            try Self.migrate(queue)
+            if manifestExists {
+                try Self.prepareExistingManifest(queue)
+            } else {
+                try Self.migrate(queue)
+            }
             _ = try await queue.read { db in
                 try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
             }
@@ -75,7 +79,7 @@ extension MonthManifestStore {
                     domain: "MonthManifestStore",
                     code: -32,
                     userInfo: [
-                        NSLocalizedDescriptionKey: "Existing month manifest for \(monthRelativePath) is corrupted and cannot be loaded.",
+                        NSLocalizedDescriptionKey: "Existing month manifest for \(monthRelativePath) is incompatible or corrupted and cannot be loaded.",
                         NSUnderlyingErrorKey: error
                     ]
                 )
@@ -188,8 +192,8 @@ extension MonthManifestStore {
         month: Int,
         manifestAbsolutePath: String? = nil
     ) async throws -> MonthManifestStore? {
+        let monthRelativePath = String(format: "%04d/%02d", year, month)
         let absPath = manifestAbsolutePath ?? {
-            let monthRelativePath = String(format: "%04d/%02d", year, month)
             return RemotePathBuilder.absolutePath(
                 basePath: basePath,
                 remoteRelativePath: monthRelativePath + "/" + Self.manifestFileName
@@ -209,13 +213,20 @@ extension MonthManifestStore {
         do {
             let queue = try DatabaseQueue(path: localURL.path)
             dbQueue = queue
-            try Self.migrate(queue)
+            try Self.prepareExistingManifest(queue)
             _ = try await queue.read { db in
                 try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
             }
         } catch {
             Self.closeAndRemoveLocalManifest(at: localURL, queue: dbQueue)
-            return nil
+            throw NSError(
+                domain: "MonthManifestStore",
+                code: -34,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Downloaded month manifest for \(monthRelativePath) is incompatible or corrupted and cannot be loaded.",
+                    NSUnderlyingErrorKey: error
+                ]
+            )
         }
 
         guard let dbQueue else {
@@ -238,7 +249,14 @@ extension MonthManifestStore {
             try store.reloadCache()
             return store
         } catch {
-            return nil
+            throw NSError(
+                domain: "MonthManifestStore",
+                code: -35,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Downloaded month manifest for \(monthRelativePath) is incompatible or corrupted and cannot be loaded.",
+                    NSUnderlyingErrorKey: error
+                ]
+            )
         }
     }
 

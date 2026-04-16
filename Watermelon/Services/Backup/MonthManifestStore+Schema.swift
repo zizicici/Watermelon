@@ -16,6 +16,15 @@ extension MonthManifestStore {
         try migrator.migrate(queue)
     }
 
+    // Downloaded manifests may not carry this build's GRDB migration history.
+    // Validate them in place instead of applying the destructive reset migration.
+    static func prepareExistingManifest(_ queue: DatabaseQueue) throws {
+        try queue.write { db in
+            try validateExistingManifestSchema(db)
+            try ensureSchemaIndexes(db)
+        }
+    }
+
     static func ensureSchemaBaseline(_ db: Database) throws {
         try db.execute(
             sql: """
@@ -51,9 +60,82 @@ extension MonthManifestStore {
             )
             """
         )
+        try ensureSchemaIndexes(db)
+    }
+
+    static func ensureSchemaIndexes(_ db: Database) throws {
         try db.execute(sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_resources_contentHash ON resources(contentHash)")
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_asset_resources_asset ON asset_resources(assetFingerprint)")
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_asset_resources_hash ON asset_resources(resourceHash)")
+    }
+
+    private static func validateExistingManifestSchema(_ db: Database) throws {
+        try validateExistingManifestTable(
+            db,
+            tableName: "resources",
+            requiredColumns: [
+                "fileName",
+                "contentHash",
+                "fileSize",
+                "resourceType",
+                "creationDateNs",
+                "backedUpAtNs"
+            ]
+        )
+        try validateExistingManifestTable(
+            db,
+            tableName: "assets",
+            requiredColumns: [
+                "assetFingerprint",
+                "creationDateNs",
+                "backedUpAtNs",
+                "resourceCount",
+                "totalFileSizeBytes"
+            ]
+        )
+        try validateExistingManifestTable(
+            db,
+            tableName: "asset_resources",
+            requiredColumns: [
+                "assetFingerprint",
+                "resourceHash",
+                "role",
+                "slot"
+            ]
+        )
+    }
+
+    private static func validateExistingManifestTable(
+        _ db: Database,
+        tableName: String,
+        requiredColumns: Set<String>
+    ) throws {
+        let rows = try Row.fetchAll(db, sql: "PRAGMA table_info(\(tableName))")
+        guard !rows.isEmpty else {
+            throw incompatibleManifestSchemaError(tableName: tableName, missingColumns: requiredColumns)
+        }
+
+        let existingColumns = Set(rows.compactMap { row in
+            row["name"] as String?
+        })
+        let missingColumns = requiredColumns.subtracting(existingColumns)
+        guard missingColumns.isEmpty else {
+            throw incompatibleManifestSchemaError(tableName: tableName, missingColumns: missingColumns)
+        }
+    }
+
+    private static func incompatibleManifestSchemaError(
+        tableName: String,
+        missingColumns: Set<String>
+    ) -> NSError {
+        let missing = missingColumns.sorted().joined(separator: ", ")
+        return NSError(
+            domain: "MonthManifestStore",
+            code: -41,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Existing month manifest schema is incompatible. Missing \(tableName) columns: \(missing)."
+            ]
+        )
     }
 
     static func closeAndRemoveLocalManifest(at localURL: URL, queue: DatabaseQueue?) {

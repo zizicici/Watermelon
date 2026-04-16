@@ -169,7 +169,9 @@ final class RemoteIndexSyncService: Sendable {
                 onMonthSynced?()
             }
             let processElapsed = CFAbsoluteTimeGetCurrent() - processStart
-            syncLog.info("[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(snapshot.assets.count)")
+            syncLog.info(
+                "[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(snapshot.assets.count), resources=\(snapshot.resources.count), links=\(snapshot.links.count)"
+            )
         }
 
         for month in removedMonths.sorted() {

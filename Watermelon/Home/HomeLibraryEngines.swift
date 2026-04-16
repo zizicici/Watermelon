@@ -551,6 +551,12 @@ private final class HomeRemoteIndexEngine: @unchecked Sendable {
                 links: monthDelta.assetResourceLinks
             )
 
+            if hasActiveConnection, !monthDelta.assets.isEmpty, items.count != monthDelta.assets.count {
+                dataLog.warning(
+                    "[HomeData] remote month \(month.text): assets=\(monthDelta.assets.count), resources=\(monthDelta.resources.count), links=\(monthDelta.assetResourceLinks.count), items=\(items.count)"
+                )
+            }
+
             let removedFingerprints = previousFingerprints.subtracting(nextFingerprints)
             let addedFingerprints = nextFingerprints.subtracting(previousFingerprints)
 
