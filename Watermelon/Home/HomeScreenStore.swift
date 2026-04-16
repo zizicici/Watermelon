@@ -27,12 +27,13 @@ final class HomeScreenStore {
     private(set) var sections: [HomeMergedYearSection] = []
     private(set) var rowLookup: [LibraryMonthKey: HomeMonthRow] = [:]
     private(set) var selection = SelectionState()
+    private(set) var localPhotoAccessState: LocalPhotoAccessState
 
     var connectionState: ConnectionState { connectionController.state }
     var executionState: HomeExecutionState? { executionCoordinator.currentState }
 
     var isSelectable: Bool {
-        connectionState.isConnected && executionState == nil
+        connectionState.isConnected && localPhotoAccessState.isAuthorized && executionState == nil
     }
 
     var savedProfiles: [ServerProfileRecord] { connectionController.savedProfiles }
@@ -56,6 +57,9 @@ final class HomeScreenStore {
 
     init(dependencies: DependencyContainer) {
         self.dependencies = dependencies
+        self.localPhotoAccessState = LocalPhotoAccessState(
+            authorizationStatus: dependencies.photoLibraryService.authorizationStatus()
+        )
         self.dataManager = HomeIncrementalDataManager(
             photoLibraryService: dependencies.photoLibraryService,
             contentHashIndexRepository: ContentHashIndexRepository(databaseManager: dependencies.databaseManager)
@@ -126,6 +130,7 @@ final class HomeScreenStore {
             guard let self else { return }
             await self.dataManager.ensureLocalIndexLoaded()
             guard !Task.isCancelled else { return }
+            _ = self.refreshLocalPhotoAccessState()
             self.connectionController.attemptAutoConnect()
             // Don't call syncRemoteDataIfNeeded here — if auto-connect is in progress,
             // connectionState is .connecting and hasActiveConnection would be false,
@@ -202,6 +207,35 @@ final class HomeScreenStore {
 
     func disconnect() {
         connectionController.disconnect()
+    }
+
+    func requestLocalPhotoAccessIfNeeded() {
+        Task { [weak self] in
+            guard let self else { return }
+
+            let accessState = LocalPhotoAccessState(
+                authorizationStatus: self.dependencies.photoLibraryService.authorizationStatus()
+            )
+
+            switch accessState {
+            case .authorized:
+                self.scheduleRefresh([.reloadLocal, .notifyStructural])
+            case .notDetermined:
+                _ = await self.dependencies.photoLibraryService.requestAuthorization()
+                guard !Task.isCancelled else { return }
+                self.scheduleRefresh([.reloadLocal, .notifyStructural])
+            case .denied:
+                break
+            }
+        }
+    }
+
+    func refreshLocalPhotoAccessIfNeeded() {
+        let accessState = LocalPhotoAccessState(
+            authorizationStatus: dependencies.photoLibraryService.authorizationStatus()
+        )
+        guard accessState != localPhotoAccessState else { return }
+        scheduleRefresh([.reloadLocal, .notifyStructural])
     }
 
     // MARK: - Derived State
@@ -352,6 +386,16 @@ final class HomeScreenStore {
         onChange?(.structural)
     }
 
+    @discardableResult
+    private func refreshLocalPhotoAccessState() -> Bool {
+        let newState = LocalPhotoAccessState(
+            authorizationStatus: dependencies.photoLibraryService.authorizationStatus()
+        )
+        guard newState != localPhotoAccessState else { return false }
+        localPhotoAccessState = newState
+        return true
+    }
+
     private func scheduleRefresh(_ work: RefreshWork) {
         pendingRefreshWork.formUnion(work)
         guard refreshTask == nil else { return }
@@ -371,9 +415,14 @@ final class HomeScreenStore {
                 }
 
                 let start = CFAbsoluteTimeGetCurrent()
+                var localPhotoAccessChanged = false
 
                 if work.contains(.reloadLocal) {
                     await self.dataManager.reloadLocalIndex()
+                    localPhotoAccessChanged = self.refreshLocalPhotoAccessState()
+                    if localPhotoAccessChanged {
+                        self.selection.clear()
+                    }
                     guard !Task.isCancelled else { break }
                 }
 
@@ -391,7 +440,7 @@ final class HomeScreenStore {
 
                 if work.contains(.notifyConnection) {
                     self.onChange?(.connection)
-                } else if work.contains(.notifyStructural) {
+                } else if work.contains(.notifyStructural) || localPhotoAccessChanged {
                     self.onChange?(.structural)
                 }
             }

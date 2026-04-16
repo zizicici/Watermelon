@@ -64,10 +64,15 @@ final class HomeViewController: UIViewController {
     private let settingsFAB = UIButton(type: .system)
     private var collectionBottomToActionPanel: Constraint?
 
+    private let localOverlay = UIView()
+    private let localOverlayLabel = UILabel()
+    private let localOverlaySpinner = UIActivityIndicatorView(style: .medium)
+    private let localOverlayButton = UIButton(type: .system)
     private let remoteOverlay = UIView()
     private let remoteOverlayLabel = UILabel()
     private let remoteOverlaySpinner = UIActivityIndicatorView(style: .medium)
     private let remoteOverlayButton = UIButton(type: .system)
+    private var didBecomeActiveObserver: NSObjectProtocol?
 
     private var rightHeaderBg: UIView!
     private var isPanelShown = false
@@ -92,6 +97,12 @@ final class HomeViewController: UIViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        if let didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(didBecomeActiveObserver)
+        }
+    }
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
@@ -101,6 +112,7 @@ final class HomeViewController: UIViewController {
         buildUI()
         configureDataSource()
         bindStore()
+        observeApplicationLifecycle()
 
         store.load()
     }
@@ -289,29 +301,52 @@ final class HomeViewController: UIViewController {
             self.collectionBottomToActionPanel = make.bottom.equalTo(actionPanel.snp.top).constraint
         }
 
+        // Local overlay
+        configureOverlayContainer(localOverlay)
+        configureOverlayLabel(localOverlayLabel)
+        localOverlaySpinner.hidesWhenStopped = true
+        configureOverlayButtonBase(localOverlayButton)
+        localOverlayButton.addTarget(self, action: #selector(localOverlayButtonTapped), for: .touchUpInside)
+
+        let localOverlayStack = makeOverlayStack(
+            spinner: localOverlaySpinner,
+            label: localOverlayLabel,
+            button: localOverlayButton
+        )
+        localOverlay.addSubview(localOverlayStack)
+        localOverlayStack.snp.makeConstraints { make in
+            make.center.equalToSuperview()
+            make.leading.trailing.equalToSuperview().inset(16)
+        }
+
+        view.addSubview(localOverlay)
+        localOverlay.snp.makeConstraints { make in
+            make.leading.equalToSuperview()
+            make.trailing.equalTo(view.snp.centerX).offset(-1)
+            make.top.equalTo(leftHeaderBg.snp.bottom)
+            make.bottom.equalTo(actionPanel.snp.top)
+        }
+
         // Remote overlay
-        remoteOverlay.backgroundColor = .appBackground
-        remoteOverlay.isHidden = true
-        remoteOverlayLabel.textAlignment = .center
-        remoteOverlayLabel.numberOfLines = 0
-        remoteOverlayLabel.font = .systemFont(ofSize: 15, weight: .medium)
-        remoteOverlayLabel.textColor = .secondaryLabel
+        configureOverlayContainer(remoteOverlay)
+        configureOverlayLabel(remoteOverlayLabel)
         remoteOverlaySpinner.hidesWhenStopped = true
 
-        var btnCfg = UIButton.Configuration.plain()
+        configureOverlayButtonBase(remoteOverlayButton)
+        var btnCfg = remoteOverlayButton.configuration ?? UIButton.Configuration.plain()
         btnCfg.image = UIImage(systemName: "chevron.down", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11))
         btnCfg.imagePlacement = .trailing
         btnCfg.imagePadding = 4
         btnCfg.title = "选择存储"
-        btnCfg.baseForegroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
         remoteOverlayButton.configuration = btnCfg
         remoteOverlayButton.showsMenuAsPrimaryAction = true
         remoteOverlayButton.menu = buildDestinationMenu()
 
-        let overlayStack = UIStackView(arrangedSubviews: [remoteOverlaySpinner, remoteOverlayLabel, remoteOverlayButton])
-        overlayStack.axis = .vertical
-        overlayStack.spacing = 12
-        overlayStack.alignment = .center
+        let overlayStack = makeOverlayStack(
+            spinner: remoteOverlaySpinner,
+            label: remoteOverlayLabel,
+            button: remoteOverlayButton
+        )
         remoteOverlay.addSubview(overlayStack)
         overlayStack.snp.makeConstraints { make in
             make.center.equalToSuperview()
@@ -507,6 +542,7 @@ final class HomeViewController: UIViewController {
         updateTopHeaderSummaries()
         updateActionPanel()
         updateSelectionInteraction()
+        updateLocalOverlay()
         updateRemoteOverlay()
     }
 
@@ -638,7 +674,8 @@ final class HomeViewController: UIViewController {
         }
 
         let headerColor = leftHeaderLabel.textColor ?? .secondaryLabel
-        if let summary = aggregatedHeaderSummary(for: .local, treatsEmptyAsZero: true) {
+        if store.localPhotoAccessState.isAuthorized,
+           let summary = aggregatedHeaderSummary(for: .local, treatsEmptyAsZero: true) {
             applyHeaderSummary(summary, to: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel, color: headerColor)
         } else {
             applyHeaderPlaceholder(to: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
@@ -904,10 +941,29 @@ final class HomeViewController: UIViewController {
 
     private func updateSelectionInteraction() {
         let selectable = store.isSelectable
+        collectionView.allowsSelection = selectable
         leftToggle.isEnabled = selectable
         rightToggle.isEnabled = selectable
         rightHeaderMenuOverlay.isEnabled = store.executionState == nil
         rightHeaderButton.isEnabled = store.executionState == nil
+    }
+
+    private func updateLocalOverlay() {
+        switch store.localPhotoAccessState {
+        case .authorized:
+            localOverlay.isHidden = true
+            localOverlaySpinner.stopAnimating()
+        case .notDetermined:
+            localOverlay.isHidden = false
+            localOverlaySpinner.stopAnimating()
+            localOverlayLabel.text = "需要授权访问本地相册"
+            updateLocalOverlayButton(title: "允许访问")
+        case .denied:
+            localOverlay.isHidden = false
+            localOverlaySpinner.stopAnimating()
+            localOverlayLabel.text = "未授权访问本地相册"
+            updateLocalOverlayButton(title: "前往设置")
+        }
     }
 
     private func updateRemoteOverlay() {
@@ -938,6 +994,58 @@ final class HomeViewController: UIViewController {
             rightHeaderLabel.text = "远端存储"
         }
         refreshDestinationMenus()
+    }
+
+    private func updateLocalOverlayButton(title: String) {
+        var configuration = localOverlayButton.configuration ?? UIButton.Configuration.plain()
+        configuration.title = title
+        configuration.image = nil
+        configuration.imagePadding = 0
+        localOverlayButton.configuration = configuration
+    }
+
+    private func configureOverlayContainer(_ overlay: UIView) {
+        overlay.backgroundColor = .appBackground
+        overlay.isHidden = true
+    }
+
+    private func configureOverlayLabel(_ label: UILabel) {
+        label.textAlignment = .center
+        label.numberOfLines = 0
+        label.font = .systemFont(ofSize: 15, weight: .medium)
+        label.textColor = .secondaryLabel
+    }
+
+    private func configureOverlayButtonBase(_ button: UIButton) {
+        var configuration = UIButton.Configuration.plain()
+        configuration.imagePlacement = .trailing
+        configuration.imagePadding = 4
+        configuration.baseForegroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
+        button.configuration = configuration
+    }
+
+    private func makeOverlayStack(
+        spinner: UIActivityIndicatorView,
+        label: UILabel,
+        button: UIButton
+    ) -> UIStackView {
+        let stack = UIStackView(arrangedSubviews: [spinner, label, button])
+        stack.axis = .vertical
+        stack.spacing = 12
+        stack.alignment = .center
+        return stack
+    }
+
+    private func observeApplicationLifecycle() {
+        didBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.store.refreshLocalPhotoAccessIfNeeded()
+            }
+        }
     }
 
     private func configureRightHeaderButton() {
@@ -1106,6 +1214,19 @@ final class HomeViewController: UIViewController {
 
     @objc private func rightToggleTapped() {
         store.toggleAll(side: .remote)
+    }
+
+    @objc private func localOverlayButtonTapped() {
+        switch store.localPhotoAccessState {
+        case .authorized:
+            break
+        case .notDetermined:
+            store.requestLocalPhotoAccessIfNeeded()
+        case .denied:
+            guard let url = URL(string: UIApplication.openSettingsURLString),
+                  UIApplication.shared.canOpenURL(url) else { return }
+            UIApplication.shared.open(url)
+        }
     }
 
     private func executeTapped() {

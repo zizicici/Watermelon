@@ -1,4 +1,5 @@
 import Foundation
+import Photos
 
 // MARK: - Connection State
 
@@ -22,6 +23,29 @@ enum ConnectionState {
         case .connected(let p), .connecting(let p): return p
         case .disconnected: return nil
         }
+    }
+}
+
+enum LocalPhotoAccessState: Equatable {
+    case authorized
+    case notDetermined
+    case denied
+
+    init(authorizationStatus: PHAuthorizationStatus) {
+        switch authorizationStatus {
+        case .authorized, .limited:
+            self = .authorized
+        case .notDetermined:
+            self = .notDetermined
+        case .denied, .restricted:
+            self = .denied
+        @unknown default:
+            self = .denied
+        }
+    }
+
+    var isAuthorized: Bool {
+        self == .authorized
     }
 }
 
