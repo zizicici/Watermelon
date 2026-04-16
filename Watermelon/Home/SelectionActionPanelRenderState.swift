@@ -17,6 +17,7 @@ enum SelectionActionPanelButtonStyle: Equatable {
     case pause
     case resume
     case complete
+    case close
     case failed
     case stop
 }
@@ -35,14 +36,15 @@ struct SelectionActionPanelSelectionState: Equatable {
 }
 
 struct SelectionActionPanelExecutionState: Equatable {
-    let backupPhase: SelectionActionPanel.CategoryPhase?
-    let downloadPhase: SelectionActionPanel.CategoryPhase?
-    let syncPhase: SelectionActionPanel.CategoryPhase?
+    let uploadCount: Int
+    let downloadCount: Int
+    let syncCount: Int
+    let statusText: String
+    let logAlertText: String?
     let primaryAction: SelectionActionPanelPrimaryAction
     let primaryButton: SelectionActionPanelButtonState
     let stopAction: SelectionActionPanelSecondaryAction?
     let stopButton: SelectionActionPanelButtonState?
-    let failureSummaryTitle: String?
 }
 
 enum SelectionActionPanelViewState: Equatable {
@@ -65,13 +67,11 @@ struct SelectionActionPanelMenus {
     let backup: UIMenu?
     let download: UIMenu?
     let sync: UIMenu?
-    let failureSummary: UIMenu?
 
     static let empty = SelectionActionPanelMenus(
         backup: nil,
         download: nil,
-        sync: nil,
-        failureSummary: nil
+        sync: nil
     )
 }
 
@@ -86,15 +86,12 @@ enum SelectionActionPanelViewStateBuilder {
         )
     }
 
-    static func execution(
-        from executionState: HomeExecutionState,
-        failureSummaryTitle: String?
-    ) -> SelectionActionPanelViewState {
-        let phases = executionState.panelPhases()
+    static func execution(from executionState: HomeExecutionState) -> SelectionActionPanelViewState {
         let primaryAction: SelectionActionPanelPrimaryAction
         let primaryButton: SelectionActionPanelButtonState
         let stopAction: SelectionActionPanelSecondaryAction?
         let stopButton: SelectionActionPanelButtonState?
+        let logAlertText = makeLogAlertText(for: executionState)
 
         switch executionState.controlState {
         case .starting, .resuming:
@@ -191,35 +188,46 @@ enum SelectionActionPanelViewStateBuilder {
                 stopButton = nil
 
             case .failed:
-                primaryAction = .none
+                primaryAction = .complete
                 primaryButton = SelectionActionPanelButtonState(
-                    style: .failed,
-                    isEnabled: false,
-                    showsSpinner: false,
-                    isHidden: false
-                )
-                stopAction = .stop
-                stopButton = SelectionActionPanelButtonState(
-                    style: .stop,
+                    style: .close,
                     isEnabled: true,
                     showsSpinner: false,
                     isHidden: false
                 )
+                stopAction = nil
+                stopButton = nil
             }
         }
 
         return .execution(
             SelectionActionPanelExecutionState(
-                backupPhase: phases.backup,
-                downloadPhase: phases.download,
-                syncPhase: phases.sync,
+                uploadCount: executionState.uploadMonths.count,
+                downloadCount: executionState.downloadMonths.count,
+                syncCount: executionState.syncMonths.count,
+                statusText: executionState.statusText,
+                logAlertText: logAlertText,
                 primaryAction: primaryAction,
                 primaryButton: primaryButton,
                 stopAction: stopAction,
-                stopButton: stopButton,
-                failureSummaryTitle: failureSummaryTitle
+                stopButton: stopButton
             )
         )
+    }
+
+    private static func makeLogAlertText(for executionState: HomeExecutionState) -> String? {
+        let failedCount = executionState.failedMonthInfos.count
+        if failedCount > 0 {
+            return failedCount == 1
+                ? "Log 中有 1 个错误，点此查看"
+                : "Log 中有 \(failedCount) 个错误，点此查看"
+        }
+
+        if case .failed = executionState.phase {
+            return "Log 中有错误，点此查看"
+        }
+
+        return nil
     }
 
     private static func primaryButtonStyle(for phase: ExecutionPhase) -> SelectionActionPanelButtonStyle {

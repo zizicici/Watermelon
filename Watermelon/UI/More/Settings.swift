@@ -121,3 +121,83 @@ extension ICloudPhotoBackupMode: UserDefaultSettable {
         "允许访问 iCloud 原件"
     }
 }
+
+// MARK: - Execution Log Filter
+
+struct ExecutionLogFilterPreference: RawRepresentable, Hashable, Sendable {
+    let rawValue: Int
+
+    init(rawValue: Int) {
+        self.rawValue = rawValue & Self.allMask
+    }
+
+    static let defaultOption = ExecutionLogFilterPreference(rawValue: allMask)
+
+    private static let allMask = ExecutionLogLevel.allCases.reduce(0) { partial, level in
+        partial | bit(for: level)
+    }
+
+    var enabledLevels: Set<ExecutionLogLevel> {
+        Set(
+            ExecutionLogLevel.allCases.filter { level in
+                rawValue & Self.bit(for: level) != 0
+            }
+        )
+    }
+
+    func contains(_ level: ExecutionLogLevel) -> Bool {
+        rawValue & Self.bit(for: level) != 0
+    }
+
+    func updating(_ level: ExecutionLogLevel, isEnabled: Bool) -> ExecutionLogFilterPreference {
+        let bit = Self.bit(for: level)
+        let updatedRawValue = isEnabled ? (rawValue | bit) : (rawValue & ~bit)
+        return ExecutionLogFilterPreference(rawValue: updatedRawValue)
+    }
+
+    static func all() -> ExecutionLogFilterPreference {
+        defaultOption
+    }
+
+    private static func bit(for level: ExecutionLogLevel) -> Int {
+        switch level {
+        case .debug:
+            return 1 << 0
+        case .info:
+            return 1 << 1
+        case .warning:
+            return 1 << 2
+        case .error:
+            return 1 << 3
+        }
+    }
+}
+
+extension ExecutionLogFilterPreference: UserDefaultSettable {
+    static func getKey() -> String {
+        "com.zizicici.common.settings.ExecutionLogFilterPreference"
+    }
+
+    static func getHeader() -> String? {
+        "执行日志筛选"
+    }
+
+    static func getFooter() -> String? {
+        "保存执行日志页右上角筛选菜单的已选日志级别。"
+    }
+
+    func getName() -> String {
+        let names = enabledLevels
+            .sorted { $0.rawValue < $1.rawValue }
+            .map { $0.rawValue.uppercased() }
+        return names.isEmpty ? "None" : names.joined(separator: " / ")
+    }
+
+    static func getTitle() -> String {
+        "执行日志筛选"
+    }
+
+    static func getOptions() -> [ExecutionLogFilterPreference] {
+        [defaultOption]
+    }
+}

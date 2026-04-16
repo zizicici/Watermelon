@@ -264,6 +264,7 @@ final class HomeViewController: UIViewController {
         actionPanel.onStopTapped = { [weak self] in self?.confirmStop() }
         actionPanel.onResumeTapped = { [weak self] in self?.store.resumeExecution() }
         actionPanel.onCompleteTapped = { [weak self] in self?.store.exitExecution() }
+        actionPanel.onExecutionDetailsTapped = { [weak self] in self?.openExecutionLog() }
         view.addSubview(actionPanel)
         actionPanel.snp.makeConstraints { make in
             make.leading.trailing.equalToSuperview()
@@ -801,6 +802,26 @@ final class HomeViewController: UIViewController {
         store.reloadProfiles()
     }
 
+    private func openExecutionLog() {
+        guard store.executionState != nil else { return }
+
+        let viewController = HomeExecutionLogViewController(
+            coordinator: store.executionCoordinator
+        )
+
+        if let navigationController {
+            navigationController.pushViewController(viewController, animated: ConsideringUser.pushAnimated)
+            return
+        }
+
+        let container = UINavigationController(rootViewController: viewController)
+        if let presentation = container.sheetPresentationController {
+            presentation.prefersGrabberVisible = true
+            presentation.detents = [.large()]
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
     private func updateActionPanel() {
         if let exec = store.executionState {
             updateActionPanelFromExecution(exec)
@@ -817,8 +838,7 @@ final class HomeViewController: UIViewController {
             menus: SelectionActionPanelMenus(
                 backup: buildCategoryMenu(for: .toRemote),
                 download: buildCategoryMenu(for: .toLocal),
-                sync: buildCategoryMenu(for: .sync),
-                failureSummary: nil
+                sync: buildCategoryMenu(for: .sync)
             )
         )
 
@@ -835,17 +855,12 @@ final class HomeViewController: UIViewController {
             setActionPanelVisible(true, animated: false)
         }
 
-        let failureSummary = buildFailureMenu(from: exec)
         actionPanel.render(
-            state: SelectionActionPanelViewStateBuilder.execution(
-                from: exec,
-                failureSummaryTitle: failureSummary?.1
-            ),
+            state: SelectionActionPanelViewStateBuilder.execution(from: exec),
             menus: SelectionActionPanelMenus(
                 backup: nil,
                 download: nil,
-                sync: nil,
-                failureSummary: failureSummary?.0
+                sync: nil
             )
         )
     }
@@ -876,27 +891,6 @@ final class HomeViewController: UIViewController {
         } else {
             animations()
         }
-    }
-
-    private func buildFailureMenu(from exec: HomeExecutionState) -> (UIMenu, String)? {
-        let infos = exec.failedMonthInfos
-        guard !infos.isEmpty else { return nil }
-
-        var byYear: [Int: [MonthFailureInfo]] = [:]
-        for info in infos {
-            byYear[info.month.year, default: []].append(info)
-        }
-
-        let yearMenus = byYear.keys.sorted().map { year -> UIMenu in
-            let actions = byYear[year]!.sorted { $0.month < $1.month }.map { info in
-                UIAction(title: info.month.displayText, subtitle: info.message) { [weak self] _ in
-                    self?.scrollToMonth(info.month)
-                }
-            }
-            return UIMenu(title: "\(year)年", options: .displayInline, children: actions)
-        }
-
-        return (UIMenu(children: yearMenus), "\(infos.count) 项失败")
     }
 
     private func updateSelectionInteraction() {

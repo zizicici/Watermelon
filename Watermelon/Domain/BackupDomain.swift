@@ -1,6 +1,13 @@
 import Foundation
 import Photos
 
+enum ExecutionLogLevel: String, CaseIterable, Sendable {
+    case debug
+    case info
+    case warning
+    case error
+}
+
 struct BackupExecutionResult: Sendable {
     let total: Int
     let succeeded: Int
@@ -62,6 +69,7 @@ struct BackupProgress {
     let skipped: Int
     let total: Int
     let message: String
+    let logLevel: ExecutionLogLevel
     let itemEvent: BackupItemEvent?
     let transferState: BackupTransferState?
 }

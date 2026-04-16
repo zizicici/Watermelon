@@ -198,6 +198,7 @@ struct HomeExecutionState {
     let monthPlans: [LibraryMonthKey: MonthPlan]
     let phase: ExecutionPhase
     let controlState: ExecutionControlState
+    let statusText: String
     let processedCountByMonth: [LibraryMonthKey: Int]
     let assetCountByMonth: [LibraryMonthKey: Int]
     let uploadMonths: [LibraryMonthKey]
@@ -243,41 +244,6 @@ struct HomeExecutionState {
 
         return basePercent
     }
-
-    func panelPhases() -> (backup: SelectionActionPanel.CategoryPhase?, download: SelectionActionPanel.CategoryPhase?, sync: SelectionActionPanel.CategoryPhase?) {
-        func categoryPhase(for months: [LibraryMonthKey]) -> SelectionActionPanel.CategoryPhase? {
-            guard !months.isEmpty else { return nil }
-            var completed = 0, failed = 0, active = 0, paused = 0, partiallyFailed = 0, uploadDone = 0
-            for m in months {
-                switch monthPlans[m]?.phase {
-                case .completed:                     completed += 1
-                case .partiallyFailed:               partiallyFailed += 1
-                case .failed:                        failed += 1
-                case .uploading, .downloading:       active += 1
-                case .uploadPaused, .downloadPaused: paused += 1
-                case .uploadDone:                    uploadDone += 1
-                default: break
-                }
-            }
-            let done = completed + failed + partiallyFailed
-            let inProgress = done + uploadDone
-            let total = months.count
-
-            if done == total {
-                return failed > 0
-                    ? .failed(completed: completed + partiallyFailed, failed: failed, total: total)
-                    : .completed(total: total)
-            }
-            if active > 0    { return .running(completed: inProgress, failed: failed, total: total) }
-            if failed > 0    { return .failed(completed: completed + partiallyFailed, failed: failed, total: total) }
-            if paused > 0    { return .paused(completed: inProgress, total: total) }
-            if inProgress > 0 { return .running(completed: inProgress, failed: failed, total: total) }
-            return .pending(total: total)
-        }
-
-        return (categoryPhase(for: uploadMonths), categoryPhase(for: downloadMonths), categoryPhase(for: syncMonths))
-    }
-
 }
 
 // MARK: - Change Kind

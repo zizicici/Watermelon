@@ -129,7 +129,10 @@ final class RemoteIndexSyncService: Sendable {
             let snapshot = snapshotCache.current()
             let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
             syncLog.info("[SyncTiming] No changes. Total: \(Self.ms(totalElapsed))s")
-            eventStream?.emit(.log("Remote index unchanged. Month digests matched (\(remoteMonths.count) month(s))."))
+            eventStream?.emitLog(
+                "Remote index unchanged. Month digests matched (\(remoteMonths.count) month(s)).",
+                level: .debug
+            )
             return snapshot
         }
 

@@ -101,9 +101,10 @@ final class AssetProcessor: Sendable {
                 timing.exportHashSeconds += Self.elapsedSeconds(since: exportHashStart)
                 if !context.iCloudPhotoBackupMode.allowsNetworkAccess,
                    PhotoLibraryService.isNetworkAccessRequiredError(error) {
-                    eventStream.emit(.log(
-                        "跳过 iCloud 资源：\(displayName)。资源未下载到本机，且“允许访问 iCloud 原件”未开启。"
-                    ))
+                    eventStream.emitLog(
+                        "跳过 iCloud 资源：\(displayName)。资源未下载到本机，且“允许访问 iCloud 原件”未开启。",
+                        level: .warning
+                    )
                     return Self.makeICloudDisabledSkipResult(
                         context: context,
                         displayName: displayName,
@@ -227,9 +228,10 @@ final class AssetProcessor: Sendable {
         if failedCount > 0 {
             let firstError = firstFailedReason ?? "resource_failed"
             print("[BackupUpload] asset FAILED: asset=\(displayName), success=\(successCount), skipped=\(skippedCount), failed=\(failedCount), reason=\(firstError)")
-            eventStream.emit(.log(
-                "Asset failed (partial): \(displayName). success=\(successCount), skipped=\(skippedCount), failed=\(failedCount)"
-            ))
+            eventStream.emitLog(
+                "Asset failed (partial): \(displayName). success=\(successCount), skipped=\(skippedCount), failed=\(failedCount)",
+                level: .error
+            )
             return AssetProcessResult(
                 status: .failed,
                 reason: firstError,

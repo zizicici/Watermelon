@@ -41,12 +41,13 @@ struct HomeExecutionSession {
         monthPlans.values.contains(where: \.needsDownload)
     }
 
-    func currentState(controlState: ExecutionControlState) -> HomeExecutionState? {
+    func currentState(controlState: ExecutionControlState, statusText: String) -> HomeExecutionState? {
         guard let phase else { return nil }
         return HomeExecutionState(
             monthPlans: monthPlans,
             phase: phase,
             controlState: controlState,
+            statusText: statusText,
             processedCountByMonth: processedCountByMonth,
             assetCountByMonth: assetCountByMonth,
             uploadMonths: uploadMonths,

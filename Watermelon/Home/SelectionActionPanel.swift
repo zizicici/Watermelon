@@ -2,13 +2,15 @@ import SnapKit
 import UIKit
 
 final class SelectionActionPanel: UIView {
-
-    enum CategoryPhase: Equatable {
-        case pending(total: Int)
-        case running(completed: Int, failed: Int, total: Int)
-        case paused(completed: Int, total: Int)
-        case completed(total: Int)
-        case failed(completed: Int, failed: Int, total: Int)
+    private enum Layout {
+        static let executionControlButtonWidth: CGFloat = 72
+        static let executionControlButtonHeight: CGFloat = 36
+        static let selectionCategoryRowHeight: CGFloat = 52
+        static let selectionCategoryButtonInsets = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0)
+        static let executionCategoryButtonInsets = NSDirectionalEdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 2)
+        static let panelLeadingInset: CGFloat = 18
+        static let panelTrailingInset: CGFloat = 12
+        static let panelVerticalInset: CGFloat = 12
     }
 
     var onExecuteTapped: (() -> Void)?
@@ -16,51 +18,64 @@ final class SelectionActionPanel: UIView {
     var onStopTapped: (() -> Void)?
     var onResumeTapped: (() -> Void)?
     var onCompleteTapped: (() -> Void)?
+    var onExecutionDetailsTapped: (() -> Void)?
 
     private var renderedState: SelectionActionPanelViewState?
 
-    private let executionControlButtonWidth: CGFloat = 72
-    private let executionControlButtonHeight: CGFloat = 36
-
     private let separator = UIView()
-    private(set) var backupCategoryButton: UIButton = {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
+    private let leftContentStack = UIStackView()
+    private let categoryScrollView = UIScrollView()
+    private let categoryRowStack = UIStackView()
+    private(set) var backupCategoryButton = SelectionActionPanel.makeSelectionCategoryButton(
+        iconName: "arrow.right",
+        subtitle: "备份",
+        color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
+    )
+    private(set) var downloadCategoryButton = SelectionActionPanel.makeSelectionCategoryButton(
+        iconName: "arrow.left",
+        subtitle: "下载",
+        color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
+    )
+    private(set) var syncCategoryButton = SelectionActionPanel.makeSelectionCategoryButton(
+        iconName: "arrow.left.arrow.right",
+        subtitle: "同步",
+        color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
+    )
+    private let executionInfoStack = UIStackView()
+    private let executionCategoryRow = UIStackView()
+    private let executionUploadCategoryButton = SelectionActionPanel.makeExecutionCategoryButton(
+        iconName: "arrow.right",
+        color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
+    )
+    private let executionDownloadCategoryButton = SelectionActionPanel.makeExecutionCategoryButton(
+        iconName: "arrow.left",
+        color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
+    )
+    private let executionSyncCategoryButton = SelectionActionPanel.makeExecutionCategoryButton(
+        iconName: "arrow.left.arrow.right",
+        color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
+    )
+    private let executionStatusButton: UIButton = {
         var cfg = UIButton.Configuration.plain()
-        cfg.image = UIImage(systemName: "arrow.right", withConfiguration: iconConfig)
-        cfg.imagePadding = 6
+        cfg.title = "Log"
+        cfg.image = UIImage(
+            systemName: "chevron.right",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        )
+        cfg.imagePlacement = .trailing
+        cfg.imagePadding = 4
         cfg.titleAlignment = .leading
-        cfg.subtitle = "备份"
-        cfg.subtitleTextAttributesTransformer = .init { var a = $0; a.font = .preferredFont(forTextStyle: .caption1); return a }
-        cfg.baseForegroundColor = .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
-        let btn = UIButton(configuration: cfg)
-        btn.showsMenuAsPrimaryAction = true
-        return btn
-    }()
-    private(set) var downloadCategoryButton: UIButton = {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-        var cfg = UIButton.Configuration.plain()
-        cfg.image = UIImage(systemName: "arrow.left", withConfiguration: iconConfig)
-        cfg.imagePadding = 6
-        cfg.titleAlignment = .leading
-        cfg.subtitle = "下载"
-        cfg.subtitleTextAttributesTransformer = .init { var a = $0; a.font = .preferredFont(forTextStyle: .caption1); return a }
-        cfg.baseForegroundColor = .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
-        let btn = UIButton(configuration: cfg)
-        btn.showsMenuAsPrimaryAction = true
-        return btn
-    }()
-    private(set) var syncCategoryButton: UIButton = {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-        var cfg = UIButton.Configuration.plain()
-        cfg.image = UIImage(systemName: "arrow.left.arrow.right", withConfiguration: iconConfig)
-        cfg.imagePadding = 6
-        cfg.titleAlignment = .leading
-        cfg.subtitle = "同步"
-        cfg.subtitleTextAttributesTransformer = .init { var a = $0; a.font = .preferredFont(forTextStyle: .caption1); return a }
-        cfg.baseForegroundColor = .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
-        let btn = UIButton(configuration: cfg)
-        btn.showsMenuAsPrimaryAction = true
-        return btn
+        cfg.baseForegroundColor = .secondaryLabel
+        cfg.titleTextAttributesTransformer = .init {
+            var a = $0; a.font = .systemFont(ofSize: 15, weight: .semibold); return a
+        }
+        cfg.contentInsets = .init(top: 0, leading: 0, bottom: 0, trailing: 0)
+        cfg.cornerStyle = .fixed
+        cfg.background = .clear()
+        let button = UIButton(configuration: cfg)
+        button.contentHorizontalAlignment = .leading
+        button.isHidden = true
+        return button
     }()
     private let executeButton: UIButton = {
         let iconConfig = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
@@ -91,25 +106,57 @@ final class SelectionActionPanel: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    private(set) var failureSummaryButton: UIButton = {
+    private static func makeSelectionCategoryButton(
+        iconName: String,
+        subtitle: String,
+        color: UIColor
+    ) -> UIButton {
         let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
         var cfg = UIButton.Configuration.plain()
-        cfg.image = UIImage(systemName: "exclamationmark.triangle.fill", withConfiguration: iconConfig)
+        cfg.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
         cfg.imagePadding = 6
         cfg.titleAlignment = .leading
-        cfg.baseForegroundColor = .systemRed
-        let btn = UIButton(configuration: cfg)
-        btn.showsMenuAsPrimaryAction = true
-        btn.isHidden = true
-        return btn
-    }()
+        cfg.subtitle = subtitle
+        cfg.contentInsets = Layout.selectionCategoryButtonInsets
+        cfg.subtitleTextAttributesTransformer = .init {
+            var attributes = $0
+            attributes.font = .preferredFont(forTextStyle: .caption1)
+            return attributes
+        }
+        cfg.baseForegroundColor = color
+        let button = UIButton(configuration: cfg)
+        button.contentHorizontalAlignment = .leading
+        button.titleLabel?.adjustsFontForContentSizeCategory = true
+        button.titleLabel?.lineBreakMode = .byTruncatingTail
+        button.setContentCompressionResistancePriority(.required, for: .vertical)
+        return button
+    }
 
-    private let categoryScrollView: UIScrollView = {
-        let sv = UIScrollView()
-        sv.showsHorizontalScrollIndicator = false
-        sv.showsVerticalScrollIndicator = false
-        return sv
-    }()
+    private static func makeExecutionCategoryButton(
+        iconName: String,
+        color: UIColor
+    ) -> UIButton {
+        let iconConfig = UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        var cfg = UIButton.Configuration.plain()
+        cfg.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
+        cfg.imagePadding = 3
+        cfg.titleAlignment = .leading
+        cfg.contentInsets = Layout.executionCategoryButtonInsets
+        cfg.titleTextAttributesTransformer = .init {
+            var attributes = $0
+            attributes.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+            return attributes
+        }
+        cfg.baseForegroundColor = color
+        let button = UIButton(configuration: cfg)
+        button.contentHorizontalAlignment = .leading
+        button.titleLabel?.adjustsFontForContentSizeCategory = true
+        button.titleLabel?.lineBreakMode = .byClipping
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .vertical)
+        button.clipsToBounds = false
+        return button
+    }
 
     private func setupUI() {
         backgroundColor = .appPaper
@@ -123,43 +170,82 @@ final class SelectionActionPanel: UIView {
 
         executeButton.addTarget(self, action: #selector(executeTapped), for: .touchUpInside)
         stopButton.addTarget(self, action: #selector(stopTappedAction), for: .touchUpInside)
+        executionUploadCategoryButton.addTarget(self, action: #selector(executionDetailsTapped), for: .touchUpInside)
+        executionDownloadCategoryButton.addTarget(self, action: #selector(executionDetailsTapped), for: .touchUpInside)
+        executionSyncCategoryButton.addTarget(self, action: #selector(executionDetailsTapped), for: .touchUpInside)
+        executionStatusButton.addTarget(self, action: #selector(executionDetailsTapped), for: .touchUpInside)
         stopButton.isHidden = true
         executeButton.snp.makeConstraints { make in
-            make.width.equalTo(executionControlButtonWidth)
-            make.height.equalTo(executionControlButtonHeight)
+            make.width.equalTo(Layout.executionControlButtonWidth)
+            make.height.equalTo(Layout.executionControlButtonHeight)
         }
         stopButton.snp.makeConstraints { make in
-            make.width.equalTo(executionControlButtonWidth)
-            make.height.equalTo(executionControlButtonHeight)
+            make.width.equalTo(Layout.executionControlButtonWidth)
+            make.height.equalTo(Layout.executionControlButtonHeight)
         }
 
-        // Scrollable category buttons (failure + backup + download + sync)
-        let scrollContent = UIStackView(arrangedSubviews: [failureSummaryButton, backupCategoryButton, downloadCategoryButton, syncCategoryButton])
-        scrollContent.axis = .horizontal
-        scrollContent.spacing = 4
-        scrollContent.alignment = .center
+        categoryScrollView.showsHorizontalScrollIndicator = false
+        categoryScrollView.showsVerticalScrollIndicator = false
+        categoryScrollView.alwaysBounceHorizontal = true
 
-        categoryScrollView.addSubview(scrollContent)
-        scrollContent.snp.makeConstraints { make in
-            make.edges.equalToSuperview()
-            make.height.equalToSuperview()
+        categoryRowStack.axis = .horizontal
+        categoryRowStack.spacing = 4
+        categoryRowStack.alignment = .fill
+        categoryRowStack.addArrangedSubview(backupCategoryButton)
+        categoryRowStack.addArrangedSubview(downloadCategoryButton)
+        categoryRowStack.addArrangedSubview(syncCategoryButton)
+
+        categoryScrollView.addSubview(categoryRowStack)
+        categoryRowStack.snp.makeConstraints { make in
+            make.edges.equalTo(categoryScrollView.contentLayoutGuide)
+            make.height.equalTo(categoryScrollView.frameLayoutGuide)
+        }
+        categoryScrollView.snp.makeConstraints { make in
+            make.height.equalTo(Layout.selectionCategoryRowHeight)
         }
 
-        let spacer = UIView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        executionCategoryRow.axis = .horizontal
+        executionCategoryRow.spacing = 6
+        executionCategoryRow.alignment = .fill
+        executionCategoryRow.setContentHuggingPriority(.required, for: .vertical)
+        let executionCategorySpacer = UIView()
+        executionCategorySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        executionCategoryRow.addArrangedSubview(executionUploadCategoryButton)
+        executionCategoryRow.addArrangedSubview(executionDownloadCategoryButton)
+        executionCategoryRow.addArrangedSubview(executionSyncCategoryButton)
+        executionCategoryRow.addArrangedSubview(executionCategorySpacer)
 
-        let contentStack = UIStackView(arrangedSubviews: [categoryScrollView, spacer, stopButton, executeButton])
+        executionInfoStack.axis = .vertical
+        executionInfoStack.spacing = 6
+        executionInfoStack.alignment = .fill
+        executionInfoStack.addArrangedSubview(executionCategoryRow)
+        executionInfoStack.addArrangedSubview(executionStatusButton)
+        executionInfoStack.isHidden = true
+        executionInfoStack.snp.makeConstraints { make in
+            make.height.equalTo(Layout.selectionCategoryRowHeight)
+        }
+
+        leftContentStack.axis = .vertical
+        leftContentStack.alignment = .fill
+        leftContentStack.distribution = .fill
+        leftContentStack.spacing = 0
+        leftContentStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        leftContentStack.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        leftContentStack.addArrangedSubview(categoryScrollView)
+        leftContentStack.addArrangedSubview(executionInfoStack)
+
+        let contentStack = UIStackView(arrangedSubviews: [leftContentStack, stopButton, executeButton])
         contentStack.axis = .horizontal
         contentStack.spacing = 4
         contentStack.setCustomSpacing(12, after: stopButton)
         contentStack.alignment = .center
 
-        let inset: CGFloat = 12
         addSubview(contentStack)
         contentStack.snp.makeConstraints { make in
-            make.top.equalToSuperview().inset(inset)
-            make.leading.trailing.equalToSuperview().inset(inset)
-            make.bottom.equalTo(safeAreaLayoutGuide).inset(inset)
+            make.top.equalToSuperview().inset(Layout.panelVerticalInset)
+            make.leading.equalToSuperview().inset(Layout.panelLeadingInset)
+            make.trailing.equalToSuperview().inset(Layout.panelTrailingInset)
+            make.bottom.equalTo(safeAreaLayoutGuide).inset(Layout.panelVerticalInset)
         }
     }
 
@@ -188,6 +274,11 @@ final class SelectionActionPanel: UIView {
         onStopTapped?()
     }
 
+    @objc private func executionDetailsTapped() {
+        guard case .execution = renderedState else { return }
+        onExecutionDetailsTapped?()
+    }
+
     func render(
         state: SelectionActionPanelViewState,
         menus: SelectionActionPanelMenus = .empty
@@ -212,26 +303,13 @@ final class SelectionActionPanel: UIView {
     ) {
         switch state {
         case .selection:
-            failureSummaryButton.isHidden = true
-            failureSummaryButton.menu = nil
-
             backupCategoryButton.showsMenuAsPrimaryAction = menus.backup != nil
             backupCategoryButton.menu = menus.backup
             downloadCategoryButton.showsMenuAsPrimaryAction = menus.download != nil
             downloadCategoryButton.menu = menus.download
             syncCategoryButton.showsMenuAsPrimaryAction = menus.sync != nil
             syncCategoryButton.menu = menus.sync
-        case .execution(let executionState):
-            if let title = executionState.failureSummaryTitle,
-               let menu = menus.failureSummary {
-                failureSummaryButton.isHidden = false
-                failureSummaryButton.menu = menu
-                failureSummaryButton.configuration?.title = title
-            } else {
-                failureSummaryButton.isHidden = true
-                failureSummaryButton.menu = nil
-            }
-
+        case .execution:
             backupCategoryButton.showsMenuAsPrimaryAction = false
             backupCategoryButton.menu = nil
             downloadCategoryButton.showsMenuAsPrimaryAction = false
@@ -242,22 +320,28 @@ final class SelectionActionPanel: UIView {
     }
 
     private func renderSelection(_ state: SelectionActionPanelSelectionState) {
+        categoryScrollView.isHidden = false
+        executionInfoStack.isHidden = true
+
         applySelectionCategory(
             button: backupCategoryButton,
             count: state.backupCount,
             iconName: "arrow.right",
+            subtitle: "备份",
             color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
         )
         applySelectionCategory(
             button: downloadCategoryButton,
             count: state.downloadCount,
             iconName: "arrow.left",
+            subtitle: "下载",
             color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
         )
         applySelectionCategory(
             button: syncCategoryButton,
             count: state.syncCount,
             iconName: "arrow.left.arrow.right",
+            subtitle: "同步",
             color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
         )
 
@@ -273,24 +357,28 @@ final class SelectionActionPanel: UIView {
     }
 
     private func renderExecution(_ state: SelectionActionPanelExecutionState) {
-        applyCategoryPhase(
-            button: backupCategoryButton,
-            phase: state.backupPhase,
+        categoryScrollView.isHidden = true
+        executionInfoStack.isHidden = false
+
+        applyExecutionCategory(
+            button: executionUploadCategoryButton,
+            count: state.uploadCount,
             iconName: "arrow.right",
             color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
         )
-        applyCategoryPhase(
-            button: downloadCategoryButton,
-            phase: state.downloadPhase,
+        applyExecutionCategory(
+            button: executionDownloadCategoryButton,
+            count: state.downloadCount,
             iconName: "arrow.left",
             color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
         )
-        applyCategoryPhase(
-            button: syncCategoryButton,
-            phase: state.syncPhase,
+        applyExecutionCategory(
+            button: executionSyncCategoryButton,
+            count: state.syncCount,
             iconName: "arrow.left.arrow.right",
             color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
         )
+        applyExecutionStatus(text: state.statusText, logAlertText: state.logAlertText)
         applyPrimaryButton(state.primaryButton)
         applyStopButton(state.stopButton)
     }
@@ -299,60 +387,54 @@ final class SelectionActionPanel: UIView {
         button: UIButton,
         count: Int,
         iconName: String,
+        subtitle: String,
         color: UIColor
     ) {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
         button.isHidden = count == 0
-        guard count > 0 else { return }
+        guard count > 0, var cfg = button.configuration else { return }
 
+        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
         button.isUserInteractionEnabled = true
-        button.configuration?.showsActivityIndicator = false
-        button.configuration?.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
-        button.configuration?.title = "\(count)"
-        button.configuration?.baseForegroundColor = color
+        cfg.showsActivityIndicator = false
+        cfg.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
+        cfg.title = "\(count)"
+        cfg.subtitle = subtitle
+        cfg.baseForegroundColor = color
+        button.configuration = cfg
     }
 
-    private func applyCategoryPhase(button: UIButton, phase: CategoryPhase?, iconName: String, color: UIColor) {
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-        guard let phase else {
-            button.isHidden = true
-            return
-        }
-        button.isHidden = false
-        button.isUserInteractionEnabled = false
+    private func applyExecutionCategory(
+        button: UIButton,
+        count: Int,
+        iconName: String,
+        color: UIColor
+    ) {
+        guard var cfg = button.configuration else { return }
 
-        switch phase {
-        case .pending(let total):
-            button.configuration?.showsActivityIndicator = false
-            button.configuration?.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
-            button.configuration?.title = "\(total)"
-            button.configuration?.baseForegroundColor = color.withAlphaComponent(0.5)
-        case .running(let completed, let failed, let total):
-            button.configuration?.showsActivityIndicator = true
-            if failed > 0 {
-                button.configuration?.image = UIImage(systemName: "exclamationmark.triangle.fill", withConfiguration: iconConfig)
-                button.configuration?.title = "\(completed)/\(total)"
-                button.configuration?.baseForegroundColor = .systemOrange
-            } else {
-                button.configuration?.title = "\(completed)/\(total)"
-                button.configuration?.baseForegroundColor = color
-            }
-        case .paused(let completed, let total):
-            button.configuration?.showsActivityIndicator = false
-            button.configuration?.image = UIImage(systemName: "pause.fill", withConfiguration: iconConfig)
-            button.configuration?.title = "\(completed)/\(total)"
-            button.configuration?.baseForegroundColor = color
-        case .completed(let total):
-            button.configuration?.showsActivityIndicator = false
-            button.configuration?.image = UIImage(systemName: "checkmark", withConfiguration: iconConfig)
-            button.configuration?.title = "\(total)/\(total)"
-            button.configuration?.baseForegroundColor = color
-        case .failed(let completed, let failed, let total):
-            button.configuration?.showsActivityIndicator = false
-            button.configuration?.image = UIImage(systemName: "exclamationmark.triangle.fill", withConfiguration: iconConfig)
-            button.configuration?.title = "\(completed + failed)/\(total)"
-            button.configuration?.baseForegroundColor = .systemRed
-        }
+        let iconConfig = UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        button.isHidden = count == 0
+        guard count > 0 else { return }
+        button.isUserInteractionEnabled = true
+        cfg.showsActivityIndicator = false
+        cfg.image = UIImage(systemName: iconName, withConfiguration: iconConfig)
+        cfg.title = "\(count)"
+        cfg.subtitle = nil
+        cfg.baseForegroundColor = color
+        button.configuration = cfg
+    }
+
+    private func applyExecutionStatus(text: String, logAlertText: String?) {
+        let trimmedStatus = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let statusText = trimmedStatus.isEmpty ? "Log" : trimmedStatus
+        let hasAlert = !(logAlertText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+
+        executionStatusButton.isHidden = false
+        var cfg = executionStatusButton.configuration ?? .plain()
+        cfg.title = statusText
+        cfg.baseForegroundColor = hasAlert
+            ? .materialPrimary(light: .Material.Orange._700, dark: .Material.Orange._200)
+            : .materialOnSurfaceVariant(light: .Material.BlueGrey._700, dark: .Material.BlueGrey._200)
+        executionStatusButton.configuration = cfg
     }
 
     private func applyPrimaryButton(_ state: SelectionActionPanelButtonState) {
@@ -392,6 +474,13 @@ final class SelectionActionPanel: UIView {
                 dark: .Material.Green._200,
                 onDark: .Material.Green._800
             )
+        case .close:
+            applyExecuteButtonStyle(
+                iconName: "xmark",
+                light: .Material.BlueGrey._600,
+                dark: .Material.BlueGrey._200,
+                onDark: .Material.BlueGrey._800
+            )
         case .failed:
             applyExecuteButtonStyle(
                 iconName: "exclamationmark.triangle.fill",
@@ -414,6 +503,8 @@ final class SelectionActionPanel: UIView {
         switch style {
         case .pause:
             palette = (.Material.Orange._600, .Material.Orange._200, .Material.Orange._800)
+        case .close:
+            palette = (.Material.BlueGrey._600, .Material.BlueGrey._200, .Material.BlueGrey._800)
         case .failed, .stop:
             palette = (.Material.Red._600, .Material.Red._200, .Material.Red._800)
         case .execute, .resume, .complete:

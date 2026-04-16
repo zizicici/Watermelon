@@ -2,7 +2,7 @@ import Foundation
 
 enum BackupEvent: Sendable {
     case progress(BackupProgress)
-    case log(String)
+    case log(String, level: ExecutionLogLevel)
     case transferState(BackupTransferState)
     case monthChanged(MonthChangeEvent)
     case started(totalAssets: Int)

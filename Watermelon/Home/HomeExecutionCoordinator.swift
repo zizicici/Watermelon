@@ -1,6 +1,18 @@
 import Foundation
 import MoreKit
 
+struct HomeExecutionLogEntry {
+    let id = UUID()
+    let timestamp: Date
+    let message: String
+    let level: ExecutionLogLevel
+}
+
+struct HomeExecutionLogSnapshot {
+    let statusText: String
+    let entries: [HomeExecutionLogEntry]
+}
+
 @MainActor
 final class HomeExecutionCoordinator {
 
@@ -29,7 +41,15 @@ final class HomeExecutionCoordinator {
 
     var phase: ExecutionPhase? { session.phase }
     var isActive: Bool { session.isActive }
-    var currentState: HomeExecutionState? { session.currentState(controlState: currentControlState) }
+    var currentState: HomeExecutionState? {
+        session.currentState(
+            controlState: currentControlState,
+            statusText: currentStatusText
+        )
+    }
+    var currentLogSnapshot: HomeExecutionLogSnapshot {
+        HomeExecutionLogSnapshot(statusText: currentStatusText, entries: logEntries)
+    }
 
     // MARK: - Callbacks
 
@@ -61,6 +81,10 @@ final class HomeExecutionCoordinator {
     private var downloadHelper: DownloadWorkflowHelper!
     private var executionSettingsSnapshot: ExecutionSettingsSnapshot?
     private var forcedUploadWorkerCountOverride: Int?
+    private var currentStatusText = "未开始"
+    private var logEntries: [HomeExecutionLogEntry] = []
+    private var logObservers: [UUID: @MainActor (HomeExecutionLogSnapshot) -> Void] = [:]
+    private var backupEventObserverID: UUID?
 
     private static let syncThrottleInterval: CFAbsoluteTime = 2.0
     private static let localAvailabilityProbeWorkerCount = 2
@@ -79,6 +103,18 @@ final class HomeExecutionCoordinator {
         }
     }
 
+    @discardableResult
+    func addLogObserver(_ observer: @escaping @MainActor (HomeExecutionLogSnapshot) -> Void) -> UUID {
+        let id = UUID()
+        logObservers[id] = observer
+        observer(currentLogSnapshot)
+        return id
+    }
+
+    func removeLogObserver(_ id: UUID) {
+        logObservers[id] = nil
+    }
+
     // MARK: - Enter / Exit
 
     func enter(upload: [LibraryMonthKey], download: [LibraryMonthKey], sync: [LibraryMonthKey]) {
@@ -87,8 +123,14 @@ final class HomeExecutionCoordinator {
         executionSettingsSnapshot = ExecutionSettingsSnapshot.fromCurrentSettings()
         forcedUploadWorkerCountOverride = nil
         dataRefresher.reset()
+        logEntries.removeAll(keepingCapacity: true)
         session.enter(upload: upload, download: download, sync: sync, localAssetIDs: dataAccess.localAssetIDs)
+        setStatusText("准备执行", notifyState: false)
+        appendInfoLog("开始执行：上传 \(upload.count) 个，下载 \(download.count) 个，同步 \(sync.count) 个。")
         backupSessionController = BackupSessionController(dependencies: dependencies)
+        backupEventObserverID = backupSessionController.addEventObserver { [weak self] event in
+            self?.handleBackupEvent(event)
+        }
         backupBridge = BackupSessionAsyncBridge(backupSessionController: backupSessionController)
         downloadHelper = DownloadWorkflowHelper(dependencies: dependencies)
         notifyStateChanged()
@@ -102,9 +144,16 @@ final class HomeExecutionCoordinator {
         executionSettingsSnapshot = nil
         forcedUploadWorkerCountOverride = nil
         dataRefresher.cancel()
+        if let backupEventObserverID {
+            backupSessionController?.removeEventObserver(backupEventObserverID)
+            self.backupEventObserverID = nil
+        }
         backupBridge?.cancel()
         downloadHelper?.cancel()
         session.reset()
+        setStatusText("未开始", notifyState: false)
+        logEntries.removeAll(keepingCapacity: true)
+        notifyLogObservers()
         notifyStateChanged()
     }
 
@@ -113,16 +162,33 @@ final class HomeExecutionCoordinator {
     }
 
     func pause() {
+        let uploadRunSnapshot = backupSessionController?.snapshot()
+        let shouldPauseBeforeUploadStart =
+            uploadRunSnapshot?.state == .idle &&
+            uploadRunSnapshot?.controlPhase == .idle
+
         switch session.pause() {
         case .upload:
+            appendInfoLog("请求暂停执行。")
+            setStatusText("正在暂停...")
             backupBridge.markAssetIDsPendingForResume(assetIDsAwaitingInlineSyncResume())
-            executionTask?.cancel()
-            executionTask = nil
             dataRefresher.cancel()
             downloadHelper.cancel()
+            if shouldPauseBeforeUploadStart {
+                let taskToAwait = executionTask
+                executionTask?.cancel()
+                executionTask = nil
+                transientControlState = .pausing
+                notifyStateChanged()
+                settleUploadPause(after: taskToAwait)
+                return
+            }
+
             backupBridge.requestPause()
             notifyStateChanged()
         case .download:
+            appendInfoLog("请求暂停执行。")
+            setStatusText("正在暂停...")
             let taskToAwait = executionTask
             executionTask?.cancel()
             executionTask = nil
@@ -139,6 +205,8 @@ final class HomeExecutionCoordinator {
     func resume() {
         guard currentControlState == .idle else { return }
         guard session.resume() != nil else { return }
+        appendInfoLog("继续执行。")
+        setStatusText("正在恢复...")
         notifyStateChanged()
         startExecution()
     }
@@ -146,6 +214,8 @@ final class HomeExecutionCoordinator {
     func stop() {
         switch session.phase {
         case .uploading:
+            appendWarningLog("请求停止执行。")
+            setStatusText("正在停止...")
             let taskToAwait = executionTask
             executionTask?.cancel()
             executionTask = nil
@@ -156,10 +226,13 @@ final class HomeExecutionCoordinator {
             backupBridge.requestStop()
             settleStop(after: taskToAwait)
         case .uploadPaused:
+            appendWarningLog("执行已停止。")
             executionTask?.cancel()
             executionTask = nil
             exit()
         case .downloading:
+            appendWarningLog("请求停止执行。")
+            setStatusText("正在停止...")
             let taskToAwait = executionTask
             executionTask?.cancel()
             executionTask = nil
@@ -169,6 +242,7 @@ final class HomeExecutionCoordinator {
             notifyStateChanged()
             settleStop(after: taskToAwait)
         case .downloadPaused:
+            appendWarningLog("执行已停止。")
             executionTask?.cancel()
             executionTask = nil
             exit()
@@ -197,6 +271,7 @@ final class HomeExecutionCoordinator {
         downloadHelper?.cancel()
 
         let alert = session.failForMissingConnection()
+        setErrorStatus(alert.message, log: "执行失败：\(alert.message)")
         notifyStateChanged()
         onAlert?(alert.title, alert.message)
     }
@@ -265,23 +340,31 @@ final class HomeExecutionCoordinator {
     private func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) async -> Bool {
         switch session.handleUploadResult(result) {
         case .continueToDownload:
+            appendInfoLog("上传阶段完成，开始处理下载任务。")
+            setStatusText("准备下载...")
             _ = await dataRefresher.syncRemoteDataAndWait()
             guard !Task.isCancelled else { return false }
             notifyStateChanged()
             return true
         case .paused:
+            appendWarningLog("执行已暂停。")
+            setStatusText("已暂停", notifyState: false)
             notifyStateChanged()
             return false
         case .failed(let alert):
+            setErrorStatus(alert.message, log: "上传阶段失败：\(alert.message)")
             notifyStateChanged()
             onAlert?(alert.title, alert.message)
             return false
         case .exit:
+            appendWarningLog("执行已停止。")
             exit()
             return false
         case .finished:
+            appendInfoLog("执行阶段完成，正在同步最终结果。")
             _ = await dataRefresher.syncRemoteDataAndWait()
             guard !Task.isCancelled else { return false }
+            refreshTerminalStatus(notifyState: false)
             notifyStateChanged()
             return false
         }
@@ -293,18 +376,23 @@ final class HomeExecutionCoordinator {
         let remaining = session.remainingDownloadMonths()
         guard !remaining.isEmpty else {
             session.finishExecution()
+            appendInfoLog("全部任务处理完成。")
+            refreshTerminalStatus(notifyState: false)
             notifyStateChanged()
             return
         }
 
         guard let context = makeDownloadContext() else {
             let alert = session.failForMissingConnection()
+            setErrorStatus(alert.message, log: "执行失败：\(alert.message)")
             notifyStateChanged()
             onAlert?(alert.title, alert.message)
             return
         }
 
         session.beginDownloadPhase()
+        appendInfoLog("开始下载阶段，共 \(remaining.count) 个月份。")
+        setStatusText("下载中", notifyState: false)
         notifyStateChanged()
 
         for month in remaining {
@@ -314,6 +402,8 @@ final class HomeExecutionCoordinator {
 
         if !Task.isCancelled {
             session.finishExecution()
+            appendInfoLog("全部任务处理完成。")
+            refreshTerminalStatus(notifyState: false)
             notifyStateChanged()
         }
     }
@@ -324,6 +414,8 @@ final class HomeExecutionCoordinator {
         phaseLabel: String
     ) async {
         session.beginDownloadMonth(month)
+        appendInfoLog("开始\(phaseLabel)：\(month.displayText)。")
+        setStatusText("\(phaseLabel) \(month.displayText)", notifyState: false)
         notifyStateChanged()
 
         let assetIDs = dataAccess.localAssetIDs(month)
@@ -354,9 +446,13 @@ final class HomeExecutionCoordinator {
         guard !assetIDs.isEmpty else { return true }
 
         do {
+            let progressHandler = makePreflightProgressHandler()
+            appendInfoLog("开始检测 iCloud 资源可用性，共 \(assetIDs.count) 项资源。")
+            setStatusText("检测 iCloud 资源可用性")
             let probeResult = try await dependencies.localHashIndexBuildService.probeAvailability(
                 for: assetIDs,
-                workerCount: Self.localAvailabilityProbeWorkerCount
+                workerCount: Self.localAvailabilityProbeWorkerCount,
+                progressHandler: progressHandler
             )
             guard !Task.isCancelled else { return false }
 
@@ -365,7 +461,9 @@ final class HomeExecutionCoordinator {
                 let unavailableCount = probeResult.unavailableAssetIDs.count
                 let failedCount = probeResult.failedAssetIDs.count
                 print("[HomeExecution] Availability probe requires conservative upload concurrency. unavailable=\(unavailableCount), failed=\(failedCount). Force upload worker count to 1.")
+                appendWarningLog("检测到 \(unavailableCount) 项 iCloud 资源未就绪，\(failedCount) 项检测失败。上传并发已降为 1。")
             }
+            appendInfoLog("iCloud 资源可用性检测完成。")
             return true
         } catch is CancellationError {
             return false
@@ -373,6 +471,7 @@ final class HomeExecutionCoordinator {
             let message = "检测 iCloud 资源状态失败：\(error.localizedDescription)"
             let alert = session.failExecution(reason: message)
             transientControlState = nil
+            setErrorStatus(message, log: "执行失败：\(message)")
             notifyStateChanged()
             onAlert?(alert.title, alert.message)
             return false
@@ -388,32 +487,42 @@ final class HomeExecutionCoordinator {
         }
 
         do {
+            let progressHandler = makePreflightProgressHandler()
+            appendInfoLog("开始补齐本地索引，共 \(assetIDs.count) 项资源。")
+            setStatusText("补齐本地索引")
             let initialResult = try await dependencies.localHashIndexBuildService.buildIndex(
                 for: assetIDs,
                 workerCount: Self.localIndexPreflightWorkerCount,
-                allowNetworkAccess: false
+                allowNetworkAccess: false,
+                progressHandler: progressHandler
             )
             guard !Task.isCancelled else { return false }
 
             if !initialResult.readyAssetIDs.isEmpty {
+                appendDebugLog("本地索引预检结果开始写回首页：\(initialResult.readyAssetIDs.count) 项。")
                 await dataRefresher.refreshLocalIndexAndNotify(initialResult.readyAssetIDs)
                 guard !Task.isCancelled else { return false }
+                appendDebugLog("首页本地索引刷新完成：\(initialResult.readyAssetIDs.count) 项。")
             }
 
             let result: LocalHashIndexBuildResult
             if session.requiresCompleteLocalIndexBeforeExecution,
                !initialResult.unavailableAssetIDs.isEmpty,
                settings.iCloudPhotoBackupMode == .enable {
+                appendWarningLog("发现 \(initialResult.unavailableAssetIDs.count) 项资源仅存于 iCloud，开始补拉原件。")
                 let iCloudResult = try await dependencies.localHashIndexBuildService.buildIndex(
                     for: initialResult.unavailableAssetIDs,
                     workerCount: Self.localIndexICloudPreflightWorkerCount,
-                    allowNetworkAccess: true
+                    allowNetworkAccess: true,
+                    progressHandler: progressHandler
                 )
                 guard !Task.isCancelled else { return false }
 
                 if !iCloudResult.readyAssetIDs.isEmpty {
+                    appendDebugLog("iCloud 补索引结果开始写回首页：\(iCloudResult.readyAssetIDs.count) 项。")
                     await dataRefresher.refreshLocalIndexAndNotify(iCloudResult.readyAssetIDs)
                     guard !Task.isCancelled else { return false }
+                    appendDebugLog("首页本地索引刷新完成：新增 \(iCloudResult.readyAssetIDs.count) 项。")
                 }
 
                 result = mergedLocalIndexBuildResult(
@@ -425,6 +534,10 @@ final class HomeExecutionCoordinator {
             }
 
             session.markLocalIndexPreflightCompleted()
+            appendLog(
+                "本地索引补齐完成：就绪 \(result.readyAssetIDs.count) 项，不可用 \(result.unavailableAssetIDs.count) 项，失败 \(result.failedAssetIDs.count) 项。",
+                level: result.incompleteAssetIDs.isEmpty ? .info : .warning
+            )
 
             if session.requiresCompleteLocalIndexBeforeExecution,
                !result.incompleteAssetIDs.isEmpty {
@@ -434,11 +547,13 @@ final class HomeExecutionCoordinator {
                 )
                 let alert = session.failExecution(reason: message)
                 transientControlState = nil
+                setErrorStatus(message, log: "执行失败：\(message)")
                 notifyStateChanged()
                 onAlert?(alert.title, alert.message)
                 return false
             }
 
+            setStatusText(session.shouldRunUploadPhase ? "准备上传..." : "准备下载...", notifyState: false)
             return true
         } catch is CancellationError {
             return false
@@ -446,6 +561,7 @@ final class HomeExecutionCoordinator {
             let message = "建立本地索引失败：\(error.localizedDescription)"
             let alert = session.failExecution(reason: message)
             transientControlState = nil
+            setErrorStatus(message, log: "执行失败：\(message)")
             notifyStateChanged()
             onAlert?(alert.title, alert.message)
             return false
@@ -540,11 +656,14 @@ final class HomeExecutionCoordinator {
         let phaseLabel = session.phaseLabel(for: month)
         session.completeSyncMonthUpload(month)
         session.beginDownloadMonth(month)
+        appendInfoLog("上传完成，开始\(phaseLabel)：\(month.displayText)。")
+        setStatusText("\(phaseLabel) \(month.displayText)", notifyState: false)
         notifyStateChanged()
 
         guard let context else {
             let message = "未连接远端存储"
             session.failDownloadMonth(month, reason: message)
+            setErrorStatus(message, log: "\(phaseLabel)失败：\(month.displayText) - \(message)")
             notifyStateChanged()
             onAlert?("\(phaseLabel)失败", "\(month.displayText): \(message)")
             return .failed(message)
@@ -560,14 +679,17 @@ final class HomeExecutionCoordinator {
         assetIDs: Set<String>,
         context: DownloadWorkflowHelper.Context
     ) async -> DownloadMonthResult {
+        appendInfoLog("同步远端索引：\(month.displayText)。")
         _ = await dataRefresher.syncRemoteDataAndWait()
         if Task.isCancelled { return .cancelled }
         if !assetIDs.isEmpty {
+            appendDebugLog("刷新本地索引：\(month.displayText)。")
             await dataRefresher.refreshLocalIndexAndNotify(assetIDs)
             if Task.isCancelled { return .cancelled }
         }
 
         let remoteItems = dataAccess.remoteOnlyItems(month)
+        appendDebugLog("\(month.displayText) 待下载资源：\(remoteItems.count) 项。")
         return await downloadHelper.downloadItems(remoteItems, context: context) { [weak self] assetID in
             guard let self else { return }
             await self.dataRefresher.refreshLocalIndexAndNotify([assetID])
@@ -583,10 +705,13 @@ final class HomeExecutionCoordinator {
         switch result {
         case .success:
             session.completeDownloadMonth(month)
+            appendInfoLog("\(phaseLabel)完成：\(month.displayText)。")
+            refreshTerminalStatus(notifyState: false)
             notifyStateChanged()
             return .success
         case .failed(let message):
             session.failDownloadMonth(month, reason: message)
+            setErrorStatus(message, log: "\(phaseLabel)失败：\(month.displayText) - \(message)")
             notifyStateChanged()
             onAlert?("\(phaseLabel)失败", "\(month.displayText): \(message)")
             return .failed(message)
@@ -607,6 +732,108 @@ final class HomeExecutionCoordinator {
             }
         }
         return assetIDs
+    }
+
+    private func handleBackupEvent(_ event: BackupEvent) {
+        switch event {
+        case .log(let message, let level):
+            appendLog(message, level: level)
+        case .monthChanged(let change):
+            let month = LibraryMonthKey(year: change.year, month: change.month)
+            switch change.action {
+            case .started:
+                appendInfoLog("开始上传：\(month.displayText)。")
+            case .completed:
+                appendInfoLog("上传完成：\(month.displayText)。")
+            }
+        case .started(let totalAssets):
+            setStatusText("上传中")
+            appendInfoLog("上传阶段开始，共 \(totalAssets) 项资源。")
+        case .finished(let result):
+            appendLog(
+                "上传阶段结束：成功 \(result.succeeded) 项，失败 \(result.failed) 项，跳过 \(result.skipped) 项。",
+                level: result.failed > 0 ? .warning : .info
+            )
+        case .progress(let progress):
+            appendLog(progress.message, level: progress.logLevel)
+        case .transferState:
+            break
+        }
+    }
+
+    private func appendLog(
+        _ message: String,
+        level: ExecutionLogLevel = .info
+    ) {
+        let entry = HomeExecutionLogEntry(timestamp: Date(), message: message, level: level)
+        logEntries.append(entry)
+        if logEntries.count > 800 {
+            logEntries.removeFirst(logEntries.count - 800)
+        }
+        notifyLogObservers()
+    }
+
+    private func appendDebugLog(_ message: String) {
+        appendLog(message, level: .debug)
+    }
+
+    private func appendInfoLog(_ message: String) {
+        appendLog(message, level: .info)
+    }
+
+    private func appendWarningLog(_ message: String) {
+        appendLog(message, level: .warning)
+    }
+
+    private func appendErrorLog(_ message: String) {
+        appendLog(message, level: .error)
+    }
+
+    private func setErrorStatus(_ statusText: String, log logMessage: String) {
+        appendErrorLog(logMessage)
+        setStatusText(statusText, notifyState: false)
+    }
+
+    private func setStatusText(_ text: String, notifyState: Bool = true) {
+        guard currentStatusText != text else { return }
+        currentStatusText = text
+        notifyLogObservers()
+        if notifyState {
+            onStateChanged?()
+        }
+    }
+
+    private func refreshTerminalStatus(notifyState: Bool = true) {
+        let text: String
+        switch session.phase {
+        case .completed:
+            text = "执行完毕"
+        case .failed(let message):
+            text = message
+        case .uploadPaused, .downloadPaused:
+            text = "已暂停"
+        case .uploading:
+            text = "上传中"
+        case .downloading:
+            text = "下载中"
+        case nil:
+            text = "未开始"
+        }
+        setStatusText(text, notifyState: notifyState)
+    }
+
+    private func makePreflightProgressHandler() -> LocalHashIndexProgressHandler {
+        { [weak self] message, level in
+            guard let coordinator = self else { return }
+            await MainActor.run {
+                coordinator.appendLog(message, level: level)
+            }
+        }
+    }
+
+    private func notifyLogObservers() {
+        let snapshot = currentLogSnapshot
+        logObservers.values.forEach { $0(snapshot) }
     }
 
     private var currentControlState: ExecutionControlState {
@@ -631,6 +858,8 @@ final class HomeExecutionCoordinator {
     private func settleDownloadPause(after task: Task<Void, Never>?) {
         guard let task else {
             transientControlState = nil
+            setStatusText("已暂停", notifyState: false)
+            appendWarningLog("执行已暂停。")
             notifyStateChanged()
             return
         }
@@ -642,6 +871,31 @@ final class HomeExecutionCoordinator {
                       self.transientControlState == .pausing,
                       self.session.phase == .downloadPaused else { return }
                 self.transientControlState = nil
+                self.setStatusText("已暂停", notifyState: false)
+                self.appendWarningLog("执行已暂停。")
+                self.notifyStateChanged()
+            }
+        }
+    }
+
+    private func settleUploadPause(after task: Task<Void, Never>?) {
+        guard let task else {
+            transientControlState = nil
+            setStatusText("已暂停", notifyState: false)
+            appendWarningLog("执行已暂停。")
+            notifyStateChanged()
+            return
+        }
+
+        Task { [weak self] in
+            _ = await task.value
+            await MainActor.run {
+                guard let self,
+                      self.transientControlState == .pausing,
+                      self.session.phase == .uploadPaused else { return }
+                self.transientControlState = nil
+                self.setStatusText("已暂停", notifyState: false)
+                self.appendWarningLog("执行已暂停。")
                 self.notifyStateChanged()
             }
         }
@@ -649,6 +903,7 @@ final class HomeExecutionCoordinator {
 
     private func settleStop(after task: Task<Void, Never>?) {
         guard let task else {
+            appendWarningLog("执行已停止。")
             exit()
             return
         }
@@ -659,6 +914,7 @@ final class HomeExecutionCoordinator {
                 guard let self,
                       self.transientControlState == .stopping,
                       self.session.isActive else { return }
+                self.appendWarningLog("执行已停止。")
                 self.exit()
             }
         }

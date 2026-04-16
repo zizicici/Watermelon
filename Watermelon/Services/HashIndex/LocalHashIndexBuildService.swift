@@ -4,6 +4,8 @@ import os.log
 
 private let localHashIndexLog = Logger(subsystem: "com.zizicici.watermelon", category: "LocalHashIndex")
 
+typealias LocalHashIndexProgressHandler = @Sendable (String, ExecutionLogLevel) async -> Void
+
 struct LocalHashIndexBuildResult: Sendable {
     let requestedAssetIDs: Set<String>
     let readyAssetIDs: Set<String>
@@ -54,6 +56,11 @@ private struct LocalHashIndexWorkerResult: Sendable {
     }
 }
 
+private struct LocalHashIndexProcessedAssetResult: Sendable {
+    let outcome: LocalHashIndexAssetOutcome
+    let reusedCache: Bool
+}
+
 private actor LocalHashIndexWorklist {
     private let assets: [LocalHashIndexAssetRef]
     private var nextIndex = 0
@@ -67,6 +74,125 @@ private actor LocalHashIndexWorklist {
         let asset = assets[nextIndex]
         nextIndex += 1
         return asset
+    }
+}
+
+private actor LocalHashIndexBuildProgressReporter {
+    private static let logCountStep = 2000
+
+    private let total: Int
+    private let phaseLabel: String
+    private let logHandler: LocalHashIndexProgressHandler?
+
+    private var processed = 0
+    private var cacheHitCount = 0
+    private var rebuiltCount = 0
+    private var unavailableCount = 0
+    private var failedCount = 0
+    private var lastLoggedProcessed = 0
+
+    init(
+        total: Int,
+        phaseLabel: String,
+        logHandler: LocalHashIndexProgressHandler?
+    ) {
+        self.total = total
+        self.phaseLabel = phaseLabel
+        self.logHandler = logHandler
+    }
+
+    func record(_ result: LocalHashIndexProcessedAssetResult) async {
+        processed += 1
+        switch result.outcome {
+        case .ready:
+            if result.reusedCache {
+                cacheHitCount += 1
+            } else {
+                rebuiltCount += 1
+            }
+        case .unavailable:
+            unavailableCount += 1
+        case .failed:
+            failedCount += 1
+        }
+        await maybeLog(force: false)
+    }
+
+    func finish() async {
+        await maybeLog(force: true)
+    }
+
+    private func maybeLog(force: Bool) async {
+        guard let logHandler, total > 0 else { return }
+
+        let shouldLog = force
+            || processed == total
+            || processed - lastLoggedProcessed >= Self.logCountStep
+        guard shouldLog else { return }
+        guard processed > lastLoggedProcessed || force else { return }
+
+        lastLoggedProcessed = processed
+        await logHandler(
+            "\(phaseLabel)进度：已处理 \(processed)/\(total)，缓存命中 \(cacheHitCount)，重建 \(rebuiltCount)，不可用 \(unavailableCount)，失败 \(failedCount)。",
+            .debug
+        )
+    }
+}
+
+private actor LocalHashIndexAvailabilityProgressReporter {
+    private static let logCountStep = 2000
+
+    private let total: Int
+    private let phaseLabel: String
+    private let logHandler: LocalHashIndexProgressHandler?
+
+    private var processed = 0
+    private var readyCount = 0
+    private var unavailableCount = 0
+    private var failedCount = 0
+    private var lastLoggedProcessed = 0
+
+    init(
+        total: Int,
+        phaseLabel: String,
+        logHandler: LocalHashIndexProgressHandler?
+    ) {
+        self.total = total
+        self.phaseLabel = phaseLabel
+        self.logHandler = logHandler
+    }
+
+    func record(_ outcome: LocalHashIndexAssetOutcome) async {
+        processed += 1
+        switch outcome {
+        case .ready:
+            readyCount += 1
+        case .unavailable:
+            unavailableCount += 1
+        case .failed:
+            failedCount += 1
+        }
+        await maybeLog(force: false)
+    }
+
+    func finish() async {
+        await maybeLog(force: true)
+    }
+
+    private func maybeLog(force: Bool) async {
+        guard let logHandler, total > 0 else { return }
+
+        let shouldLog = force
+            || processed == total
+            || processed - lastLoggedProcessed >= Self.logCountStep
+        guard shouldLog else { return }
+        guard processed > lastLoggedProcessed || force else { return }
+
+        lastLoggedProcessed = processed
+        await logHandler(
+            "\(phaseLabel)进度：已检查 \(processed)/\(total)，本地可用 \(readyCount)，iCloud-only \(unavailableCount)，失败 \(failedCount)。",
+            .debug
+        )
     }
 }
 
@@ -96,7 +222,8 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
     func buildIndex(
         for assetIDs: Set<String>,
         workerCount: Int = 2,
-        allowNetworkAccess: Bool = false
+        allowNetworkAccess: Bool = false,
+        progressHandler: LocalHashIndexProgressHandler? = nil
     ) async throws -> LocalHashIndexBuildResult {
         guard !assetIDs.isEmpty else {
             return LocalHashIndexBuildResult(
@@ -116,24 +243,40 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         do {
             try await ensurePhotoAuthorization()
 
+            let phaseLabel = Self.phaseLabel(forNetworkAccess: allowNetworkAccess)
+            let prepareStart = CFAbsoluteTimeGetCurrent()
+            await progressHandler?("\(phaseLabel)：开始准备输入，共 \(assetIDs.count) 项资源。", .info)
             let preparedInput = try await prepareInput(for: assetIDs)
+            let prepareElapsed = CFAbsoluteTimeGetCurrent() - prepareStart
             let worklist = LocalHashIndexWorklist(assets: preparedInput.assets)
+            await progressHandler?(
+                "\(phaseLabel)：输入准备完成，本地资产 \(preparedInput.assets.count) 项，已有缓存 \(preparedInput.cachedHashesByAssetID.count) 项，缺失 \(preparedInput.missingAssetIDs.count) 项，用时 \(Self.formatElapsed(prepareElapsed))s。",
+                .debug
+            )
 
             let effectiveWorkerCount = min(max(workerCount, 1), max(preparedInput.assets.count, 1))
+            await progressHandler?("\(phaseLabel)：开始扫描，worker \(effectiveWorkerCount)。", .info)
+            let progressReporter = LocalHashIndexBuildProgressReporter(
+                total: preparedInput.assets.count,
+                phaseLabel: phaseLabel,
+                logHandler: progressHandler
+            )
+            let scanStart = CFAbsoluteTimeGetCurrent()
             let aggregate = try await withThrowingTaskGroup(of: LocalHashIndexWorkerResult.self) { group in
                 for _ in 0 ..< effectiveWorkerCount {
-                    group.addTask { [self] in
+                    group.addTask { [self, progressReporter] in
                         var result = LocalHashIndexWorkerResult()
 
                         while let assetRef = await worklist.nextAsset() {
                             try Task.checkCancellation()
                             let cachedLocalHash = preparedInput.cachedHashesByAssetID[assetRef.asset.localIdentifier]
-                            let outcome = try await processAsset(
+                            let processedAsset = try await processAsset(
                                 assetRef.asset,
                                 cachedLocalHash: cachedLocalHash,
                                 allowNetworkAccess: allowNetworkAccess
                             )
-                            result.record(outcome)
+                            result.record(processedAsset.outcome)
+                            await progressReporter.record(processedAsset)
                         }
 
                         return result
@@ -148,6 +291,9 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 }
                 return aggregate
             }
+            await progressReporter.finish()
+            let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
+            await progressHandler?("\(phaseLabel)：扫描完成，用时 \(Self.formatElapsed(scanElapsed))s。", .debug)
 
             let result = LocalHashIndexBuildResult(
                 requestedAssetIDs: assetIDs,
@@ -181,7 +327,8 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
 
     func probeAvailability(
         for assetIDs: Set<String>,
-        workerCount: Int = 2
+        workerCount: Int = 2,
+        progressHandler: LocalHashIndexProgressHandler? = nil
     ) async throws -> LocalAssetAvailabilityProbeResult {
         guard !assetIDs.isEmpty else {
             return LocalAssetAvailabilityProbeResult(
@@ -193,19 +340,35 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         }
 
         try await ensurePhotoAuthorization()
+        let phaseLabel = "iCloud 可用性检测"
+        let prepareStart = CFAbsoluteTimeGetCurrent()
+        await progressHandler?("\(phaseLabel)：开始准备输入，共 \(assetIDs.count) 项资源。", .info)
         let preparedInput = try await prepareAssetFetchInput(for: assetIDs)
+        let prepareElapsed = CFAbsoluteTimeGetCurrent() - prepareStart
         let worklist = LocalHashIndexWorklist(assets: preparedInput.assets)
         let effectiveWorkerCount = min(max(workerCount, 1), max(preparedInput.assets.count, 1))
+        await progressHandler?(
+            "\(phaseLabel)：输入准备完成，本地资产 \(preparedInput.assets.count) 项，缺失 \(preparedInput.missingAssetIDs.count) 项，用时 \(Self.formatElapsed(prepareElapsed))s。",
+            .debug
+        )
+        await progressHandler?("\(phaseLabel)：开始扫描，worker \(effectiveWorkerCount)。", .info)
+        let progressReporter = LocalHashIndexAvailabilityProgressReporter(
+            total: preparedInput.assets.count,
+            phaseLabel: phaseLabel,
+            logHandler: progressHandler
+        )
+        let scanStart = CFAbsoluteTimeGetCurrent()
 
         let aggregate = try await withThrowingTaskGroup(of: LocalHashIndexWorkerResult.self) { group in
             for _ in 0 ..< effectiveWorkerCount {
-                group.addTask { [self] in
+                group.addTask { [self, progressReporter] in
                     var result = LocalHashIndexWorkerResult()
 
                     while let assetRef = await worklist.nextAsset() {
                         try Task.checkCancellation()
                         let outcome = try await probeAssetAvailability(assetRef.asset)
                         result.record(outcome)
+                        await progressReporter.record(outcome)
                     }
 
                     return result
@@ -219,6 +382,9 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             }
             return aggregate
         }
+        await progressReporter.finish()
+        let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
+        await progressHandler?("\(phaseLabel)：扫描完成，用时 \(Self.formatElapsed(scanElapsed))s。", .debug)
 
         return LocalAssetAvailabilityProbeResult(
             requestedAssetIDs: assetIDs,
@@ -302,12 +468,15 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         _ asset: PHAsset,
         cachedLocalHash: LocalAssetHashCache?,
         allowNetworkAccess: Bool
-    ) async throws -> LocalHashIndexAssetOutcome {
+    ) async throws -> LocalHashIndexProcessedAssetResult {
         let selectedResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
             from: PHAssetResource.assetResources(for: asset)
         )
         guard !selectedResources.isEmpty else {
-            return .failed(asset.localIdentifier)
+            return LocalHashIndexProcessedAssetResult(
+                outcome: .failed(asset.localIdentifier),
+                reusedCache: false
+            )
         }
 
         if canReuseCache(
@@ -315,7 +484,10 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             selectedResources: selectedResources,
             cachedLocalHash: cachedLocalHash
         ) {
-            return .ready(asset.localIdentifier)
+            return LocalHashIndexProcessedAssetResult(
+                outcome: .ready(asset.localIdentifier),
+                reusedCache: true
+            )
         }
 
         do {
@@ -363,14 +535,23 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 },
                 totalFileSizeBytes: totalFileSizeBytes
             )
-            return .ready(asset.localIdentifier)
+            return LocalHashIndexProcessedAssetResult(
+                outcome: .ready(asset.localIdentifier),
+                reusedCache: false
+            )
         } catch is CancellationError {
             throw CancellationError()
         } catch {
             if !allowNetworkAccess && PhotoLibraryService.isNetworkAccessRequiredError(error) {
-                return .unavailable(asset.localIdentifier)
+                return LocalHashIndexProcessedAssetResult(
+                    outcome: .unavailable(asset.localIdentifier),
+                    reusedCache: false
+                )
             }
-            return .failed(asset.localIdentifier)
+            return LocalHashIndexProcessedAssetResult(
+                outcome: .failed(asset.localIdentifier),
+                reusedCache: false
+            )
         }
     }
 
@@ -423,5 +604,13 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         }
 
         return true
+    }
+
+    private static func phaseLabel(forNetworkAccess allowNetworkAccess: Bool) -> String {
+        allowNetworkAccess ? "iCloud 补索引" : "本地索引预检"
+    }
+
+    private static func formatElapsed(_ elapsed: TimeInterval) -> String {
+        String(format: "%.1f", elapsed)
     }
 }

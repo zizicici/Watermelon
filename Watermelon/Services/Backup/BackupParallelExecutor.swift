@@ -31,13 +31,15 @@ struct BackupParallelExecutor: Sendable {
         let workerCountSource = workerCountOverride == nil ? "protocol-default" : "user-override"
         if let requestedWorkers = workerCountOverride,
            preparedRun.workerCount < requestedWorkers {
-            eventStream.emit(.log(
-                "Worker override adjusted: requested=\(requestedWorkers), effective=\(preparedRun.workerCount), reason=month-count(\(preparedRun.monthPlans.count))."
-            ))
+            eventStream.emitLog(
+                "Worker override adjusted: requested=\(requestedWorkers), effective=\(preparedRun.workerCount), reason=month-count(\(preparedRun.monthPlans.count)).",
+                level: .warning
+            )
         }
-        eventStream.emit(.log(
-            "Parallel month scheduler: month(s)=\(preparedRun.monthPlans.count), worker(s)=\(preparedRun.workerCount), connectionPool=\(preparedRun.connectionPoolSize), strategy=dynamic-pull, source=\(workerCountSource), storage=\(profile.resolvedStorageType.rawValue)."
-        ))
+        eventStream.emitLog(
+            "Parallel month scheduler: month(s)=\(preparedRun.monthPlans.count), worker(s)=\(preparedRun.workerCount), connectionPool=\(preparedRun.connectionPoolSize), strategy=dynamic-pull, source=\(workerCountSource), storage=\(profile.resolvedStorageType.rawValue).",
+            level: .debug
+        )
 
         let aggregator = ParallelBackupProgressAggregator(total: preparedRun.totalAssetCount)
         let clientPool = StorageClientPool(
@@ -73,7 +75,7 @@ struct BackupParallelExecutor: Sendable {
         } catch {
             await clientPool.shutdown()
             if profile.isConnectionUnavailableError(error) {
-                eventStream.emit(.log("Remote storage unavailable. Stop backup immediately."))
+                eventStream.emitLog("Remote storage unavailable. Stop backup immediately.", level: .error)
             }
             throw error
         }
@@ -81,7 +83,7 @@ struct BackupParallelExecutor: Sendable {
         await clientPool.shutdown()
 
         if let finalStageTimingSummary = await aggregator.finalTimingSummary() {
-            eventStream.emit(.log(finalStageTimingSummary))
+            eventStream.emitLog(finalStageTimingSummary, level: .debug)
         }
         let state = await aggregator.snapshot()
         let result = BackupExecutionResult(
@@ -134,9 +136,10 @@ struct BackupParallelExecutor: Sendable {
                     throw error
                 }
 
-                eventStream.emit(.log(
-                    "Worker\(workerID + 1) claimed month \(monthKey.text), assets=\(monthPlan.assetLocalIdentifiers.count), est=\(StageTimingWindow.formatBytes(monthPlan.estimatedBytes))."
-                ))
+                eventStream.emitLog(
+                    "Worker\(workerID + 1) claimed month \(monthKey.text), assets=\(monthPlan.assetLocalIdentifiers.count), est=\(StageTimingWindow.formatBytes(monthPlan.estimatedBytes)).",
+                    level: .debug
+                )
                 eventStream.emit(.monthChanged(MonthChangeEvent(
                     year: monthKey.year,
                     month: monthKey.month,
@@ -161,9 +164,10 @@ struct BackupParallelExecutor: Sendable {
                         )
                     } catch {
                         if !hasLoggedLocalHashCacheWarning {
-                            eventStream.emit(.log(
-                                "Worker\(workerID + 1) local hash cache warning for month \(monthKey.text): \(error.localizedDescription)"
-                            ))
+                            eventStream.emitLog(
+                                "Worker\(workerID + 1) local hash cache warning for month \(monthKey.text): \(error.localizedDescription)",
+                                level: .warning
+                            )
                             hasLoggedLocalHashCacheWarning = true
                         }
                         batchLocalHashCacheByAssetID = [:]
@@ -232,7 +236,7 @@ struct BackupParallelExecutor: Sendable {
                                 asset: asset
                             )
                             if let timingSummary = progressState.timingSummary {
-                                eventStream.emit(.log(timingSummary))
+                                eventStream.emitLog(timingSummary, level: .debug)
                             }
                         } catch {
                             if error is CancellationError {
@@ -251,7 +255,7 @@ struct BackupParallelExecutor: Sendable {
                             )
                             let errorMessage = profile.userFacingStorageErrorMessage(error)
                             print("[BackupUpload] asset processing FAILED: asset=\(displayName), reason=\(errorMessage)")
-                            eventStream.emit(.log("Failed asset: \(displayName) - \(errorMessage)"))
+                            eventStream.emitLog("Failed asset: \(displayName) - \(errorMessage)", level: .error)
 
                             let progressState = await aggregator.recordFailure()
                             emitFailureProgress(
@@ -263,7 +267,7 @@ struct BackupParallelExecutor: Sendable {
                                 position: progressState.position
                             )
                             if let timingSummary = progressState.timingSummary {
-                                eventStream.emit(.log(timingSummary))
+                                eventStream.emitLog(timingSummary, level: .debug)
                             }
                         }
                     }
@@ -277,9 +281,10 @@ struct BackupParallelExecutor: Sendable {
                 }
 
                 if missingAssetCount > 0 {
-                    eventStream.emit(.log(
-                        "Worker\(workerID + 1) month \(monthKey.text): \(missingAssetCount) asset(s) missing in photo library snapshot."
-                    ))
+                    eventStream.emitLog(
+                        "Worker\(workerID + 1) month \(monthKey.text): \(missingAssetCount) asset(s) missing in photo library snapshot.",
+                        level: .warning
+                    )
                 }
 
                 let shouldFinishMonth = !workerState.paused && monthFatalError == nil
@@ -287,9 +292,10 @@ struct BackupParallelExecutor: Sendable {
                 let skipFlushDueToUnavailable = monthFatalError.map(profile.isConnectionUnavailableError) ?? false
 
                 if skipFlushDueToUnavailable {
-                    eventStream.emit(.log(
-                        "Worker\(workerID + 1): month \(monthKey.text) aborted before completion because remote storage became unavailable. Skip manifest flush."
-                    ))
+                    eventStream.emitLog(
+                        "Worker\(workerID + 1): month \(monthKey.text) aborted before completion because remote storage became unavailable. Skip manifest flush.",
+                        level: .error
+                    )
                 } else {
                     do {
                         try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
@@ -304,14 +310,16 @@ struct BackupParallelExecutor: Sendable {
                                 case .success:
                                     break
                                 case .failed(let message):
-                                    eventStream.emit(.log(
-                                        "Worker\(workerID + 1) month \(monthKey.text) finalization failed: \(message)"
-                                    ))
+                                    eventStream.emitLog(
+                                        "Worker\(workerID + 1) month \(monthKey.text) finalization failed: \(message)",
+                                        level: .error
+                                    )
                                 case .cancelled:
                                     workerState.paused = true
-                                    eventStream.emit(.log(
-                                        "Worker\(workerID + 1): cancellation requested during month \(monthKey.text) finalization."
-                                    ))
+                                    eventStream.emitLog(
+                                        "Worker\(workerID + 1): cancellation requested during month \(monthKey.text) finalization.",
+                                        level: .info
+                                    )
                                 }
                                 if workerState.paused {
                                     break
@@ -319,14 +327,15 @@ struct BackupParallelExecutor: Sendable {
                             }
                         } else {
                             if monthFatalError != nil {
-                                eventStream.emit(.log(
-                                    "Worker\(workerID + 1): month \(monthKey.text) aborted before completion due to fatal upload error."
-                                ))
+                                eventStream.emitLog(
+                                    "Worker\(workerID + 1): month \(monthKey.text) aborted before completion due to fatal upload error.",
+                                    level: .error
+                                )
                             } else {
                                 let pauseLog = hadDirtyManifestBeforeFinalize
                                     ? "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) manifest flushed before exit."
                                     : "Worker\(workerID + 1): cancellation requested. Month \(monthKey.text) paused before completion."
-                                eventStream.emit(.log(pauseLog))
+                                eventStream.emitLog(pauseLog, level: .info)
                             }
                         }
                     } catch {
@@ -366,6 +375,7 @@ struct BackupParallelExecutor: Sendable {
             succeeded: state.succeeded, failed: state.failed,
             skipped: state.skipped, total: state.total,
             message: message,
+            logLevel: Self.logLevel(for: result),
             itemEvent: BackupItemEvent(
                 assetLocalIdentifier: asset.localIdentifier,
                 assetFingerprint: result.assetFingerprint,
@@ -390,6 +400,7 @@ struct BackupParallelExecutor: Sendable {
             succeeded: state.succeeded, failed: state.failed,
             skipped: state.skipped, total: state.total,
             message: "[\(position)/\(state.total)] Failed asset \(displayName)",
+            logLevel: .error,
             itemEvent: BackupItemEvent(
                 assetLocalIdentifier: asset.localIdentifier,
                 assetFingerprint: nil,
@@ -414,6 +425,20 @@ struct BackupParallelExecutor: Sendable {
                 return "\(prefix) Asset skipped \(result.displayName) (\(reason))"
             }
             return "\(prefix) Asset skipped \(result.displayName)"
+        }
+    }
+
+    private static func logLevel(for result: AssetProcessResult) -> ExecutionLogLevel {
+        switch result.status {
+        case .success:
+            return .debug
+        case .failed:
+            return .error
+        case .skipped:
+            if result.reason == "icloud_photo_backup_disabled" {
+                return .warning
+            }
+            return .debug
         }
     }
 

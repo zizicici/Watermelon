@@ -23,6 +23,13 @@ final class BackupEventStream: @unchecked Sendable {
         target?.yield(event)
     }
 
+    func emitLog(
+        _ message: String,
+        level: ExecutionLogLevel = .info
+    ) {
+        emit(.log(message, level: level))
+    }
+
     func finish() {
         let target: AsyncStream<BackupEvent>.Continuation? = lock.withLock {
             guard !finished else { return nil }

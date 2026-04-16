@@ -45,6 +45,7 @@ enum State {
     private var session = BackupSessionState()
 
     private var observers: [UUID: @MainActor (Snapshot) -> Void] = [:]
+    private var eventObservers: [UUID: @MainActor (BackupEvent) -> Void] = [:]
     private var startCommandTask: Task<Void, Never>?
     private var resumePreparationTask: Task<Void, Never>?
     private var notifyThrottleTask: Task<Void, Never>?
@@ -186,6 +187,17 @@ enum State {
 
     func removeObserver(_ id: UUID) {
         observers[id] = nil
+    }
+
+    @discardableResult
+    func addEventObserver(_ observer: @escaping @MainActor (BackupEvent) -> Void) -> UUID {
+        let id = UUID()
+        eventObservers[id] = observer
+        return id
+    }
+
+    func removeEventObserver(_ id: UUID) {
+        eventObservers[id] = nil
     }
 
     @discardableResult
@@ -481,6 +493,8 @@ enum State {
         displayMode: BackupRunMode,
         terminalIntent: BackupTerminationIntent
     ) -> Bool {
+        notifyEventObservers(event)
+
         if case .finished = event {
             runDriver.clearActiveRunState()
             activeTerminationIntent = .none
@@ -617,6 +631,10 @@ enum State {
         resumeStartCommandWaitersIfNeeded()
         let latest = snapshot()
         observers.values.forEach { $0(latest) }
+    }
+
+    private func notifyEventObservers(_ event: BackupEvent) {
+        eventObservers.values.forEach { $0(event) }
     }
 
     private func scheduleObserverNotification() {
