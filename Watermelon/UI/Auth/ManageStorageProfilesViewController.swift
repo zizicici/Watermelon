@@ -54,9 +54,9 @@ final class ManageStorageProfilesViewController: UIViewController {
     private func symbolImage(for profile: ServerProfileRecord) -> UIImage? {
         switch profile.resolvedStorageType {
         case .smb:
-            return UIImage(systemName: "network")
+            return UIImage(systemName: "server.rack")
         case .webdav:
-            return UIImage(systemName: "globe")
+            return UIImage(systemName: "network")
         case .externalVolume:
             return UIImage(systemName: "externaldrive")
         }

@@ -2,18 +2,52 @@ import SnapKit
 import UIKit
 
 final class AddWebDAVStorageViewController: UIViewController {
+    private enum Section: Int, CaseIterable {
+        case name
+        case connection
+        case credentials
+    }
+
+    private enum Field {
+        case name
+        case endpoint
+        case basePath
+        case username
+        case password
+    }
+
     private let dependencies: DependencyContainer
     private let editingProfile: ServerProfileRecord?
     private let shouldPopToRootOnSave: Bool
     private let onSaved: (ServerProfileRecord, String) -> Void
 
-    private let stackView = UIStackView()
-    private let nameRow = FormRowView(title: "名称", placeholder: "WebDAV")
-    private let endpointRow = FormRowView(title: "Endpoint URL", placeholder: "https://example.com/dav")
-    private let basePathRow = FormRowView(title: "备份根路径", placeholder: "/Watermelon")
-    private let usernameRow = FormRowView(title: "Username", placeholder: "user")
-    private let passwordRow = FormRowView(title: "Password", placeholder: "password", isSecure: true)
-    private let saveButton = UIButton(type: .system)
+    private let tableView = UITableView(frame: .zero, style: .insetGrouped)
+    private lazy var saveBarButtonItem = UIBarButtonItem(
+        title: "保存",
+        style: .prominentStyle,
+        target: self,
+        action: #selector(saveTapped)
+    )
+    private lazy var loadingIndicatorView = UIActivityIndicatorView(style: .medium)
+    private lazy var loadingBarButtonItem = UIBarButtonItem(customView: loadingIndicatorView)
+    private lazy var keyboardToolbar: UIToolbar = {
+        let toolbar = UIToolbar()
+        toolbar.sizeToFit()
+        toolbar.items = [
+            UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
+            UIBarButtonItem(title: "Done", style: .plain, target: self, action: #selector(dismissKeyboard))
+        ]
+        return toolbar
+    }()
+
+    private var keyboardObservers: [NSObjectProtocol] = []
+    private var isSaving = false
+
+    private var nameText = ""
+    private var endpointText = ""
+    private var basePathText = ""
+    private var usernameText = ""
+    private var passwordText = ""
 
     init(
         dependencies: DependencyContainer,
@@ -35,80 +69,82 @@ final class AddWebDAVStorageViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = .appBackground
         title = editingProfile == nil ? "添加 WebDAV 存储" : "编辑 WebDAV 存储"
-        configureUI()
+
         fillInitialValues()
+        configureUI()
+        registerKeyboardNotifications()
     }
 
-    private func configureUI() {
-        stackView.axis = .vertical
-        stackView.spacing = 14
-
-        endpointRow.textField.keyboardType = .URL
-        endpointRow.textField.autocapitalizationType = .none
-
-        saveButton.configuration = .filled()
-        saveButton.configuration?.title = editingProfile == nil ? "保存并连接" : "保存更改"
-        saveButton.addTarget(self, action: #selector(saveTapped), for: .touchUpInside)
-
-        view.addSubview(stackView)
-        stackView.snp.makeConstraints { make in
-            make.top.equalTo(view.safeAreaLayoutGuide).offset(16)
-            make.leading.trailing.equalToSuperview().inset(16)
-        }
-
-        stackView.addArrangedSubview(nameRow)
-        stackView.addArrangedSubview(endpointRow)
-        stackView.addArrangedSubview(basePathRow)
-        stackView.addArrangedSubview(usernameRow)
-        stackView.addArrangedSubview(passwordRow)
-        stackView.addArrangedSubview(saveButton)
+    deinit {
+        keyboardObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     private func fillInitialValues() {
         if let editingProfile {
-            nameRow.textField.text = editingProfile.name
-            usernameRow.textField.text = editingProfile.username
-            basePathRow.textField.text = editingProfile.basePath
-            endpointRow.textField.text = editingProfile.webDAVParams?.endpointURLString ?? fallbackEndpointString(for: editingProfile)
+            nameText = editingProfile.name
+            usernameText = editingProfile.username
+            basePathText = editingProfile.basePath
+            endpointText = editingProfile.webDAVParams?.endpointURLString ?? fallbackEndpointString(for: editingProfile)
             return
         }
-        basePathRow.textField.text = "/Watermelon"
+        basePathText = "/Watermelon"
+    }
+
+    private func configureUI() {
+        navigationItem.rightBarButtonItem = saveBarButtonItem
+
+        tableView.backgroundColor = .appBackground
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.keyboardDismissMode = .interactive
+        tableView.rowHeight = UITableView.automaticDimension
+        tableView.estimatedRowHeight = 44
+        tableView.register(SettingsTextFieldCell.self, forCellReuseIdentifier: SettingsTextFieldCell.reuseIdentifier)
+
+        view.addSubview(tableView)
+        tableView.snp.makeConstraints { make in
+            make.edges.equalTo(view.safeAreaLayoutGuide)
+        }
     }
 
     private func fallbackEndpointString(for profile: ServerProfileRecord) -> String {
         let scheme = profile.port == 443 ? "https" : "http"
-        let host = profile.host
         let defaultPort = scheme == "https" ? 443 : 80
         let portPart = profile.port == defaultPort ? "" : ":\(profile.port)"
-        return "\(scheme)://\(host)\(portPart)\(profile.shareName)"
+        return "\(scheme)://\(profile.host)\(portPart)\(profile.shareName)"
     }
 
     @objc
     private func saveTapped() {
+        dismissKeyboard()
+        guard !isSaving else { return }
+
         do {
+            setSaving(true)
             let (profile, password) = try saveProfile()
             onSaved(profile, password)
             popAfterSave()
         } catch {
+            setSaving(false)
             presentAlert(title: "保存失败", message: error.localizedDescription)
         }
     }
 
     private func saveProfile() throws -> (ServerProfileRecord, String) {
-        let endpointURL = try parseEndpointURL((endpointRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+        let endpointURL = try parseEndpointURL(endpointText.trimmingCharacters(in: .whitespacesAndNewlines))
         let endpointURLString = Self.normalizedEndpointURLString(endpointURL)
 
-        let username = (usernameRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let username = usernameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !username.isEmpty else {
             throw NSError(domain: "AddWebDAVStorage", code: 1, userInfo: [NSLocalizedDescriptionKey: "请填写用户名"])
         }
 
-        let inputPassword = passwordRow.textField.text ?? ""
+        let trimmedPassword = passwordText.trimmingCharacters(in: .whitespacesAndNewlines)
         let password: String
-        if !inputPassword.isEmpty {
-            password = inputPassword
+        if !trimmedPassword.isEmpty {
+            password = trimmedPassword
         } else if let editingProfile,
                   let saved = try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef),
                   !saved.isEmpty {
@@ -117,7 +153,7 @@ final class AddWebDAVStorageViewController: UIViewController {
             throw NSError(domain: "AddWebDAVStorage", code: 2, userInfo: [NSLocalizedDescriptionKey: "请填写密码"])
         }
 
-        let rawBasePath = (basePathRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawBasePath = basePathText.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedBasePath = RemotePathBuilder.normalizePath(rawBasePath.isEmpty ? "/Watermelon" : rawBasePath)
 
         let existing = try findExistingProfile(
@@ -136,7 +172,7 @@ final class AddWebDAVStorageViewController: UIViewController {
         }
 
         let baseProfile = editingProfile ?? existing
-        let finalName = (nameRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileName = finalName.isEmpty ? (endpointURL.host ?? "WebDAV") : finalName
         let endpointPath = endpointURL.path.isEmpty ? "/" : endpointURL.path
         let credentialRef = "webdav|\(endpointURLString)|\(username)"
@@ -175,13 +211,7 @@ final class AddWebDAVStorageViewController: UIViewController {
             throw NSError(domain: "AddWebDAVStorage", code: 4, userInfo: [NSLocalizedDescriptionKey: "请填写 Endpoint URL"])
         }
 
-        let normalizedInput: String
-        if input.contains("://") {
-            normalizedInput = input
-        } else {
-            normalizedInput = "https://\(input)"
-        }
-
+        let normalizedInput = input.contains("://") ? input : "https://\(input)"
         guard let url = URL(string: normalizedInput),
               let scheme = url.scheme?.lowercased(),
               (scheme == "http" || scheme == "https"),
@@ -234,9 +264,205 @@ final class AddWebDAVStorageViewController: UIViewController {
         navigationController.popViewController(animated: true)
     }
 
+    private func setSaving(_ saving: Bool) {
+        isSaving = saving
+        tableView.isUserInteractionEnabled = !saving
+        if saving {
+            loadingIndicatorView.startAnimating()
+            navigationItem.rightBarButtonItem = loadingBarButtonItem
+        } else {
+            loadingIndicatorView.stopAnimating()
+            navigationItem.rightBarButtonItem = saveBarButtonItem
+        }
+    }
+
     private func presentAlert(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "确定", style: .default))
         present(alert, animated: true)
+    }
+
+    @objc
+    private func dismissKeyboard() {
+        view.endEditing(true)
+    }
+
+    private func registerKeyboardNotifications() {
+        let center = NotificationCenter.default
+        keyboardObservers.append(center.addObserver(
+            forName: UIResponder.keyboardWillShowNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.handleKeyboard(note: note, showing: true)
+        })
+        keyboardObservers.append(center.addObserver(
+            forName: UIResponder.keyboardWillHideNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.handleKeyboard(note: note, showing: false)
+        })
+    }
+
+    private func handleKeyboard(note: Notification, showing: Bool) {
+        guard let info = note.userInfo,
+              let frame = info[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              let duration = info[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval else {
+            return
+        }
+
+        let keyboardFrame = view.convert(frame, from: nil)
+        let overlap = max(0, view.bounds.maxY - keyboardFrame.minY - view.safeAreaInsets.bottom)
+        let insetBottom = showing ? overlap : 0
+
+        UIView.animate(withDuration: duration) {
+            self.tableView.contentInset.bottom = insetBottom
+            self.tableView.verticalScrollIndicatorInsets.bottom = insetBottom
+        }
+    }
+
+    private func focusField(_ field: Field?) {
+        guard let field else {
+            dismissKeyboard()
+            return
+        }
+
+        let indexPath = indexPath(for: field)
+        tableView.scrollToRow(at: indexPath, at: .middle, animated: true)
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  let cell = self.tableView.cellForRow(at: indexPath) as? SettingsTextFieldCell else { return }
+            cell.focus()
+        }
+    }
+
+    private func indexPath(for field: Field) -> IndexPath {
+        switch field {
+        case .name:
+            return IndexPath(row: 0, section: Section.name.rawValue)
+        case .endpoint:
+            return IndexPath(row: 0, section: Section.connection.rawValue)
+        case .basePath:
+            return IndexPath(row: 1, section: Section.connection.rawValue)
+        case .username:
+            return IndexPath(row: 0, section: Section.credentials.rawValue)
+        case .password:
+            return IndexPath(row: 1, section: Section.credentials.rawValue)
+        }
+    }
+}
+
+extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDelegate {
+    func numberOfSections(in tableView: UITableView) -> Int {
+        Section.allCases.count
+    }
+
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        guard let section = Section(rawValue: section) else { return 0 }
+        switch section {
+        case .name:
+            return 1
+        case .connection:
+            return 2
+        case .credentials:
+            return 2
+        }
+    }
+
+    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        guard let section = Section(rawValue: section) else { return nil }
+        switch section {
+        case .name:
+            return "名称"
+        case .connection:
+            return "连接信息"
+        case .credentials:
+            return "认证"
+        }
+    }
+
+    func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        guard let section = Section(rawValue: section) else { return nil }
+        switch section {
+        case .name:
+            return nil
+        case .connection:
+            return "Endpoint 可以直接填写完整 URL；备份根路径默认为 /Watermelon。"
+        case .credentials:
+            return editingProfile == nil ? nil : "密码留空时会继续使用已保存的密码。"
+        }
+    }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        guard let section = Section(rawValue: indexPath.section),
+              let cell = tableView.dequeueReusableCell(
+                withIdentifier: SettingsTextFieldCell.reuseIdentifier,
+                for: indexPath
+              ) as? SettingsTextFieldCell else {
+            return UITableViewCell()
+        }
+
+        switch section {
+        case .name:
+            cell.configure(
+                title: nil,
+                text: nameText,
+                placeholder: "WebDAV",
+                autocapitalizationType: .words,
+                returnKeyType: .next,
+                inputAccessoryView: keyboardToolbar
+            )
+            cell.onTextChanged = { [weak self] in self?.nameText = $0 }
+            cell.onReturn = { [weak self] in self?.focusField(.endpoint) }
+        case .connection:
+            if indexPath.row == 0 {
+                cell.configure(
+                    title: "Endpoint URL",
+                    text: endpointText,
+                    placeholder: "https://example.com/dav",
+                    keyboardType: .URL,
+                    returnKeyType: .next,
+                    inputAccessoryView: keyboardToolbar
+                )
+                cell.onTextChanged = { [weak self] in self?.endpointText = $0 }
+                cell.onReturn = { [weak self] in self?.focusField(.basePath) }
+            } else {
+                cell.configure(
+                    title: "备份根路径",
+                    text: basePathText,
+                    placeholder: "/Watermelon",
+                    returnKeyType: .next,
+                    inputAccessoryView: keyboardToolbar
+                )
+                cell.onTextChanged = { [weak self] in self?.basePathText = $0 }
+                cell.onReturn = { [weak self] in self?.focusField(.username) }
+            }
+        case .credentials:
+            if indexPath.row == 0 {
+                cell.configure(
+                    title: "Username",
+                    text: usernameText,
+                    placeholder: "user",
+                    returnKeyType: .next,
+                    inputAccessoryView: keyboardToolbar
+                )
+                cell.onTextChanged = { [weak self] in self?.usernameText = $0 }
+                cell.onReturn = { [weak self] in self?.focusField(.password) }
+            } else {
+                cell.configure(
+                    title: "Password",
+                    text: passwordText,
+                    placeholder: editingProfile == nil ? "password" : "留空表示不变",
+                    isSecure: true,
+                    returnKeyType: .done,
+                    inputAccessoryView: keyboardToolbar
+                )
+                cell.onTextChanged = { [weak self] in self?.passwordText = $0 }
+                cell.onReturn = { [weak self] in self?.focusField(nil) }
+            }
+        }
+
+        return cell
     }
 }

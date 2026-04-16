@@ -16,10 +16,15 @@ final class SMBSharePathPickerViewController: UIViewController {
     private var loadTask: Task<Void, Never>?
     private var loadRequestID: UInt64 = 0
 
-    private let pathLabel = UILabel()
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
-    private let nextButton = UIButton(type: .system)
-    private let loadingView = UIActivityIndicatorView(style: .medium)
+    private lazy var nextBarButtonItem = UIBarButtonItem(
+        title: "下一步",
+        style: .prominentStyle,
+        target: self,
+        action: #selector(nextTapped)
+    )
+    private lazy var loadingIndicatorView = UIActivityIndicatorView(style: .medium)
+    private lazy var loadingBarButtonItem = UIBarButtonItem(customView: loadingIndicatorView)
 
     init(
         dependencies: DependencyContainer,
@@ -52,12 +57,10 @@ final class SMBSharePathPickerViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = .appBackground
         title = "选择 Share 与路径"
 
         configureUI()
-        refreshPathLabel()
-
         startLoadDirectories()
     }
 
@@ -66,44 +69,19 @@ final class SMBSharePathPickerViewController: UIViewController {
     }
 
     private func configureUI() {
-        pathLabel.font = .systemFont(ofSize: 13)
-        pathLabel.textColor = .secondaryLabel
-        pathLabel.numberOfLines = 2
+        navigationItem.rightBarButtonItem = nextBarButtonItem
+        updateNextButtonState()
 
+        tableView.backgroundColor = .appBackground
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "dir")
         tableView.dataSource = self
         tableView.delegate = self
+        tableView.rowHeight = UITableView.automaticDimension
+        tableView.estimatedRowHeight = 44
 
-        nextButton.configuration = .filled()
-        nextButton.configuration?.title = "下一步"
-        nextButton.addTarget(self, action: #selector(nextTapped), for: .touchUpInside)
-
-        loadingView.hidesWhenStopped = true
-
-        view.addSubview(pathLabel)
         view.addSubview(tableView)
-        view.addSubview(nextButton)
-        view.addSubview(loadingView)
-
-        pathLabel.snp.makeConstraints { make in
-            make.top.equalTo(view.safeAreaLayoutGuide).offset(12)
-            make.leading.trailing.equalToSuperview().inset(16)
-        }
-
-        nextButton.snp.makeConstraints { make in
-            make.leading.trailing.equalToSuperview().inset(16)
-            make.bottom.equalTo(view.safeAreaLayoutGuide).inset(12)
-            make.height.equalTo(44)
-        }
-
         tableView.snp.makeConstraints { make in
-            make.top.equalTo(pathLabel.snp.bottom).offset(8)
-            make.leading.trailing.equalToSuperview()
-            make.bottom.equalTo(nextButton.snp.top).offset(-8)
-        }
-
-        loadingView.snp.makeConstraints { make in
-            make.center.equalToSuperview()
+            make.edges.equalTo(view.safeAreaLayoutGuide)
         }
     }
 
@@ -123,10 +101,6 @@ final class SMBSharePathPickerViewController: UIViewController {
             onSaved: onSaved
         )
         navigationController?.pushViewController(finalizeVC, animated: true)
-    }
-
-    private func refreshPathLabel() {
-        pathLabel.text = "当前路径: \(currentPath)"
     }
 
     private func startLoadDirectories() {
@@ -154,8 +128,7 @@ final class SMBSharePathPickerViewController: UIViewController {
                     guard self.selectedShare?.name == shareName, self.currentPath == targetPath else { return }
                     self.directories = dirs
                     self.setLoading(false)
-                    self.tableView.reloadSections(IndexSet(integer: TableSection.paths.rawValue), with: .none)
-                    self.refreshPathLabel()
+                    self.tableView.reloadData()
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -182,13 +155,19 @@ final class SMBSharePathPickerViewController: UIViewController {
 
     @MainActor
     private func setLoading(_ loading: Bool) {
-        nextButton.isEnabled = !loading
         tableView.isUserInteractionEnabled = !loading
         if loading {
-            loadingView.startAnimating()
+            loadingIndicatorView.startAnimating()
+            navigationItem.rightBarButtonItem = loadingBarButtonItem
         } else {
-            loadingView.stopAnimating()
+            loadingIndicatorView.stopAnimating()
+            navigationItem.rightBarButtonItem = nextBarButtonItem
+            updateNextButtonState()
         }
+    }
+
+    private func updateNextButtonState() {
+        nextBarButtonItem.isEnabled = selectedShare != nil && !shares.isEmpty
     }
 
     @MainActor
@@ -224,9 +203,19 @@ extension SMBSharePathPickerViewController: UITableViewDataSource, UITableViewDe
         guard let section = TableSection(rawValue: section) else { return nil }
         switch section {
         case .shares:
-            return "Share 列表"
+            return "Share"
         case .paths:
-            return "路径列表"
+            return "路径"
+        }
+    }
+
+    func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        guard let section = TableSection(rawValue: section) else { return nil }
+        switch section {
+        case .shares:
+            return nil
+        case .paths:
+            return "当前路径: \(currentPath)"
         }
     }
 
@@ -247,19 +236,11 @@ extension SMBSharePathPickerViewController: UITableViewDataSource, UITableViewDe
                 cell.selectionStyle = .none
                 cell.accessoryType = .none
             } else {
-                guard indexPath.row < shares.count else {
-                    content.text = "Share 数据已变更"
-                    content.secondaryText = "请稍后重试"
-                    cell.selectionStyle = .none
-                    cell.accessoryType = .none
-                    cell.contentConfiguration = content
-                    return cell
-                }
                 let share = shares[indexPath.row]
                 content.text = share.name
                 content.secondaryText = share.comment.isEmpty ? "(no comment)" : share.comment
                 cell.selectionStyle = .default
-                cell.accessoryType = (selectedShare?.name == share.name) ? .checkmark : .none
+                cell.accessoryType = selectedShare?.name == share.name ? .checkmark : .none
             }
         case .paths:
             let hasParent = currentPath != "/"
@@ -267,24 +248,13 @@ extension SMBSharePathPickerViewController: UITableViewDataSource, UITableViewDe
                 content.text = ".."
                 content.secondaryText = "返回上一级"
                 cell.accessoryType = .disclosureIndicator
-                cell.selectionStyle = .default
-                cell.contentConfiguration = content
-                return cell
+            } else {
+                let adjustedIndex = indexPath.row - (hasParent ? 1 : 0)
+                let entry = directories[adjustedIndex]
+                content.text = entry.name
+                content.secondaryText = entry.path
+                cell.accessoryType = .disclosureIndicator
             }
-
-            let index = hasParent ? indexPath.row - 1 : indexPath.row
-            guard index >= 0, index < directories.count else {
-                content.text = "目录已变更"
-                content.secondaryText = "请稍后重试"
-                cell.selectionStyle = .none
-                cell.accessoryType = .none
-                cell.contentConfiguration = content
-                return cell
-            }
-            let entry = directories[index]
-            content.text = entry.name
-            content.secondaryText = entry.path
-            cell.accessoryType = .disclosureIndicator
             cell.selectionStyle = .default
         }
 
@@ -294,32 +264,27 @@ extension SMBSharePathPickerViewController: UITableViewDataSource, UITableViewDe
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-
         guard let section = TableSection(rawValue: indexPath.section) else { return }
+
         switch section {
         case .shares:
-            guard !shares.isEmpty else { return }
-            guard indexPath.row < shares.count else { return }
+            guard !shares.isEmpty, indexPath.row < shares.count else { return }
             selectedShare = shares[indexPath.row]
             currentPath = "/"
-            directories = []
-            tableView.reloadSections(IndexSet([TableSection.shares.rawValue, TableSection.paths.rawValue]), with: .none)
-            refreshPathLabel()
+            updateNextButtonState()
+            tableView.reloadData()
             startLoadDirectories()
-            return
         case .paths:
             let hasParent = currentPath != "/"
-
             if hasParent && indexPath.row == 0 {
                 currentPath = parentPath(of: currentPath)
                 startLoadDirectories()
                 return
             }
 
-            let index = hasParent ? indexPath.row - 1 : indexPath.row
-            guard index >= 0, index < directories.count else { return }
-            let entry = directories[index]
-            currentPath = entry.path
+            let adjustedIndex = indexPath.row - (hasParent ? 1 : 0)
+            guard adjustedIndex >= 0, adjustedIndex < directories.count else { return }
+            currentPath = directories[adjustedIndex].path
             startLoadDirectories()
         }
     }

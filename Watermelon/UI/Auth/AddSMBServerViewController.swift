@@ -2,17 +2,35 @@ import SnapKit
 import UIKit
 
 final class AddSMBServerViewController: UIViewController {
+    private enum Section: Int, CaseIterable {
+        case name
+        case summary
+    }
+
     private let dependencies: DependencyContainer
     private let context: SMBServerPathContext
     private let editingProfile: ServerProfileRecord?
     private let shouldPopToRootOnSave: Bool
     private let onSaved: (ServerProfileRecord, String) -> Void
 
-    private let stackView = UIStackView()
-    private let nameRow = FormRowView(title: "名称", placeholder: "Home NAS")
+    private let tableView = UITableView(frame: .zero, style: .insetGrouped)
+    private lazy var saveBarButtonItem = UIBarButtonItem(
+        title: "保存",
+        style: .prominentStyle,
+        target: self,
+        action: #selector(saveTapped)
+    )
+    private lazy var keyboardToolbar: UIToolbar = {
+        let toolbar = UIToolbar()
+        toolbar.sizeToFit()
+        toolbar.items = [
+            UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
+            UIBarButtonItem(title: "Done", style: .plain, target: self, action: #selector(dismissKeyboard))
+        ]
+        return toolbar
+    }()
 
-    private let summaryLabel = UILabel()
-    private let saveButton = UIButton(type: .system)
+    private var nameText = ""
 
     init(
         dependencies: DependencyContainer,
@@ -36,57 +54,45 @@ final class AddSMBServerViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = .appBackground
         title = editingProfile == nil ? "确认并保存" : "确认并更新"
 
+        nameText = editingProfile?.name ?? context.auth.name
         configureUI()
-        fillData()
     }
 
     private func configureUI() {
-        stackView.axis = .vertical
-        stackView.spacing = 14
+        navigationItem.rightBarButtonItem = saveBarButtonItem
 
-        summaryLabel.numberOfLines = 0
-        summaryLabel.font = .systemFont(ofSize: 14)
-        summaryLabel.textColor = .secondaryLabel
+        tableView.backgroundColor = .appBackground
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.keyboardDismissMode = .interactive
+        tableView.rowHeight = UITableView.automaticDimension
+        tableView.estimatedRowHeight = 44
+        tableView.register(SettingsTextFieldCell.self, forCellReuseIdentifier: SettingsTextFieldCell.reuseIdentifier)
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "SummaryCell")
 
-        saveButton.configuration = .filled()
-        saveButton.configuration?.title = editingProfile == nil ? "保存并登录" : "保存更改"
-        saveButton.addTarget(self, action: #selector(saveTapped), for: .touchUpInside)
-
-        view.addSubview(stackView)
-        stackView.snp.makeConstraints { make in
-            make.top.equalTo(view.safeAreaLayoutGuide).offset(16)
-            make.leading.trailing.equalToSuperview().inset(16)
+        view.addSubview(tableView)
+        tableView.snp.makeConstraints { make in
+            make.edges.equalTo(view.safeAreaLayoutGuide)
         }
-
-        stackView.addArrangedSubview(nameRow)
-        stackView.addArrangedSubview(summaryLabel)
-        stackView.addArrangedSubview(saveButton)
     }
 
-    private func fillData() {
-        nameRow.textField.text = editingProfile?.name ?? context.auth.name
-        summaryLabel.text = [
-            "Host: \(context.auth.host):\(context.auth.port)",
-            "Share: \(context.shareName)",
-            "Path: \(context.basePath)",
-            "Username: \(context.auth.username)",
-            "Domain: \(context.auth.domain ?? "(none)")"
-        ].joined(separator: "\n")
+    @objc
+    private func dismissKeyboard() {
+        view.endEditing(true)
     }
 
     @objc
     private func saveTapped() {
+        dismissKeyboard()
         do {
             let (profile, password) = try saveProfile()
             onSaved(profile, password)
             popAfterSave()
         } catch {
-            let alert = UIAlertController(title: "保存失败", message: error.localizedDescription, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "确定", style: .default))
-            present(alert, animated: true)
+            presentAlert(title: "保存失败", message: error.localizedDescription)
         }
     }
 
@@ -104,7 +110,7 @@ final class AddSMBServerViewController: UIViewController {
     }
 
     private func saveProfile() throws -> (ServerProfileRecord, String) {
-        let finalName = (nameRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileName = finalName.isEmpty ? context.auth.host : finalName
 
         let normalizedPath = RemotePathBuilder.normalizePath(context.basePath)
@@ -161,5 +167,81 @@ final class AddSMBServerViewController: UIViewController {
             try? dependencies.keychainService.delete(account: oldRef)
         }
         return (profile, context.auth.password)
+    }
+
+    private func presentAlert(title: String, message: String) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "确定", style: .default))
+        present(alert, animated: true)
+    }
+}
+
+extension AddSMBServerViewController: UITableViewDataSource, UITableViewDelegate {
+    func numberOfSections(in tableView: UITableView) -> Int {
+        Section.allCases.count
+    }
+
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        1
+    }
+
+    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        guard let section = Section(rawValue: section) else { return nil }
+        switch section {
+        case .name:
+            return "名称"
+        case .summary:
+            return "连接信息"
+        }
+    }
+
+    func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        guard let section = Section(rawValue: section) else { return nil }
+        switch section {
+        case .name:
+            return nil
+        case .summary:
+            return "保存后会直接连接到该 SMB 存储。"
+        }
+    }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        guard let section = Section(rawValue: indexPath.section) else { return UITableViewCell() }
+
+        switch section {
+        case .name:
+            guard let cell = tableView.dequeueReusableCell(
+                withIdentifier: SettingsTextFieldCell.reuseIdentifier,
+                for: indexPath
+            ) as? SettingsTextFieldCell else {
+                return UITableViewCell()
+            }
+            cell.configure(
+                title: nil,
+                text: nameText,
+                placeholder: "Home NAS",
+                autocapitalizationType: .words,
+                returnKeyType: .done,
+                inputAccessoryView: keyboardToolbar
+            )
+            cell.onTextChanged = { [weak self] in self?.nameText = $0 }
+            cell.onReturn = { [weak self] in self?.dismissKeyboard() }
+            return cell
+        case .summary:
+            let cell = tableView.dequeueReusableCell(withIdentifier: "SummaryCell", for: indexPath)
+            cell.selectionStyle = .none
+            var content = UIListContentConfiguration.subtitleCell()
+            content.secondaryText = [
+                "Host: \(context.auth.host):\(context.auth.port)",
+                "Share: \(context.shareName)",
+                "Path: \(context.basePath)",
+                "Username: \(context.auth.username)",
+                "Domain: \(context.auth.domain ?? "(none)")"
+            ].joined(separator: "\n")
+            content.secondaryTextProperties.color = .secondaryLabel
+            content.secondaryTextProperties.numberOfLines = 0
+            cell.contentConfiguration = content
+            return cell
+        }
     }
 }

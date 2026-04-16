@@ -5,6 +5,12 @@ import SnapKit
 import UIKit
 
 final class HomeViewController: UIViewController {
+    private enum NewStorageDestination {
+        case smb
+        case smbDiscovery
+        case webdav
+        case externalVolume
+    }
 
     private let dependencies: DependencyContainer
     private let store: HomeScreenStore
@@ -37,6 +43,7 @@ final class HomeViewController: UIViewController {
     private let leftHeaderLabel: MarqueeLabel = {
         let label = MarqueeLabel(frame: .zero, rate: 30, fadeLength: 8)
         label.animationDelay = 2
+        label.trailingBuffer = 40
         return label
     }()
     private let leftHeaderCountLabel = UILabel()
@@ -45,6 +52,7 @@ final class HomeViewController: UIViewController {
     private let rightHeaderLabel: MarqueeLabel = {
         let label = MarqueeLabel(frame: .zero, rate: 30, fadeLength: 8)
         label.animationDelay = 2
+        label.trailingBuffer = 40
         return label
     }()
     private let rightHeaderCountLabel = UILabel()
@@ -494,6 +502,7 @@ final class HomeViewController: UIViewController {
     private func renderStructuralChange() {
         hasLoadedHeaderSummary = true
         applyFullSnapshot()
+        refreshDestinationMenus()
         updateTopHeaderToggles()
         updateTopHeaderSummaries()
         updateActionPanel()
@@ -913,7 +922,6 @@ final class HomeViewController: UIViewController {
             remoteOverlaySpinner.stopAnimating()
             remoteOverlayLabel.text = "未连接远端存储"
             remoteOverlayButton.isHidden = false
-            remoteOverlayButton.menu = buildDestinationMenu()
         case .connected:
             remoteOverlay.isHidden = true
             remoteOverlaySpinner.stopAnimating()
@@ -929,9 +937,7 @@ final class HomeViewController: UIViewController {
         case .disconnected:
             rightHeaderLabel.text = "远端存储"
         }
-        let menu = buildDestinationMenu()
-        rightHeaderButton.menu = menu
-        rightHeaderMenuOverlay.menu = menu
+        refreshDestinationMenus()
     }
 
     private func configureRightHeaderButton() {
@@ -949,9 +955,14 @@ final class HomeViewController: UIViewController {
         rightHeaderButton.showsMenuAsPrimaryAction = true
         rightHeaderButton.setContentHuggingPriority(.required, for: .horizontal)
         rightHeaderButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        refreshDestinationMenus()
+    }
+
+    private func refreshDestinationMenus() {
         let menu = buildDestinationMenu()
         rightHeaderButton.menu = menu
         rightHeaderMenuOverlay.menu = menu
+        remoteOverlayButton.menu = menu
     }
 
     // MARK: - Destination Menu
@@ -980,11 +991,114 @@ final class HomeViewController: UIViewController {
         }
 
         let profileSection = UIMenu(title: "", options: .displayInline, children: profileActions)
+        let addStorageMenu = UIMenu(
+            title: "新增存储",
+            image: UIImage(systemName: "plus.circle"),
+            children: [
+                UIMenu(
+                    title: "SMB",
+                    image: UIImage(systemName: "server.rack"),
+                    children: [
+                        UIAction(title: "手动添加") { [weak self] _ in
+                            self?.openNewStorageFlow(.smb)
+                        },
+                        UIAction(title: "发现本地 SMB", image: UIImage(systemName: "bonjour")) { [weak self] _ in
+                            self?.openNewStorageFlow(.smbDiscovery)
+                        }
+                    ]
+                ),
+                UIAction(title: "WebDAV", image: UIImage(systemName: "network")) { [weak self] _ in
+                    self?.openNewStorageFlow(.webdav)
+                },
+                UIAction(title: "外接存储", image: UIImage(systemName: "externaldrive")) { [weak self] _ in
+                    self?.openNewStorageFlow(.externalVolume)
+                }
+            ]
+        )
         let disconnectSection = UIMenu(title: "", options: .displayInline, children: [disconnectAction])
-        return UIMenu(children: [profileSection, disconnectSection])
+        return UIMenu(children: [addStorageMenu, profileSection, disconnectSection])
     }
 
     // MARK: - User Actions
+
+    private func openNewStorageFlow(_ destination: NewStorageDestination) {
+        let onSaved: (ServerProfileRecord, String) -> Void = { [weak self] profile, _ in
+            self?.handleStorageCreated(profile)
+        }
+
+        if let navigationController {
+            let rootViewController = makeNewStorageRootViewController(
+                for: destination,
+                shouldPopToRootOnSave: true,
+                onSaved: onSaved
+            )
+            navigationController.pushViewController(rootViewController, animated: ConsideringUser.pushAnimated)
+            return
+        }
+
+        let rootViewController = makeNewStorageRootViewController(
+            for: destination,
+            shouldPopToRootOnSave: false
+        ) { [weak self] profile, _ in
+            self?.dismiss(animated: ConsideringUser.animated) {
+                self?.handleStorageCreated(profile)
+            }
+        }
+        rootViewController.navigationItem.leftBarButtonItem = UIBarButtonItem(
+            barButtonSystemItem: .close,
+            target: self,
+            action: #selector(dismissModalFlow)
+        )
+        let container = UINavigationController(rootViewController: rootViewController)
+        if let presentation = container.sheetPresentationController {
+            presentation.prefersGrabberVisible = true
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
+    private func makeNewStorageRootViewController(
+        for destination: NewStorageDestination,
+        shouldPopToRootOnSave: Bool,
+        onSaved: @escaping (ServerProfileRecord, String) -> Void
+    ) -> UIViewController {
+        switch destination {
+        case .smb:
+            return AddSMBServerLoginViewController(
+                dependencies: dependencies,
+                draft: SMBServerLoginDraft(name: "", host: "", port: 445, username: "", domain: nil),
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
+        case .smbDiscovery:
+            return SMBLocalDiscoveryViewController(
+                dependencies: dependencies,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
+        case .webdav:
+            return AddWebDAVStorageViewController(
+                dependencies: dependencies,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
+        case .externalVolume:
+            return AddExternalStorageViewController(
+                dependencies: dependencies,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
+        }
+    }
+
+    private func handleStorageCreated(_ profile: ServerProfileRecord) {
+        reloadProfiles()
+        store.connectProfile(profile)
+    }
+
+    @objc
+    private func dismissModalFlow() {
+        dismiss(animated: ConsideringUser.animated)
+    }
 
     @objc private func leftToggleTapped() {
         store.toggleAll(side: .local)

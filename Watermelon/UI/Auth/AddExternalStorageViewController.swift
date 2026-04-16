@@ -3,18 +3,37 @@ import UniformTypeIdentifiers
 import UIKit
 
 final class AddExternalStorageViewController: UIViewController {
+    private enum Section: Int, CaseIterable {
+        case name
+        case location
+    }
+
     private let dependencies: DependencyContainer
     private let editingProfile: ServerProfileRecord?
     private let shouldPopToRootOnSave: Bool
     private let onSaved: (ServerProfileRecord, String) -> Void
     private let bookmarkStore = SecurityScopedBookmarkStore()
 
-    private let stackView = UIStackView()
-    private let nameRow = FormRowView(title: "名称", placeholder: "外接硬盘")
-    private let pathLabel = UILabel()
-    private let pickButton = UIButton(type: .system)
-    private let saveButton = UIButton(type: .system)
+    private let tableView = UITableView(frame: .zero, style: .insetGrouped)
+    private lazy var saveBarButtonItem = UIBarButtonItem(
+        title: "保存",
+        style: .prominentStyle,
+        target: self,
+        action: #selector(saveTapped)
+    )
+    private lazy var keyboardToolbar: UIToolbar = {
+        let toolbar = UIToolbar()
+        toolbar.sizeToFit()
+        toolbar.items = [
+            UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
+            UIBarButtonItem(title: "Done", style: .plain, target: self, action: #selector(dismissKeyboard))
+        ]
+        return toolbar
+    }()
 
+    private var keyboardObservers: [NSObjectProtocol] = []
+
+    private var nameText = ""
     private var selectedDirectoryURL: URL?
 
     init(
@@ -37,64 +56,56 @@ final class AddExternalStorageViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = .appBackground
         title = editingProfile == nil ? "添加外接存储" : "编辑外接存储"
-        configureUI()
+
         fillInitialValues()
+        configureUI()
         updateSaveButtonState()
+        registerKeyboardNotifications()
     }
 
-    private func configureUI() {
-        stackView.axis = .vertical
-        stackView.spacing = 14
-
-        pathLabel.numberOfLines = 0
-        pathLabel.font = .systemFont(ofSize: 13)
-        pathLabel.textColor = .secondaryLabel
-        pathLabel.text = "尚未选择目录"
-
-        pickButton.configuration = .tinted()
-        pickButton.configuration?.title = editingProfile == nil ? "选择目录" : "重新选择目录"
-        pickButton.addTarget(self, action: #selector(pickDirectoryTapped), for: .touchUpInside)
-
-        saveButton.configuration = .filled()
-        saveButton.configuration?.title = editingProfile == nil ? "保存并连接" : "保存更改"
-        saveButton.addTarget(self, action: #selector(saveTapped), for: .touchUpInside)
-
-        view.addSubview(stackView)
-        stackView.snp.makeConstraints { make in
-            make.top.equalTo(view.safeAreaLayoutGuide).offset(16)
-            make.leading.trailing.equalToSuperview().inset(16)
-        }
-
-        stackView.addArrangedSubview(nameRow)
-        stackView.addArrangedSubview(pathLabel)
-        stackView.addArrangedSubview(pickButton)
-        stackView.addArrangedSubview(saveButton)
+    deinit {
+        keyboardObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     private func fillInitialValues() {
         guard let editingProfile else { return }
-        nameRow.textField.text = editingProfile.name
-        if let path = editingProfile.externalVolumeParams?.displayPath, !path.isEmpty {
-            pathLabel.text = "当前目录: \(path)"
+        nameText = editingProfile.name
+    }
+
+    private func configureUI() {
+        navigationItem.rightBarButtonItem = saveBarButtonItem
+
+        tableView.backgroundColor = .appBackground
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.keyboardDismissMode = .interactive
+        tableView.rowHeight = UITableView.automaticDimension
+        tableView.estimatedRowHeight = 44
+        tableView.register(SettingsTextFieldCell.self, forCellReuseIdentifier: SettingsTextFieldCell.reuseIdentifier)
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "ValueCell")
+
+        view.addSubview(tableView)
+        tableView.snp.makeConstraints { make in
+            make.edges.equalTo(view.safeAreaLayoutGuide)
         }
     }
 
     private func updateSaveButtonState() {
-        if selectedDirectoryURL != nil {
-            saveButton.isEnabled = true
-            return
+        saveBarButtonItem.isEnabled = selectedDirectoryURL != nil || !(editingProfile?.externalVolumeParams?.displayPath ?? "").isEmpty
+    }
+
+    private func currentDisplayPath() -> String? {
+        if let selectedDirectoryURL {
+            return selectedDirectoryURL.path
         }
-        if let path = editingProfile?.externalVolumeParams?.displayPath, !path.isEmpty {
-            saveButton.isEnabled = true
-            return
-        }
-        saveButton.isEnabled = false
+        return editingProfile?.externalVolumeParams?.displayPath
     }
 
     @objc
     private func pickDirectoryTapped() {
+        dismissKeyboard()
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
         picker.delegate = self
         picker.allowsMultipleSelection = false
@@ -103,6 +114,7 @@ final class AddExternalStorageViewController: UIViewController {
 
     @objc
     private func saveTapped() {
+        dismissKeyboard()
         do {
             let selectedDisplayPath: String
             let encodedParams: Data
@@ -140,11 +152,10 @@ final class AddExternalStorageViewController: UIViewController {
                     userInfo: [NSLocalizedDescriptionKey: "已存在相同的外接存储目录"]
                 )
             }
+
             let baseProfile = editingProfile ?? existing
-            let finalName = (nameRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let profileName = finalName.isEmpty
-                ? URL(fileURLWithPath: selectedDisplayPath).lastPathComponent
-                : finalName
+            let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let profileName = finalName.isEmpty ? URL(fileURLWithPath: selectedDisplayPath).lastPathComponent : finalName
             let credentialRef = baseProfile?.credentialRef ?? "external:\(UUID().uuidString)"
             let shareName = baseProfile?.shareName ?? "external-\(UUID().uuidString)"
 
@@ -199,6 +210,119 @@ final class AddExternalStorageViewController: UIViewController {
         alert.addAction(UIAlertAction(title: "确定", style: .default))
         present(alert, animated: true)
     }
+
+    @objc
+    private func dismissKeyboard() {
+        view.endEditing(true)
+    }
+
+    private func registerKeyboardNotifications() {
+        let center = NotificationCenter.default
+        keyboardObservers.append(center.addObserver(
+            forName: UIResponder.keyboardWillShowNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.handleKeyboard(note: note, showing: true)
+        })
+        keyboardObservers.append(center.addObserver(
+            forName: UIResponder.keyboardWillHideNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            self?.handleKeyboard(note: note, showing: false)
+        })
+    }
+
+    private func handleKeyboard(note: Notification, showing: Bool) {
+        guard let info = note.userInfo,
+              let frame = info[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              let duration = info[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval else {
+            return
+        }
+
+        let keyboardFrame = view.convert(frame, from: nil)
+        let overlap = max(0, view.bounds.maxY - keyboardFrame.minY - view.safeAreaInsets.bottom)
+        let insetBottom = showing ? overlap : 0
+
+        UIView.animate(withDuration: duration) {
+            self.tableView.contentInset.bottom = insetBottom
+            self.tableView.verticalScrollIndicatorInsets.bottom = insetBottom
+        }
+    }
+}
+
+extension AddExternalStorageViewController: UITableViewDataSource, UITableViewDelegate {
+    func numberOfSections(in tableView: UITableView) -> Int {
+        Section.allCases.count
+    }
+
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        1
+    }
+
+    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        guard let section = Section(rawValue: section) else { return nil }
+        switch section {
+        case .name:
+            return "名称"
+        case .location:
+            return "目录"
+        }
+    }
+
+    func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        guard let section = Section(rawValue: section) else { return nil }
+        switch section {
+        case .name:
+            return nil
+        case .location:
+            return currentDisplayPath() ?? "请选择要备份到的外接存储目录。"
+        }
+    }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        guard let section = Section(rawValue: indexPath.section) else { return UITableViewCell() }
+
+        switch section {
+        case .name:
+            guard let cell = tableView.dequeueReusableCell(
+                withIdentifier: SettingsTextFieldCell.reuseIdentifier,
+                for: indexPath
+            ) as? SettingsTextFieldCell else {
+                return UITableViewCell()
+            }
+            cell.configure(
+                title: nil,
+                text: nameText,
+                placeholder: "外接硬盘",
+                autocapitalizationType: .words,
+                returnKeyType: .done,
+                inputAccessoryView: keyboardToolbar
+            )
+            cell.onTextChanged = { [weak self] in self?.nameText = $0 }
+            cell.onReturn = { [weak self] in self?.dismissKeyboard() }
+            return cell
+        case .location:
+            let cell = tableView.dequeueReusableCell(withIdentifier: "ValueCell", for: indexPath)
+            cell.accessoryType = .disclosureIndicator
+            var content = UIListContentConfiguration.valueCell()
+            if let path = currentDisplayPath() {
+                content.text = URL(fileURLWithPath: path).lastPathComponent
+            } else {
+                content.text = "选择目录"
+            }
+            content.textProperties.color = .label
+            cell.contentConfiguration = content
+            return cell
+        }
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard let section = Section(rawValue: indexPath.section), section == .location else { return }
+        pickDirectoryTapped()
+    }
 }
 
 extension AddExternalStorageViewController: UIDocumentPickerDelegate {
@@ -206,11 +330,10 @@ extension AddExternalStorageViewController: UIDocumentPickerDelegate {
         guard let url = urls.first else { return }
 
         selectedDirectoryURL = url
-        pathLabel.text = "已选择: \(url.path)"
-
-        if (nameRow.textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            nameRow.textField.text = url.lastPathComponent
+        if nameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            nameText = url.lastPathComponent
         }
         updateSaveButtonState()
+        tableView.reloadData()
     }
 }
