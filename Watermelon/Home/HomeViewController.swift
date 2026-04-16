@@ -1130,6 +1130,11 @@ final class HomeViewController: UIViewController {
     // MARK: - User Actions
 
     private func openNewStorageFlow(_ destination: NewStorageDestination) {
+        if !ProStatus.isPro && store.savedProfiles.count >= 1 {
+            presentProUpgradeAlert()
+            return
+        }
+
         let onSaved: (ServerProfileRecord, String) -> Void = { [weak self] profile, _ in
             self?.handleStorageCreated(profile)
         }
@@ -1162,6 +1167,21 @@ final class HomeViewController: UIViewController {
             presentation.prefersGrabberVisible = true
         }
         present(container, animated: ConsideringUser.animated)
+    }
+
+    private func presentProUpgradeAlert() {
+        let alert = UIAlertController(
+            title: "升级到 Pro",
+            message: "免费版仅支持 1 个存储目标。升级 Pro 解锁无限存储目标。",
+            preferredStyle: .alert
+        )
+        if let price = Store.shared.membershipDisplayPrice() {
+            alert.addAction(UIAlertAction(title: "升级 (\(price))", style: .default) { _ in
+                Task { try? await Store.shared.purchaseLifetimeMembership() }
+            })
+        }
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        present(alert, animated: true)
     }
 
     private func makeNewStorageRootViewController(

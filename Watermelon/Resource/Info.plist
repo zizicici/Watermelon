@@ -12,6 +12,14 @@
 	<string>Watermelon needs write access to restore selected backups into your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Watermelon needs read access to back up original photo and video resources.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.zizicici.watermelon.background-backup</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

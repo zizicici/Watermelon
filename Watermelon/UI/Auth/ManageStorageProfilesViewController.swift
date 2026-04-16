@@ -183,8 +183,30 @@ extension ManageStorageProfilesViewController: UITableViewDataSource, UITableVie
         content.image = symbolImage(for: profile)
         cell.contentConfiguration = content
         cell.showsReorderControl = true
-        cell.accessoryType = (dependencies.appSession.activeProfile?.id == profile.id) ? .checkmark : .none
+
+        if profile.resolvedStorageType != .externalVolume {
+            let toggle = UISwitch()
+            toggle.isOn = profile.backgroundBackupEnabled
+            toggle.addTarget(self, action: #selector(backgroundBackupToggleChanged(_:)), for: .valueChanged)
+            cell.accessoryView = toggle
+            cell.accessoryType = .none
+        } else {
+            cell.accessoryView = nil
+            cell.accessoryType = (dependencies.appSession.activeProfile?.id == profile.id) ? .checkmark : .none
+        }
         return cell
+    }
+
+    @objc private func backgroundBackupToggleChanged(_ sender: UISwitch) {
+        var view: UIView? = sender
+        while let v = view, !(v is UITableViewCell) { view = v.superview }
+        guard let cell = view as? UITableViewCell,
+              let indexPath = tableView.indexPath(for: cell),
+              indexPath.row < profiles.count,
+              let profileID = profiles[indexPath.row].id
+        else { return }
+        try? dependencies.databaseManager.setBackgroundBackupEnabled(sender.isOn, profileID: profileID)
+        profiles[indexPath.row].backgroundBackupEnabled = sender.isOn
     }
 
     func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {

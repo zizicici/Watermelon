@@ -193,6 +193,7 @@ final class AddWebDAVStorageViewController: UIViewController {
             username: username,
             domain: nil,
             credentialRef: credentialRef,
+            backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? true,
             createdAt: baseProfile?.createdAt ?? Date(),
             updatedAt: Date()
         )

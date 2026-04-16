@@ -7,6 +7,8 @@
 
 import UIKit
 import MoreKit
+import BackgroundTasks
+import os
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -17,23 +19,77 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             membershipKey: "com.zizicici.watermelon.membership.lifetime"
         )
         MoreKitAppearance.shared.tintColor = .systemGreen
+
+        ProStatus.setupStoreObserver()
+        Task { await ProStatus.verifyEntitlement() }
+
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: BackgroundBackupRunner.taskIdentifier,
+            using: nil
+        ) { task in
+            Self.handleBackgroundBackup(task as! BGProcessingTask)
+        }
+
         return true
+    }
+
+    private static func handleBackgroundBackup(_ task: BGProcessingTask) {
+        if BackgroundBackupSetting.getValue() == .enable {
+            let request = BGProcessingTaskRequest(identifier: BackgroundBackupRunner.taskIdentifier)
+            request.requiresNetworkConnectivity = true
+            request.requiresExternalPower = true
+            try? BGTaskScheduler.shared.submit(request)
+        }
+
+        let container = DependencyContainer()
+        let runner = BackgroundBackupRunner(dependencies: container)
+        let completionGuard = OSAllocatedUnfairLock(initialState: false)
+
+        let backupTask = Task {
+            await runner.run()
+            let isFirst = completionGuard.withLock { (done: inout Bool) -> Bool in
+                guard !done else { return false }
+                done = true
+                return true
+            }
+            if isFirst { task.setTaskCompleted(success: true) }
+        }
+
+        task.expirationHandler = {
+            backupTask.cancel()
+            let isFirst = completionGuard.withLock { (done: inout Bool) -> Bool in
+                guard !done else { return false }
+                done = true
+                return true
+            }
+            if isFirst { task.setTaskCompleted(success: false) }
+        }
+    }
+
+    static func scheduleNextBackgroundBackup() {
+        guard ProStatus.isPro,
+              BackgroundBackupSetting.getValue() == .enable else { return }
+
+        let request = BGProcessingTaskRequest(
+            identifier: BackgroundBackupRunner.taskIdentifier
+        )
+        request.requiresNetworkConnectivity = true
+        request.requiresExternalPower = true
+        try? BGTaskScheduler.shared.submit(request)
+    }
+
+    static func cancelPendingBackgroundBackup() {
+        BGTaskScheduler.shared.cancel(
+            taskRequestWithIdentifier: BackgroundBackupRunner.taskIdentifier
+        )
     }
 
     // MARK: UISceneSession Lifecycle
 
     func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
-        // Called when a new scene session is being created.
-        // Use this method to select a configuration to create the new scene with.
         return UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
     }
 
     func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
-        // Called when the user discards a scene session.
-        // If any sessions were discarded while the application was not running, this will be called shortly after application:didFinishLaunchingWithOptions.
-        // Use this method to release any resources that were specific to the discarded scenes, as they will not return.
     }
-
-
 }
-

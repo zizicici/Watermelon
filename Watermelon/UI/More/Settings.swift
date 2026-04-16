@@ -122,6 +122,63 @@ extension ICloudPhotoBackupMode: UserDefaultSettable {
     }
 }
 
+// MARK: - Background Backup
+
+enum BackgroundBackupSetting: Int, CaseIterable, Codable {
+    case disable = 0
+    case enable
+}
+
+extension BackgroundBackupSetting: UserDefaultSettable {
+    static func getKey() -> String {
+        "com.zizicici.common.settings.BackgroundBackupSetting"
+    }
+
+    static var defaultOption: BackgroundBackupSetting {
+        .disable
+    }
+
+    static func getHeader() -> String? {
+        "后台自动备份"
+    }
+
+    static func getFooter() -> String? {
+        """
+        启用后，设备连接电源并使用 Wi-Fi 时，Watermelon 会在后台自动备份最近两个月的照片和视频。
+        更早的月份请在应用内手动备份。
+        支持 SMB 和 WebDAV（不支持外接存储）。此功能需要 Pro。
+        """
+    }
+
+    func getName() -> String {
+        switch self {
+        case .disable:
+            return "Disable"
+        case .enable:
+            return "Enable"
+        }
+    }
+
+    static func getTitle() -> String {
+        "后台自动备份"
+    }
+
+    static func setCurrent(_ value: BackgroundBackupSetting) throws {
+        if value == .enable && !ProStatus.isPro {
+            throw BackgroundBackupSettingError.requiresPro
+        }
+        setValue(value)
+    }
+}
+
+enum BackgroundBackupSettingError: LocalizedError {
+    case requiresPro
+
+    var errorDescription: String? {
+        "后台自动备份是 Pro 专属功能。请升级到 Pro 以启用此功能。"
+    }
+}
+
 // MARK: - Execution Log Filter
 
 struct ExecutionLogFilterPreference: RawRepresentable, Hashable, Sendable {

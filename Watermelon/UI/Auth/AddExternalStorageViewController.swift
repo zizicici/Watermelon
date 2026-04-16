@@ -172,6 +172,7 @@ final class AddExternalStorageViewController: UIViewController {
                 username: "local",
                 domain: nil,
                 credentialRef: credentialRef,
+                backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? true,
                 createdAt: baseProfile?.createdAt ?? Date(),
                 updatedAt: Date()
             )

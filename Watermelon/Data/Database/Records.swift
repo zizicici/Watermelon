@@ -22,6 +22,7 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
     var username: String
     var domain: String?
     var credentialRef: String
+    var backgroundBackupEnabled: Bool = true
     var createdAt: Date
     var updatedAt: Date
 

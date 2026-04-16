@@ -82,6 +82,15 @@ final class DatabaseManager {
             )
         }
 
+        migrator.registerMigration("v9_add_background_backup_enabled") { db in
+            try db.execute(
+                sql: """
+                ALTER TABLE \(ServerProfileRecord.databaseTableName)
+                ADD COLUMN backgroundBackupEnabled INTEGER NOT NULL DEFAULT 1
+                """
+            )
+        }
+
         return migrator
     }
 
@@ -97,6 +106,27 @@ final class DatabaseManager {
         try read { db in
             try ServerProfileRecord
                 .order(Column("sortOrder").asc, Column("updatedAt").desc)
+                .fetchAll(db)
+        }
+    }
+
+    func setBackgroundBackupEnabled(_ enabled: Bool, profileID: Int64) throws {
+        try write { db in
+            try db.execute(
+                sql: """
+                UPDATE \(ServerProfileRecord.databaseTableName)
+                SET backgroundBackupEnabled = ? WHERE id = ?
+                """,
+                arguments: [enabled, profileID]
+            )
+        }
+    }
+
+    func fetchBackgroundBackupEnabledProfiles() throws -> [ServerProfileRecord] {
+        try read { db in
+            try ServerProfileRecord
+                .filter(Column("backgroundBackupEnabled") == true)
+                .filter(Column("storageType") != StorageType.externalVolume.rawValue)
                 .fetchAll(db)
         }
     }
