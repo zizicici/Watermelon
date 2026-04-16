@@ -9,7 +9,6 @@ import MoreKit
 class WatermelonMoreDataSource: MoreViewControllerDataSource {
     private enum ItemID {
         static let manageProfiles = "manageProfiles"
-        static let hashIndex = "hashIndex"
         static let workerCount = "workerCount"
         static let iCloudPhotoBackup = "iCloudPhotoBackup"
         static let language = "language"
@@ -45,11 +44,6 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 items: [MoreCustomItem(id: ItemID.manageProfiles, title: "管理存储")]
             )))
             sections.append(.custom(MoreCustomSection(
-                id: "localData",
-                header: "本地数据",
-                items: [MoreCustomItem(id: ItemID.hashIndex, title: "本地 Hash 索引")]
-            )))
-            sections.append(.custom(MoreCustomSection(
                 id: "backup",
                 header: String(localized: "more.section.backup"),
                 items: [
@@ -79,10 +73,6 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 let vc = ManageStorageProfilesViewController(dependencies: dependencies) { [weak self] in
                     self?.onProfilesChanged?()
                 }
-                controller.pushViewController(vc)
-            case ItemID.hashIndex:
-                guard let dependencies else { return }
-                let vc = LocalHashIndexManagerViewController(dependencies: dependencies)
                 controller.pushViewController(vc)
             case ItemID.workerCount:
                 controller.enterSettings(BackupWorkerCountMode.self)
