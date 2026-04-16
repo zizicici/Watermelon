@@ -11,6 +11,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let manageProfiles = "manageProfiles"
         static let hashIndex = "hashIndex"
         static let workerCount = "workerCount"
+        static let iCloudPhotoBackup = "iCloudPhotoBackup"
         static let language = "language"
     }
 
@@ -51,11 +52,18 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
             sections.append(.custom(MoreCustomSection(
                 id: "backup",
                 header: String(localized: "more.section.backup"),
-                items: [MoreCustomItem(
-                    id: ItemID.workerCount,
-                    title: "上传并发",
-                    value: BackupWorkerCountMode.getValue().getName()
-                )]
+                items: [
+                    MoreCustomItem(
+                        id: ItemID.workerCount,
+                        title: "上传并发",
+                        value: BackupWorkerCountMode.getValue().getName()
+                    ),
+                    MoreCustomItem(
+                        id: ItemID.iCloudPhotoBackup,
+                        title: "允许访问 iCloud 原件",
+                        value: ICloudPhotoBackupMode.getValue().getName()
+                    )
+                ]
             )))
         }
 
@@ -78,6 +86,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.pushViewController(vc)
             case ItemID.workerCount:
                 controller.enterSettings(BackupWorkerCountMode.self)
+            case ItemID.iCloudPhotoBackup:
+                controller.enterSettings(ICloudPhotoBackupMode.self)
             case ItemID.language:
                 controller.jumpToSettings()
             default:

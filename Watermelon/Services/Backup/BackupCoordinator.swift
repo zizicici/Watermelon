@@ -41,6 +41,7 @@ final class BackupCoordinator: Sendable {
             preparedRun: preparedRun,
             profile: request.profile,
             workerCountOverride: request.workerCountOverride,
+            iCloudPhotoBackupMode: request.iCloudPhotoBackupMode,
             eventStream: eventStream,
             onMonthUploaded: request.onMonthUploaded
         )

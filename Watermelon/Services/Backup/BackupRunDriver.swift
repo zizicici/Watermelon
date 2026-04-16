@@ -14,6 +14,7 @@ final class BackupRunDriver {
     private var activeRunToken: UInt64 = 0
 
     private(set) var activeWorkerCountOverride: Int?
+    private(set) var activeICloudPhotoBackupMode: ICloudPhotoBackupMode = .disable
 
     init(backupCoordinator: BackupCoordinator) {
         self.backupCoordinator = backupCoordinator
@@ -40,6 +41,7 @@ final class BackupRunDriver {
         mode: BackupRunMode,
         displayMode: BackupRunMode,
         workerCountOverride: Int?,
+        iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         onMonthUploaded: BackupMonthFinalizer? = nil,
         terminalIntentProvider: @escaping TerminalIntentProvider,
         onEvent: @escaping EventHandler,
@@ -54,6 +56,7 @@ final class BackupRunDriver {
         let eventStream = BackupEventStream()
         activeEventStream = eventStream
         activeWorkerCountOverride = workerCountOverride
+        activeICloudPhotoBackupMode = iCloudPhotoBackupMode
 
         let capturedRunToken = runToken
         let capturedRunMode = mode
@@ -84,6 +87,7 @@ final class BackupRunDriver {
                     password: password,
                     onlyAssetLocalIdentifiers: mode.targetAssetIdentifiers,
                     workerCountOverride: workerCountOverride,
+                    iCloudPhotoBackupMode: iCloudPhotoBackupMode,
                     onMonthUploaded: onMonthUploaded
                 )
                 _ = try await self.backupCoordinator.runBackup(request: request, eventStream: eventStream)

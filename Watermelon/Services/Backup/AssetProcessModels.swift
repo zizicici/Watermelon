@@ -6,6 +6,7 @@ struct AssetProcessContext {
     let asset: PHAsset
     let selectedResources: [BackupSelectedResource]
     let cachedLocalHash: LocalAssetHashCache?
+    let iCloudPhotoBackupMode: ICloudPhotoBackupMode
     let monthStore: MonthManifestStore
     let profile: ServerProfileRecord
     let assetPosition: Int

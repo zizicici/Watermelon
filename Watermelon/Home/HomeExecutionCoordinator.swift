@@ -1,7 +1,29 @@
 import Foundation
+import MoreKit
 
 @MainActor
 final class HomeExecutionCoordinator {
+
+    private struct ExecutionSettingsSnapshot {
+        let uploadWorkerCountOverride: Int?
+        let iCloudPhotoBackupMode: ICloudPhotoBackupMode
+
+        static func fromCurrentSettings() -> ExecutionSettingsSnapshot {
+            ExecutionSettingsSnapshot(
+                uploadWorkerCountOverride: BackupWorkerCountMode.getValue().workerCountOverride,
+                iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue()
+            )
+        }
+
+        func makeUploadRunConfiguration(
+            forcedWorkerCountOverride: Int?
+        ) -> BackupRunConfigurationOverride {
+            BackupRunConfigurationOverride(
+                workerCountOverride: forcedWorkerCountOverride ?? uploadWorkerCountOverride,
+                iCloudPhotoBackupMode: iCloudPhotoBackupMode
+            )
+        }
+    }
 
     // MARK: - Public State
 
@@ -37,9 +59,13 @@ final class HomeExecutionCoordinator {
     private var backupSessionController: BackupSessionController!
     private var backupBridge: BackupSessionAsyncBridge!
     private var downloadHelper: DownloadWorkflowHelper!
+    private var executionSettingsSnapshot: ExecutionSettingsSnapshot?
+    private var forcedUploadWorkerCountOverride: Int?
 
     private static let syncThrottleInterval: CFAbsoluteTime = 2.0
+    private static let localAvailabilityProbeWorkerCount = 2
     private static let localIndexPreflightWorkerCount = 2
+    private static let localIndexICloudPreflightWorkerCount = 1
 
     init(dependencies: DependencyContainer, dataAccess: DataAccess) {
         self.dependencies = dependencies
@@ -58,6 +84,8 @@ final class HomeExecutionCoordinator {
     func enter(upload: [LibraryMonthKey], download: [LibraryMonthKey], sync: [LibraryMonthKey]) {
         executionTask = nil
         transientControlState = nil
+        executionSettingsSnapshot = ExecutionSettingsSnapshot.fromCurrentSettings()
+        forcedUploadWorkerCountOverride = nil
         dataRefresher.reset()
         session.enter(upload: upload, download: download, sync: sync, localAssetIDs: dataAccess.localAssetIDs)
         backupSessionController = BackupSessionController(dependencies: dependencies)
@@ -71,6 +99,8 @@ final class HomeExecutionCoordinator {
         executionTask?.cancel()
         executionTask = nil
         transientControlState = nil
+        executionSettingsSnapshot = nil
+        forcedUploadWorkerCountOverride = nil
         dataRefresher.cancel()
         backupBridge?.cancel()
         downloadHelper?.cancel()
@@ -183,7 +213,7 @@ final class HomeExecutionCoordinator {
                     self.notifyStateChanged()
                 }
 
-                let prepared = await self.prepareLocalIndexIfNeeded()
+                let prepared = await self.prepareExecutionIfNeeded()
                 guard !Task.isCancelled else { return }
                 guard prepared else { return }
 
@@ -198,8 +228,12 @@ final class HomeExecutionCoordinator {
             if self.session.shouldRunUploadPhase {
                 guard !Task.isCancelled else { return }
                 let scope = self.session.consumePendingUploadScope()
+                let runConfigurationOverride = self.activeExecutionSettingsSnapshot().makeUploadRunConfiguration(
+                    forcedWorkerCountOverride: self.forcedUploadWorkerCountOverride
+                )
                 let result = await self.backupBridge.runUpload(
                     scope: scope,
+                    runConfigurationOverride: runConfigurationOverride,
                     onMonthUploaded: self.makeUploadMonthFinalizer()
                 ) { [weak self] progress in
                     self?.handleUploadProgress(progress)
@@ -301,7 +335,52 @@ final class HomeExecutionCoordinator {
         onStateChanged?()
     }
 
+    private func prepareExecutionIfNeeded() async -> Bool {
+        if !(await prepareLocalAvailabilityProbeIfNeeded()) {
+            return false
+        }
+        return await prepareLocalIndexIfNeeded()
+    }
+
+    private func prepareLocalAvailabilityProbeIfNeeded() async -> Bool {
+        forcedUploadWorkerCountOverride = nil
+
+        let settings = activeExecutionSettingsSnapshot()
+
+        guard session.shouldRunUploadPhase else { return true }
+        guard settings.iCloudPhotoBackupMode == .enable else { return true }
+
+        let assetIDs = selectedLocalAssetIDsForUploadPhase()
+        guard !assetIDs.isEmpty else { return true }
+
+        do {
+            let probeResult = try await dependencies.localHashIndexBuildService.probeAvailability(
+                for: assetIDs,
+                workerCount: Self.localAvailabilityProbeWorkerCount
+            )
+            guard !Task.isCancelled else { return false }
+
+            if probeResult.requiresSingleWorker {
+                forcedUploadWorkerCountOverride = 1
+                let unavailableCount = probeResult.unavailableAssetIDs.count
+                let failedCount = probeResult.failedAssetIDs.count
+                print("[HomeExecution] Availability probe requires conservative upload concurrency. unavailable=\(unavailableCount), failed=\(failedCount). Force upload worker count to 1.")
+            }
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            let message = "检测 iCloud 资源状态失败：\(error.localizedDescription)"
+            let alert = session.failExecution(reason: message)
+            transientControlState = nil
+            notifyStateChanged()
+            onAlert?(alert.title, alert.message)
+            return false
+        }
+    }
+
     private func prepareLocalIndexIfNeeded() async -> Bool {
+        let settings = activeExecutionSettingsSnapshot()
         let assetIDs = selectedLocalAssetIDsForExecution()
         guard !assetIDs.isEmpty else {
             session.markLocalIndexPreflightCompleted()
@@ -309,23 +388,50 @@ final class HomeExecutionCoordinator {
         }
 
         do {
-            let result = try await dependencies.localHashIndexBuildService.buildIndex(
+            let initialResult = try await dependencies.localHashIndexBuildService.buildIndex(
                 for: assetIDs,
                 workerCount: Self.localIndexPreflightWorkerCount,
                 allowNetworkAccess: false
             )
             guard !Task.isCancelled else { return false }
 
-            if !result.readyAssetIDs.isEmpty {
-                await dataRefresher.refreshLocalIndexAndNotify(result.readyAssetIDs)
+            if !initialResult.readyAssetIDs.isEmpty {
+                await dataRefresher.refreshLocalIndexAndNotify(initialResult.readyAssetIDs)
                 guard !Task.isCancelled else { return false }
+            }
+
+            let result: LocalHashIndexBuildResult
+            if session.requiresCompleteLocalIndexBeforeExecution,
+               !initialResult.unavailableAssetIDs.isEmpty,
+               settings.iCloudPhotoBackupMode == .enable {
+                let iCloudResult = try await dependencies.localHashIndexBuildService.buildIndex(
+                    for: initialResult.unavailableAssetIDs,
+                    workerCount: Self.localIndexICloudPreflightWorkerCount,
+                    allowNetworkAccess: true
+                )
+                guard !Task.isCancelled else { return false }
+
+                if !iCloudResult.readyAssetIDs.isEmpty {
+                    await dataRefresher.refreshLocalIndexAndNotify(iCloudResult.readyAssetIDs)
+                    guard !Task.isCancelled else { return false }
+                }
+
+                result = mergedLocalIndexBuildResult(
+                    initial: initialResult,
+                    iCloudRecovery: iCloudResult
+                )
+            } else {
+                result = initialResult
             }
 
             session.markLocalIndexPreflightCompleted()
 
             if session.requiresCompleteLocalIndexBeforeExecution,
                !result.incompleteAssetIDs.isEmpty {
-                let message = makeLocalIndexIncompleteMessage(from: result)
+                let message = makeLocalIndexIncompleteMessage(
+                    from: result,
+                    iCloudPhotoBackupMode: settings.iCloudPhotoBackupMode
+                )
                 let alert = session.failExecution(reason: message)
                 transientControlState = nil
                 notifyStateChanged()
@@ -346,6 +452,16 @@ final class HomeExecutionCoordinator {
         }
     }
 
+    private func activeExecutionSettingsSnapshot() -> ExecutionSettingsSnapshot {
+        if let executionSettingsSnapshot {
+            return executionSettingsSnapshot
+        }
+
+        let snapshot = ExecutionSettingsSnapshot.fromCurrentSettings()
+        executionSettingsSnapshot = snapshot
+        return snapshot
+    }
+
     private func selectedLocalAssetIDsForExecution() -> Set<String> {
         var assetIDs = Set<String>()
         for month in session.monthPlans.keys {
@@ -354,8 +470,17 @@ final class HomeExecutionCoordinator {
         return assetIDs
     }
 
+    private func selectedLocalAssetIDsForUploadPhase() -> Set<String> {
+        var assetIDs = Set<String>()
+        for month in session.uploadMonths + session.syncMonths {
+            assetIDs.formUnion(dataAccess.localAssetIDs(month))
+        }
+        return assetIDs
+    }
+
     private func makeLocalIndexIncompleteMessage(
-        from result: LocalHashIndexBuildResult
+        from result: LocalHashIndexBuildResult,
+        iCloudPhotoBackupMode: ICloudPhotoBackupMode
     ) -> String {
         var parts: [String] = []
         if !result.unavailableAssetIDs.isEmpty {
@@ -365,7 +490,23 @@ final class HomeExecutionCoordinator {
             parts.append("\(result.failedAssetIDs.count) 项资源读取失败")
         }
         let detail = parts.joined(separator: "，")
+        if !result.unavailableAssetIDs.isEmpty, iCloudPhotoBackupMode == .disable {
+            return "本地索引不完整：\(detail)。为避免下载或同步产生重复图片，本次操作已停止。请先在设置中启用“允许访问 iCloud 原件”，或先将这些原件下载到本机。"
+        }
         return "本地索引不完整：\(detail)。为避免下载或同步产生重复图片，本次操作已停止。"
+    }
+
+    private func mergedLocalIndexBuildResult(
+        initial: LocalHashIndexBuildResult,
+        iCloudRecovery: LocalHashIndexBuildResult
+    ) -> LocalHashIndexBuildResult {
+        LocalHashIndexBuildResult(
+            requestedAssetIDs: initial.requestedAssetIDs,
+            readyAssetIDs: initial.readyAssetIDs.union(iCloudRecovery.readyAssetIDs),
+            unavailableAssetIDs: iCloudRecovery.unavailableAssetIDs,
+            failedAssetIDs: initial.failedAssetIDs.union(iCloudRecovery.failedAssetIDs),
+            missingAssetIDs: initial.missingAssetIDs.union(iCloudRecovery.missingAssetIDs)
+        )
     }
 
     private func makeUploadMonthFinalizer() -> BackupMonthFinalizer? {

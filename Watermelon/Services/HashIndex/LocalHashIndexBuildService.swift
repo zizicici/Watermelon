@@ -16,6 +16,17 @@ struct LocalHashIndexBuildResult: Sendable {
     }
 }
 
+struct LocalAssetAvailabilityProbeResult: Sendable {
+    let requestedAssetIDs: Set<String>
+    let unavailableAssetIDs: Set<String>
+    let failedAssetIDs: Set<String>
+    let missingAssetIDs: Set<String>
+
+    var requiresSingleWorker: Bool {
+        !unavailableAssetIDs.isEmpty
+    }
+}
+
 private struct LocalHashIndexAssetRef: @unchecked Sendable {
     let asset: PHAsset
 }
@@ -61,6 +72,11 @@ private actor LocalHashIndexWorklist {
 
 private struct LocalHashIndexBuildPreparedInput: Sendable {
     let cachedHashesByAssetID: [String: LocalAssetHashCache]
+    let assets: [LocalHashIndexAssetRef]
+    let missingAssetIDs: Set<String>
+}
+
+private struct LocalHashIndexAssetFetchInput: Sendable {
     let assets: [LocalHashIndexAssetRef]
     let missingAssetIDs: Set<String>
 }
@@ -163,6 +179,55 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         }
     }
 
+    func probeAvailability(
+        for assetIDs: Set<String>,
+        workerCount: Int = 2
+    ) async throws -> LocalAssetAvailabilityProbeResult {
+        guard !assetIDs.isEmpty else {
+            return LocalAssetAvailabilityProbeResult(
+                requestedAssetIDs: [],
+                unavailableAssetIDs: [],
+                failedAssetIDs: [],
+                missingAssetIDs: []
+            )
+        }
+
+        try await ensurePhotoAuthorization()
+        let preparedInput = try await prepareAssetFetchInput(for: assetIDs)
+        let worklist = LocalHashIndexWorklist(assets: preparedInput.assets)
+        let effectiveWorkerCount = min(max(workerCount, 1), max(preparedInput.assets.count, 1))
+
+        let aggregate = try await withThrowingTaskGroup(of: LocalHashIndexWorkerResult.self) { group in
+            for _ in 0 ..< effectiveWorkerCount {
+                group.addTask { [self] in
+                    var result = LocalHashIndexWorkerResult()
+
+                    while let assetRef = await worklist.nextAsset() {
+                        try Task.checkCancellation()
+                        let outcome = try await probeAssetAvailability(assetRef.asset)
+                        result.record(outcome)
+                    }
+
+                    return result
+                }
+            }
+
+            var aggregate = LocalHashIndexWorkerResult()
+            for try await result in group {
+                aggregate.unavailableAssetIDs.formUnion(result.unavailableAssetIDs)
+                aggregate.failedAssetIDs.formUnion(result.failedAssetIDs)
+            }
+            return aggregate
+        }
+
+        return LocalAssetAvailabilityProbeResult(
+            requestedAssetIDs: assetIDs,
+            unavailableAssetIDs: aggregate.unavailableAssetIDs,
+            failedAssetIDs: aggregate.failedAssetIDs,
+            missingAssetIDs: preparedInput.missingAssetIDs
+        )
+    }
+
     private func ensurePhotoAuthorization() async throws {
         let status = photoLibraryService.authorizationStatus()
         if status != .authorized && status != .limited {
@@ -176,11 +241,23 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
     private func prepareInput(
         for assetIDs: Set<String>
     ) async throws -> LocalHashIndexBuildPreparedInput {
+        async let cachedHashesByAssetID = loadCachedHashes(for: assetIDs)
+        async let assetFetchInput = prepareAssetFetchInput(for: assetIDs)
+
+        let preparedAssets = try await assetFetchInput
+        let cachedHashes = try await cachedHashesByAssetID
+        return LocalHashIndexBuildPreparedInput(
+            cachedHashesByAssetID: cachedHashes,
+            assets: preparedAssets.assets,
+            missingAssetIDs: preparedAssets.missingAssetIDs
+        )
+    }
+
+    private func prepareAssetFetchInput(
+        for assetIDs: Set<String>
+    ) async throws -> LocalHashIndexAssetFetchInput {
         let photoLibraryService = self.photoLibraryService
-        let repository = self.repository
         let task = Task.detached(priority: .userInitiated) {
-            try Task.checkCancellation()
-            let cachedHashesByAssetID = try repository.fetchAssetHashCaches(assetIDs: assetIDs)
             try Task.checkCancellation()
             let fetchedAssets = photoLibraryService.fetchAssets(localIdentifiers: assetIDs)
             let sortedAssets = fetchedAssets.sorted { lhs, rhs in
@@ -192,11 +269,26 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 return lhs.localIdentifier < rhs.localIdentifier
             }
             let resolvedAssetIDs = Set(sortedAssets.map(\.localIdentifier))
-            return LocalHashIndexBuildPreparedInput(
-                cachedHashesByAssetID: cachedHashesByAssetID,
+            return LocalHashIndexAssetFetchInput(
                 assets: sortedAssets.map(LocalHashIndexAssetRef.init(asset:)),
                 missingAssetIDs: assetIDs.subtracting(resolvedAssetIDs)
             )
+        }
+
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func loadCachedHashes(
+        for assetIDs: Set<String>
+    ) async throws -> [String: LocalAssetHashCache] {
+        let repository = self.repository
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            return try repository.fetchAssetHashCaches(assetIDs: assetIDs)
         }
 
         return try await withTaskCancellationHandler {
@@ -275,9 +367,37 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            if !allowNetworkAccess && Self.isNetworkAccessRequiredError(error) {
+            if !allowNetworkAccess && PhotoLibraryService.isNetworkAccessRequiredError(error) {
                 return .unavailable(asset.localIdentifier)
             }
+            return .failed(asset.localIdentifier)
+        }
+    }
+
+    private func probeAssetAvailability(
+        _ asset: PHAsset
+    ) async throws -> LocalHashIndexAssetOutcome {
+        let selectedResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
+            from: PHAssetResource.assetResources(for: asset)
+        )
+        guard !selectedResources.isEmpty else {
+            return .failed(asset.localIdentifier)
+        }
+
+        do {
+            for selected in selectedResources {
+                try Task.checkCancellation()
+                let isLocallyAvailable = try await photoLibraryService.isResourceLocallyAvailable(
+                    selected.resource
+                )
+                if !isLocallyAvailable {
+                    return .unavailable(asset.localIdentifier)
+                }
+            }
+            return .ready(asset.localIdentifier)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
             return .failed(asset.localIdentifier)
         }
     }
@@ -303,11 +423,5 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         }
 
         return true
-    }
-
-    private static func isNetworkAccessRequiredError(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        return nsError.domain == PHPhotosErrorDomain &&
-            nsError.code == PHPhotosError.Code.networkAccessRequired.rawValue
     }
 }

@@ -17,6 +17,7 @@ struct BackupParallelExecutor: Sendable {
         preparedRun: BackupPreparedRun,
         profile: ServerProfileRecord,
         workerCountOverride: Int?,
+        iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         eventStream: BackupEventStream,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) async throws -> BackupExecutionResult {
@@ -55,6 +56,7 @@ struct BackupParallelExecutor: Sendable {
                             workerID: workerID,
                             monthQueue: monthQueue,
                             profile: profile,
+                            iCloudPhotoBackupMode: iCloudPhotoBackupMode,
                             snapshotSeedLookup: preparedRun.snapshotSeedLookup,
                             eventStream: eventStream,
                             aggregator: aggregator,
@@ -97,6 +99,7 @@ struct BackupParallelExecutor: Sendable {
         workerID: Int,
         monthQueue: MonthWorkQueue,
         profile: ServerProfileRecord,
+        iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         snapshotSeedLookup: MonthSeedLookup?,
         eventStream: BackupEventStream,
         aggregator: ParallelBackupProgressAggregator,
@@ -206,6 +209,7 @@ struct BackupParallelExecutor: Sendable {
                                 asset: asset,
                                 selectedResources: selectedResources,
                                 cachedLocalHash: cachedLocalHash,
+                                iCloudPhotoBackupMode: iCloudPhotoBackupMode,
                                 monthStore: monthStore,
                                 profile: profile,
                                 assetPosition: dispatch.position,

@@ -41,6 +41,10 @@ struct BackupRunPreparationService: Sendable {
 
         try await ensurePhotoAuthorization()
 
+        if request.iCloudPhotoBackupMode == .enable {
+            eventStream.emit(.log("已启用“允许访问 iCloud 原件”：Watermelon 可按需下载 iCloud 原件。检测到仅存于 iCloud 的本地资源时，本次执行会自动降为 1 个 Worker。"))
+        }
+
         let client = try makeStorageClient(profile: profile, password: password)
         try await client.connect()
 

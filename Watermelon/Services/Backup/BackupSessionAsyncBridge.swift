@@ -33,6 +33,7 @@ final class BackupSessionAsyncBridge {
 
     func runUpload(
         scope: BackupScopeSelection? = nil,
+        runConfigurationOverride: BackupRunConfigurationOverride? = nil,
         onMonthUploaded: BackupMonthFinalizer? = nil,
         onProgress: @escaping (UploadProgress) -> Void
     ) async -> UploadResult {
@@ -41,6 +42,7 @@ final class BackupSessionAsyncBridge {
 
         let started = await backupSessionController.startBackupWhenReady(
             scope: scope,
+            runConfigurationOverride: runConfigurationOverride,
             onMonthUploaded: onMonthUploaded
         )
         guard started else {

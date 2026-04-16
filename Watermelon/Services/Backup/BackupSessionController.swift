@@ -14,7 +14,7 @@ final class BackupSessionController {
         let continuation: CheckedContinuation<Void, Never>
     }
 
-    enum State {
+enum State {
         case idle
         case running
         case paused
@@ -189,14 +189,25 @@ final class BackupSessionController {
     }
 
     @discardableResult
-    func startBackup(onMonthUploaded: BackupMonthFinalizer? = nil) -> Bool {
+    func startBackup(
+        runConfigurationOverride: BackupRunConfigurationOverride? = nil,
+        onMonthUploaded: BackupMonthFinalizer? = nil
+    ) -> Bool {
         if state == .paused {
             return resumeFromPause(onMonthUploaded: onMonthUploaded)
         }
         if let selectedAssetIDs = backupScopeSelection.selectedAssetIDs {
-            return startBackup(mode: .scoped(assetIDs: selectedAssetIDs), onMonthUploaded: onMonthUploaded)
+            return startBackup(
+                mode: .scoped(assetIDs: selectedAssetIDs),
+                runConfigurationOverride: runConfigurationOverride,
+                onMonthUploaded: onMonthUploaded
+            )
         }
-        return startBackup(mode: .full, onMonthUploaded: onMonthUploaded)
+        return startBackup(
+            mode: .full,
+            runConfigurationOverride: runConfigurationOverride,
+            onMonthUploaded: onMonthUploaded
+        )
     }
 
     @discardableResult
@@ -213,6 +224,7 @@ final class BackupSessionController {
     @discardableResult
     func startBackupWhenReady(
         scope: BackupScopeSelection? = nil,
+        runConfigurationOverride: BackupRunConfigurationOverride? = nil,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) async -> Bool {
         if let scope {
@@ -227,7 +239,10 @@ final class BackupSessionController {
             }
             guard !Task.isCancelled else { return false }
             guard updateScopeSelection(scope) else { return false }
-            return startBackup(onMonthUploaded: onMonthUploaded)
+            return startBackup(
+                runConfigurationOverride: runConfigurationOverride,
+                onMonthUploaded: onMonthUploaded
+            )
         }
 
         if state == .paused {
@@ -245,12 +260,16 @@ final class BackupSessionController {
             await waitUntilReadyForStartCommand(.newRun)
         }
         guard !Task.isCancelled else { return false }
-        return startBackup(onMonthUploaded: onMonthUploaded)
+        return startBackup(
+            runConfigurationOverride: runConfigurationOverride,
+            onMonthUploaded: onMonthUploaded
+        )
     }
 
     @discardableResult
     private func startBackup(
         mode: BackupRunMode,
+        runConfigurationOverride configurationOverride: BackupRunConfigurationOverride?,
         onMonthUploaded: BackupMonthFinalizer?
     ) -> Bool {
         guard state != .running else {
@@ -267,8 +286,7 @@ final class BackupSessionController {
             return false
         }
 
-        let workerCountMode = BackupWorkerCountMode.getValue()
-        let workerCountOverride = workerCountMode.workerCountOverride
+        let configuration = resolveRunConfiguration(override: configurationOverride)
         let startContext = session.prepareForStart(mode: mode)
         notifyObserversNow()
 
@@ -303,7 +321,8 @@ final class BackupSessionController {
                 password: connection.password,
                 mode: mode,
                 displayMode: mode,
-                workerCountOverride: workerCountOverride,
+                workerCountOverride: configuration.workerCountOverride,
+                iCloudPhotoBackupMode: configuration.iCloudPhotoBackupMode,
                 onMonthUploaded: onMonthUploaded
             )
 
@@ -390,6 +409,7 @@ final class BackupSessionController {
         mode: BackupRunMode,
         displayMode: BackupRunMode,
         workerCountOverride: Int?,
+        iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) -> UInt64? {
         activeTerminationIntent = .none
@@ -399,6 +419,7 @@ final class BackupSessionController {
             mode: mode,
             displayMode: displayMode,
             workerCountOverride: workerCountOverride,
+            iCloudPhotoBackupMode: iCloudPhotoBackupMode,
             onMonthUploaded: onMonthUploaded,
             terminalIntentProvider: { [weak self] in
                 self?.activeTerminationIntent ?? .none
@@ -427,6 +448,16 @@ final class BackupSessionController {
         }
 
         return runToken
+    }
+
+    private func resolveRunConfiguration(
+        override: BackupRunConfigurationOverride? = nil
+    ) -> BackupRunConfigurationOverride {
+        if let override { return override }
+        return BackupRunConfigurationOverride(
+            workerCountOverride: BackupWorkerCountMode.getValue().workerCountOverride,
+            iCloudPhotoBackupMode: ICloudPhotoBackupMode.getValue()
+        )
     }
 
     private func applyIntent(_ intent: BackupTerminationIntent) {
@@ -521,8 +552,8 @@ final class BackupSessionController {
         }
 
         let resumeContext = session.prepareForResume()
-        let workerCountMode = BackupWorkerCountMode.getValue()
-        let workerCountOverride = workerCountMode.workerCountOverride
+        let iCloudPhotoBackupMode = runDriver.activeICloudPhotoBackupMode
+        let workerCountOverride = runDriver.activeWorkerCountOverride
         notifyObserversNow()
 
         resumePreparationTask = Task { [weak self] in
@@ -550,7 +581,8 @@ final class BackupSessionController {
                     password: connection.password,
                     mode: resumedExecutionMode,
                     displayMode: resumeContext.pausedDisplayMode,
-                    workerCountOverride: workerCountOverride ?? self.runDriver.activeWorkerCountOverride,
+                    workerCountOverride: workerCountOverride,
+                    iCloudPhotoBackupMode: iCloudPhotoBackupMode,
                     onMonthUploaded: onMonthUploaded
                 )
 

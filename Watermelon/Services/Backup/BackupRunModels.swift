@@ -38,11 +38,17 @@ enum BackupMonthFinalizationResult: Sendable {
 
 typealias BackupMonthFinalizer = @Sendable @MainActor (LibraryMonthKey) async -> BackupMonthFinalizationResult
 
+struct BackupRunConfigurationOverride: Sendable {
+    let workerCountOverride: Int?
+    let iCloudPhotoBackupMode: ICloudPhotoBackupMode
+}
+
 struct BackupRunRequest: Sendable {
     let profile: ServerProfileRecord
     let password: String
     let onlyAssetLocalIdentifiers: Set<String>?
     let workerCountOverride: Int?
+    let iCloudPhotoBackupMode: ICloudPhotoBackupMode
     let onMonthUploaded: BackupMonthFinalizer?
 
     init(
@@ -50,12 +56,14 @@ struct BackupRunRequest: Sendable {
         password: String,
         onlyAssetLocalIdentifiers: Set<String>?,
         workerCountOverride: Int? = nil,
+        iCloudPhotoBackupMode: ICloudPhotoBackupMode = .disable,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) {
         self.profile = profile
         self.password = password
         self.onlyAssetLocalIdentifiers = onlyAssetLocalIdentifiers
         self.workerCountOverride = workerCountOverride
+        self.iCloudPhotoBackupMode = iCloudPhotoBackupMode
         self.onMonthUploaded = onMonthUploaded
     }
 }

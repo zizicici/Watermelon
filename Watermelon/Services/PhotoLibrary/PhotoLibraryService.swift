@@ -61,6 +61,74 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    private final class AvailabilityProbeRequestState {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Bool, Error>?
+        private var requestID: PHAssetResourceDataRequestID?
+        private var completed = false
+
+        func bind(
+            continuation: CheckedContinuation<Bool, Error>,
+            requestID: PHAssetResourceDataRequestID
+        ) -> Bool {
+            lock.withLock {
+                guard !completed else { return false }
+                self.continuation = continuation
+                self.requestID = requestID
+                return true
+            }
+        }
+
+        func complete(_ result: Result<Bool, Error>) {
+            let captured: CheckedContinuation<Bool, Error>? = lock.withLock {
+                guard !completed else { return nil }
+                completed = true
+                let c = self.continuation
+                self.continuation = nil
+                requestID = nil
+                return c
+            }
+
+            guard let captured else { return }
+            switch result {
+            case .success(let value):
+                captured.resume(returning: value)
+            case .failure(let error):
+                captured.resume(throwing: error)
+            }
+        }
+
+        func cancelRequest(using manager: PHAssetResourceManager) {
+            let id: PHAssetResourceDataRequestID? = lock.withLock { self.requestID }
+            if let id {
+                manager.cancelDataRequest(id)
+            }
+        }
+
+        func markAvailable(using manager: PHAssetResourceManager) {
+            let state: (continuation: CheckedContinuation<Bool, Error>?, requestID: PHAssetResourceDataRequestID?)? = lock.withLock {
+                guard !completed else { return nil }
+                completed = true
+                let captured = continuation
+                let capturedRequestID = requestID
+                continuation = nil
+                requestID = nil
+                return (captured, capturedRequestID)
+            }
+
+            guard let state else { return }
+            if let requestID = state.requestID {
+                manager.cancelDataRequest(requestID)
+            }
+            state.continuation?.resume(returning: true)
+        }
+
+        func cancel(using manager: PHAssetResourceManager) {
+            cancelRequest(using: manager)
+            complete(.failure(CancellationError()))
+        }
+    }
+
     func requestAuthorization() async -> PHAuthorizationStatus {
         await withCheckedContinuation { continuation in
             PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
@@ -195,6 +263,61 @@ final class PhotoLibraryService: @unchecked Sendable {
         )
     }
 
+    func isResourceLocallyAvailable(
+        _ resource: PHAssetResource,
+        cancellationController: BackupCancellationController? = nil
+    ) async throws -> Bool {
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = false
+
+        let resourceManager = self.resourceManager
+        let state = AvailabilityProbeRequestState()
+        let cancellationHandlerID = cancellationController?.addCancellationHandler {
+            state.cancel(using: resourceManager)
+        }
+        defer {
+            if let cancellationHandlerID {
+                cancellationController?.removeCancellationHandler(cancellationHandlerID)
+            }
+        }
+        try cancellationController?.throwIfCancelled()
+
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
+                let requestID = resourceManager.requestData(
+                    for: resource,
+                    options: options,
+                    dataReceivedHandler: { data in
+                        guard !data.isEmpty else { return }
+                        state.markAvailable(using: resourceManager)
+                    },
+                    completionHandler: { error in
+                        if let error {
+                            if Self.isNetworkAccessRequiredError(error) {
+                                state.complete(.success(false))
+                            } else {
+                                state.complete(.failure(error))
+                            }
+                        } else {
+                            state.complete(.success(true))
+                        }
+                    }
+                )
+
+                if !state.bind(continuation: continuation, requestID: requestID) {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+
+                if Task.isCancelled {
+                    state.cancel(using: resourceManager)
+                }
+            }
+        }, onCancel: {
+            state.cancel(using: resourceManager)
+        })
+    }
+
     static func isLivePhoto(_ asset: PHAsset) -> Bool {
         asset.mediaSubtypes.contains(.photoLive)
     }
@@ -207,6 +330,12 @@ final class PhotoLibraryService: @unchecked Sendable {
             return size
         }
         return 0
+    }
+
+    static func isNetworkAccessRequiredError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == PHPhotosErrorDomain &&
+            nsError.code == PHPhotosError.Code.networkAccessRequired.rawValue
     }
 
     static func resourceTypeName(_ type: PHAssetResourceType) -> String {

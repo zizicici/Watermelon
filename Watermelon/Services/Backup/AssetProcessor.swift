@@ -89,11 +89,29 @@ final class AssetProcessor: Sendable {
             }
 
             let exportHashStart = CFAbsoluteTimeGetCurrent()
-            let exportedResource = try await photoLibraryService.exportResourceToTempFileAndDigest(
-                local.resource,
-                cancellationController: cancellationController
-            )
-            timing.exportHashSeconds += Self.elapsedSeconds(since: exportHashStart)
+            let exportedResource: ExportedResourceFile
+            do {
+                exportedResource = try await photoLibraryService.exportResourceToTempFileAndDigest(
+                    local.resource,
+                    cancellationController: cancellationController,
+                    allowNetworkAccess: context.iCloudPhotoBackupMode.allowsNetworkAccess
+                )
+                timing.exportHashSeconds += Self.elapsedSeconds(since: exportHashStart)
+            } catch {
+                timing.exportHashSeconds += Self.elapsedSeconds(since: exportHashStart)
+                if !context.iCloudPhotoBackupMode.allowsNetworkAccess,
+                   PhotoLibraryService.isNetworkAccessRequiredError(error) {
+                    eventStream.emit(.log(
+                        "跳过 iCloud 资源：\(displayName)。资源未下载到本机，且“允许访问 iCloud 原件”未开启。"
+                    ))
+                    return Self.makeICloudDisabledSkipResult(
+                        context: context,
+                        displayName: displayName,
+                        timing: timing
+                    )
+                }
+                throw error
+            }
             let tempFileURL = exportedResource.fileURL
             var shouldRemoveTempFile = true
             defer {
@@ -405,5 +423,23 @@ final class AssetProcessor: Sendable {
         }
 
         return result
+    }
+
+    private static func makeICloudDisabledSkipResult(
+        context: AssetProcessContext,
+        displayName: String,
+        timing: AssetProcessTiming
+    ) -> AssetProcessResult {
+        let totalFileSizeBytes = totalSizeBytes(of: context.selectedResources)
+        return AssetProcessResult(
+            status: .skipped,
+            reason: "icloud_photo_backup_disabled",
+            displayName: displayName,
+            resourceSummary: "资源\(context.selectedResources.count) 未上传（包含仅存于 iCloud 的资源）",
+            assetFingerprint: nil,
+            timing: timing,
+            totalFileSizeBytes: totalFileSizeBytes,
+            uploadedFileSizeBytes: 0
+        )
     }
 }
