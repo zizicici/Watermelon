@@ -92,18 +92,21 @@ final class PhotoLibraryService: @unchecked Sendable {
 
     func exportResourceToTempFile(
         _ resource: PHAssetResource,
-        cancellationController: BackupCancellationController? = nil
+        cancellationController: BackupCancellationController? = nil,
+        allowNetworkAccess: Bool = true
     ) async throws -> URL {
         let exported = try await exportResourceToTempFileAndDigest(
             resource,
-            cancellationController: cancellationController
+            cancellationController: cancellationController,
+            allowNetworkAccess: allowNetworkAccess
         )
         return exported.fileURL
     }
 
     func exportResourceToTempFileAndDigest(
         _ resource: PHAssetResource,
-        cancellationController: BackupCancellationController? = nil
+        cancellationController: BackupCancellationController? = nil,
+        allowNetworkAccess: Bool = true
     ) async throws -> ExportedResourceFile {
         let ext = (resource.originalFilename as NSString).pathExtension
         let temp = FileManager.default.temporaryDirectory
@@ -125,7 +128,7 @@ final class PhotoLibraryService: @unchecked Sendable {
         let digestState = ExportDigestState()
 
         let options = PHAssetResourceRequestOptions()
-        options.isNetworkAccessAllowed = true
+        options.isNetworkAccessAllowed = allowNetworkAccess
 
         let resourceManager = self.resourceManager
         let state = ExportRequestState()

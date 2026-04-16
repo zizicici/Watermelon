@@ -1,12 +1,12 @@
 import Foundation
 import GRDB
 
-struct AssetResourceRoleSlot: Hashable {
+struct AssetResourceRoleSlot: Hashable, Sendable {
     let role: Int
     let slot: Int
 }
 
-struct LocalAssetHashCache {
+struct LocalAssetHashCache: Sendable {
     let assetFingerprint: Data
     let resourceCount: Int
     let totalFileSizeBytes: Int64

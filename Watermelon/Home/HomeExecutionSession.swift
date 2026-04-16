@@ -29,12 +29,17 @@ struct HomeExecutionSession {
     private(set) var downloadMonths: [LibraryMonthKey] = []
     private(set) var syncMonths: [LibraryMonthKey] = []
     private(set) var uploadPhaseCompleted = false
+    private(set) var localIndexPreflightCompleted = false
 
     private var pendingUploadScope: BackupScopeSelection?
     private var lastSyncTime: CFAbsoluteTime = 0
 
     var isActive: Bool { phase != nil }
     var hasSyncMonths: Bool { !syncMonths.isEmpty }
+    var needsLocalIndexPreflight: Bool { !localIndexPreflightCompleted }
+    var requiresCompleteLocalIndexBeforeExecution: Bool {
+        monthPlans.values.contains(where: \.needsDownload)
+    }
 
     func currentState(controlState: ExecutionControlState) -> HomeExecutionState? {
         guard let phase else { return nil }
@@ -78,6 +83,7 @@ struct HomeExecutionSession {
         lastSyncTime = 0
 
         uploadPhaseCompleted = (upload + sync).isEmpty
+        localIndexPreflightCompleted = false
         pendingUploadScope = uploadPhaseCompleted ? nil : buildUploadScope(localAssetIDs: localAssetIDs)
         phase = uploadPhaseCompleted ? .downloading : .uploading
     }
@@ -92,6 +98,7 @@ struct HomeExecutionSession {
         downloadMonths.removeAll()
         syncMonths.removeAll()
         uploadPhaseCompleted = false
+        localIndexPreflightCompleted = false
         pendingUploadScope = nil
         lastSyncTime = 0
     }
@@ -246,6 +253,16 @@ struct HomeExecutionSession {
             monthPlans[key]?.apply(.completed)
         }
         phase = monthPlans.values.contains(where: \.isFailed) ? .failed("部分月份失败") : .completed
+    }
+
+    mutating func markLocalIndexPreflightCompleted() {
+        localIndexPreflightCompleted = true
+    }
+
+    mutating func failExecution(reason: String) -> AlertMessage {
+        applyEvent(.failed(reason: reason), where: { !$0.isTerminal })
+        phase = .failed(reason)
+        return AlertMessage(title: "错误", message: reason)
     }
 
     private mutating func buildUploadScope(

@@ -39,6 +39,7 @@ final class HomeExecutionCoordinator {
     private var downloadHelper: DownloadWorkflowHelper!
 
     private static let syncThrottleInterval: CFAbsoluteTime = 2.0
+    private static let localIndexPreflightWorkerCount = 2
 
     init(dependencies: DependencyContainer, dataAccess: DataAccess) {
         self.dependencies = dependencies
@@ -176,6 +177,24 @@ final class HomeExecutionCoordinator {
         executionTask = Task { [weak self] in
             guard let self else { return }
 
+            if self.session.needsLocalIndexPreflight {
+                await MainActor.run {
+                    self.transientControlState = .starting
+                    self.notifyStateChanged()
+                }
+
+                let prepared = await self.prepareLocalIndexIfNeeded()
+                guard !Task.isCancelled else { return }
+                guard prepared else { return }
+
+                await MainActor.run {
+                    if self.transientControlState == .starting {
+                        self.transientControlState = nil
+                    }
+                    self.notifyStateChanged()
+                }
+            }
+
             if self.session.shouldRunUploadPhase {
                 guard !Task.isCancelled else { return }
                 let scope = self.session.consumePendingUploadScope()
@@ -274,25 +293,79 @@ final class HomeExecutionCoordinator {
         notifyStateChanged()
 
         let assetIDs = dataAccess.localAssetIDs(month)
-        if !assetIDs.isEmpty && session.monthPlans[month]?.needsUpload == true {
-            let ok = await backupBridge.runScopedBackup(assetIDs: assetIDs) { [weak self] in
-                self?.notifyStateChanged()
-            }
-            if Task.isCancelled { return }
-            if !ok {
-                session.failDownloadMonth(month, reason: "备份索引失败")
-                notifyStateChanged()
-                onAlert?("\(phaseLabel)失败", "\(month.displayText): 备份索引失败")
-                return
-            }
-        }
-
         let result = await downloadRemoteMonth(month, assetIDs: assetIDs, context: context)
         _ = applyDownloadResult(result, month: month, phaseLabel: phaseLabel)
     }
 
     private func notifyStateChanged() {
         onStateChanged?()
+    }
+
+    private func prepareLocalIndexIfNeeded() async -> Bool {
+        let assetIDs = selectedLocalAssetIDsForExecution()
+        guard !assetIDs.isEmpty else {
+            session.markLocalIndexPreflightCompleted()
+            return true
+        }
+
+        do {
+            let result = try await dependencies.localHashIndexBuildService.buildIndex(
+                for: assetIDs,
+                workerCount: Self.localIndexPreflightWorkerCount,
+                allowNetworkAccess: false
+            )
+            guard !Task.isCancelled else { return false }
+
+            if !result.readyAssetIDs.isEmpty {
+                await dataRefresher.refreshLocalIndexAndNotify(result.readyAssetIDs)
+                guard !Task.isCancelled else { return false }
+            }
+
+            session.markLocalIndexPreflightCompleted()
+
+            if session.requiresCompleteLocalIndexBeforeExecution,
+               !result.incompleteAssetIDs.isEmpty {
+                let message = makeLocalIndexIncompleteMessage(from: result)
+                let alert = session.failExecution(reason: message)
+                transientControlState = nil
+                notifyStateChanged()
+                onAlert?(alert.title, alert.message)
+                return false
+            }
+
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            let message = "建立本地索引失败：\(error.localizedDescription)"
+            let alert = session.failExecution(reason: message)
+            transientControlState = nil
+            notifyStateChanged()
+            onAlert?(alert.title, alert.message)
+            return false
+        }
+    }
+
+    private func selectedLocalAssetIDsForExecution() -> Set<String> {
+        var assetIDs = Set<String>()
+        for month in session.monthPlans.keys {
+            assetIDs.formUnion(dataAccess.localAssetIDs(month))
+        }
+        return assetIDs
+    }
+
+    private func makeLocalIndexIncompleteMessage(
+        from result: LocalHashIndexBuildResult
+    ) -> String {
+        var parts: [String] = []
+        if !result.unavailableAssetIDs.isEmpty {
+            parts.append("\(result.unavailableAssetIDs.count) 项资源未下载到本机")
+        }
+        if !result.failedAssetIDs.isEmpty {
+            parts.append("\(result.failedAssetIDs.count) 项资源读取失败")
+        }
+        let detail = parts.joined(separator: "，")
+        return "本地索引不完整：\(detail)。为避免下载或同步产生重复图片，本次操作已停止。"
     }
 
     private func makeUploadMonthFinalizer() -> BackupMonthFinalizer? {
