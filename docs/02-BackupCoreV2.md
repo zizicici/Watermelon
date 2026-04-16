@@ -26,11 +26,21 @@
 - `failedItemCount`
 - `failureMessage`
 
+进入执行时，`HomeExecutionCoordinator` 还会冻结一份本次执行配置快照：
+
+1. `上传并发`
+2. `允许访问 iCloud 原件`
+
+这份快照会贯穿 probe / preflight / upload / resume，全程不再重新读取设置。
+
 ## 3. 执行前的本地索引预检查
 
-执行一开始，`HomeExecutionCoordinator` 会先跑：
+执行一开始，`HomeExecutionCoordinator` 会先跑两步：
 
-1. `LocalHashIndexBuildService.buildIndex(for:assetIDs, workerCount: 2, allowNetworkAccess: false)`
+1. 如果本次包含上传且启用了 `允许访问 iCloud 原件`，先做 availability probe：
+   `LocalHashIndexBuildService.probeAvailability(for:assetIDs, workerCount: 2)`
+2. 然后做本地 hash 索引预检查：
+   `LocalHashIndexBuildService.buildIndex(for:assetIDs, workerCount: 2, allowNetworkAccess: false)`
 
 目的：
 
@@ -39,9 +49,14 @@
 
 关键规则：
 
-1. 如果本次 **只上传**，即使有少量本地索引仍不完整，也允许继续执行。
-2. 如果本次包含 **下载或同步**，且仍有 `unavailableAssetIDs / failedAssetIDs`，则直接停止执行。
-3. 这里明确禁止网络拉取原图，因此 iCloud-only 资源会被判定为“本机不可用”，属于有意为之的保守策略。
+1. availability probe 只覆盖本次会进入上传阶段的本地资产，也就是 `upload + sync` 月份。
+2. 若 probe 检测到上传范围内存在 iCloud-only 本地资源，本次 upload 会强制降为 `1` 个 worker。
+3. 本地索引预检查第一轮始终离线执行，因此 iCloud-only 资源会先被标记为 `unavailable`。
+4. 如果本次 **只上传**，即使有少量本地索引仍不完整，也允许继续执行。
+5. 如果本次包含 **下载或同步**，且第一轮存在 `unavailableAssetIDs`：
+   - 启用 `允许访问 iCloud 原件`：只对这些 `unavailableAssetIDs` 再跑一次 `buildIndex(... allowNetworkAccess: true)`，worker 固定为 `1`
+   - 未启用：直接停止执行，并提示去设置启用该选项，或先在系统相册把原件下载到本机
+6. 如果联网补索引后仍有 `failedAssetIDs / unavailableAssetIDs`，则继续停止执行。
 
 ## 4. 上传主流程
 
@@ -76,7 +91,8 @@
 1. `SMB / WebDAV = 2`
 2. `externalVolume = 3`
 3. 用户可在设置里手动覆盖 `1...4`
-4. 最终还会再按月份数裁剪
+4. 启用 `允许访问 iCloud 原件` 时，不会直接永远单 worker；只有 availability probe 命中 iCloud-only 上传资产时，才会把本次 upload 强制改为 `1`
+5. 最终还会再按月份数裁剪
 
 ## 5. 并行执行面
 
@@ -104,6 +120,7 @@
 3. 将资源导出到临时文件并计算 `SHA-256`
 4. 生成 `assetFingerprint`
 5. 对每个资源执行上传或跳过：
+   - 若未启用 `允许访问 iCloud 原件` 且导出遇到 `networkAccessRequired`：整条 asset 记为 `skipped`
    - manifest 中已有同 hash：直接跳过
    - 同名冲突：
      - 小于 `5 MiB`：优先下载远端文件比 hash
@@ -182,6 +199,7 @@
 1. `HomeExecutionSession.resume()` 恢复到对应阶段
 2. 已完成的月份不会重新执行
 3. 已上传未下载完成的 sync 月份会继续下载收尾
+4. resume 会沿用该 run 启动时冻结的 `上传并发 / 允许访问 iCloud 原件` 配置
 
 ### 停止
 
@@ -200,9 +218,11 @@
 
 ## 12. 关键常量
 
-1. 本地索引预检查 worker：`2`
-2. Home 侧远端同步节流：`2s`
-3. month seed 内存阈值：`120_000` 条目
-4. 并行执行的 PHAsset 批大小：`500`
-5. 小文件碰撞校验阈值：`5 * 1024 * 1024`
-6. 上传最大重试次数：`3`
+1. availability probe worker：`2`
+2. 本地索引离线预检查 worker：`2`
+3. iCloud recovery 预检查 worker：`1`
+4. Home 侧远端同步节流：`2s`
+5. month seed 内存阈值：`120_000` 条目
+6. 并行执行的 PHAsset 批大小：`500`
+7. 小文件碰撞校验阈值：`5 * 1024 * 1024`
+8. 上传最大重试次数：`3`

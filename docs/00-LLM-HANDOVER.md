@@ -28,8 +28,9 @@
 3. `HomeScreenStore.load()` 先跑 `HomeIncrementalDataManager.ensureLocalIndexLoaded()`，随后尝试自动连接上次激活的 profile。
 4. 连接成功后，`HomeConnectionController` 调 `BackupCoordinator.reloadRemoteIndex(...)`，共享的 `RemoteLibrarySnapshotCache` 被刷新。
 5. 首页月份选择完成后，`HomeExecutionCoordinator.enter(...)` 建立一次新的执行会话。
-6. 执行前先跑 `LocalHashIndexBuildService.buildIndex(...)` 作为本地索引预检查。
-7. 上传由 `BackupSessionController` 驱动 `BackupCoordinator.runBackup(...)`；下载由 `DownloadWorkflowHelper + RestoreService` 完成。
+6. 执行前会先冻结一次运行时设置；若启用了 `允许访问 iCloud 原件` 且本次包含上传，会先做 availability probe。
+7. 随后跑本地索引预检查；download / sync 在启用 `允许访问 iCloud 原件` 时允许对 `unavailableAssetIDs` 再做一次联网补索引。
+8. 上传由 `BackupSessionController` 驱动 `BackupCoordinator.runBackup(...)`；下载由 `DownloadWorkflowHelper + RestoreService` 完成。
 
 ## 4. Home 当前分层
 
@@ -60,11 +61,13 @@
 
 ## 5. 关键执行行为
 
-1. 执行前一定会对涉及的本地 asset 补齐本地 hash 索引，默认 2 个 worker，不允许网络拉原图。
-2. 如果本次包含下载或同步，且仍有资源未在本机落地，则会直接停止执行，避免重复图片。
-3. 上传阶段按“月份”分桶，worker 动态领取月份，不是静态切片。
-4. 同步月份会在该月上传 flush 后立即进入下载收尾，不必等所有上传完成。
-5. 下载成功后逐 item 写回本地 hash 索引，因此中断后能自动跳过已完成 item。
+1. 执行开始时会冻结 `上传并发` 和 `允许访问 iCloud 原件`；任务运行中改设置不会立即生效。
+2. 若启用了 `允许访问 iCloud 原件` 且上传范围中检测到仅存于 iCloud 的本地资源，本次 upload 会自动降为 `1` 个 worker。
+3. 本地 hash 索引预检查第一轮始终离线执行；若本次包含下载或同步且启用了 `允许访问 iCloud 原件`，会只对 `unavailableAssetIDs` 再补一次联网索引。
+4. 如果 download / sync 在补索引后仍不完整，则直接停止执行，避免重复图片。
+5. 上传阶段按“月份”分桶，worker 动态领取月份，不是静态切片。
+6. 同步月份会在该月上传 flush 后立即进入下载收尾，不必等所有上传完成。
+7. 下载成功后逐 item 写回本地 hash 索引，因此中断后能自动跳过已完成 item。
 
 ## 6. 数据与索引
 

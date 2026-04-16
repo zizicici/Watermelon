@@ -39,13 +39,17 @@ Home 现在不是“胖 VC”，而是四层分工：
 
 ### 上传
 
-1. `HomeExecutionCoordinator` 先用 `LocalHashIndexBuildService` 对本次涉及的本地 asset 建索引（不允许网络拉原图）。
-2. 若本次包含下载或同步，且索引仍不完整，则直接终止，避免因为缺少本地 hash 而生成重复资源。
-3. 上传实际通过 `BackupSessionController` + `BackupSessionAsyncBridge` 驱动 `BackupCoordinator.runBackup(...)`。
-4. `BackupCoordinator` 再分成：
+1. `HomeExecutionCoordinator` 会先冻结一次执行设置，包括 `上传并发` 和 `允许访问 iCloud 原件`。
+2. 若本次包含上传且启用了 `允许访问 iCloud 原件`，会先对上传范围做轻量 availability probe；一旦检测到仅存于 iCloud 的本地资源，本次 upload 会自动降为 `1` 个 worker。
+3. 随后会对本次涉及的本地 asset 做本地索引预检查；第一轮始终离线建索引。
+4. 若本次包含下载或同步，且第一轮仍有 `unavailableAssetIDs`：
+   - 启用 `允许访问 iCloud 原件`：只对这些资产再做一次联网补索引
+   - 未启用：直接终止，避免因为缺少本地 hash 而生成重复资源
+5. 上传实际通过 `BackupSessionController` + `BackupSessionAsyncBridge` 驱动 `BackupCoordinator.runBackup(...)`。
+6. `BackupCoordinator` 再分成：
    - `BackupRunPreparationService.prepareRun`
    - `BackupParallelExecutor.execute`
-5. `BackupParallelExecutor` 用 `MonthWorkQueue` 动态分发月份，worker 按月加载 `MonthManifestStore`，逐 asset 调用 `AssetProcessor.process(...)`。
+7. `BackupParallelExecutor` 用 `MonthWorkQueue` 动态分发月份，worker 按月加载 `MonthManifestStore`，逐 asset 调用 `AssetProcessor.process(...)`。
 
 ### 同步月份
 

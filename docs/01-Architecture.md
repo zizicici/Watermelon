@@ -27,7 +27,7 @@
 说明：
 
 1. `AppSession` 保存当前激活 profile 和会话内密码。
-2. `LocalHashIndexBuildService` 既供更多页索引管理器使用，也供首页执行前预检查使用。
+2. `LocalHashIndexBuildService` 既供更多页索引管理器使用，也供首页执行前的 availability probe 与本地索引预检查使用。
 
 ## 3. Home 模块
 
@@ -74,11 +74,12 @@
 职责：
 
 1. 建立一次执行会话 `HomeExecutionSession`
-2. 在执行前调用 `LocalHashIndexBuildService` 做本地索引预检查
-3. 上传阶段通过 `BackupSessionAsyncBridge` 驱动 `BackupSessionController`
-4. 同步月份在上传 flush 后通过 `onMonthUploaded` 内联进入下载收尾
-5. 纯下载月份在上传阶段结束后顺序执行
-6. 处理暂停、恢复、停止、连接丢失和失败告警
+2. 在执行前冻结 `上传并发` 与 `允许访问 iCloud 原件`
+3. 如有需要，先调用 `LocalHashIndexBuildService` 做 availability probe，再做本地索引预检查
+4. 上传阶段通过 `BackupSessionAsyncBridge` 驱动 `BackupSessionController`
+5. 同步月份在上传 flush 后通过 `onMonthUploaded` 内联进入下载收尾
+6. 纯下载月份在上传阶段结束后顺序执行
+7. 处理暂停、恢复、停止、连接丢失和失败告警
 
 ### `HomeExecutionSession`
 
@@ -245,4 +246,5 @@
 1. `管理存储`
 2. `本地 Hash 索引`
 3. `上传并发`
-4. 系统语言入口与 MoreKit 通用页内容
+4. `允许访问 iCloud 原件`
+5. 系统语言入口与 MoreKit 通用页内容
