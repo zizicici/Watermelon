@@ -1,67 +1,92 @@
-# PhotoBackup / Watermelon 接手总览（按当前代码）
+# Watermelon 接手总览（按当前代码）
 
 ## 1. 一句话现状
 
-项目当前主线是：`Home` 单页 + `More` 配置页；备份支持 `SMB / WebDAV / 外接存储`，并已实现按月份分桶的多 worker 上传。
+项目当前主线是：`Home` 单页 + `More` 配置页；首页已经拆成 `ViewController + Store + ConnectionController + ExecutionCoordinator` 四层，备份与同步依赖本地 hash 索引和远端月 manifest。
 
-## 2. 先看哪些文件
+## 2. 优先阅读这些文件
 
 1. `Watermelon/App/DependencyContainer.swift`
 2. `Watermelon/Home/HomeViewController.swift`
-3. `Watermelon/Home/HomeLibraryEngines.swift`
-4. `Watermelon/Home/HomeAlbumMatching.swift`
-5. `Watermelon/Services/Backup/BackupSessionController.swift`
-6. `Watermelon/Services/Backup/BackupCoordinator.swift`
-7. `Watermelon/Services/Backup/AssetProcessor.swift`
-8. `Watermelon/Services/Backup/MonthManifestStore.swift`
-9. `Watermelon/Services/Backup/RemoteIndexSyncService.swift`
-10. `Watermelon/Services/Restore/RestoreService.swift`
+3. `Watermelon/Home/HomeScreenStore.swift`
+4. `Watermelon/Home/HomeConnectionController.swift`
+5. `Watermelon/Home/HomeExecutionCoordinator.swift`
+6. `Watermelon/Home/HomeExecutionSession.swift`
+7. `Watermelon/Home/HomeLibraryEngines.swift`
+8. `Watermelon/Services/HashIndex/LocalHashIndexBuildService.swift`
+9. `Watermelon/Services/Backup/BackupSessionController.swift`
+10. `Watermelon/Services/Backup/BackupRunPreparation.swift`
+11. `Watermelon/Services/Backup/BackupParallelExecutor.swift`
+12. `Watermelon/Services/Backup/AssetProcessor.swift`
+13. `Watermelon/Services/Backup/RemoteIndexSyncService.swift`
+14. `Watermelon/Services/Restore/RestoreService.swift`
 
-## 3. 主流程（运行时）
+## 3. 运行时主流程
 
-1. `AppCoordinator.start()` 直接进入 `HomeViewController`。
-2. Home 顶部左右分栏：左侧”本地相册”、右侧”远端存储”（下拉菜单切换连接）。
-3. 连接成功时先执行 `backupCoordinator.reloadRemoteIndex(...)`，再刷新 Home 数据。
-4. 用户选中月份后，底部面板显示备份/下载/同步计数，点”执行”进入三阶段执行模式。
-5. `BackupSessionController`（每次执行新建实例）负责 UI 状态聚合与备份命令处理，调用 `BackupCoordinator.runBackup(request:eventStream:)`。
-6. `BackupCoordinator` 执行权限检查、远端索引同步、按月并发调度、月 manifest flush 与收尾。
-7. 下载阶段由 `RestoreService.restoreItems` 执行，逐 item 写入 hash index 确保中断后可续。
+1. `AppCoordinator.start()` 直接把 `HomeViewController` 设为 root。
+2. `HomeViewController` 初始化 `HomeScreenStore`，负责 UI 渲染，不再直接持有大块业务状态。
+3. `HomeScreenStore.load()` 先跑 `HomeIncrementalDataManager.ensureLocalIndexLoaded()`，随后尝试自动连接上次激活的 profile。
+4. 连接成功后，`HomeConnectionController` 调 `BackupCoordinator.reloadRemoteIndex(...)`，共享的 `RemoteLibrarySnapshotCache` 被刷新。
+5. 首页月份选择完成后，`HomeExecutionCoordinator.enter(...)` 建立一次新的执行会话。
+6. 执行前先跑 `LocalHashIndexBuildService.buildIndex(...)` 作为本地索引预检查。
+7. 上传由 `BackupSessionController` 驱动 `BackupCoordinator.runBackup(...)`；下载由 `DownloadWorkflowHelper + RestoreService` 完成。
 
-## 4. 备份链路关键点
+## 4. Home 当前分层
 
-1. 备份模式：`full` / `scoped(assetIDs)` / `retry(assetIDs)`。
-2. 执行前会加载本地 hash 索引（`local_assets/local_asset_resources`）用于跳过与估算。
-3. 全量或范围资产会按“月份”分桶，worker 动态领取月份任务（非静态切片）。
-4. 存储连接使用 `StorageClientPool`（网络协议连接池上限为 2，本地盘按 worker 数）。
-5. 单 Asset 由 `AssetProcessor` 处理：导出+hash、碰名处理、上传、写 manifest、写本地索引、更新远端快照缓存。
-6. `MonthManifestStore.flushToRemote` 失败抛出异常，默认终止 run。
-7. 暂停/停止是协作取消，不会强杀正在进行的单次 I/O。
+### `HomeViewController`
 
-## 5. 数据存储（真实）
+- 负责双栏 UICollectionView、顶部 header、连接菜单、右侧 overlay、底部操作面板、更多页 FAB。
+- 通过 `store.onChange` 响应五类变化：`.data / .selection / .execution / .connection / .structural`。
 
-本地 GRDB：
+### `HomeScreenStore`
 
-1. `server_profiles`
-2. `sync_state`
-3. `local_assets`
-4. `local_asset_resources`
+- 首页状态中心。
+- 聚合 `HomeIncrementalDataManager`、`HomeConnectionController`、`HomeExecutionCoordinator`。
+- 维护 `sections / rowLookup / selection / executionState / connectionState`。
+- 负责把内部状态变化转成 UI 级别更新。
 
-远端（每月目录）：
+### `HomeConnectionController`
 
-1. `resources`
-2. `assets`
-3. `asset_resources`
+- 加载已保存 profile
+- 从 `sync_state + Keychain` 自动连接
+- 处理密码提示、切换连接、断开连接
+- 连接时重载远端索引；失败时必要时恢复旧连接的远端快照
 
-文件路径：`/{YYYY}/{MM}/.watermelon_manifest.sqlite`
+### `HomeExecutionCoordinator`
 
-## 6. UI 入口要点
+- 管理执行阶段：本地索引预检查 → 上传 → 内联同步下载 / 剩余下载
+- 维护暂停、恢复、停止和失败处理
+- 利用 `HomeExecutionDataRefresher` 合并远端同步与本地索引刷新
 
-1. Home 是左右双栏（本地 / 远端），按年-月 section 展示，支持月份选择。
-2. 选中月份后底部弹出 `SelectionActionPanel`，显示备份(→)/下载(←)/同步(↔)计数。
-3. 点”执行”进入执行模式：上传阶段 → 下载阶段 → 完成。支持暂停/停止。
-4. 箭头百分比基于 reconciliation `matchedCount`，上传阶段额外叠加 session 实时进度。
+## 5. 关键执行行为
 
-## 7. 当前已替代/已下线
+1. 执行前一定会对涉及的本地 asset 补齐本地 hash 索引，默认 2 个 worker，不允许网络拉原图。
+2. 如果本次包含下载或同步，且仍有资源未在本机落地，则会直接停止执行，避免重复图片。
+3. 上传阶段按“月份”分桶，worker 动态领取月份，不是静态切片。
+4. 同步月份会在该月上传 flush 后立即进入下载收尾，不必等所有上传完成。
+5. 下载成功后逐 item 写回本地 hash 索引，因此中断后能自动跳过已完成 item。
 
-1. 旧 `BackupExecutor` 已由 `BackupSessionController + BackupCoordinator + AssetProcessor` 替代。
-2. 旧 `BackupRunCommandActor` 已合并入 `BackupSessionController`（@MainActor），不再存在独立 actor。
+## 6. 数据与索引
+
+### 本地 SQLite
+
+- `server_profiles`
+- `sync_state`
+- `local_assets`
+- `local_asset_resources`
+
+### 远端
+
+- 每个月目录维护 `.watermelon_manifest.sqlite`
+- schema：`resources / assets / asset_resources`
+
+### 内存快照
+
+- `RemoteLibrarySnapshotCache` 维护共享远端快照
+- Home 侧通过 `RemoteLibrarySnapshotState(revision, isFullSnapshot, monthDeltas)` 增量消费
+
+## 7. 当前已淘汰的理解
+
+1. 首页不是 `HomeViewController` 单独承载状态，当前主控层是 `HomeScreenStore`。
+2. “上传完再统一下载所有 sync 月份” 已不是实际行为；sync 月份现在按月内联收尾。
+3. 根控制器不是 `UINavigationController`；`HomeViewController` 直接作为 root，需要时自行 push / present 其他页面。

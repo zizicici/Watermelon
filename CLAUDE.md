@@ -4,170 +4,257 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-iOS photo backup app ("Watermelon") that backs up `PHAsset` items to remote storage (SMB/WebDAV/external-volume folder). The repository name is `PhotoBackup`; the Xcode target is `Watermelon`.
+Watermelon is an iOS photo backup app that reads from `PHAsset` and writes to remote storage (`SMB`, `WebDAV`, or an external-volume folder via security-scoped bookmark).
 
-Build with `Watermelon.xcodeproj`. There is no package manager CLI or test runner — all building and testing is done through Xcode. The project has no automated test suite; regression testing is done manually on device with SMB/WebDAV server and external drive.
+The app currently centers on a single Home screen plus a More/settings page. Home is no longer a fat view controller; the runtime flow is split across `HomeViewController`, `HomeScreenStore`, `HomeConnectionController`, `HomeExecutionCoordinator`, and `HomeIncrementalDataManager`.
+
+Build with `Watermelon.xcodeproj`. There is no automated test suite in the repo; critical-path validation is still manual.
 
 ## Source Layout
 
-```
+```text
 Watermelon/
   App/          # AppDelegate, SceneDelegate, AppCoordinator, AppSession, DependencyContainer
-  Home/         # HomeViewController, HomeAlbumMatching, HomeLibraryEngines,
-                # HomeExecutionCoordinator, HomeExecutionSession, HomeScreenStore,
-                # HomeConnectionController, DownloadWorkflowHelper, SelectionActionPanel
+  Home/         # HomeViewController, HomeScreenStore, HomeScreenState,
+                # HomeConnectionController, HomeExecutionCoordinator,
+                # HomeExecutionSession, HomeExecutionDataRefresher,
+                # HomeLibraryEngines, HomeAlbumMatching,
+                # DownloadWorkflowHelper, SelectionActionPanel
   Services/
     Backup/     # BackupCoordinator, BackupRunPreparation, BackupParallelExecutor,
-                # BackupMonthScheduler, StorageClientPool,
-                # AssetProcessor (+Upload, +Naming), BackupAssetResourcePlanner,
+                # BackupSessionController, BackupSessionAsyncBridge,
+                # BackupRunDriver, BackupResumePlanner, BackupMonthScheduler,
+                # StorageClientPool, AssetProcessor (+Upload, +Naming),
                 # MonthManifestStore (+Loading, +Schema),
-                # RemoteIndexSyncService, RemoteLibrarySnapshotCache,
-                # BackupSessionController, BackupSessionReducer,
-                # BackupCancellationController, BackupEventStream,
-                # BackupRunModels, BackupRunDriver, BackupResumePlanner
-    SMB/        # AMSMB2Client, SMBSetupService, SMBErrorClassifier,
-                # SMBClientProtocol (RemoteStorageClientProtocol, RemoteStorageClientError)
-    Storage/    # StorageClientFactory, WebDAVClient, LocalVolumeClient,
-                # SecurityScopedBookmarkStore
-    HashIndex/  # ContentHashIndexRepository
-    PhotoLibrary/ Restore/
+                # RemoteIndexSyncService, RemoteLibrarySnapshotCache
+    HashIndex/  # ContentHashIndexRepository, LocalHashIndexBuildService
+    PhotoLibrary/
+    Restore/
+    SMB/
+    Storage/
   UI/
-    Auth/       # AddSMBServerLoginViewController, SMBSharePathPickerViewController,
-                # AddSMBServerViewController, AddWebDAVStorageViewController,
-                # AddExternalStorageViewController, ManageStorageProfilesViewController
-    More/       # MoreViewController, SettingOptionsViewController, Settings
-    Common/     # FormRowView, UIColor+App
+    Auth/       # storage profile create/edit flows
+    More/       # LocalHashIndexManagerViewController, WatermelonMoreDataSource, Settings
+    Common/
   Data/
-    Database/   # DatabaseManager, Records
-    Security/   # KeychainService
-  Domain/       # BackupDomain, RemoteLibraryDomain, RemotePathBuilder, StorageProfile
+    Database/
+    Security/
+  Domain/       # backup/storage/remote snapshot domain models
 ```
 
 ## Architecture
 
 ### App Startup
 
-`SceneDelegate` → `AppCoordinator.start()` → `showHome()` → `HomeViewController`.
-No TabBar. Single-screen architecture centered on `HomeViewController`.
+`SceneDelegate` -> `AppCoordinator.start()` -> `HomeViewController`.
+
+There is no global TabBar and no root `UINavigationController`; `HomeViewController` is set directly as the window root.
 
 ### Dependency Injection
 
-Single `DependencyContainer` created at startup holds all top-level singletons:
-`DatabaseManager`, `KeychainService`, `AppSession`, `StorageClientFactory`, `PhotoLibraryService`, `ContentHashIndexRepository`, `BackupCoordinator`, `RestoreService`.
+`DependencyContainer` owns the top-level services:
 
-`AppSession` holds the active `ServerProfileRecord` and in-memory password (SMB/WebDAV require it; external-volume does not).
+- `DatabaseManager`
+- `KeychainService`
+- `AppSession`
+- `StorageClientFactory`
+- `PhotoLibraryService`
+- `ContentHashIndexRepository`
+- `LocalHashIndexBuildService`
+- `BackupCoordinator`
+- `RestoreService`
+
+`AppSession` stores the active profile and in-memory session password. SMB/WebDAV require passwords; external volume does not.
+
+### Home Layering
+
+#### `HomeViewController`
+
+UI-only layer for:
+
+- two-column month grid
+- top headers and profile menu
+- right-side remote overlay (`connecting` / `disconnected`)
+- bottom `SelectionActionPanel`
+- floating More/settings button
+
+It binds to `HomeScreenStore.onChange` and renders five change kinds:
+
+- `.data`
+- `.selection`
+- `.execution`
+- `.connection`
+- `.structural`
+
+#### `HomeScreenStore`
+
+State aggregator for Home. Owns:
+
+- `HomeIncrementalDataManager`
+- `HomeConnectionController`
+- `HomeExecutionCoordinator`
+
+It maintains:
+
+- `sections`
+- `rowLookup`
+- `selection`
+- derived `connectionState`
+- derived `executionState`
+
+It also coalesces refresh work (`reloadLocal`, `syncRemote`, connection/structural notifications) instead of cancelling in-flight refreshes.
+
+#### `HomeConnectionController`
+
+Responsible for:
+
+- loading saved profiles
+- auto-connecting the last active profile using `sync_state` + Keychain
+- prompting for passwords
+- switching/disconnecting profiles
+- calling `BackupCoordinator.reloadRemoteIndex(...)`
+
+If a new connection attempt fails and a previous profile is still active, it tries to restore the old remote snapshot.
+
+#### `HomeExecutionCoordinator`
+
+Coordinates one execution session:
+
+1. local hash-index preflight via `LocalHashIndexBuildService`
+2. upload via `BackupSessionController` + `BackupSessionAsyncBridge`
+3. inline sync-month finalization after upload flush
+4. remaining download months
+5. pause / resume / stop / missing-connection failure
+
+State for a single execution lives in `HomeExecutionSession` and is exposed as `HomeExecutionState`.
+
+#### `HomeIncrementalDataManager`
+
+Owns the Home data pipeline:
+
+- local photo-library index
+- remote snapshot index
+- reconciliation engine
+
+It registers as a `PHPhotoLibraryChangeObserver`, applies remote deltas on a processing queue, and scans file sizes on the main actor with `Task.yield()` between months.
 
 ### Backup Control Plane
 
-`BackupSessionController` (`@MainActor`) is the unified control plane and UI-facing state aggregator:
+`BackupSessionController` (`@MainActor`) is the upload control plane:
 
-1. Handles `start/pause/stop/resume/retry` commands directly.
-2. Maintains run token, termination intent, and run task lifecycle.
-3. Creates per-run `BackupEventStream` and manages `runTask`/`eventListenerTask`.
-4. Processes `BackupEvent` directly from the event stream (no intermediate signal layer).
+- start / pause / stop / resume
+- run lifecycle
+- observer snapshots
+- month started/completed tracking
+- processed/failed counts per month
+
+Home creates a fresh `BackupSessionController` for each execution session.
 
 ### Backup Execution Plane
 
-`BackupCoordinator.runBackup(request: BackupRunRequest, eventStream: BackupEventStream)` delegates to two services:
+`BackupCoordinator` composes:
 
-**Phase 1 — Preparation** (`BackupRunPreparationService.prepareRun`):
+- `BackupRunPreparationService`
+- `BackupParallelExecutor`
+- `RemoteIndexSyncService`
 
-1. Request photo permission.
-2. Build storage client via `StorageClientFactory`, connect, ensure `basePath` exists.
-3. `RemoteIndexSyncService.syncIndex` scans month manifest digests and applies deltas to `RemoteLibrarySnapshotCache`.
-4. Group `PHAsset` items by month via `BackupMonthScheduler.buildMonthAssetIDsByMonth`.
-5. Build month plans sorted by estimated bytes DESC (largest months first).
-6. Resolve worker count (SMB/WebDAV: 2, external-volume: 3, max 4) and connection pool size.
-7. Return `BackupPreparedRun` with initial client, month plans, worker config, and a client factory closure.
+#### Phase 1 — Preparation (`BackupRunPreparationService.prepareRun`)
 
-**Phase 2 — Parallel execution** (`BackupParallelExecutor.execute`):
+1. ensure photo authorization
+2. create/connect storage client
+3. ensure `basePath` exists
+4. sync remote manifests into `RemoteLibrarySnapshotCache`
+5. optionally build `MonthSeedLookup` when the snapshot is not too large
+6. load assets (`full`, `scoped`, or `retry`)
+7. group asset IDs by month
+8. estimate month bytes from the local hash index
+9. resolve worker count / connection pool size
 
-1. Create `StorageClientPool` (actor) with max connections; seed the initial client.
-2. Spawn `N` workers in a `TaskGroup`, each pulling months from `MonthWorkQueue` (actor, dynamic pull).
-3. Per month per worker: load/create `MonthManifestStore`, process assets in batches of 500.
-4. Per-asset processing is delegated to `AssetProcessor`.
-5. After each month: flush manifest to remote via atomic temp+move.
-6. On error: external-storage errors skip manifest flush and propagate immediately; other fatal errors terminate all workers via the task group.
+#### Phase 2 — Parallel execution (`BackupParallelExecutor.execute`)
 
-`BackupRunRequest` carries run-scoped parameters: `profile`, `password`, `onlyAssetLocalIdentifiers` (retry mode), `workerCountOverride`, `onMonthUploaded` (finalizer callback).
+1. create `StorageClientPool`
+2. dynamically assign months via `MonthWorkQueue`
+3. per month: `MonthManifestStore.loadOrCreate(...)`
+4. process assets in batches of 500
+5. per asset: `AssetProcessor.process(...)`
+6. flush manifest when the month completes
+7. run `onMonthUploaded` callback after flush when provided
+
+### Sync-Month Finalization
+
+This is easy to miss from older docs:
+
+- sync months are not always deferred to a single download stage at the end
+- after a sync month uploads and flushes successfully, Home can immediately:
+  - sync remote data
+  - refresh local index
+  - download that month’s `remoteOnlyItems`
+
+Pure download months still run after the upload phase finishes.
 
 ### Data Storage
 
-**Local SQLite** (GRDB, `DatabaseManager`), migrations `v7_dev_schema_reset`, `v8_server_profiles_smb_identity`:
+#### Local SQLite (`DatabaseManager`)
 
-- `server_profiles` — saved storage profiles (`storageType`, `connectionParams`, `sortOrder`)
-- `sync_state` — key/value store (e.g. `active_server_profile_id`)
-- `local_assets` — per-asset fingerprint cache
-- `local_asset_resources` — per-resource content hash by `(assetLocalIdentifier, role, slot)`
+Migrations:
 
-`server_profiles` uniqueness is SMB-only via partial unique index on `(host, port, shareName, basePath, username, IFNULL(domain, ''))` with `WHERE storageType = 'smb'`.
+- `v7_dev_schema_reset`
+- `v8_server_profiles_smb_identity`
 
-**Remote monthly manifest** (`MonthManifestStore`), path `/{YYYY}/{MM}/.watermelon_manifest.sqlite`, migration `month_manifest_v3_dev_schema_reset` (dev-phase drop+recreate):
+Tables:
+
+- `server_profiles`
+- `sync_state`
+- `local_assets`
+- `local_asset_resources`
+
+#### Remote Monthly Manifest (`MonthManifestStore`)
+
+Path: `/{YYYY}/{MM}/.watermelon_manifest.sqlite`
+
+Tables:
 
 - `resources`
 - `assets`
 - `asset_resources`
 
-Manifest writes are deferred: `upsertResource/upsertAsset` mark `dirty=true`; `flushToRemote()` uploads at month boundaries and run completion.
+Migration: `month_manifest_v3_dev_schema_reset`
 
-Passwords are stored in Keychain (`com.zizicici.watermelon.credentials`), not in local DB.
+#### In-Memory Remote Snapshot
 
-### Home Page — Data Model
+Home consumes remote state via:
 
-Three-engine architecture in `HomeLibraryEngines.swift`:
+- `RemoteLibrarySnapshot`
+- `RemoteLibrarySnapshotState(revision, isFullSnapshot, monthDeltas)`
 
-- **`HomeLocalIndexEngine`** — in-memory index of all `PHAsset` items, grouped by month. Tracks per-asset fingerprint, content hashes, and `isBackedUp` (fingerprint exists in remote set). Supports incremental updates via `PHPhotoLibraryChangeObserver`.
-- **`HomeRemoteIndexEngine`** — in-memory index of remote snapshot data. Applies month-level deltas from `RemoteLibrarySnapshotState`, maintains `remoteFingerprintRefCount` for global fingerprint tracking.
-- **`HomeReconcileEngine`** — merges local and remote per-month into `HomeAlbumItem` with `.localOnly` / `.remoteOnly` / `.both` tags. Exposes `matchedCount(for:)` for progress calculation.
-
-`HomeIncrementalDataManager` (`@MainActor`) owns all three engines and provides the public API: `ensureLocalIndexLoaded`, `reloadLocalIndex` (force), `refreshLocalIndex(forAssetIDs:)`, `syncRemoteSnapshot`, `matchedCount(for:)`, `remoteOnlyItems(for:)`.
-
-### Home Page — Matching
-
-`HomeAlbumMatching.mergeItems` matches remote items to local items by content hash. `bestLocalID` ranks candidates by: exact hash-set match > intersection size > `isBackedUp` > creation-date proximity. Remote items are assembled from `assets + asset_resources + resources` relationships.
-
-### Home Page — Execution Mode
-
-`HomeViewController` manages a three-phase execution flow:
-
-1. **Selection phase** — user selects months on left (local) / right (remote) columns. Arrow direction per month: local-only → upload (→), remote-only → download (←), both → sync (↔). `SelectionActionPanel` shows counts and "执行" button.
-
-2. **Upload phase** — a per-execution `BackupSessionController` (fresh instance each session) drives `BackupCoordinator.runBackup` with scoped asset IDs. `handleBackupSnapshot` tracks `startedMonths`/`flushedMonths`/`processedCountByMonth` from backup events.
-
-3. **Download phase** — sequential per-month via `ensureHashIndexAndDownload`:
-   - Scoped backup populates local hash index (skips already-backed-up assets quickly).
-   - `refreshLocalIndex(forAssetIDs:)` ensures reconciliation reflects newly computed hashes.
-   - `processDownloadMonth` downloads `remoteOnlyItems` via `RestoreService`.
-   - Per-item: `writeHashIndexForItem` + `refreshLocalIndex` persists progress immediately (survives mid-download stop).
-
-**Progress calculation** (`progressPercent`): reconciliation `matchedCount` is the baseline (always accurate). During upload, `max(sessionPercent, basePercent)` ensures progress never drops. Sync months skip session tracking entirely and use pure reconciliation (updated per-120ms via `syncRemoteDataIfNeeded` in the progress handler). Download months also use pure reconciliation (updated per-item via `refreshLocalIndex`).
-
-**Pause/Stop**: upload phase → `backupSessionController.stopBackup()` (cooperative cancellation). Download phase → `downloadTask.cancel()` + `backupSessionController.stopBackup()` + `Task.checkCancellation` in `RestoreService.restoreItems` loop.
+The remote snapshot cache is shared and incrementally updated; Home does not rescan the remote storage from scratch on every UI update.
 
 ### Storage Clients
 
-Three implementations of `RemoteStorageClientProtocol`:
+Implementations of `RemoteStorageClientProtocol`:
 
-- **`AMSMB2Client`** — wraps AMSMB2 library (`SMB2Manager`). `@unchecked Sendable` class. Uses `SMBErrorClassifier` for NT_STATUS hex matching (not-found, collision, connection-unavailable) and POSIX error code extraction.
-- **`WebDAVClient`** — `actor`. Custom XML parser for PROPFIND/PROPPATCH. Percent-encoded path handling with case normalization. Supports RFC 1123 and Win32 modification date formats.
-- **`LocalVolumeClient`** — `actor`. Security-scoped bookmark lifecycle. Fast-path `copyItem` with chunked fallback. `hasLostAccessToExternalVolume` probes root URL to confirm disconnection rather than relying on error code heuristics.
+- `AMSMB2Client`
+- `WebDAVClient`
+- `LocalVolumeClient`
 
-`StorageClientPool` (actor) manages connection pooling: `acquire()` blocks when pool exhausted, `release(reusable:)` recycles or replaces connections, `shutdown()` disconnects all and fails pending waiters.
+Factory:
+
+- `StorageClientFactory.makeClient(profile:password:)`
 
 ## Key Rules & Invariants
 
-- Remote scanner is **read-only** — never creates directories or writes manifests during scanning.
+- Home selection is disabled when no remote profile is connected or when execution is active.
+- Before download/sync execution, local hash-index preflight must succeed sufficiently to avoid duplicate imports.
 - `assetFingerprint` is SHA-256 of sorted `role|slot|hashHex` tokens joined by `\n`.
-- Name-collision strategy: files < 5 MiB download+hash compare; files ≥ 5 MiB size heuristic; unresolved conflicts use `_n` suffix.
-- Upload retries: max 3 attempts with exponential back-off; collision status triggers immediate rename retry.
-- Pause/stop are cooperative cancellation (not force-kill I/O): cancellation controller + task cancellation.
-- `MonthManifestStore.loadSeeded` lists the actual remote directory (not just seed resources) to detect orphaned files from prior incomplete flushes.
-- Download hash index is written per-item (not batched) so partial downloads survive stop/restart without re-downloading.
-- `BackupSessionController` is created fresh per execution session to avoid state leakage between runs.
+- Sync months may reach `uploadDone` before they are fully complete; they become `completed` only after download finalization.
+- Download success writes hash-index entries per item, so completed items survive stop/restart.
+- `MonthManifestStore.loadSeeded(...)` lists the actual remote directory to detect orphaned files from an earlier unflushed manifest.
+- Worker scheduling is dynamic by month, not static partitioning.
 
 ## Known Gaps
 
-- No automated tests; critical paths rely on manual regression.
-- Full backup resume still recomputes pending set by rescanning photo library.
-- Manifest flush is per-worker-per-month + run-end; force-kill can still lose unflushed delta.
-- WebDAV `RemoteStorageEntry.path` is returned percent-encoded from `list()`/`metadata()`, while SMB and LocalVolume return decoded paths. Callers that feed `entry.path` back into client methods (e.g. `RemoteIndexSyncService`) may double-encode non-ASCII characters on WebDAV.
+- No automated tests; manual regression is still the main safety net.
+- Full backup resume still rescans the photo library to rebuild the pending set.
+- Manifest flush still has a force-kill window where recent deltas may not be pushed to the remote manifest.
+- Download/sync can be blocked by local hash-index preflight when originals are not present on-device (intentional safety tradeoff).
+- Home refresh/execution/connection interactions are clearer than before, but still subtle enough that refactors need careful validation.

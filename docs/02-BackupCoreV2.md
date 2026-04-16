@@ -1,89 +1,208 @@
 # 备份核心流程（当前实现）
 
-## 1. 执行入口
+## 1. 两条执行主线
+
+当前代码里有两层执行链路：
+
+1. **通用上传链路**
+   `BackupSessionController` / `BackupCoordinator` / `AssetProcessor`
+2. **首页执行链路**
+   `HomeExecutionCoordinator` 在通用上传链路外，再拼上本地索引预检查、同步月份内联下载和纯下载月份执行
+
+## 2. 首页执行入口
 
 调用链：
 
-1. `BackupSessionController.startBackup()/resumeFromPause()`
-2. `BackupCoordinator.runBackup(request:eventStream:)`
+1. `HomeViewController.executeTapped()`
+2. `HomeScreenStore.startExecution(upload:download:sync:)`
+3. `HomeExecutionCoordinator.enter(upload:download:sync:)`
+4. `HomeExecutionCoordinator.startExecution()`
 
-说明：
+执行会话由 `HomeExecutionSession` 管理，按月保存 `MonthPlan`：
 
-1. 每个 run 使用独立 `BackupEventStream`。
-2. `BackupRunRequest` 包含 `profile/password/onlyAssetLocalIdentifiers/workerCountOverride`。
+- `needsUpload`
+- `needsDownload`
+- `phase`
+- `failedItemCount`
+- `failureMessage`
 
-## 2. run 主流程
+## 3. 执行前的本地索引预检查
 
-`BackupCoordinator.runBackup` 执行步骤：
+执行一开始，`HomeExecutionCoordinator` 会先跑：
 
-1. 校验或申请相册权限。
-2. 创建并连接远端 client，确保 `basePath` 目录存在。
-3. `RemoteIndexSyncService.syncIndex` 同步远端快照，并生成月级 seed（用于 `MonthManifestStore.loadOrCreate(seed:)`）。
-4. 准备待处理资产：
-5. 全量：`fetchAssetsResult(ascendingByCreationDate: true)`
-6. 范围/重试：按 ID 拉取并按创建时间排序
-7. 加载本地 hash 缓存（全量或按指定资产）。
-8. 将资产按月份分桶，按“预计字节数优先、数量次之、月份次之”排序。
-9. 计算 worker 数（协议默认或用户覆盖）并创建 `StorageClientPool`。
-10. worker 动态从 `MonthWorkQueue` 领取月份任务。
-11. 每个月份处理完成后执行 manifest flush。
-12. 汇总结果并发出 `finished` 事件。
+1. `LocalHashIndexBuildService.buildIndex(for:assetIDs, workerCount: 2, allowNetworkAccess: false)`
 
-## 3. 并发与调度
+目的：
 
-1. worker 数上限策略：
-2. 协议默认：SMB/WebDAV = 2，外接存储 = 3
-3. 用户可在设置中覆盖（1~4）
-4. 最终会按月份数再裁剪
+1. 让本次涉及的本地 asset 尽量都具备资源级 hash
+2. 让后续 reconcile、下载去重、同步判定有稳定基线
 
-连接池策略：
+关键规则：
 
-1. SMB/WebDAV 连接池最多 2 条连接（防止会话过多）。
-2. 外接存储连接池按 worker 数。
-3. worker 释放 client 时支持不可复用连接替换。
+1. 如果本次 **只上传**，即使有少量本地索引仍不完整，也允许继续执行。
+2. 如果本次包含 **下载或同步**，且仍有 `unavailableAssetIDs / failedAssetIDs`，则直接停止执行。
+3. 这里明确禁止网络拉取原图，因此 iCloud-only 资源会被判定为“本机不可用”，属于有意为之的保守策略。
 
-## 4. 单 Asset 处理（`AssetProcessor.process`）
+## 4. 上传主流程
 
-1. 先尝试本地缓存快速命中（`processWithLocalCache`）。
-2. 命中且月 manifest 已有同 fingerprint 时可直接跳过。
-3. 未命中则逐资源导出到临时文件并计算 SHA-256。
-4. 计算 `assetFingerprint`（由 role/slot/hash 组合得到）。
-5. 逐资源上传（或跳过）并收集 link。
-6. 若任一资源失败，整个 asset 记失败，不写 `assets/asset_resources`。
-7. 全部非失败时写：
-8. 月 manifest 的 `assets/asset_resources`
-9. 本地 `local_assets/local_asset_resources`
-10. 远端内存快照缓存增量
+上传实际通过 `BackupSessionAsyncBridge.runUpload(...)` 进入通用备份链路：
 
-## 5. 单资源处理（`uploadResource`）
+1. `BackupSessionController.startBackupWhenReady(...)`
+2. `BackupSessionController.startBackup(...)`
+3. `BackupRunDriver`
+4. `BackupCoordinator.runBackup(request:eventStream:)`
 
-1. 若 manifest 中已有同 hash，直接 `skipped(hash_exists)`。
-2. 同名冲突处理：
-3. 小文件（<5 MiB）且 size 未知或一致时，下载远端同名文件比 hash。
-4. hash 相同则 `skipped(name_same_hash)`。
-5. 否则使用 `AssetProcessor` 内联方法 `resolveNextAvailableName` 生成 `_n` 新文件名。
-6. 上传重试最多 3 次（含碰名重试）。
-7. 上传成功后调用 `setModificationDate`（按各 client 实现；WebDAV 会尝试 PROPPATCH）。
-8. 写入 manifest `resources` 与远端快照缓存。
+### `BackupRunPreparationService.prepareRun`
 
-## 6. 月 manifest 与 flush 语义
+准备阶段顺序：
 
-1. `upsertResource/upsertAsset` 先写本地月 sqlite 并标记 `dirty`。
-2. 月末或任务收尾调用 `flushToRemote` 同步远端 manifest 文件。
-3. flush 失败抛出异常，默认终止 run。外接硬盘断开时跳过 flush。
-4. 暂停/停止收尾时会对当前月使用 `ignoreCancellation`，尽量完成 flush。
+1. 校验或申请相册权限
+2. 创建并连接远端 client
+3. 保证 `basePath` 存在
+4. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest
+5. 如果快照条目数不大于 `120_000`，构建 `MonthSeedLookup`
+6. 读取待处理资产
+   - `full`：全图库，按创建时间升序
+   - `retry/scoped`：按指定 ID 获取，再按创建时间排序
+7. 按月份构建 `monthAssetIDsByMonth`
+8. 从本地 hash 索引读取 `totalFileSizeBytes`，估算每个月体积
+9. 按“预计字节数优先、数量次之、月份次之”构建 `MonthWorkItem`
+10. 决定 worker 数与连接池大小
 
-## 7. 暂停 / 停止 / 恢复
+### worker 数
 
-1. `BackupSessionController` 统一处理控制命令与 intent。
-2. 暂停/停止通过协作取消实现（`Task.cancel` + 检查点退出）。
-3. 恢复 full run 时会重新扫描图库并减去已完成资产集合。
-4. 恢复 scoped/retry run 时直接用剩余 ID 集合。
-5. run 终态由 `BackupSessionController.finishRun/handleRunFailure` 映射到 UI 状态。
+默认规则：
 
-## 8. 关键常量
+1. `SMB / WebDAV = 2`
+2. `externalVolume = 3`
+3. 用户可在设置里手动覆盖 `1...4`
+4. 最终还会再按月份数裁剪
 
-1. 小文件阈值：`5 * 1024 * 1024` bytes
-2. 上传重试次数：`3`
-3. hash 读取缓冲：`64 KiB`
-4. 阶段耗时日志窗口：每 `200` 项汇总一次
+## 5. 并行执行面
+
+`BackupParallelExecutor.execute(...)` 的核心步骤：
+
+1. 创建 `StorageClientPool`
+2. 用初始已连接 client 预热连接池
+3. 用 `MonthWorkQueue` 动态分发月份
+4. 每个 worker：
+   - 领取一个月份
+   - `MonthManifestStore.loadOrCreate(...)`
+   - 以 `500` 个 asset 为一批处理
+   - 批量读取本地 hash cache
+   - 逐 asset 调 `AssetProcessor.process(...)`
+5. 月份结束后 `flushToRemote(...)`
+6. flush 成功后发出 `.monthChanged(.completed)`
+7. 若提供了 `onMonthUploaded`，则在该月份 flush 完成后执行月级收尾
+
+## 6. 单 asset 处理
+
+`AssetProcessor.process(...)` 的关键规则：
+
+1. 先基于 `LocalHashIndexBuildService` / `ContentHashIndexRepository` 的结果尝试本地 cache 快速命中
+2. 未命中时，按 `BackupAssetResourcePlanner` 选择资源并分配 `role/slot`
+3. 将资源导出到临时文件并计算 `SHA-256`
+4. 生成 `assetFingerprint`
+5. 对每个资源执行上传或跳过：
+   - manifest 中已有同 hash：直接跳过
+   - 同名冲突：
+     - 小于 `5 MiB`：优先下载远端文件比 hash
+     - 其他情况：走尺寸/重命名策略
+   - 上传失败最多重试 `3` 次
+6. 所有资源成功后才写：
+   - 月 manifest 的 `assets / asset_resources / resources`
+   - 本地 `local_assets / local_asset_resources`
+   - 远端快照缓存增量
+
+## 7. 同步月份的内联下载
+
+这是当前实现最容易被旧文档误导的地方。
+
+同步月份不是统一等到上传阶段结束后再下载，而是：
+
+1. `HomeExecutionCoordinator.makeUploadMonthFinalizer()` 把回调传给 `BackupCoordinator`
+2. 某个 sync 月份 flush 完成后，worker 会调用 `onMonthUploaded(month)`
+3. 回调内部执行：
+   - 标记该月上传已完成
+   - 立刻 `syncRemoteDataAndWait()`
+   - 刷新该月相关本地索引
+   - 取出该月 `remoteOnlyItems`
+   - 交给 `DownloadWorkflowHelper.downloadItems(...)`
+4. 下载成功后再把该月标记为 `downloadCompleted`
+
+效果：
+
+1. sync 月份能更早完成闭环
+2. 恢复执行时，已经做完上传但下载被暂停的 sync 月份可以继续补完
+
+## 8. 剩余下载阶段
+
+上传阶段结束后，`HomeExecutionCoordinator.runDownloadPhase()` 只处理仍未终态的下载月份：
+
+1. 先同步一次远端快照
+2. 如该月存在本地 asset，则刷新本地索引
+3. 读取 `remoteOnlyItems(month)`
+4. `DownloadWorkflowHelper.downloadItems(...)`
+5. 每个 item 成功后：
+   - `writeHashIndex(...)`
+   - 触发 `refreshLocalIndexAndNotify([assetID])`
+
+下载阶段的取消粒度仍是 item 级，因为 `RestoreService.restoreItems(...)` 在 item 循环开头检查 `Task.checkCancellation()`。
+
+## 9. 进度与 UI 映射
+
+### 上传阶段
+
+1. `BackupSessionAsyncBridge` 把 started/completed months 和 `processedCountByMonth` 回传给 `HomeExecutionSession`
+2. `HomeExecutionCoordinator` 以 `2s` 节流触发远端同步
+3. 首页箭头百分比取：
+   - `sessionPercent`
+   - `reconciliation baseline`
+   的较大值，保证不回退
+
+### 下载阶段
+
+1. 纯下载和 sync 月份下载阶段都以 reconcile 的 `matchedCount` 为准
+2. 每个 item 成功后立即刷新本地索引，因此百分比会逐步前进
+
+## 10. 暂停 / 恢复 / 停止
+
+### 暂停
+
+1. 上传阶段：
+   - 取消执行 task
+   - 请求 `backupBridge.requestPause()`
+   - 已完成上传但未完成下载的 sync 月份会记录待恢复 asset IDs
+2. 下载阶段：
+   - 取消下载 task
+   - 标记 `downloadPaused`
+
+### 恢复
+
+1. `HomeExecutionSession.resume()` 恢复到对应阶段
+2. 已完成的月份不会重新执行
+3. 已上传未下载完成的 sync 月份会继续下载收尾
+
+### 停止
+
+1. 上传阶段：发送 stop intent，并等待运行中的备份链路自行收束
+2. 下载阶段：取消下载 task，然后退出执行态
+
+## 11. manifest flush 语义
+
+1. `MonthManifestStore` 本地 sqlite 改动先落本地临时文件
+2. 月份结束时 `flushToRemote(...)`
+3. 如果远端存储已不可用：
+   - 记录日志
+   - 跳过 flush
+   - 将错误向上抛出
+4. `loadSeeded(...)` 会额外列出真实远端目录，避免“文件已存在但 manifest 未记账”造成的重名冲突
+
+## 12. 关键常量
+
+1. 本地索引预检查 worker：`2`
+2. Home 侧远端同步节流：`2s`
+3. month seed 内存阈值：`120_000` 条目
+4. 并行执行的 PHAsset 批大小：`500`
+5. 小文件碰撞校验阈值：`5 * 1024 * 1024`
+6. 上传最大重试次数：`3`

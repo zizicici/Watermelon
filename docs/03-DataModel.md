@@ -1,11 +1,11 @@
-# 数据模型（本地 GRDB + 远端月级 SQLite）
+# 数据模型（本地 SQLite + 远端月 manifest + 内存快照）
 
 ## 1. 本地数据库（`DatabaseManager`）
 
-当前迁移策略：
+当前本地数据库由 GRDB 管理，迁移顺序：
 
 1. `v7_dev_schema_reset`
-2. 开发期直接重建表结构（drop 后按最新 schema 创建）
+2. `v8_server_profiles_smb_identity`
 
 ### `server_profiles`
 
@@ -32,6 +32,12 @@ ON server_profiles(host, port, shareName, basePath, username, IFNULL(domain, '')
 WHERE storageType = 'smb';
 ```
 
+说明：
+
+1. `storageType` 当前取值：`smb` / `webdav` / `externalVolume`
+2. SMB 唯一性由 host/port/shareName/basePath/username/domain 决定
+3. WebDAV 和外接存储的类型特定参数放在 `connectionParams`
+
 ### `sync_state`
 
 ```sql
@@ -41,6 +47,10 @@ CREATE TABLE sync_state (
   updatedAt DATETIME NOT NULL
 );
 ```
+
+当前主要用途：
+
+1. 记录 `active_server_profile_id`
 
 ### `local_assets`
 
@@ -74,14 +84,61 @@ CREATE INDEX idx_local_asset_resources_hash
 ON local_asset_resources(contentHash);
 ```
 
-## 2. 远端月 manifest（`MonthManifestStore`）
+## 2. `connectionParams` 的真实内容
 
-路径：`/{YYYY}/{MM}/.watermelon_manifest.sqlite`
+当前代码中的两种 typed payload：
 
-当前迁移策略：
+### WebDAV
+
+```swift
+struct WebDAVConnectionParams: Codable {
+    let endpointURLString: String
+}
+```
+
+### 外接存储
+
+```swift
+struct ExternalVolumeConnectionParams: Codable {
+    let rootBookmarkData: Data
+    let displayPath: String
+}
+```
+
+说明：
+
+1. SMB 主要信息直接落在 `host / port / shareName / basePath / username / domain`
+2. WebDAV 仍复用通用字段，但 endpoint 通过 `connectionParams` 保存
+3. 外接存储依赖 security-scoped bookmark，不需要密码
+
+## 3. 本地 hash 索引语义
+
+### `local_assets`
+
+1. `assetFingerprint`
+   - 由 `(role, slot, contentHash)` 组合计算
+   - 是首页 reconcile 和下载去重的关键标识
+2. `resourceCount`
+   - 该 asset 下纳入备份的资源数
+3. `totalFileSizeBytes`
+   - 该 asset 所有选中资源的总大小
+   - 用于月份体积估算、首页文件大小统计
+
+### `local_asset_resources`
+
+1. 主键是 `(assetLocalIdentifier, role, slot)`
+2. `contentHash` 是资源级 SHA-256
+3. `fileSize` 是资源级文件大小缓存
+
+## 4. 远端月 manifest（`MonthManifestStore`）
+
+路径：
+
+1. `/{YYYY}/{MM}/.watermelon_manifest.sqlite`
+
+当前迁移：
 
 1. `month_manifest_v3_dev_schema_reset`
-2. 迁移中 drop 旧表后按 baseline 重新建表
 
 ### `resources`
 
@@ -129,32 +186,69 @@ CREATE INDEX idx_asset_resources_hash
 ON asset_resources(resourceHash);
 ```
 
-## 3. 字段语义
+## 5. 远端 manifest 字段语义
 
-### 本地侧
+### `resources`
 
-1. `local_assets.assetFingerprint`：由 Asset 下 `(role, slot, contentHash)` 组合计算。
-2. `local_assets.totalFileSizeBytes`：该 asset 资源总大小（用于范围估算与统计）。
-3. `local_asset_resources.fileSize`：资源级大小缓存。
-4. `server_profiles.storageType`：`smb` / `webdav` / `externalVolume`。
-5. `server_profiles.connectionParams`：类型特定参数（WebDAV endpoint、外接存储 bookmark 等）。
+1. 一行对应远端月目录中的一个真实文件
+2. `resourceType` 保存 `PHAssetResourceType.rawValue`
+3. `creationDateNs` 尽量保留资源创建时间
+4. `backedUpAtNs` 是备份写入时间
 
-### 远端侧
+### `assets`
 
-1. `resources`：月目录实际文件对象。
-2. `assets`：逻辑资产对象（按 fingerprint 唯一）。
-3. `asset_resources`：资产到资源的关联，保留 role/slot。
-4. `assets.totalFileSizeBytes`：该逻辑资产的总大小。
+1. 一行对应一个逻辑资产
+2. 通过 `assetFingerprint` 去重
+3. `resourceCount` 和 `totalFileSizeBytes` 用于统计、首页汇总和校验
 
-## 4. assetFingerprint 计算规则
+### `asset_resources`
 
-1. 对每个资源构造 token：`role|slot|hashHex`
-2. token 排序后用换行连接
-3. 对结果做 SHA-256，得到 32-byte `assetFingerprint`
+1. 连接逻辑资产与资源 hash
+2. 保留 `role / slot`，方便重建资源实例与媒体类型判定
 
-## 5. Keychain
+## 6. `assetFingerprint` 计算规则
 
-1. 密码不写入 SQLite，仅存 Keychain
-2. keychain service：`com.zizicici.watermelon.credentials`
-3. keychain account：`credentialRef`
-4. SMB/WebDAV 用密码；外接存储依赖 bookmark（`connectionParams`）
+当前规则：
+
+1. 对每个资源生成 token：`role|slot|hashHex`
+2. token 排序
+3. 用 `\n` 连接
+4. 对最终字符串做 SHA-256
+
+## 7. 内存态远端快照
+
+Home 当前不直接反复扫远端文件系统，而是消费 `RemoteLibrarySnapshotCache` 暴露的状态。
+
+### 全量快照
+
+```swift
+struct RemoteLibrarySnapshot {
+    let resources: [RemoteManifestResource]
+    let assets: [RemoteManifestAsset]
+    let assetResourceLinks: [RemoteAssetResourceLink]
+}
+```
+
+### 增量状态
+
+```swift
+struct RemoteLibrarySnapshotState {
+    let revision: UInt64
+    let isFullSnapshot: Bool
+    let monthDeltas: [RemoteLibraryMonthDelta]
+}
+```
+
+说明：
+
+1. `revision` 用来让 Home 只消费“上次之后的变化”
+2. `monthDeltas` 是月级增量，不是整库重建
+3. 这部分是内存状态，不写回 SQLite
+
+## 8. Keychain 与会话密码
+
+1. 密码不写入 SQLite
+2. 通过 `KeychainService` 保存
+3. keychain service：`com.zizicici.watermelon.credentials`
+4. `AppSession` 里保留当前连接的会话密码
+5. SMB / WebDAV 需要密码；外接存储不需要

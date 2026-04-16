@@ -1,100 +1,225 @@
 # UI 流程与状态（当前主链路）
 
-## 1. 启动与 Home
+## 1. 启动与首页
 
 App 启动后直接进入 `HomeViewController`。
 
 ### 顶部区域
 
-左右两栏 header，各带全选 toggle：
-1. 左侧：`本地相册`（全选/取消）
-2. 右侧：`远端存储`（下拉菜单切换连接 + 全选/取消）
+左右两栏 header：
 
-远端菜单内容：
-1. 已保存连接列表（当前连接标 ✓）
-2. `未连接` 断开选项
+1. 左侧：`本地相册`
+   - 全选 / 取消全选 toggle
+   - 照片 / 视频 / 体积汇总
+2. 右侧：`远端存储`
+   - 当前连接名称
+   - profile 下拉菜单
+   - 全选 / 取消全选 toggle
+   - 照片 / 视频 / 体积汇总
 
-### 内容区
+右侧连接菜单内容：
 
-1. `UICollectionViewCompositionalLayout` 按年-月 section 展示
-2. 每月一行：左 cell（本地）+ 右 cell（远端），中间箭头 badge
-3. 箭头方向由选择组合决定：只选本地→(→)、只选远端→(←)、两侧→(↔)
-4. 箭头旁显示进度百分比（基于 reconciliation `matchedCount`）
-5. Section header 按年分组，显示年份、照片/视频计数、大小、年级全选 toggle
-6. Cell 季节配色（1-3月绿、4-6月蓝、7-9月琥珀、10-12月红）
+1. 已保存 profile 列表
+2. 当前连接项打勾
+3. `未连接` 断开项
 
-### 底部面板（SelectionActionPanel）
+### 右侧 overlay
 
-选中月份后弹出，显示三个分类按钮：
-1. 备份(→) 计数 — 长按弹出月份详情菜单
-2. 下载(←) 计数
-3. 同步(↔) 计数
-4. 执行按钮
+远端未就绪时，右半栏会被 overlay 覆盖：
 
-执行模式下切换为：
-1. 分类进度（pending → running x/y → completed ✓）
-2. 暂停/恢复按钮 + 停止按钮
-3. 完成后显示”完成”按钮退出
+1. `connecting`：spinner + `连接中...`
+2. `disconnected`：`未连接远端存储` + `选择存储` 按钮
+3. `connected`：overlay 隐藏
 
-### 执行模式 Cell 状态
+### 更多页入口
 
-1. **待处理**：正常颜色 + 选中勾
-2. **运行中**：正常颜色 + activity indicator
-3. **已完成**：灰色背景 + 绿色勾
+1. 首页右下角有一个悬浮 `ellipsis` 按钮
+2. 进入 `MoreViewController`
+3. 如果当前没有导航栈，则会自动包一层导航控制器再弹出
 
-## 2. 执行流程
+## 2. 内容区
 
-### 上传阶段
+1. `UICollectionViewCompositionalLayout`
+2. 按年分 section，按月展示 row
+3. 每行两个 cell：
+   - 左：本地月份
+   - 右：远端月份
+4. 中间 supplementary badge 显示方向箭头和百分比
 
-1. 收集所有上传+同步月份的本地 asset IDs
-2. 创建 `BackupScopeSelection`，通过 `BackupSessionController.startBackup()` 执行
-3. `handleBackupSnapshot` 跟踪 startedMonths/flushedMonths/processedCountByMonth
-4. 进度更新：非终态 → `refreshRemoteDataInPlace + syncRemoteDataIfNeeded + reconfigureVisibleCells/Arrows`
-5. 终态 `.completed` → 转入下载阶段（如有）或显示完成
+箭头方向规则：
 
-### 下载阶段
+1. 只选本地：`→`（上传）
+2. 只选远端：`←`（下载）
+3. 两边都选：`↔`（同步）
 
-1. 逐月执行 `ensureHashIndexAndDownload`
-2. 先跑 scoped backup 填充 hash index → 刷新 local index（safety net）
-3. `processDownloadMonth` 下载 remoteOnly items
-4. 每个 item 完成后：`writeHashIndexForItem` + `refreshLocalIndex`（增量持久化）
-5. 进度基于 reconciliation `matchedCount`（每 item 更新，支持断点续传）
+月份 cell 颜色：
 
-### 停止/暂停
+1. 1-3 月：绿色
+2. 4-6 月：蓝色
+3. 7-9 月：琥珀色
+4. 10-12 月：红色
 
-1. 上传阶段：`backupSessionController.stopBackup()`（cooperative cancellation）
-2. 下载阶段：`downloadTask.cancel()` + `backupSessionController.stopBackup()` + `RestoreService` 循环内 `Task.checkCancellation`
+## 3. 选择规则
 
-## 5. More 页面（`MoreViewController`）
+### 可交互条件
 
-入口：Home 右上角连接菜单末项 `更多`。
+只有在下面两个条件都满足时，月份选择才允许：
 
-分组：
+1. 已连接远端存储
+2. 当前不在执行态
 
-1. `远端存储`：`管理存储` -> `ManageStorageProfilesViewController`
-2. `本地数据`：`本地 Hash 索引` -> `LocalHashIndexManagerViewController`
-3. `备份`：`上传并发`（automatic/1/2/3/4）
-4. 其他通用设置与关于信息
+### 选择行为
 
-## 6. 存储添加与管理流程
+1. 支持单月选择
+2. 支持年级 toggle
+3. 支持顶部左右全选 toggle
+4. 连接状态变化时，已选月份会被清空
 
-### 添加 SMB
+## 4. 底部操作面板（`SelectionActionPanel`）
 
-1. `AddSMBServerLoginViewController`
-2. `SMBSharePathPickerViewController`
-3. `AddSMBServerViewController`
+### 选择态
 
-### 添加 WebDAV
+显示：
 
-1. `AddWebDAVStorageViewController`
-2. 保存到 `server_profiles`（`storageType=webdav` + `connectionParams`），密码写 Keychain
+1. `备份(→)` 月份数
+2. `下载(←)` 月份数
+3. `同步(↔)` 月份数
+4. `执行` 按钮
 
-### 添加外接存储
+分类按钮支持长按菜单查看月份列表。
 
-1. `AddExternalStorageViewController`
-2. 目录授权后保存 security-scoped bookmark 到 `connectionParams`
+### 执行态
 
-### 管理存储
+显示：
 
-1. 位于 More 页“远端存储”分组
-2. `ManageStorageProfilesViewController` 支持删除、排序、按类型编辑连接参数
+1. `备份 / 下载 / 同步` 三类阶段状态
+2. `暂停 / 恢复`
+3. `停止`
+4. 执行结束后显示 `完成`
+
+如果有失败月份，还会带失败汇总菜单。
+
+## 5. 执行前确认
+
+点击 `执行` 后：
+
+1. 统计本次备份 / 下载 / 同步月份数
+2. 弹出确认框
+3. 用户确认后调用 `store.startExecution(...)`
+
+## 6. 执行阶段
+
+### 6.1 本地索引预检查
+
+正式上传前先补本地 hash 索引：
+
+1. 针对本次涉及的所有本地 asset
+2. 默认 2 个 worker
+3. 不允许网络拉原图
+
+如果本次包含下载或同步且索引仍不完整，则直接失败并弹窗。
+
+### 6.2 上传阶段
+
+1. `HomeExecutionCoordinator` 通过 `BackupSessionController` 驱动通用上传链路
+2. 月份进入 `uploading`
+3. 处理进度会写入 `processedCountByMonth`
+4. 月份 flush 完成后进入：
+   - 上传-only 月份：`completed`
+   - sync 月份：`uploadDone`
+
+### 6.3 同步月份内联下载
+
+sync 月份在上传 flush 后会立刻做该月下载收尾：
+
+1. 先同步远端快照
+2. 刷新该月本地索引
+3. 只下载 `remoteOnlyItems`
+4. 每个 item 成功后立即写 hash 索引并刷新本地索引
+
+完成后该月变为 `completed`。
+
+### 6.4 纯下载阶段
+
+上传阶段结束后，剩余 `download` 月份会按顺序执行：
+
+1. 同步远端快照
+2. 刷新本地索引
+3. 下载 `remoteOnlyItems`
+4. 完成后标记该月 `completed`
+
+## 7. Cell 执行态样式
+
+当前 `MonthPlan.Phase` 与视觉大致对应：
+
+1. `pending`
+   - 正常样式
+2. `uploading / downloading`
+   - 正常底色 + spinner
+3. `uploadPaused / downloadPaused`
+   - 正常底色 + 暂停标记
+4. `uploadDone`
+   - 仍按运行中样式显示，等待 sync 下载完成
+5. `completed`
+   - 灰底 + 绿色勾
+6. `partiallyFailed`
+   - 运行态底色 + warning 指示
+7. `failed`
+   - 失败样式
+
+## 8. 进度规则
+
+### 上传
+
+箭头百分比取：
+
+1. `BackupSessionController` 回传的 session 进度
+2. reconcile `matchedCount` 计算出的基线进度
+
+二者中的较大值，保证百分比单调前进。
+
+### 下载 / 同步下载
+
+1. 直接依赖 reconcile `matchedCount`
+2. 每个 item 下载成功后立即刷新本地索引，因此进度按 item 推进
+
+## 9. 暂停 / 恢复 / 停止
+
+### 暂停
+
+1. 上传阶段：请求 backup pause
+2. 下载阶段：取消下载 task，并把月份状态切为 paused
+
+### 恢复
+
+1. 已完成月份不会重跑
+2. sync 月份若已上传但未下载完，会从下载态继续
+
+### 停止
+
+1. 弹确认框
+2. 停止后退出执行态
+3. 用户需要重新选择月份再执行
+
+## 10. More 页面
+
+入口：
+
+1. 首页右下角 FAB
+
+当前自定义项：
+
+1. `远端存储` → `管理存储`
+2. `本地数据` → `本地 Hash 索引`
+3. `备份` → `上传并发`
+4. `通用` → 系统语言入口
+
+## 11. 本地 Hash 索引管理页
+
+`LocalHashIndexManagerViewController` 当前支持：
+
+1. `创建` / `更新` 两种模式
+2. 是否移除本地已不存在条目
+3. 进度条与滚动日志
+4. 顶部按钮：开始 / 暂停 / 停止 / 重置
+5. 索引统计与覆盖率查看
