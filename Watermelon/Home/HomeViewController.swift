@@ -806,7 +806,8 @@ final class HomeViewController: UIViewController {
                 features: [
                     String(localized: "store.promotion.feature.1"),
                     String(localized: "store.promotion.feature.2"),
-                ]
+                    String(localized: "store.promotion.feature.3"),
+                ].map { "- \($0)" }
             ),
             gratefulConfig: GratefulCellConfiguration(
                 title: String(localized: "store.grateful.title"),

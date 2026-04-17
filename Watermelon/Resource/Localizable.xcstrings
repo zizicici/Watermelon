@@ -744,79 +744,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Speicher verwalten"
+            "value" : "Remote-Speicher verwalten"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Manage Storage"
+            "value" : "Manage Remote Storage"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Administrar almacenamiento"
+            "value" : "Administrar almacenamiento remoto"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Administrar almacenamiento"
+            "value" : "Administrar almacenamiento remoto"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gérer le stockage"
+            "value" : "Gérer le stockage distant"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ストレージを管理"
+            "value" : "リモートストレージを管理"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "저장소 관리"
+            "value" : "원격 저장소 관리"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gerenciar armazenamento"
+            "value" : "Gerenciar armazenamento remoto"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gerir armazenamento"
+            "value" : "Gerir armazenamento remoto"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Керувати сховищем"
+            "value" : "Керувати віддаленим сховищем"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理存储"
+            "value" : "管理远端存储"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理儲存"
+            "value" : "管理遠端儲存"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理儲存"
+            "value" : "管理遠端儲存"
           }
         }
       }
@@ -14440,79 +14440,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Speicher verwalten"
+            "value" : "Remote-Speicher verwalten"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Manage Storage"
+            "value" : "Manage Remote Storage"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Administrar almacenamiento"
+            "value" : "Administrar almacenamiento remoto"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Administrar almacenamiento"
+            "value" : "Administrar almacenamiento remoto"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gérer le stockage"
+            "value" : "Gérer le stockage distant"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ストレージを管理"
+            "value" : "リモートストレージを管理"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "저장소 관리"
+            "value" : "원격 저장소 관리"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gerenciar armazenamento"
+            "value" : "Gerenciar armazenamento remoto"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gerir armazenamento"
+            "value" : "Gerir armazenamento remoto"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Керувати сховищем"
+            "value" : "Керувати віддаленим сховищем"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理存储"
+            "value" : "管理远端存储"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理儲存"
+            "value" : "管理遠端儲存"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理儲存"
+            "value" : "管理遠端儲存"
           }
         }
       }
@@ -14604,79 +14604,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Systemstandard"
+            "value" : "Deutsch"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "System Default"
+            "value" : "English"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Predeterminado del sistema"
+            "value" : "Español"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Predeterminado del sistema"
+            "value" : "Español (Latinoamérica)"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Par défaut du système"
+            "value" : "Français"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "システムに従う"
+            "value" : "日本語"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "시스템 기본값"
+            "value" : "한국어"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Padrão do sistema"
+            "value" : "Português (Brasil)"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Predefinição do sistema"
+            "value" : "Português (Portugal)"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "За замовчуванням системи"
+            "value" : "Українська"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跟随系统"
+            "value" : "简体中文"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跟隨系統"
+            "value" : "繁體中文"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跟隨系統"
+            "value" : "繁體中文（香港）"
           }
         }
       }
@@ -17267,7 +17267,7 @@
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "무제한 저장소"
+            "value" : "저장소를 무제한으로 연결"
           }
         },
         "pt-BR" : {
@@ -17291,19 +17291,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无限存储目标"
+            "value" : "可添加任意数量的存储目标"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無限儲存目標"
+            "value" : "可新增任意數量的儲存目標"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無限儲存目標"
+            "value" : "可新增任意數量的儲存目標"
           }
         }
       }
@@ -17386,6 +17386,88 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "背景自動備份"
+          }
+        }
+      }
+    },
+    "store.promotion.feature.3" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Und zukünftige Funktionen …"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "And more to come…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Y funciones futuras…"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Y funciones futuras…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Et les fonctionnalités à venir…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そして今後の新機能…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "그리고 앞으로 추가될 기능…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "E recursos futuros…"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "E funcionalidades futuras…"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Та майбутні можливості…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以及未来新增的功能……"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以及未來新增的功能……"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以及未來新增的功能……"
           }
         }
       }
