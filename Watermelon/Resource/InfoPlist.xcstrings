@@ -1,426 +1,423 @@
 {
-  "sourceLanguage": "en",
-  "strings": {
-    "CFBundleDisplayName": {
-      "comment": "Bundle display name",
-      "extractionState": "extracted_with_value",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+  "sourceLanguage" : "en",
+  "strings" : {
+    "CFBundleDisplayName" : {
+      "comment" : "Bundle display name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "en": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Watermelon"
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Watermelon"
           }
         },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "es-419": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜备份"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜备份"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜備份"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份"
           }
         },
-        "zh-HK": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜備份"
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份"
           }
         }
       }
     },
-    "CFBundleName": {
-      "comment": "Bundle name",
-      "extractionState": "extracted_with_value",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+    "CFBundleName" : {
+      "comment" : "Bundle name",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "en": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Watermelon"
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Watermelon"
           }
         },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "es-419": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon"
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon"
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜备份"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜备份"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜備份"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份"
           }
         },
-        "zh-HK": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜備份"
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份"
           }
         }
       }
     },
-    "NSLocalNetworkUsageDescription": {
-      "comment": "Privacy - Local Network Usage Description",
-      "extractionState": "extracted_with_value",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon nutzt Ihr lokales Netzwerk, um eine Verbindung zu SMB-Servern herzustellen und Ihre Fotos zu sichern."
+    "NSLocalNetworkUsageDescription" : {
+      "comment" : "Privacy - Local Network Usage Description",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon nutzt Ihr lokales Netzwerk, um eine Verbindung zu SMB-Servern herzustellen und Ihre Fotos zu sichern."
           }
         },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon uses your local network to connect to SMB servers and back up your photos."
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon uses your local network to connect to SMB servers and back up your photos."
           }
         },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon usa tu red local para conectarse a servidores SMB y hacer copias de seguridad de tus fotos."
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon usa tu red local para conectarse a servidores SMB y hacer copias de seguridad de tus fotos."
           }
         },
-        "es-419": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon usa tu red local para conectarse a servidores SMB y respaldar tus fotos."
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon usa tu red local para conectarse a servidores SMB y respaldar tus fotos."
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon utilise votre réseau local pour se connecter aux serveurs SMB et sauvegarder vos photos."
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon utilise votre réseau local pour se connecter aux serveurs SMB et sauvegarder vos photos."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon は SMB サーバーに接続して写真をバックアップするためにローカルネットワークを使用します。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon は SMB サーバーに接続して写真をバックアップするためにローカルネットワークを使用します。"
           }
         },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon은(는) SMB 서버에 연결하여 사진을 백업하기 위해 로컬 네트워크를 사용합니다."
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon은(는) SMB 서버에 연결하여 사진을 백업하기 위해 로컬 네트워크를 사용합니다."
           }
         },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Watermelon usa sua rede local para conectar a servidores SMB e fazer backup das suas fotos."
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon usa sua rede local para conectar a servidores SMB e fazer backup das suas fotos."
           }
         },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Watermelon usa a sua rede local para ligar a servidores SMB e fazer cópia de segurança das suas fotos."
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon usa a sua rede local para ligar a servidores SMB e fazer cópia de segurança das suas fotos."
           }
         },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon використовує вашу локальну мережу для підключення до SMB-серверів та резервного копіювання фотографій."
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon використовує вашу локальну мережу для підключення до SMB-серверів та резервного копіювання фотографій."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜备份 使用本地网络连接 SMB 服务器并备份你的照片。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜备份 使用本地网络连接 SMB 服务器并备份你的照片。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜備份 使用本機網路連接 SMB 伺服器並備份你的照片。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份 使用本機網路連接 SMB 伺服器並備份你的照片。"
           }
         },
-        "zh-HK": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜備份 使用本機網路連接 SMB 伺服器並備份你的相片。"
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份 使用本機網路連接 SMB 伺服器並備份你的相片。"
           }
         }
       }
     },
-    "NSPhotoLibraryAddUsageDescription": {
-      "comment": "Privacy - Photo Library Additions Usage Description",
-      "extractionState": "extracted_with_value",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon benötigt Schreibzugriff, um ausgewählte Sicherungen in Ihre Fotomediathek wiederherzustellen."
+    "NSPhotoLibraryAddUsageDescription" : {
+      "comment" : "Privacy - Photo Library Additions Usage Description",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon benötigt Schreibzugriff, um ausgewählte Sicherungen in Ihre Fotomediathek wiederherzustellen."
           }
         },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon needs write access to restore selected backups into your photo library."
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon needs write access to restore selected backups into your photo library."
           }
         },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon necesita acceso de escritura para restaurar las copias de seguridad seleccionadas en tu fototeca."
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon necesita acceso de escritura para restaurar las copias de seguridad seleccionadas en tu fototeca."
           }
         },
-        "es-419": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon necesita acceso de escritura para restaurar los respaldos seleccionados en tu fototeca."
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon necesita acceso de escritura para restaurar los respaldos seleccionados en tu fototeca."
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon a besoin d'un accès en écriture pour restaurer les sauvegardes sélectionnées dans votre photothèque."
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon a besoin d'un accès en écriture pour restaurer les sauvegardes sélectionnées dans votre photothèque."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon は選択したバックアップを写真ライブラリに復元するために書き込みアクセスが必要です。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon は選択したバックアップを写真ライブラリに復元するために書き込みアクセスが必要です。"
           }
         },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon은(는) 선택한 백업을 사진 라이브러리로 복원하기 위해 쓰기 권한이 필요합니다."
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon은(는) 선택한 백업을 사진 라이브러리로 복원하기 위해 쓰기 권한이 필요합니다."
           }
         },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Watermelon precisa de acesso de gravação para restaurar os backups selecionados na sua biblioteca de fotos."
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon precisa de acesso de gravação para restaurar os backups selecionados na sua biblioteca de fotos."
           }
         },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Watermelon precisa de acesso de escrita para restaurar as cópias de segurança selecionadas na sua biblioteca de fotos."
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon precisa de acesso de escrita para restaurar as cópias de segurança selecionadas na sua biblioteca de fotos."
           }
         },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon потребує доступ на запис для відновлення вибраних резервних копій у вашу фотобібліотеку."
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon потребує доступ на запис для відновлення вибраних резервних копій у вашу фотобібліотеку."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜备份 需要写入权限来将所选备份恢复到你的照片库中。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜备份 需要写入权限来将所选备份恢复到你的照片库中。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜備份 需要寫入權限來將所選備份還原到你的照片庫中。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份 需要寫入權限來將所選備份還原到你的照片庫中。"
           }
         },
-        "zh-HK": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜備份 需要寫入權限來將所選備份還原到你的相片庫中。"
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份 需要寫入權限來將所選備份還原到你的相片庫中。"
           }
         }
       }
     },
-    "NSPhotoLibraryUsageDescription": {
-      "comment": "Privacy - Photo Library Usage Description",
-      "extractionState": "extracted_with_value",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon benötigt Lesezugriff, um originale Foto- und Videoressourcen zu sichern."
+    "NSPhotoLibraryUsageDescription" : {
+      "comment" : "Privacy - Photo Library Usage Description",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon benötigt Lesezugriff, um originale Foto- und Videoressourcen zu sichern."
           }
         },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon needs read access to back up original photo and video resources."
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon needs read access to back up original photo and video resources."
           }
         },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon necesita acceso de lectura para hacer copias de seguridad de los recursos de fotos y vídeos originales."
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon necesita acceso de lectura para hacer copias de seguridad de los recursos de fotos y vídeos originales."
           }
         },
-        "es-419": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon necesita acceso de lectura para respaldar los recursos originales de fotos y videos."
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon necesita acceso de lectura para respaldar los recursos originales de fotos y videos."
           }
         },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon a besoin d'un accès en lecture pour sauvegarder les ressources photo et vidéo originales."
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon a besoin d'un accès en lecture pour sauvegarder les ressources photo et vidéo originales."
           }
         },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon はオリジナルの写真と動画リソースをバックアップするために読み取りアクセスが必要です。"
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon はオリジナルの写真と動画リソースをバックアップするために読み取りアクセスが必要です。"
           }
         },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon은(는) 원본 사진 및 동영상 리소스를 백업하기 위해 읽기 권한이 필요합니다."
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon은(는) 원본 사진 및 동영상 리소스를 백업하기 위해 읽기 권한이 필요합니다."
           }
         },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Watermelon precisa de acesso de leitura para fazer backup dos recursos originais de fotos e vídeos."
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon precisa de acesso de leitura para fazer backup dos recursos originais de fotos e vídeos."
           }
         },
-        "pt-PT": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Watermelon precisa de acesso de leitura para fazer cópia de segurança dos recursos originais de fotos e vídeos."
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon precisa de acesso de leitura para fazer cópia de segurança dos recursos originais de fotos e vídeos."
           }
         },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watermelon потребує доступ на читання для резервного копіювання оригінальних ресурсів фотографій та відео."
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon потребує доступ на читання для резервного копіювання оригінальних ресурсів фотографій та відео."
           }
         },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜备份 需要读取权限来备份原始照片和视频资源。"
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜备份 需要读取权限来备份原始照片和视频资源。"
           }
         },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜備份 需要讀取權限來備份原始照片和影片資源。"
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份 需要讀取權限來備份原始照片和影片資源。"
           }
         },
-        "zh-HK": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "西瓜備份 需要讀取權限來備份原始相片和影片資源。"
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "西瓜備份 需要讀取權限來備份原始相片和影片資源。"
           }
         }
       }
     }
   },
-  "version": "1.1"
+  "version" : "1.1"
 }
