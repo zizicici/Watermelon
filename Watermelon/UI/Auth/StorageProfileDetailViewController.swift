@@ -233,6 +233,7 @@ extension StorageProfileDetailViewController: UITableViewDataSource, UITableView
             var content = cell.defaultContentConfiguration()
             content.text = String(localized: "storage.detail.deleteStorage")
             content.textProperties.color = .systemRed
+            content.textProperties.alignment = .center
             cell.contentConfiguration = content
             cell.accessoryType = .none
             cell.accessoryView = nil
