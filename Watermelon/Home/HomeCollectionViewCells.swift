@@ -172,10 +172,12 @@ final class HalfHeaderView: UIView {
 // MARK: - Direction Arrow Badge
 
 final class DirectionArrowView: UICollectionReusableView {
+    private static let percentFont: UIFont = .monospacedDigitSystemFont(ofSize: 9, weight: .light)
+
     private let imageView = UIImageView()
     private let percentLabel: UILabel = {
         let label = UILabel()
-        label.font = .monospacedDigitSystemFont(ofSize: 9, weight: .light)
+        label.font = DirectionArrowView.percentFont
         label.textAlignment = .center
         label.adjustsFontSizeToFitWidth = true
         label.minimumScaleFactor = 0.7
@@ -240,7 +242,7 @@ final class DirectionArrowView: UICollectionReusableView {
             let text = String(format: "%.1f%%", percent)
             let attrStr = NSAttributedString(string: text, attributes: [
                 .kern: -0.5,
-                .font: percentLabel.font!,
+                .font: Self.percentFont,
                 .foregroundColor: iconColor
             ])
             percentLabel.attributedText = attrStr

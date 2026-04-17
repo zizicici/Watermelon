@@ -27,7 +27,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             forTaskWithIdentifier: BackgroundBackupRunner.taskIdentifier,
             using: nil
         ) { task in
-            Self.handleBackgroundBackup(task as! BGProcessingTask)
+            guard let processingTask = task as? BGProcessingTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            Self.handleBackgroundBackup(processingTask)
         }
 
         return true

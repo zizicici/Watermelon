@@ -76,9 +76,9 @@ final class HomeExecutionCoordinator {
     private let dataRefresher: HomeExecutionDataRefresher
     private var executionTask: Task<Void, Never>?
     private var transientControlState: ExecutionControlState?
-    private var backupSessionController: BackupSessionController!
-    private var backupBridge: BackupSessionAsyncBridge!
-    private var downloadHelper: DownloadWorkflowHelper!
+    private var backupSessionController: BackupSessionController?
+    private var backupBridge: BackupSessionAsyncBridge?
+    private var downloadHelper: DownloadWorkflowHelper?
     private var executionSettingsSnapshot: ExecutionSettingsSnapshot?
     private var forcedUploadWorkerCountOverride: Int?
     private var currentStatusText = String(localized: "home.execution.notStarted")
@@ -127,11 +127,12 @@ final class HomeExecutionCoordinator {
         session.enter(upload: upload, download: download, sync: sync, localAssetIDs: dataAccess.localAssetIDs)
         setStatusText(String(localized: "home.execution.log.preparingExecution"), notifyState: false)
         appendInfoLog(String(format: String(localized: "home.execution.log.startExecution"), upload.count, download.count, sync.count))
-        backupSessionController = BackupSessionController(dependencies: dependencies)
-        backupEventObserverID = backupSessionController.addEventObserver { [weak self] event in
+        let controller = BackupSessionController(dependencies: dependencies)
+        backupSessionController = controller
+        backupEventObserverID = controller.addEventObserver { [weak self] event in
             self?.handleBackupEvent(event)
         }
-        backupBridge = BackupSessionAsyncBridge(backupSessionController: backupSessionController)
+        backupBridge = BackupSessionAsyncBridge(backupSessionController: controller)
         downloadHelper = DownloadWorkflowHelper(dependencies: dependencies)
         notifyStateChanged()
         startExecution()
@@ -171,9 +172,9 @@ final class HomeExecutionCoordinator {
         case .upload:
             appendInfoLog(String(localized: "home.execution.log.requestPause"))
             setStatusText(String(localized: "home.execution.log.pausing"))
-            backupBridge.markAssetIDsPendingForResume(assetIDsAwaitingInlineSyncResume())
+            backupBridge?.markAssetIDsPendingForResume(assetIDsAwaitingInlineSyncResume())
             dataRefresher.cancel()
-            downloadHelper.cancel()
+            downloadHelper?.cancel()
             if shouldPauseBeforeUploadStart {
                 let taskToAwait = executionTask
                 executionTask?.cancel()
@@ -184,7 +185,7 @@ final class HomeExecutionCoordinator {
                 return
             }
 
-            backupBridge.requestPause()
+            backupBridge?.requestPause()
             notifyStateChanged()
         case .download:
             appendInfoLog(String(localized: "home.execution.log.requestPause"))
@@ -193,8 +194,8 @@ final class HomeExecutionCoordinator {
             executionTask?.cancel()
             executionTask = nil
             transientControlState = .pausing
-            backupBridge.cancel()
-            downloadHelper.cancel()
+            backupBridge?.cancel()
+            downloadHelper?.cancel()
             notifyStateChanged()
             settleDownloadPause(after: taskToAwait)
         case nil:
@@ -221,9 +222,9 @@ final class HomeExecutionCoordinator {
             executionTask = nil
             transientControlState = .stopping
             dataRefresher.cancel()
-            downloadHelper.cancel()
+            downloadHelper?.cancel()
             notifyStateChanged()
-            backupBridge.requestStop()
+            backupBridge?.requestStop()
             settleStop(after: taskToAwait)
         case .uploadPaused:
             appendWarningLog(String(localized: "home.execution.log.stopped"))
@@ -237,8 +238,8 @@ final class HomeExecutionCoordinator {
             executionTask?.cancel()
             executionTask = nil
             transientControlState = .stopping
-            backupBridge.cancel()
-            downloadHelper.cancel()
+            backupBridge?.cancel()
+            downloadHelper?.cancel()
             notifyStateChanged()
             settleStop(after: taskToAwait)
         case .downloadPaused:
@@ -302,11 +303,12 @@ final class HomeExecutionCoordinator {
 
             if self.session.shouldRunUploadPhase {
                 guard !Task.isCancelled else { return }
+                guard let backupBridge = self.backupBridge else { return }
                 let scope = self.session.consumePendingUploadScope()
                 let runConfigurationOverride = self.activeExecutionSettingsSnapshot().makeUploadRunConfiguration(
                     forcedWorkerCountOverride: self.forcedUploadWorkerCountOverride
                 )
-                let result = await self.backupBridge.runUpload(
+                let result = await backupBridge.runUpload(
                     scope: scope,
                     runConfigurationOverride: runConfigurationOverride,
                     onMonthUploaded: self.makeUploadMonthFinalizer()
@@ -690,6 +692,7 @@ final class HomeExecutionCoordinator {
 
         let remoteItems = dataAccess.remoteOnlyItems(month)
         appendDebugLog(String(format: String(localized: "home.execution.log.pendingDownload"), month.displayText, remoteItems.count))
+        guard let downloadHelper else { return .cancelled }
         return await downloadHelper.downloadItems(remoteItems, context: context) { [weak self] assetID in
             guard let self else { return }
             await self.dataRefresher.refreshLocalIndexAndNotify([assetID])

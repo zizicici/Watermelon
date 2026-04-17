@@ -74,7 +74,7 @@ final class HomeViewController: UIViewController {
     private let remoteOverlayButton = UIButton(type: .system)
     private var didBecomeActiveObserver: NSObjectProtocol?
 
-    private var rightHeaderBg: UIView!
+    private let rightHeaderBg = UIView()
     private var isPanelShown = false
     private var hasLoadedHeaderSummary = false
 
@@ -166,7 +166,6 @@ final class HomeViewController: UIViewController {
     private func buildUI() {
         let leftHeaderBg = UIView()
         leftHeaderBg.backgroundColor = .materialSurface(light: .Material.Green._100, darkTint: .Material.Green._200, darkAlpha: 0.16)
-        rightHeaderBg = UIView()
         rightHeaderBg.backgroundColor = .materialSurface(light: .Material.Green._100, darkTint: .Material.Green._200, darkAlpha: 0.16)
 
         view.addSubview(leftHeaderBg)

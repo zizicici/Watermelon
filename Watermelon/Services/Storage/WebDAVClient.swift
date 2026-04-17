@@ -147,7 +147,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
 
         private static func localName(elementName: String, qName: String?) -> String {
-            let source = (qName?.isEmpty == false) ? qName! : elementName
+            let source = qName.flatMap { $0.isEmpty ? nil : $0 } ?? elementName
             if let idx = source.lastIndex(of: ":") {
                 return String(source[source.index(after: idx)...]).lowercased()
             }
