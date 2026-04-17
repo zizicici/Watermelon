@@ -19,6 +19,7 @@ final class HomeScreenStore {
     let dataManager: HomeIncrementalDataManager
     private(set) var executionCoordinator: HomeExecutionCoordinator
     private(set) var connectionController: HomeConnectionController
+    private let pipBridge: PiPExecutionBridge
 
     private let dependencies: DependencyContainer
 
@@ -85,7 +86,9 @@ final class HomeScreenStore {
                 }
             )
         )
+        self.pipBridge = PiPExecutionBridge(coordinator: self.executionCoordinator)
         bind()
+        pipBridge.attach()
     }
 
     deinit {
@@ -279,6 +282,8 @@ final class HomeScreenStore {
     }
 
     private func handleExecutionChange() {
+        pipBridge.observeStateChange()
+
         let isNowActive = executionCoordinator.isActive
         homeLog.info("[HomeSync] handleExecutionChange: active=\(isNowActive), wasActive=\(self.wasExecutionActive)")
 

@@ -106,7 +106,6 @@ final class PiPProgressManager: NSObject {
 
     @objc private func appWillResignActive() {
         guard isActive, isEnabled, hasActiveTask else { return }
-        startAmbientLoop()
         pipController?.startPictureInPicture()
     }
 
@@ -131,7 +130,7 @@ final class PiPProgressManager: NSObject {
 
     private func finishPiP(statusText: String, tone: FinishTone) {
         hasActiveTask = false
-        guard isActive else { return }
+        guard isActive, !isFinished else { return }
 
         if isPiPShowing {
             isFinished = true
@@ -453,8 +452,12 @@ extension PiPProgressManager: AVPictureInPictureControllerDelegate {
         _ pictureInPictureController: AVPictureInPictureController
     ) {
         Task { @MainActor [weak self] in
-            self?.isPiPShowing = false
-            self?.stopAmbientLoop()
+            guard let self else { return }
+            self.isPiPShowing = false
+            self.stopAmbientLoop()
+            if self.isFinished {
+                self.tearDown()
+            }
         }
     }
 
@@ -465,6 +468,17 @@ extension PiPProgressManager: AVPictureInPictureControllerDelegate {
         Task { @MainActor [weak self] in
             self?.pipSourceView?.isHidden = true
             completionHandler(true)
+        }
+    }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        failedToStartPictureInPictureWithError error: Error
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.isPiPShowing = false
+            self.stopAmbientLoop()
         }
     }
 }
