@@ -14,14 +14,15 @@ import os
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        ProStatus.setupStoreObserver()
+
         MoreKit.configure(
-            productIDs: ["com.zizicici.watermelon.pro"],
+            productID: ProStatus.productID,
             membershipKey: "com.zizicici.watermelon.membership.lifetime"
         )
         MoreKitAppearance.shared.tintColor = .systemGreen
         MoreKitAppearance.shared.backgroundColor = .appBackground
 
-        ProStatus.setupStoreObserver()
         Task { await ProStatus.verifyEntitlement() }
 
         BGTaskScheduler.shared.register(
@@ -71,6 +72,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
     }
 
+    @MainActor
     static func scheduleNextBackgroundBackup() {
         guard ProStatus.isPro,
               BackgroundBackupSetting.getValue() == .enable else { return }

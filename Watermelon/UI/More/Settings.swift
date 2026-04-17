@@ -163,6 +163,7 @@ extension BackgroundBackupSetting: UserDefaultSettable {
         String(localized: "settings.background.header")
     }
 
+    @MainActor
     static func setCurrent(_ value: BackgroundBackupSetting) throws {
         if value == .enable && !ProStatus.isPro {
             throw BackgroundBackupSettingError.requiresPro
