@@ -4,19 +4,14 @@ import UIKit
 
 @MainActor
 final class HomeExecutionLogViewController: UIViewController {
-    private static let timestampFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter
-    }()
-
     private let coordinator: HomeExecutionCoordinator
 
     private let statusCardView = UIView()
     private let statusTitleLabel = UILabel()
     private let statusLabel = UILabel()
-    private let logTextView = UITextView()
-    private let copyButton = UIButton(type: .system)
+    private let logTableView = UITableView(frame: .zero, style: .plain)
+    private let emptyLabel = UILabel()
+    private let exportButton = UIButton(type: .system)
 
     private lazy var filterBarButtonItem = UIBarButtonItem(
         title: String(localized: "log.filter"),
@@ -26,7 +21,10 @@ final class HomeExecutionLogViewController: UIViewController {
     )
 
     private var logObserverID: UUID?
-    private var snapshot = HomeExecutionLogSnapshot(statusText: String(localized: "home.execution.notStarted"), entries: [])
+    private var statusText = String(localized: "home.execution.notStarted")
+    private var allEntries: [ExecutionLogEntry] = []
+    private var displayedEntries: [ExecutionLogEntry] = []
+    private var lastEntryAnchor: (index: Int, id: UUID)?
     private var selectedLevels = ExecutionLogFilterPreference.getValue().enabledLevels
 
     init(coordinator: HomeExecutionCoordinator) {
@@ -72,29 +70,40 @@ final class HomeExecutionLogViewController: UIViewController {
         statusLabel.font = .systemFont(ofSize: 18, weight: .semibold)
         statusLabel.textColor = .label
         statusLabel.numberOfLines = 0
+        statusLabel.text = statusText
 
-        logTextView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        logTextView.backgroundColor = .secondarySystemBackground
-        logTextView.textColor = .label
-        logTextView.layer.cornerRadius = 12
-        logTextView.isEditable = false
-        logTextView.isSelectable = true
-        logTextView.alwaysBounceVertical = true
-        logTextView.textContainerInset = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
+        logTableView.backgroundColor = .secondarySystemBackground
+        logTableView.layer.cornerRadius = 12
+        logTableView.layer.masksToBounds = true
+        logTableView.separatorStyle = .none
+        logTableView.dataSource = self
+        logTableView.estimatedRowHeight = 32
+        logTableView.rowHeight = UITableView.automaticDimension
+        logTableView.keyboardDismissMode = .onDrag
+        logTableView.contentInset = UIEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
+        logTableView.register(ExecutionLogEntryCell.self, forCellReuseIdentifier: ExecutionLogEntryCell.reuseIdentifier)
 
-        var copyConfig = UIButton.Configuration.filled()
-        copyConfig.title = String(localized: "log.copyButton")
-        copyConfig.cornerStyle = .medium
-        copyConfig.baseBackgroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
-        copyConfig.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
-        copyButton.configuration = copyConfig
-        copyButton.addTarget(self, action: #selector(copyTapped), for: .touchUpInside)
+        emptyLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        emptyLabel.textColor = ExecutionLogPalette.secondary
+        emptyLabel.textAlignment = .center
+        emptyLabel.numberOfLines = 0
+        emptyLabel.text = String(localized: "log.empty")
+        emptyLabel.isHidden = true
+
+        var exportConfig = UIButton.Configuration.filled()
+        exportConfig.title = String(localized: "log.exportButton")
+        exportConfig.cornerStyle = .medium
+        exportConfig.baseBackgroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
+        exportConfig.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
+        exportButton.configuration = exportConfig
+        exportButton.addTarget(self, action: #selector(exportTapped), for: .touchUpInside)
 
         view.addSubview(statusCardView)
         statusCardView.addSubview(statusTitleLabel)
         statusCardView.addSubview(statusLabel)
-        view.addSubview(logTextView)
-        view.addSubview(copyButton)
+        view.addSubview(logTableView)
+        view.addSubview(emptyLabel)
+        view.addSubview(exportButton)
 
         statusCardView.snp.makeConstraints { make in
             make.top.equalTo(view.safeAreaLayoutGuide).offset(12)
@@ -107,12 +116,16 @@ final class HomeExecutionLogViewController: UIViewController {
             make.top.equalTo(statusTitleLabel.snp.bottom).offset(8)
             make.leading.trailing.bottom.equalToSuperview().inset(12)
         }
-        logTextView.snp.makeConstraints { make in
+        logTableView.snp.makeConstraints { make in
             make.top.equalTo(statusCardView.snp.bottom).offset(12)
             make.leading.trailing.equalToSuperview().inset(12)
-            make.bottom.equalTo(copyButton.snp.top).offset(-12)
+            make.bottom.equalTo(exportButton.snp.top).offset(-12)
         }
-        copyButton.snp.makeConstraints { make in
+        emptyLabel.snp.makeConstraints { make in
+            make.center.equalTo(logTableView)
+            make.leading.trailing.equalTo(logTableView).inset(12)
+        }
+        exportButton.snp.makeConstraints { make in
             make.leading.trailing.equalToSuperview().inset(12)
             make.bottom.equalTo(view.safeAreaLayoutGuide).inset(12)
             make.height.greaterThanOrEqualTo(44)
@@ -120,86 +133,76 @@ final class HomeExecutionLogViewController: UIViewController {
     }
 
     private func apply(_ snapshot: HomeExecutionLogSnapshot) {
-        let shouldStickToBottom = self.snapshot.entries.isEmpty || isNearBottom()
-        self.snapshot = snapshot
+        statusText = snapshot.statusText
         statusLabel.text = snapshot.statusText
-        let filteredEntries = filteredEntries(from: snapshot)
-        logTextView.attributedText = formattedLogAttributedText(for: filteredEntries)
-        copyButton.isEnabled = !filteredEntries.isEmpty
 
-        guard shouldStickToBottom else { return }
-        scrollToBottom()
-    }
+        let previousAllCount = allEntries.count
+        let newAllCount = snapshot.entries.count
 
-    private func filteredEntries(from snapshot: HomeExecutionLogSnapshot) -> [HomeExecutionLogEntry] {
-        snapshot.entries.filter { selectedLevels.contains($0.level) }
-    }
+        let anchorMatches: Bool = {
+            guard let anchor = lastEntryAnchor else { return previousAllCount == 0 }
+            guard anchor.index < newAllCount else { return false }
+            return snapshot.entries[anchor.index].id == anchor.id
+        }()
 
-    private func formattedLogText(for snapshot: HomeExecutionLogSnapshot) -> String {
-        filteredEntries(from: snapshot)
-            .map { entry in
-                "[\(Self.timestampFormatter.string(from: entry.timestamp))] [\(tag(for: entry.level))] \(entry.message)"
+        let isAppendOnly = anchorMatches && newAllCount > previousAllCount
+
+        if isAppendOnly {
+            let appended = snapshot.entries[previousAllCount..<newAllCount]
+            allEntries = snapshot.entries
+            updateLastEntryAnchor()
+            let appendedDisplayed = appended.filter { selectedLevels.contains($0.level) }
+            if !appendedDisplayed.isEmpty {
+                let stickToBottom = shouldStickToBottom()
+                let startIndex = displayedEntries.count
+                displayedEntries.append(contentsOf: appendedDisplayed)
+                let indexPaths = (startIndex..<displayedEntries.count).map { IndexPath(row: $0, section: 0) }
+                logTableView.performBatchUpdates({
+                    logTableView.insertRows(at: indexPaths, with: .none)
+                }, completion: { [weak self] _ in
+                    guard let self, stickToBottom, let last = indexPaths.last else { return }
+                    self.logTableView.scrollToRow(at: last, at: .bottom, animated: false)
+                })
             }
-            .joined(separator: "\n")
-    }
-
-    private func formattedLogAttributedText(for entries: [HomeExecutionLogEntry]) -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        let timestampFont = UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
-        let messageFont = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-
-        guard !entries.isEmpty else {
-            return NSAttributedString(
-                string: String(localized: "log.empty"),
-                attributes: [
-                    .font: messageFont,
-                    .foregroundColor: secondaryLogColor()
-                ]
-            )
+            refreshEmptyState()
+        } else {
+            allEntries = snapshot.entries
+            updateLastEntryAnchor()
+            reloadDisplayed(scrollToBottom: true)
         }
 
-        for (index, entry) in entries.enumerated() {
-            let timestamp = "[\(Self.timestampFormatter.string(from: entry.timestamp))] "
-            let levelTag = "[\(tag(for: entry.level))] "
-            result.append(NSAttributedString(
-                string: timestamp,
-                attributes: [
-                    .font: timestampFont,
-                    .foregroundColor: secondaryLogColor()
-                ]
-            ))
-            result.append(NSAttributedString(
-                string: levelTag,
-                attributes: [
-                    .font: timestampFont,
-                    .foregroundColor: color(for: entry.level)
-                ]
-            ))
-            result.append(NSAttributedString(
-                string: entry.message,
-                attributes: [
-                    .font: messageFont,
-                    .foregroundColor: color(for: entry.level)
-                ]
-            ))
-            if index < entries.count - 1 {
-                result.append(NSAttributedString(string: "\n"))
-            }
+        updateExportAvailability()
+    }
+
+    private func updateLastEntryAnchor() {
+        if let last = allEntries.last {
+            lastEntryAnchor = (allEntries.count - 1, last.id)
+        } else {
+            lastEntryAnchor = nil
         }
-
-        return result
     }
 
-    private func isNearBottom() -> Bool {
-        let visibleBottom = logTextView.contentOffset.y + logTextView.bounds.height - logTextView.adjustedContentInset.bottom
-        let contentBottom = logTextView.contentSize.height
-        return visibleBottom >= contentBottom - 80
+    private func reloadDisplayed(scrollToBottom: Bool) {
+        displayedEntries = allEntries.filter { selectedLevels.contains($0.level) }
+        logTableView.reloadData()
+        refreshEmptyState()
+        guard scrollToBottom, !displayedEntries.isEmpty else { return }
+        let last = IndexPath(row: displayedEntries.count - 1, section: 0)
+        logTableView.scrollToRow(at: last, at: .bottom, animated: false)
     }
 
-    private func scrollToBottom() {
-        let bottomOffset = logTextView.contentSize.height - logTextView.bounds.height + logTextView.adjustedContentInset.bottom
-        guard bottomOffset > 0 else { return }
-        logTextView.setContentOffset(CGPoint(x: 0, y: bottomOffset), animated: false)
+    private func refreshEmptyState() {
+        emptyLabel.isHidden = !displayedEntries.isEmpty
+    }
+
+    private func updateExportAvailability() {
+        exportButton.isEnabled = coordinator.currentSessionLogURL != nil
+    }
+
+    private func shouldStickToBottom() -> Bool {
+        let visibleBottom = logTableView.contentOffset.y + logTableView.bounds.height - logTableView.adjustedContentInset.bottom
+        let contentBottom = logTableView.contentSize.height
+        return visibleBottom >= contentBottom - 80 || displayedEntries.isEmpty
     }
 
     private func makeFilterMenu() -> UIMenu {
@@ -245,7 +248,7 @@ final class HomeExecutionLogViewController: UIViewController {
 
     private func refreshFilteredDisplay() {
         refreshFilterMenu()
-        apply(snapshot)
+        reloadDisplayed(scrollToBottom: false)
     }
 
     private func title(for level: ExecutionLogLevel) -> String {
@@ -261,36 +264,6 @@ final class HomeExecutionLogViewController: UIViewController {
         }
     }
 
-    private func color(for level: ExecutionLogLevel) -> UIColor {
-        switch level {
-        case .debug:
-            return .materialOnSurfaceVariant(light: .Material.BlueGrey._700, dark: .Material.BlueGrey._200)
-        case .info:
-            return .materialPrimary(light: .Material.Blue._600, dark: .Material.Blue._200)
-        case .warning:
-            return .materialPrimary(light: .Material.Orange._700, dark: .Material.Orange._200)
-        case .error:
-            return .materialPrimary(light: .Material.Red._700, dark: .Material.Red._200)
-        }
-    }
-
-    private func secondaryLogColor() -> UIColor {
-        .materialOnSurfaceVariant(light: .Material.BlueGrey._700, dark: .Material.BlueGrey._200)
-    }
-
-    private func tag(for level: ExecutionLogLevel) -> String {
-        switch level {
-        case .debug:
-            return "DEBUG"
-        case .info:
-            return "INFO"
-        case .warning:
-            return "WARN"
-        case .error:
-            return "ERROR"
-        }
-    }
-
     private func persistSelectedLevels() {
         var preference = ExecutionLogFilterPreference(rawValue: 0)
         for level in ExecutionLogLevel.allCases {
@@ -300,14 +273,25 @@ final class HomeExecutionLogViewController: UIViewController {
     }
 
     @objc
-    private func copyTapped() {
-        UIPasteboard.general.string = formattedLogText(for: snapshot)
+    private func exportTapped() {
+        guard let url = coordinator.currentSessionLogURL else { return }
+        let activityController = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        activityController.popoverPresentationController?.sourceView = exportButton
+        activityController.popoverPresentationController?.sourceRect = exportButton.bounds
+        present(activityController, animated: true)
+    }
+}
 
-        let alert = UIAlertController(title: nil, message: String(localized: "log.copied"), preferredStyle: .alert)
-        present(alert, animated: true)
-        Task { @MainActor [weak alert] in
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            alert?.dismiss(animated: true)
+extension HomeExecutionLogViewController: UITableViewDataSource {
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        displayedEntries.count
+    }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: ExecutionLogEntryCell.reuseIdentifier, for: indexPath)
+        if let cell = cell as? ExecutionLogEntryCell {
+            cell.configure(with: displayedEntries[indexPath.row])
         }
+        return cell
     }
 }

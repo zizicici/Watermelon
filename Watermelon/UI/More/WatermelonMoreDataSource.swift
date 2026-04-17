@@ -5,6 +5,7 @@
 
 import Foundation
 import MoreKit
+import UIKit
 
 class WatermelonMoreDataSource: MoreViewControllerDataSource {
     private enum ItemID {
@@ -13,6 +14,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let iCloudPhotoBackup = "iCloudPhotoBackup"
         static let backgroundBackup = "backgroundBackup"
         static let language = "language"
+        static let diagnosticLogs = "diagnosticLogs"
     }
 
     private let dependencies: DependencyContainer?
@@ -67,6 +69,17 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
             )))
         }
 
+        sections.append(.custom(MoreCustomSection(
+            id: "diagnostics",
+            header: String(localized: "more.section.diagnostics"),
+            items: [
+                MoreCustomItem(
+                    id: ItemID.diagnosticLogs,
+                    title: String(localized: "more.item.diagnosticLogs")
+                )
+            ]
+        )))
+
         sections.append(contentsOf: [.contact, .appjun, .about])
         return sections
     }
@@ -88,6 +101,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.enterSettings(BackgroundBackupSetting.self)
             case ItemID.language:
                 controller.jumpToSettings()
+            case ItemID.diagnosticLogs:
+                controller.pushViewController(ExecutionLogHistoryViewController())
             default:
                 break
             }

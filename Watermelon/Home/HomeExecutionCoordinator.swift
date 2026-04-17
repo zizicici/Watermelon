@@ -1,16 +1,9 @@
 import Foundation
 import MoreKit
 
-struct HomeExecutionLogEntry {
-    let id = UUID()
-    let timestamp: Date
-    let message: String
-    let level: ExecutionLogLevel
-}
-
 struct HomeExecutionLogSnapshot {
     let statusText: String
-    let entries: [HomeExecutionLogEntry]
+    let entries: [ExecutionLogEntry]
 }
 
 @MainActor
@@ -82,9 +75,12 @@ final class HomeExecutionCoordinator {
     private var executionSettingsSnapshot: ExecutionSettingsSnapshot?
     private var forcedUploadWorkerCountOverride: Int?
     private var currentStatusText = String(localized: "home.execution.notStarted")
-    private var logEntries: [HomeExecutionLogEntry] = []
+    private var logEntries: [ExecutionLogEntry] = []
     private var logObservers: [UUID: @MainActor (HomeExecutionLogSnapshot) -> Void] = [:]
     private var backupEventObserverID: UUID?
+    private(set) var currentSessionLogURL: URL?
+    private var sessionLogStreamContinuation: AsyncStream<ExecutionLogEntry>.Continuation?
+    private var sessionLogDrainTask: Task<Void, Never>?
 
     private static let syncThrottleInterval: CFAbsoluteTime = 2.0
     private static let localAvailabilityProbeWorkerCount = 2
@@ -124,6 +120,7 @@ final class HomeExecutionCoordinator {
         forcedUploadWorkerCountOverride = nil
         dataRefresher.reset()
         logEntries.removeAll(keepingCapacity: true)
+        startSessionLogWriter(kind: .manual)
         session.enter(upload: upload, download: download, sync: sync, localAssetIDs: dataAccess.localAssetIDs)
         setStatusText(String(localized: "home.execution.log.preparingExecution"), notifyState: false)
         appendInfoLog(String(format: String(localized: "home.execution.log.startExecution"), upload.count, download.count, sync.count))
@@ -154,6 +151,7 @@ final class HomeExecutionCoordinator {
         session.reset()
         setStatusText(String(localized: "home.execution.notStarted"), notifyState: false)
         logEntries.removeAll(keepingCapacity: true)
+        finalizeSessionLogWriter()
         notifyLogObservers()
         notifyStateChanged()
     }
@@ -776,12 +774,33 @@ final class HomeExecutionCoordinator {
         _ message: String,
         level: ExecutionLogLevel = .info
     ) {
-        let entry = HomeExecutionLogEntry(timestamp: Date(), message: message, level: level)
+        let entry = ExecutionLogEntry(timestamp: Date(), message: message, level: level)
         logEntries.append(entry)
-        if logEntries.count > 800 {
-            logEntries.removeFirst(logEntries.count - 800)
-        }
+        sessionLogStreamContinuation?.yield(entry)
         notifyLogObservers()
+    }
+
+    private func startSessionLogWriter(kind: ExecutionLogKind) {
+        sessionLogStreamContinuation?.finish()
+        sessionLogStreamContinuation = nil
+        sessionLogDrainTask = nil
+
+        let writer = ExecutionLogFileStore.beginSession(kind: kind)
+        currentSessionLogURL = writer.fileURL
+        let (stream, continuation) = AsyncStream.makeStream(of: ExecutionLogEntry.self)
+        sessionLogStreamContinuation = continuation
+        sessionLogDrainTask = Task.detached {
+            for await entry in stream {
+                await writer.appendLog(entry.message, level: entry.level, at: entry.timestamp)
+            }
+            await writer.finalize()
+        }
+    }
+
+    private func finalizeSessionLogWriter() {
+        sessionLogStreamContinuation?.finish()
+        sessionLogStreamContinuation = nil
+        sessionLogDrainTask = nil
     }
 
     private func appendDebugLog(_ message: String) {

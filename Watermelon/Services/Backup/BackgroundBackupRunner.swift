@@ -59,10 +59,19 @@ final class BackgroundBackupRunner {
         let monthAssetIDs = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: recentAssets)
         let sortedMonths = monthAssetIDs.keys.sorted(by: >)
 
+        let writer = ExecutionLogFileStore.beginSession(kind: .auto)
+        await writer.appendLog(
+            String(format: String(localized: "backup.auto.log.sessionStart"), profiles.count, sortedMonths.count),
+            level: .info
+        )
+
         for profile in profiles.shuffled() {
             if Task.isCancelled { break }
-            await backupProfile(profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths)
+            await backupProfile(profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
         }
+
+        await writer.appendLog(String(localized: "backup.auto.log.sessionEnd"), level: .info)
+        await writer.finalize()
     }
 
     // MARK: - Per-Profile Backup
@@ -70,12 +79,23 @@ final class BackgroundBackupRunner {
     private func backupProfile(
         _ profile: ServerProfileRecord,
         monthAssetIDs: [LibraryMonthKey: [String]],
-        sortedMonths: [LibraryMonthKey]
+        sortedMonths: [LibraryMonthKey],
+        writer: ExecutionLogSessionWriter
     ) async {
+        await writer.appendLog(
+            String(format: String(localized: "backup.auto.log.profileStart"), profile.name),
+            level: .info
+        )
         let password: String
         if profile.storageProfile.requiresPassword {
             guard let pw = try? keychainService.readPassword(account: profile.credentialRef),
-                  !pw.isEmpty else { return }
+                  !pw.isEmpty else {
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.profileMissingPassword"), profile.name),
+                    level: .warning
+                )
+                return
+            }
             password = pw
         } else {
             password = ""
@@ -86,11 +106,19 @@ final class BackgroundBackupRunner {
             client = try storageClientFactory.makeClient(profile: profile, password: password)
             try await client.connect()
         } catch {
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, String(describing: error)),
+                level: .error
+            )
             return
         }
 
-        await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths)
+        await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
         await client.disconnectSafely()
+        await writer.appendLog(
+            String(format: String(localized: "backup.auto.log.profileEnd"), profile.name),
+            level: .info
+        )
     }
 
     // MARK: - Backup Loop
@@ -99,12 +127,23 @@ final class BackgroundBackupRunner {
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         monthAssetIDs: [LibraryMonthKey: [String]],
-        sortedMonths: [LibraryMonthKey]
+        sortedMonths: [LibraryMonthKey],
+        writer: ExecutionLogSessionWriter
     ) async {
 
         let eventStream = BackupEventStream()
-        let drainTask = Task.detached { for await _ in eventStream.stream {} }
-        defer { eventStream.finish(); drainTask.cancel() }
+        let drainTask = Task.detached {
+            for await event in eventStream.stream {
+                switch event {
+                case .log(let message, let level):
+                    await writer.appendLog(message, level: level)
+                case .progress(let progress):
+                    await writer.appendLog(progress.message, level: progress.logLevel)
+                case .started, .finished, .transferState, .monthChanged:
+                    break
+                }
+            }
+        }
 
         let iCloudMode = ICloudPhotoBackupMode.getValue()
         var uploadsSinceFlush = 0
@@ -113,6 +152,11 @@ final class BackgroundBackupRunner {
             if Task.isCancelled { break }
 
             guard let assetIDs = monthAssetIDs[monthKey], !assetIDs.isEmpty else { continue }
+
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.monthStart"), monthKey.displayText, assetIDs.count),
+                level: .info
+            )
 
             let monthStore: MonthManifestStore
             do {
@@ -124,6 +168,10 @@ final class BackgroundBackupRunner {
                 )
             } catch {
                 if Task.isCancelled { break }
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.monthManifestFailed"), monthKey.displayText, String(describing: error)),
+                    level: .error
+                )
                 continue
             }
 
@@ -178,7 +226,14 @@ final class BackgroundBackupRunner {
 
             _ = try? await monthStore.flushToRemote(ignoreCancellation: true)
             uploadsSinceFlush = 0
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.monthEnd"), monthKey.displayText),
+                level: .info
+            )
         }
+
+        eventStream.finish()
+        await drainTask.value
     }
 
     // MARK: - Wi-Fi Check

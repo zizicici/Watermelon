@@ -36,6 +36,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             Self.handleBackgroundBackup(processingTask)
         }
 
+        Task.detached(priority: .utility) {
+            ExecutionLogFileStore.purgeExpired()
+        }
+
         return true
     }
 
