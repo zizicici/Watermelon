@@ -180,6 +180,58 @@ enum BackgroundBackupSettingError: LocalizedError {
     }
 }
 
+enum PiPProgressSetting: Int, CaseIterable, Codable {
+    case disable = 0
+    case enable
+}
+
+extension PiPProgressSetting: UserDefaultSettable {
+    static func getKey() -> String {
+        "com.zizicici.common.settings.PiPProgressSetting"
+    }
+
+    static var defaultOption: PiPProgressSetting {
+        .disable
+    }
+
+    static func getHeader() -> String? {
+        String(localized: "settings.pipProgress.header")
+    }
+
+    static func getFooter() -> String? {
+        String(localized: "settings.pipProgress.footer")
+    }
+
+    func getName() -> String {
+        switch self {
+        case .disable:
+            return String(localized: "settings.common.disable")
+        case .enable:
+            return String(localized: "settings.common.enable")
+        }
+    }
+
+    static func getTitle() -> String {
+        String(localized: "settings.pipProgress.header")
+    }
+
+    @MainActor
+    static func setCurrent(_ value: PiPProgressSetting) throws {
+        if value == .enable && !ProStatus.isPro {
+            throw PiPProgressSettingError.requiresPro
+        }
+        setValue(value)
+    }
+}
+
+enum PiPProgressSettingError: LocalizedError {
+    case requiresPro
+
+    var errorDescription: String? {
+        String(localized: "settings.pipProgress.requiresPro")
+    }
+}
+
 // MARK: - Execution Log Filter
 
 struct ExecutionLogFilterPreference: RawRepresentable, Hashable, Sendable {

@@ -121,6 +121,7 @@ final class HomeExecutionCoordinator {
         dataRefresher.reset()
         logEntries.removeAll(keepingCapacity: true)
         startSessionLogWriter(kind: .manual)
+        PiPProgressManager.shared.taskDidStart(title: String(localized: "home.execution.log.preparingExecution"))
         session.enter(upload: upload, download: download, sync: sync, localAssetIDs: dataAccess.localAssetIDs)
         setStatusText(String(localized: "home.execution.log.preparingExecution"), notifyState: false)
         appendInfoLog(String(format: String(localized: "home.execution.log.startExecution"), upload.count, download.count, sync.count))
@@ -226,6 +227,7 @@ final class HomeExecutionCoordinator {
             settleStop(after: taskToAwait)
         case .uploadPaused:
             appendWarningLog(String(localized: "home.execution.log.stopped"))
+            PiPProgressManager.shared.taskDidCancel()
             executionTask?.cancel()
             executionTask = nil
             exit()
@@ -242,6 +244,7 @@ final class HomeExecutionCoordinator {
             settleStop(after: taskToAwait)
         case .downloadPaused:
             appendWarningLog(String(localized: "home.execution.log.stopped"))
+            PiPProgressManager.shared.taskDidCancel()
             executionTask?.cancel()
             executionTask = nil
             exit()
@@ -377,6 +380,7 @@ final class HomeExecutionCoordinator {
         guard !remaining.isEmpty else {
             session.finishExecution()
             appendInfoLog(String(localized: "home.execution.log.allTasksComplete"))
+            PiPProgressManager.shared.taskDidComplete()
             refreshTerminalStatus(notifyState: false)
             notifyStateChanged()
             return
@@ -403,6 +407,7 @@ final class HomeExecutionCoordinator {
         if !Task.isCancelled {
             session.finishExecution()
             appendInfoLog(String(localized: "home.execution.log.allTasksComplete"))
+            PiPProgressManager.shared.taskDidComplete()
             refreshTerminalStatus(notifyState: false)
             notifyStateChanged()
         }
@@ -777,6 +782,7 @@ final class HomeExecutionCoordinator {
         let entry = ExecutionLogEntry(timestamp: Date(), message: message, level: level)
         logEntries.append(entry)
         sessionLogStreamContinuation?.yield(entry)
+        PiPProgressManager.shared.appendLog(entry)
         notifyLogObservers()
     }
 
@@ -822,11 +828,13 @@ final class HomeExecutionCoordinator {
     private func setErrorStatus(_ statusText: String, log logMessage: String) {
         appendErrorLog(logMessage)
         setStatusText(statusText, notifyState: false)
+        PiPProgressManager.shared.taskDidFail(message: statusText)
     }
 
     private func setStatusText(_ text: String, notifyState: Bool = true) {
         guard currentStatusText != text else { return }
         currentStatusText = text
+        PiPProgressManager.shared.updateStatus(text)
         notifyLogObservers()
         if notifyState {
             onStateChanged?()
@@ -934,6 +942,7 @@ final class HomeExecutionCoordinator {
     private func settleStop(after task: Task<Void, Never>?) {
         guard let task else {
             appendWarningLog(String(localized: "home.execution.log.stopped"))
+            PiPProgressManager.shared.taskDidCancel()
             exit()
             return
         }
@@ -945,6 +954,7 @@ final class HomeExecutionCoordinator {
                       self.transientControlState == .stopping,
                       self.session.isActive else { return }
                 self.appendWarningLog(String(localized: "home.execution.log.stopped"))
+                PiPProgressManager.shared.taskDidCancel()
                 self.exit()
             }
         }

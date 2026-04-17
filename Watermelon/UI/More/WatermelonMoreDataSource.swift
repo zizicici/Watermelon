@@ -15,6 +15,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let backgroundBackup = "backgroundBackup"
         static let language = "language"
         static let diagnosticLogs = "diagnosticLogs"
+        static let pipProgress = "pipProgress"
     }
 
     private let dependencies: DependencyContainer?
@@ -64,6 +65,11 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                         id: ItemID.backgroundBackup,
                         title: String(localized: "more.item.backgroundBackup"),
                         value: BackgroundBackupSetting.getValue().getName()
+                    ),
+                    MoreCustomItem(
+                        id: ItemID.pipProgress,
+                        title: String(localized: "more.item.pipProgress"),
+                        value: PiPProgressSetting.getValue().getName()
                     )
                 ]
             )))
@@ -99,6 +105,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.enterSettings(ICloudPhotoBackupMode.self)
             case ItemID.backgroundBackup:
                 controller.enterSettings(BackgroundBackupSetting.self)
+            case ItemID.pipProgress:
+                controller.enterSettings(PiPProgressSetting.self)
             case ItemID.language:
                 controller.jumpToSettings()
             case ItemID.diagnosticLogs:
