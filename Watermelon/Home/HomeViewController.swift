@@ -816,7 +816,7 @@ final class HomeViewController: UIViewController {
             gratefulConfig: GratefulCellConfiguration(
                 title: String(localized: "store.grateful.title"),
                 titleHighlight: "Pro",
-                content: String(format: String(localized: "store.grateful.content"), AppName.localized)
+                content: String(localized: "store.grateful.content")
             ),
             email: "watermelon@zi.ci",
             appStoreId: "6762260596",
