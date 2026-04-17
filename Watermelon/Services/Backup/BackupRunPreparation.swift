@@ -43,7 +43,7 @@ struct BackupRunPreparationService: Sendable {
 
         if request.iCloudPhotoBackupMode == .enable {
             eventStream.emitLog(
-                "已启用\"允许访问 iCloud 原件\"：Watermelon 可按需下载 iCloud 原件。检测到仅存于 iCloud 的本地资源时，本次执行会自动降为 1 个 Worker。",
+                String(localized: "backup.log.icloudAccessEnabled"),
                 level: .info
             )
         }
@@ -63,14 +63,24 @@ struct BackupRunPreparationService: Sendable {
                 )
                 snapshotSeedLookup = makeMonthSeedLookup(from: snapshot, eventStream: eventStream)
                 eventStream.emitLog(
-                    "Remote index synced. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s).",
+                    String.localizedStringWithFormat(
+                        String(localized: "backup.log.remoteIndexSynced"),
+                        snapshot.totalResourceCount,
+                        snapshot.totalCount
+                    ),
                     level: .info
                 )
             } catch {
                 if profile.isConnectionUnavailableError(error) {
                     throw error
                 }
-                eventStream.emitLog("Remote index scan warning: \(error.localizedDescription)", level: .warning)
+                eventStream.emitLog(
+                    String.localizedStringWithFormat(
+                        String(localized: "backup.log.remoteIndexScanWarning"),
+                        error.localizedDescription
+                    ),
+                    level: .warning
+                )
             }
 
             let retryMode = onlyAssetLocalIdentifiers != nil
@@ -98,11 +108,16 @@ struct BackupRunPreparationService: Sendable {
                 let requested = onlyAssetLocalIdentifiers?.count ?? 0
                 let missing = max(requested - retryAssets.count, 0)
                 eventStream.emitLog(
-                    "Retry mode: requested \(requested), resolved \(retryAssets.count), missing \(missing).",
+                    String.localizedStringWithFormat(
+                        String(localized: "backup.log.retryModeSummary"),
+                        requested,
+                        retryAssets.count,
+                        missing
+                    ),
                     level: .info
                 )
             } else {
-                eventStream.emitLog("Start backup by asset (oldest month first).", level: .info)
+                eventStream.emitLog(String(localized: "backup.log.startBackupByAsset"), level: .info)
             }
 
             let estimatedBytesByMonth = fetchEstimatedBytesByMonth(
@@ -158,7 +173,11 @@ struct BackupRunPreparationService: Sendable {
                 onMonthSynced: onMonthSynced
             )
             eventStream?.emitLog(
-                "Remote index reloaded. \(snapshot.totalResourceCount) resource(s), \(snapshot.totalCount) asset(s).",
+                String.localizedStringWithFormat(
+                    String(localized: "backup.log.remoteIndexReloaded"),
+                    snapshot.totalResourceCount,
+                    snapshot.totalCount
+                ),
                 level: .info
             )
             await client.disconnectSafely()
@@ -218,7 +237,11 @@ struct BackupRunPreparationService: Sendable {
                 )
             } catch {
                 eventStream.emitLog(
-                    "Local hash size estimate warning for month \(month.text): \(error.localizedDescription)",
+                    String.localizedStringWithFormat(
+                        String(localized: "backup.log.localHashEstimateWarning"),
+                        month.text,
+                        error.localizedDescription
+                    ),
                     level: .warning
                 )
                 estimatedBytesByMonth[month] = 0
@@ -235,7 +258,7 @@ struct BackupRunPreparationService: Sendable {
         let totalEntries = snapshot.totalResourceCount + snapshot.totalCount + snapshot.assetResourceLinks.count
         if totalEntries > Self.monthSeedLookupEntryThreshold {
             eventStream.emitLog(
-                "Remote snapshot is large (\(totalEntries) entries). Disable in-memory month seeding and load manifests on demand.",
+                String.localizedStringWithFormat(String(localized: "backup.log.remoteSnapshotLarge"), totalEntries),
                 level: .warning
             )
             return nil

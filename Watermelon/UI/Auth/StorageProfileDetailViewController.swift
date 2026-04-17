@@ -171,7 +171,10 @@ final class StorageProfileDetailViewController: UIViewController {
             onProfilesChanged()
             navigationController?.popViewController(animated: true)
         } catch {
-            presentAlert(title: String(localized: "auth.manage.deleteFailed"), message: error.localizedDescription)
+            presentAlert(
+                title: String(localized: "auth.manage.deleteFailed"),
+                message: UserFacingErrorLocalizer.message(for: error)
+            )
         }
     }
 

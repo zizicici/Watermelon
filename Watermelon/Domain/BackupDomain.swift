@@ -29,7 +29,6 @@ struct BackupItemEvent {
     let resourceDate: Date?
     let status: BackupItemStatus
     let reason: String?
-    let resourceSummary: String?
     let updatedAt: Date
 }
 
@@ -81,9 +80,9 @@ enum BackupError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .photoPermissionDenied:
-            return "Photo library permission denied."
+            return String(localized: "backup.error.photoPermissionDenied")
         case .restoreNoSelection:
-            return "No items selected for restore."
+            return String(localized: "backup.error.restoreNoSelection")
         }
     }
 }

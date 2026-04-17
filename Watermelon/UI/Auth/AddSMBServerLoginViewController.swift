@@ -151,7 +151,10 @@ final class AddSMBServerLoginViewController: UIViewController {
             } catch {
                 await MainActor.run {
                     self.setLoading(false)
-                    self.presentAlert(title: String(localized: "auth.smb.login.loginFailed"), message: error.localizedDescription)
+                    self.presentAlert(
+                        title: String(localized: "auth.smb.login.loginFailed"),
+                        message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
+                    )
                 }
             }
         }
@@ -329,7 +332,7 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
             cell.configure(
                 title: nil,
                 text: nameText,
-                placeholder: "Home NAS",
+                placeholder: String(localized: "auth.smb.login.placeholder.name"),
                 autocapitalizationType: .words,
                 returnKeyType: .next,
                 inputAccessoryView: keyboardToolbar
@@ -339,9 +342,9 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
         case .server:
             if indexPath.row == 0 {
                 cell.configure(
-                    title: "Host",
+                    title: String(localized: "auth.field.host"),
                     text: hostText,
-                    placeholder: "192.168.1.20",
+                    placeholder: String(localized: "auth.smb.login.placeholder.host"),
                     returnKeyType: .next,
                     inputAccessoryView: keyboardToolbar
                 )
@@ -349,9 +352,9 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
                 cell.onReturn = { [weak self] in self?.focusField(.port) }
             } else {
                 cell.configure(
-                    title: "Port",
+                    title: String(localized: "auth.field.port"),
                     text: portText,
-                    placeholder: "445",
+                    placeholder: String(localized: "auth.smb.login.placeholder.port"),
                     keyboardType: .numberPad,
                     returnKeyType: .next,
                     inputAccessoryView: keyboardToolbar
@@ -363,9 +366,9 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
             switch indexPath.row {
             case 0:
                 cell.configure(
-                    title: "Username",
+                    title: String(localized: "auth.field.username"),
                     text: usernameText,
-                    placeholder: "admin",
+                    placeholder: String(localized: "auth.smb.login.placeholder.username"),
                     returnKeyType: .next,
                     inputAccessoryView: keyboardToolbar
                 )
@@ -373,9 +376,11 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
                 cell.onReturn = { [weak self] in self?.focusField(.password) }
             case 1:
                 cell.configure(
-                    title: "Password",
+                    title: String(localized: "auth.field.password"),
                     text: passwordText,
-                    placeholder: editingProfile == nil ? "password" : String(localized: "auth.passwordPlaceholderEdit"),
+                    placeholder: editingProfile == nil
+                        ? String(localized: "auth.smb.login.placeholder.password")
+                        : String(localized: "auth.passwordPlaceholderEdit"),
                     isSecure: true,
                     returnKeyType: .next,
                     inputAccessoryView: keyboardToolbar
@@ -384,9 +389,9 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
                 cell.onReturn = { [weak self] in self?.focusField(.domain) }
             default:
                 cell.configure(
-                    title: "Domain",
+                    title: String(localized: "auth.field.domain"),
                     text: domainText,
-                    placeholder: "WORKGROUP",
+                    placeholder: String(localized: "auth.smb.login.placeholder.domain"),
                     returnKeyType: .done,
                     inputAccessoryView: keyboardToolbar
                 )

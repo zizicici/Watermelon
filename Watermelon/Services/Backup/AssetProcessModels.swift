@@ -17,7 +17,6 @@ struct AssetProcessResult: Sendable {
     let status: BackupItemStatus
     let reason: String?
     let displayName: String
-    let resourceSummary: String
     let assetFingerprint: Data?
     let timing: AssetProcessTiming
     let totalFileSizeBytes: Int64

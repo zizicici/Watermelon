@@ -130,7 +130,7 @@ final class RemoteIndexSyncService: Sendable {
             let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
             syncLog.info("[SyncTiming] No changes. Total: \(Self.ms(totalElapsed))s")
             eventStream?.emitLog(
-                "Remote index unchanged. Month digests matched (\(remoteMonths.count) month(s)).",
+                String.localizedStringWithFormat(String(localized: "backup.remoteIndex.unchanged"), remoteMonths.count),
                 level: .debug
             )
             return snapshot
@@ -152,7 +152,12 @@ final class RemoteIndexSyncService: Sendable {
                 throw NSError(
                     domain: "RemoteIndexSyncService",
                     code: -21,
-                    userInfo: [NSLocalizedDescriptionKey: "Month manifest is missing for \(month.text)."]
+                    userInfo: [
+                        NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                            String(localized: "backup.remoteIndex.error.missingMonthManifest"),
+                            month.text
+                        )
+                    ]
                 )
             }
             let downloadElapsed = CFAbsoluteTimeGetCurrent() - monthStart

@@ -92,7 +92,10 @@ final class AddSMBServerViewController: UIViewController {
             onSaved(profile, password)
             popAfterSave()
         } catch {
-            presentAlert(title: String(localized: "auth.saveFailed"), message: error.localizedDescription)
+            presentAlert(
+                title: String(localized: "auth.saveFailed"),
+                message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
+            )
         }
     }
 
@@ -129,7 +132,7 @@ final class AddSMBServerViewController: UIViewController {
             throw NSError(
                 domain: "AddSMBServerViewController",
                 code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "已存在相同的 SMB 连接配置"]
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.smb.save.duplicateConfig")]
             )
         }
 
@@ -220,7 +223,7 @@ extension AddSMBServerViewController: UITableViewDataSource, UITableViewDelegate
             cell.configure(
                 title: nil,
                 text: nameText,
-                placeholder: "Home NAS",
+                placeholder: String(localized: "auth.smb.save.placeholder.name"),
                 autocapitalizationType: .words,
                 returnKeyType: .done,
                 inputAccessoryView: keyboardToolbar
@@ -233,11 +236,26 @@ extension AddSMBServerViewController: UITableViewDataSource, UITableViewDelegate
             cell.selectionStyle = .none
             var content = UIListContentConfiguration.subtitleCell()
             content.secondaryText = [
-                "Host: \(context.auth.host):\(context.auth.port)",
-                "Share: \(context.shareName)",
-                "Path: \(context.basePath)",
-                "Username: \(context.auth.username)",
-                "Domain: \(context.auth.domain ?? "(none)")"
+                String.localizedStringWithFormat(
+                    String(localized: "auth.summary.host"),
+                    "\(context.auth.host):\(context.auth.port)"
+                ),
+                String.localizedStringWithFormat(
+                    String(localized: "auth.summary.share"),
+                    context.shareName
+                ),
+                String.localizedStringWithFormat(
+                    String(localized: "auth.summary.path"),
+                    context.basePath
+                ),
+                String.localizedStringWithFormat(
+                    String(localized: "auth.summary.username"),
+                    context.auth.username
+                ),
+                String.localizedStringWithFormat(
+                    String(localized: "auth.summary.domain"),
+                    context.auth.domain ?? String(localized: "common.none")
+                )
             ].joined(separator: "\n")
             content.secondaryTextProperties.color = .secondaryLabel
             content.secondaryTextProperties.numberOfLines = 0

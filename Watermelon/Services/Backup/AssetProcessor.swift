@@ -83,7 +83,7 @@ final class AssetProcessor: Sendable {
                         resourcePosition: resourcePosition + 1,
                         totalResources: context.selectedResources.count,
                         resourceFraction: 0,
-                        stageDescription: "准备资源"
+                        stageDescription: String(localized: "backup.transfer.prepareResource")
                     )
                 ))
             }
@@ -102,7 +102,10 @@ final class AssetProcessor: Sendable {
                 if !context.iCloudPhotoBackupMode.allowsNetworkAccess,
                    PhotoLibraryService.isNetworkAccessRequiredError(error) {
                     eventStream.emitLog(
-                        "跳过 iCloud 资源：\(displayName)。资源未下载到本机，且\"允许访问 iCloud 原件\"未开启。",
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.log.skipICloudResource"),
+                            displayName
+                        ),
                         level: .warning
                     )
                     return Self.makeICloudDisabledSkipResult(
@@ -188,7 +191,7 @@ final class AssetProcessor: Sendable {
                         resourcePosition: resourcePosition + 1,
                         totalResources: preparedResources.count,
                         resourceFraction: 1,
-                        stageDescription: "上传完成"
+                        stageDescription: String(localized: "backup.transfer.uploadCompleted")
                     )
                 ))
             }
@@ -229,14 +232,19 @@ final class AssetProcessor: Sendable {
             let firstError = firstFailedReason ?? "resource_failed"
             print("[BackupUpload] asset FAILED: asset=\(displayName), success=\(successCount), skipped=\(skippedCount), failed=\(failedCount), reason=\(firstError)")
             eventStream.emitLog(
-                "Asset failed (partial): \(displayName). success=\(successCount), skipped=\(skippedCount), failed=\(failedCount)",
+                String.localizedStringWithFormat(
+                    String(localized: "backup.log.assetPartialFailure"),
+                    displayName,
+                    successCount,
+                    skippedCount,
+                    failedCount
+                ),
                 level: .error
             )
             return AssetProcessResult(
                 status: .failed,
                 reason: firstError,
                 displayName: displayName,
-                resourceSummary: "资源\(preparedResources.count) 上传\(successCount) 跳过\(skippedCount) 失败\(failedCount)",
                 assetFingerprint: assetFingerprint,
                 timing: timing,
                 totalFileSizeBytes: totalFileSizeBytes,
@@ -280,7 +288,6 @@ final class AssetProcessor: Sendable {
                 status: .skipped,
                 reason: "resources_reused",
                 displayName: displayName,
-                resourceSummary: "资源\(preparedResources.count) 上传0 跳过\(skippedCount) 失败0",
                 assetFingerprint: assetFingerprint,
                 timing: timing,
                 totalFileSizeBytes: totalFileSizeBytes,
@@ -292,7 +299,6 @@ final class AssetProcessor: Sendable {
             status: .success,
             reason: nil,
             displayName: displayName,
-            resourceSummary: "资源\(preparedResources.count) 上传\(successCount) 跳过\(skippedCount) 失败0",
             assetFingerprint: assetFingerprint,
             timing: timing,
             totalFileSizeBytes: totalFileSizeBytes,
@@ -345,7 +351,6 @@ final class AssetProcessor: Sendable {
                 status: .skipped,
                 reason: "asset_exists_cached",
                 displayName: displayName,
-                resourceSummary: "资源\(context.selectedResources.count) 已存在（缓存命中）",
                 assetFingerprint: cachedFingerprint,
                 timing: timing,
                 totalFileSizeBytes: totalFileSizeBytes,
@@ -401,7 +406,6 @@ final class AssetProcessor: Sendable {
             status: .skipped,
             reason: "resources_reused_cached",
             displayName: displayName,
-            resourceSummary: "资源\(context.selectedResources.count) 上传0 跳过\(context.selectedResources.count) 失败0（缓存命中）",
             assetFingerprint: cachedFingerprint,
             timing: timing,
             totalFileSizeBytes: totalFileSizeBytes,
@@ -437,7 +441,6 @@ final class AssetProcessor: Sendable {
             status: .skipped,
             reason: "icloud_photo_backup_disabled",
             displayName: displayName,
-            resourceSummary: "资源\(context.selectedResources.count) 未上传（包含仅存于 iCloud 的资源）",
             assetFingerprint: nil,
             timing: timing,
             totalFileSizeBytes: totalFileSizeBytes,

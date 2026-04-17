@@ -185,7 +185,7 @@ final class PhotoLibraryService: @unchecked Sendable {
             throw NSError(
                 domain: NSCocoaErrorDomain,
                 code: NSFileWriteUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to create temporary export file."]
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "photo.error.createTempExportFile")]
             )
         }
 

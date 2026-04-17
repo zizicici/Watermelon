@@ -35,15 +35,15 @@ enum RemoteStorageClientError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConnected:
-            return "Storage session is not connected."
+            return String(localized: "storage.client.notConnected")
         case .unavailable:
-            return "Storage support is unavailable on this build."
+            return String(localized: "storage.client.unavailable")
         case .invalidConfiguration:
-            return "Invalid storage configuration."
+            return String(localized: "storage.client.invalidConfiguration")
         case .externalStorageUnavailable:
-            return "External storage is unavailable. Reconnect the drive and try again."
+            return String(localized: "storage.client.externalUnavailable")
         case .unsupportedStorageType(let type):
-            return "Unsupported storage type: \(type)."
+            return String.localizedStringWithFormat(String(localized: "storage.client.unsupportedType"), type)
         case .underlying(let error):
             return error.localizedDescription
         }

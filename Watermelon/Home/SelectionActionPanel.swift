@@ -57,7 +57,7 @@ final class SelectionActionPanel: UIView {
     )
     private let executionStatusButton: UIButton = {
         var cfg = UIButton.Configuration.plain()
-        cfg.title = "Log"
+        cfg.title = String(localized: "panel.log")
         cfg.image = UIImage(
             systemName: "chevron.right",
             withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
@@ -378,7 +378,7 @@ final class SelectionActionPanel: UIView {
             iconName: "arrow.left.arrow.right",
             color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
         )
-        applyExecutionStatus(text: state.statusText, logAlertText: state.logAlertText)
+        applyExecutionStatus(text: state.statusText, hasLogAlert: state.hasLogAlert)
         applyPrimaryButton(state.primaryButton)
         applyStopButton(state.stopButton)
     }
@@ -423,15 +423,14 @@ final class SelectionActionPanel: UIView {
         button.configuration = cfg
     }
 
-    private func applyExecutionStatus(text: String, logAlertText: String?) {
+    private func applyExecutionStatus(text: String, hasLogAlert: Bool) {
         let trimmedStatus = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let statusText = trimmedStatus.isEmpty ? "Log" : trimmedStatus
-        let hasAlert = !(logAlertText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let statusText = trimmedStatus.isEmpty ? String(localized: "panel.log") : trimmedStatus
 
         executionStatusButton.isHidden = false
         var cfg = executionStatusButton.configuration ?? .plain()
         cfg.title = statusText
-        cfg.baseForegroundColor = hasAlert
+        cfg.baseForegroundColor = hasLogAlert
             ? .materialPrimary(light: .Material.Orange._700, dark: .Material.Orange._200)
             : .materialOnSurfaceVariant(light: .Material.BlueGrey._700, dark: .Material.BlueGrey._200)
         executionStatusButton.configuration = cfg

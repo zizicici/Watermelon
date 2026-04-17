@@ -258,7 +258,7 @@ extension AssetProcessor {
                                 resourcePosition: resourcePosition,
                                 totalResources: totalResources,
                                 resourceFraction: Float(clamped),
-                                stageDescription: "上传资源"
+                                stageDescription: String(localized: "backup.transfer.uploadResource")
                             )
                         ))
                     }

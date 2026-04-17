@@ -52,7 +52,10 @@ extension MonthManifestStore {
                     domain: "MonthManifestStore",
                     code: -31,
                     userInfo: [
-                        NSLocalizedDescriptionKey: "Failed to download existing month manifest for \(monthRelativePath).",
+                        NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                            String(localized: "backup.manifest.error.downloadExistingManifest"),
+                            monthRelativePath
+                        ),
                         NSUnderlyingErrorKey: error
                     ]
                 )
@@ -79,7 +82,10 @@ extension MonthManifestStore {
                     domain: "MonthManifestStore",
                     code: -32,
                     userInfo: [
-                        NSLocalizedDescriptionKey: "Existing month manifest for \(monthRelativePath) is incompatible or corrupted and cannot be loaded.",
+                        NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                            String(localized: "backup.manifest.error.existingManifestInvalid"),
+                            monthRelativePath
+                        ),
                         NSUnderlyingErrorKey: error
                     ]
                 )
@@ -93,7 +99,7 @@ extension MonthManifestStore {
             throw NSError(
                 domain: "MonthManifestStore",
                 code: -33,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to initialize month manifest database queue."]
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "backup.manifest.error.initializeQueue")]
             )
         }
 
@@ -223,7 +229,10 @@ extension MonthManifestStore {
                 domain: "MonthManifestStore",
                 code: -34,
                 userInfo: [
-                    NSLocalizedDescriptionKey: "Downloaded month manifest for \(monthRelativePath) is incompatible or corrupted and cannot be loaded.",
+                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                        String(localized: "backup.manifest.error.downloadedManifestInvalid"),
+                        monthRelativePath
+                    ),
                     NSUnderlyingErrorKey: error
                 ]
             )
@@ -253,7 +262,10 @@ extension MonthManifestStore {
                 domain: "MonthManifestStore",
                 code: -35,
                 userInfo: [
-                    NSLocalizedDescriptionKey: "Downloaded month manifest for \(monthRelativePath) is incompatible or corrupted and cannot be loaded.",
+                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                        String(localized: "backup.manifest.error.downloadedManifestInvalid"),
+                        monthRelativePath
+                    ),
                     NSUnderlyingErrorKey: error
                 ]
             )

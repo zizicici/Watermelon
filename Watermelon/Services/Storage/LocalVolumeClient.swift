@@ -181,7 +181,12 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
                 throw NSError(
                     domain: NSCocoaErrorDomain,
                     code: NSFileWriteUnknownError,
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to create destination file at \(destinationURL.path)"]
+                    userInfo: [
+                        NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                            String(localized: "storage.local.createDestinationFileFailed"),
+                            destinationURL.path
+                        )
+                    ]
                 )
             }
 

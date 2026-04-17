@@ -64,7 +64,10 @@ final class ManageStorageProfilesViewController: UIViewController {
             try dependencies.databaseManager.saveServerProfileSortOrder(profileIDs: ids)
             onProfilesChanged()
         } catch {
-            presentAlert(title: String(localized: "auth.manage.sortFailed"), message: error.localizedDescription)
+            presentAlert(
+                title: String(localized: "auth.manage.sortFailed"),
+                message: UserFacingErrorLocalizer.message(for: error)
+            )
             reloadProfiles()
         }
     }
@@ -98,7 +101,10 @@ final class ManageStorageProfilesViewController: UIViewController {
             editButtonItem.isEnabled = profiles.count > 1
             onProfilesChanged()
         } catch {
-            presentAlert(title: String(localized: "auth.manage.deleteFailed"), message: error.localizedDescription)
+            presentAlert(
+                title: String(localized: "auth.manage.deleteFailed"),
+                message: UserFacingErrorLocalizer.message(for: error)
+            )
         }
     }
 

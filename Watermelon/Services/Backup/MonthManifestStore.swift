@@ -165,7 +165,7 @@ final class MonthManifestStore {
             throw NSError(
                 domain: "MonthManifestStore",
                 code: -11,
-                userInfo: [NSLocalizedDescriptionKey: "Missing referenced resource hash for asset link."]
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "backup.manifest.error.missingResourceHash")]
             )
         }
 

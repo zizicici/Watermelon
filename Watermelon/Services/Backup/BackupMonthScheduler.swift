@@ -364,12 +364,12 @@ struct StageTimingWindow {
             guard uploadBodySeconds > 0 else { return 0 }
             return Double(uploadedFileSizeBytes) / uploadBodySeconds
         }()
-        let prefix = force && processedCount < Self.batchSize
-            ? "阶段耗时(最后\(processedCount)项"
-            : "阶段耗时(最近\(processedCount)项"
-        let summary = String(
-            format: "%@, 进度%lld/%lld): size total=%@ uploaded=%@ rate=%@/s bodyRate=%@/s (wall %.2fs), export/hash %.2fs (avg %.1fms), collision %.2fs (avg %.1fms), uploadBody %.2fs (avg %.1fms), setMtime %.2fs (avg %.1fms), db %.2fs (avg %.1fms), timedAssets=%lld",
-            prefix,
+        let formatKey: String.LocalizationValue = force && processedCount < Self.batchSize
+            ? "backup.scheduler.stageTimingFinal"
+            : "backup.scheduler.stageTimingRecent"
+        let summary = String.localizedStringWithFormat(
+            String(localized: formatKey),
+            Int64(processedCount),
             Int64(processed),
             Int64(max(total, 1)),
             Self.formatBytes(totalFileSizeBytes),

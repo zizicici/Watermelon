@@ -53,7 +53,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 throw parser.parserError ?? NSError(
                     domain: "WebDAVClient",
                     code: -1001,
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to parse WebDAV PROPFIND response."]
+                    userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.parsePropfindResponse")]
                 )
             }
             return entries
@@ -216,7 +216,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                         domain: "WebDAVClient",
                         code: -1200,
                         userInfo: [
-                            NSLocalizedDescriptionKey: "Endpoint responded but does not look like a WebDAV service. Verify URL/port/path."
+                            NSLocalizedDescriptionKey: String(localized: "webdav.error.notAService")
                         ]
                     )
                 )
@@ -667,7 +667,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 throw NSError(
                     domain: "WebDAVClient",
                     code: -1100,
-                    userInfo: [NSLocalizedDescriptionKey: "Unexpected WebDAV response type."]
+                    userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.unexpectedResponseType")]
                 )
             }
             return (data, http)
@@ -686,7 +686,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 throw NSError(
                     domain: "WebDAVClient",
                     code: -1101,
-                    userInfo: [NSLocalizedDescriptionKey: "Unexpected WebDAV upload response type."]
+                    userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.unexpectedUploadResponseType")]
                 )
             }
             return (data, http)
@@ -705,7 +705,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 throw NSError(
                     domain: "WebDAVClient",
                     code: -1102,
-                    userInfo: [NSLocalizedDescriptionKey: "Unexpected WebDAV download response type."]
+                    userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.unexpectedDownloadResponseType")]
                 )
             }
             return (fileURL, http)
@@ -1020,7 +1020,12 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 domain: "WebDAVClient",
                 code: statusCode,
                 userInfo: [
-                    NSLocalizedDescriptionKey: "WebDAV \(method) failed with status \(statusCode): \(target)"
+                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                        String(localized: "webdav.error.requestFailed"),
+                        method,
+                        statusCode,
+                        target
+                    )
                 ]
             )
         )
@@ -1028,15 +1033,20 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
 
     private static func authenticationError(_ statusCode: Int, url: URL?) -> RemoteStorageClientError {
         let target = url?.absoluteString ?? "(unknown URL)"
-        let message = statusCode == 401
-            ? "WebDAV authentication failed. Check username and password, then try again."
-            : "WebDAV access was denied (403). Check account permissions and endpoint path, then try again."
         return .underlying(
             NSError(
                 domain: "WebDAVClient",
                 code: statusCode,
                 userInfo: [
-                    NSLocalizedDescriptionKey: "\(message) Endpoint: \(target)"
+                    NSLocalizedDescriptionKey: statusCode == 401
+                        ? String.localizedStringWithFormat(
+                            String(localized: "webdav.error.authenticationFailed"),
+                            target
+                        )
+                        : String.localizedStringWithFormat(
+                            String(localized: "webdav.error.accessDenied"),
+                            target
+                        )
                 ]
             )
         )

@@ -44,7 +44,7 @@ struct BackupSessionState {
     )
 
     var state: BackupSessionController.State = .idle
-    var statusText: String = "未开始"
+    var statusText: String = String(localized: "backup.session.notStarted")
     var succeeded: Int = 0
     var failed: Int = 0
     var skipped: Int = 0
@@ -87,7 +87,7 @@ struct BackupSessionState {
 
     mutating func failForMissingConnection() {
         state = .failed
-        statusText = "请先连接远端存储"
+        statusText = String(localized: "backup.session.missingConnection")
     }
 
     mutating func prepareForStart(mode: BackupRunMode) -> BackupSessionStartContext {
@@ -112,7 +112,9 @@ struct BackupSessionState {
         }
 
         state = .running
-        statusText = mode.isRetry ? "准备重试..." : "准备备份..."
+        statusText = mode.isRetry
+            ? String(localized: "backup.session.preparingRetry")
+            : String(localized: "backup.session.preparingBackup")
         controlPhase = .starting
         succeeded = 0
         failed = 0
@@ -137,24 +139,24 @@ struct BackupSessionState {
 
     mutating func beginPauseRequest() {
         controlPhase = .pausing
-        statusText = "正在暂停..."
+        statusText = String(localized: "backup.session.pausing")
     }
 
     mutating func transitionToPausedWithoutRun() {
         controlPhase = .idle
         state = .paused
-        statusText = "备份已暂停"
+        statusText = String(localized: "backup.session.paused")
     }
 
     mutating func beginStopRequest() {
         controlPhase = .stopping
-        statusText = "正在停止..."
+        statusText = String(localized: "backup.session.stopping")
     }
 
     mutating func transitionToStoppedWithoutRun() {
         controlPhase = .idle
         state = .stopped
-        statusText = "备份已停止"
+        statusText = String(localized: "backup.session.stopped")
     }
 
     mutating func resolveStartCancellation(mode: BackupRunMode) {
@@ -168,13 +170,13 @@ struct BackupSessionState {
             lastPausedDisplayRunMode = nil
             currentRunMode = .full
             state = .stopped
-            statusText = "备份已停止"
+            statusText = String(localized: "backup.session.stopped")
         } else {
             lastPausedRunMode = mode
             lastPausedDisplayRunMode = mode
             currentRunMode = mode
             state = .paused
-            statusText = "备份已暂停"
+            statusText = String(localized: "backup.session.paused")
         }
     }
 
@@ -184,7 +186,7 @@ struct BackupSessionState {
         state = .running
         controlPhase = .resuming
         currentRunMode = pausedDisplayMode
-        statusText = "正在准备继续..."
+        statusText = String(localized: "backup.session.resuming")
         return BackupSessionResumeContext(pausedMode: pausedMode, pausedDisplayMode: pausedDisplayMode)
     }
 
@@ -194,7 +196,7 @@ struct BackupSessionState {
         lastPausedDisplayRunMode = nil
         currentRunMode = .full
         state = .completed
-        statusText = "备份完成"
+        statusText = String(localized: "backup.session.completed")
     }
 
     mutating func completeResumeLaunchSucceeded(displayMode: BackupRunMode) {
@@ -208,7 +210,7 @@ struct BackupSessionState {
         lastPausedDisplayRunMode = nil
         currentRunMode = .full
         state = .failed
-        statusText = "继续备份失败"
+        statusText = String(localized: "backup.session.resumeFailed")
     }
 
     mutating func cancelResume(
@@ -219,7 +221,9 @@ struct BackupSessionState {
         controlPhase = .idle
         let intent: BackupTerminationIntent = (phaseBeforeCancel == .stopping) ? .stop : .pause
         state = intent == .stop ? .stopped : .paused
-        statusText = intent == .stop ? "备份已停止" : "备份已暂停"
+        statusText = intent == .stop
+            ? String(localized: "backup.session.stopped")
+            : String(localized: "backup.session.paused")
         if intent == .stop {
             lastPausedRunMode = nil
             lastPausedDisplayRunMode = nil
@@ -237,7 +241,7 @@ struct BackupSessionState {
         lastPausedDisplayRunMode = nil
         currentRunMode = .full
         state = .failed
-        statusText = "继续备份失败"
+        statusText = String(localized: "backup.session.resumeFailed")
     }
 
     mutating func reduce(
@@ -320,7 +324,9 @@ struct BackupSessionState {
                 currentRunMode = displayMode
             }
             state = effectiveIntent == .stop ? .stopped : .paused
-            statusText = effectiveIntent == .stop ? "备份已停止" : "备份已暂停"
+            statusText = effectiveIntent == .stop
+                ? String(localized: "backup.session.stopped")
+                : String(localized: "backup.session.paused")
             return
         }
 
@@ -328,7 +334,9 @@ struct BackupSessionState {
         lastPausedDisplayRunMode = nil
         currentRunMode = .full
         state = .failed
-        statusText = externalUnavailable ? "外接存储已断开" : "备份失败"
+        statusText = externalUnavailable
+            ? String(localized: "backup.session.externalUnavailable")
+            : String(localized: "backup.session.failed")
     }
 
     private mutating func finishRun(
@@ -350,7 +358,7 @@ struct BackupSessionState {
             lastPausedDisplayRunMode = nil
             currentRunMode = .full
             state = .stopped
-            statusText = "备份已停止"
+            statusText = String(localized: "backup.session.stopped")
             return
         }
 
@@ -359,7 +367,7 @@ struct BackupSessionState {
             lastPausedDisplayRunMode = displayMode
             currentRunMode = displayMode
             state = .paused
-            statusText = "备份已暂停"
+            statusText = String(localized: "backup.session.paused")
             return
         }
 
@@ -368,8 +376,16 @@ struct BackupSessionState {
         currentRunMode = .full
         state = .completed
         completedAssetIDsForResume.removeAll()
-        let verb = runMode.isRetry ? "重试" : "备份"
-        statusText = result.failed == 0 ? "\(verb)完成" : "\(verb)完成（部分失败）"
+        switch (runMode.isRetry, result.failed == 0) {
+        case (true, true):
+            statusText = String(localized: "backup.session.retryCompleted")
+        case (true, false):
+            statusText = String(localized: "backup.session.retryCompletedPartial")
+        case (false, true):
+            statusText = String(localized: "backup.session.backupCompleted")
+        case (false, false):
+            statusText = String(localized: "backup.session.backupCompletedPartial")
+        }
     }
 
     private mutating func applyProgressEvent(_ event: BackupItemEvent) {

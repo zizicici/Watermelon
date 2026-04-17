@@ -181,7 +181,10 @@ final class AddExternalStorageViewController: UIViewController {
             onSaved(profile, "")
             popAfterSave()
         } catch {
-            presentAlert(title: String(localized: "auth.saveFailed"), message: error.localizedDescription)
+            presentAlert(
+                title: String(localized: "auth.saveFailed"),
+                message: UserFacingErrorLocalizer.message(for: error, storageType: .externalVolume)
+            )
         }
     }
 
@@ -296,7 +299,7 @@ extension AddExternalStorageViewController: UITableViewDataSource, UITableViewDe
             cell.configure(
                 title: nil,
                 text: nameText,
-                placeholder: "外接硬盘",
+                placeholder: String(localized: "auth.external.placeholder.name"),
                 autocapitalizationType: .words,
                 returnKeyType: .done,
                 inputAccessoryView: keyboardToolbar

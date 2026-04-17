@@ -139,7 +139,10 @@ final class SMBSharePathPickerViewController: UIViewController {
                 await MainActor.run {
                     guard requestID == self.loadRequestID else { return }
                     self.setLoading(false)
-                    self.presentAlert(title: String(localized: "auth.smb.share.readFailed"), message: error.localizedDescription)
+                    self.presentAlert(
+                        title: String(localized: "auth.smb.share.readFailed"),
+                        message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
+                    )
                 }
             }
         }

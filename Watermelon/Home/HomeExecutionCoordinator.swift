@@ -470,7 +470,11 @@ final class HomeExecutionCoordinator {
         } catch is CancellationError {
             return false
         } catch {
-            let message = String(format: String(localized: "home.execution.log.icloudProbeFailed"), error.localizedDescription)
+            let errorMessage = UserFacingErrorLocalizer.message(
+                for: error,
+                profile: dependencies.appSession.activeProfile
+            )
+            let message = String(format: String(localized: "home.execution.log.icloudProbeFailed"), errorMessage)
             let alert = session.failExecution(reason: message)
             transientControlState = nil
             setErrorStatus(message, log: String(format: String(localized: "home.execution.log.executionFailed"), message))
@@ -560,7 +564,11 @@ final class HomeExecutionCoordinator {
         } catch is CancellationError {
             return false
         } catch {
-            let message = String(format: String(localized: "home.execution.log.indexFailed"), error.localizedDescription)
+            let errorMessage = UserFacingErrorLocalizer.message(
+                for: error,
+                profile: dependencies.appSession.activeProfile
+            )
+            let message = String(format: String(localized: "home.execution.log.indexFailed"), errorMessage)
             let alert = session.failExecution(reason: message)
             transientControlState = nil
             setErrorStatus(message, log: String(format: String(localized: "home.execution.log.executionFailed"), message))

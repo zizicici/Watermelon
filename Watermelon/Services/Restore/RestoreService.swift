@@ -180,7 +180,7 @@ final class RestoreService {
                     continuation.resume(throwing: NSError(
                         domain: "RestoreService",
                         code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: "Unknown restore failure."]
+                        userInfo: [NSLocalizedDescriptionKey: String(localized: "restore.error.unknownFailure")]
                     ))
                 }
             }

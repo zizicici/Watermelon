@@ -133,7 +133,16 @@ private actor LocalHashIndexBuildProgressReporter {
 
         lastLoggedProcessed = processed
         await logHandler(
-            "\(phaseLabel)进度：已处理 \(processed)/\(total)，缓存命中 \(cacheHitCount)，重建 \(rebuiltCount)，不可用 \(unavailableCount)，失败 \(failedCount)。",
+            String.localizedStringWithFormat(
+                String(localized: "backup.preflight.progressBuild"),
+                phaseLabel,
+                processed,
+                total,
+                cacheHitCount,
+                rebuiltCount,
+                unavailableCount,
+                failedCount
+            ),
             .debug
         )
     }
@@ -190,7 +199,15 @@ private actor LocalHashIndexAvailabilityProgressReporter {
 
         lastLoggedProcessed = processed
         await logHandler(
-            "\(phaseLabel)进度：已检查 \(processed)/\(total)，本地可用 \(readyCount)，iCloud-only \(unavailableCount)，失败 \(failedCount)。",
+            String.localizedStringWithFormat(
+                String(localized: "backup.preflight.progressAvailability"),
+                phaseLabel,
+                processed,
+                total,
+                readyCount,
+                unavailableCount,
+                failedCount
+            ),
             .debug
         )
     }
@@ -245,17 +262,38 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
 
             let phaseLabel = Self.phaseLabel(forNetworkAccess: allowNetworkAccess)
             let prepareStart = CFAbsoluteTimeGetCurrent()
-            await progressHandler?("\(phaseLabel)：开始准备输入，共 \(assetIDs.count) 项资源。", .info)
+            await progressHandler?(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.preflight.prepareStart"),
+                    phaseLabel,
+                    assetIDs.count
+                ),
+                .info
+            )
             let preparedInput = try await prepareInput(for: assetIDs)
             let prepareElapsed = CFAbsoluteTimeGetCurrent() - prepareStart
             let worklist = LocalHashIndexWorklist(assets: preparedInput.assets)
             await progressHandler?(
-                "\(phaseLabel)：输入准备完成，本地资产 \(preparedInput.assets.count) 项，已有缓存 \(preparedInput.cachedHashesByAssetID.count) 项，缺失 \(preparedInput.missingAssetIDs.count) 项，用时 \(Self.formatElapsed(prepareElapsed))s。",
+                String.localizedStringWithFormat(
+                    String(localized: "backup.preflight.prepareDone"),
+                    phaseLabel,
+                    preparedInput.assets.count,
+                    preparedInput.cachedHashesByAssetID.count,
+                    preparedInput.missingAssetIDs.count,
+                    Self.formatElapsed(prepareElapsed)
+                ),
                 .debug
             )
 
             let effectiveWorkerCount = min(max(workerCount, 1), max(preparedInput.assets.count, 1))
-            await progressHandler?("\(phaseLabel)：开始扫描，worker \(effectiveWorkerCount)。", .info)
+            await progressHandler?(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.preflight.scanStart"),
+                    phaseLabel,
+                    effectiveWorkerCount
+                ),
+                .info
+            )
             let progressReporter = LocalHashIndexBuildProgressReporter(
                 total: preparedInput.assets.count,
                 phaseLabel: phaseLabel,
@@ -293,7 +331,14 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             }
             await progressReporter.finish()
             let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
-            await progressHandler?("\(phaseLabel)：扫描完成，用时 \(Self.formatElapsed(scanElapsed))s。", .debug)
+            await progressHandler?(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.preflight.scanDone"),
+                    phaseLabel,
+                    Self.formatElapsed(scanElapsed)
+                ),
+                .debug
+            )
 
             let result = LocalHashIndexBuildResult(
                 requestedAssetIDs: assetIDs,
@@ -340,18 +385,38 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         }
 
         try await ensurePhotoAuthorization()
-        let phaseLabel = "iCloud 可用性检测"
+        let phaseLabel = String(localized: "backup.preflight.phaseLabel.availabilityProbe")
         let prepareStart = CFAbsoluteTimeGetCurrent()
-        await progressHandler?("\(phaseLabel)：开始准备输入，共 \(assetIDs.count) 项资源。", .info)
+        await progressHandler?(
+            String.localizedStringWithFormat(
+                String(localized: "backup.preflight.prepareStart"),
+                phaseLabel,
+                assetIDs.count
+            ),
+            .info
+        )
         let preparedInput = try await prepareAssetFetchInput(for: assetIDs)
         let prepareElapsed = CFAbsoluteTimeGetCurrent() - prepareStart
         let worklist = LocalHashIndexWorklist(assets: preparedInput.assets)
         let effectiveWorkerCount = min(max(workerCount, 1), max(preparedInput.assets.count, 1))
         await progressHandler?(
-            "\(phaseLabel)：输入准备完成，本地资产 \(preparedInput.assets.count) 项，缺失 \(preparedInput.missingAssetIDs.count) 项，用时 \(Self.formatElapsed(prepareElapsed))s。",
+            String.localizedStringWithFormat(
+                String(localized: "backup.preflight.prepareDoneAvailability"),
+                phaseLabel,
+                preparedInput.assets.count,
+                preparedInput.missingAssetIDs.count,
+                Self.formatElapsed(prepareElapsed)
+            ),
             .debug
         )
-        await progressHandler?("\(phaseLabel)：开始扫描，worker \(effectiveWorkerCount)。", .info)
+        await progressHandler?(
+            String.localizedStringWithFormat(
+                String(localized: "backup.preflight.scanStart"),
+                phaseLabel,
+                effectiveWorkerCount
+            ),
+            .info
+        )
         let progressReporter = LocalHashIndexAvailabilityProgressReporter(
             total: preparedInput.assets.count,
             phaseLabel: phaseLabel,
@@ -384,7 +449,14 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         }
         await progressReporter.finish()
         let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
-        await progressHandler?("\(phaseLabel)：扫描完成，用时 \(Self.formatElapsed(scanElapsed))s。", .debug)
+        await progressHandler?(
+            String.localizedStringWithFormat(
+                String(localized: "backup.preflight.scanDone"),
+                phaseLabel,
+                Self.formatElapsed(scanElapsed)
+            ),
+            .debug
+        )
 
         return LocalAssetAvailabilityProbeResult(
             requestedAssetIDs: assetIDs,
@@ -607,7 +679,9 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
     }
 
     private static func phaseLabel(forNetworkAccess allowNetworkAccess: Bool) -> String {
-        allowNetworkAccess ? "iCloud 补索引" : "本地索引预检"
+        allowNetworkAccess
+            ? String(localized: "backup.preflight.phaseLabel.icloudIndex")
+            : String(localized: "backup.preflight.phaseLabel.localIndex")
     }
 
     private static func formatElapsed(_ elapsed: TimeInterval) -> String {

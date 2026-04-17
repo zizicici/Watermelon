@@ -40,7 +40,7 @@ struct SelectionActionPanelExecutionState: Equatable {
     let downloadCount: Int
     let syncCount: Int
     let statusText: String
-    let logAlertText: String?
+    let hasLogAlert: Bool
     let primaryAction: SelectionActionPanelPrimaryAction
     let primaryButton: SelectionActionPanelButtonState
     let stopAction: SelectionActionPanelSecondaryAction?
@@ -91,7 +91,7 @@ enum SelectionActionPanelViewStateBuilder {
         let primaryButton: SelectionActionPanelButtonState
         let stopAction: SelectionActionPanelSecondaryAction?
         let stopButton: SelectionActionPanelButtonState?
-        let logAlertText = makeLogAlertText(for: executionState)
+        let hasLogAlert = hasLogAlert(for: executionState)
 
         switch executionState.controlState {
         case .starting, .resuming:
@@ -206,7 +206,7 @@ enum SelectionActionPanelViewStateBuilder {
                 downloadCount: executionState.downloadMonths.count,
                 syncCount: executionState.syncMonths.count,
                 statusText: executionState.statusText,
-                logAlertText: logAlertText,
+                hasLogAlert: hasLogAlert,
                 primaryAction: primaryAction,
                 primaryButton: primaryButton,
                 stopAction: stopAction,
@@ -215,19 +215,14 @@ enum SelectionActionPanelViewStateBuilder {
         )
     }
 
-    private static func makeLogAlertText(for executionState: HomeExecutionState) -> String? {
-        let failedCount = executionState.failedMonthInfos.count
-        if failedCount > 0 {
-            return failedCount == 1
-                ? "Log 中有 1 个错误，点此查看"
-                : "Log 中有 \(failedCount) 个错误，点此查看"
+    private static func hasLogAlert(for executionState: HomeExecutionState) -> Bool {
+        if !executionState.failedMonthInfos.isEmpty {
+            return true
         }
-
         if case .failed = executionState.phase {
-            return "Log 中有错误，点此查看"
+            return true
         }
-
-        return nil
+        return false
     }
 
     private static func primaryButtonStyle(for phase: ExecutionPhase) -> SelectionActionPanelButtonStyle {

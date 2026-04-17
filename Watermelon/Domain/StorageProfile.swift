@@ -138,7 +138,7 @@ extension ServerProfileRecord {
         return error.localizedDescription
     }
 
-    private static func webDAVErrorCode(from error: Error) -> Int? {
+    static func webDAVErrorCode(from error: Error) -> Int? {
         if let storageError = error as? RemoteStorageClientError {
             switch storageError {
             case .underlying(let underlying):

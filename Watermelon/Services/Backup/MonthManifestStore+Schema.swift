@@ -133,7 +133,11 @@ extension MonthManifestStore {
             domain: "MonthManifestStore",
             code: -41,
             userInfo: [
-                NSLocalizedDescriptionKey: "Existing month manifest schema is incompatible. Missing \(tableName) columns: \(missing)."
+                NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.error.schemaIncompatible"),
+                    tableName,
+                    missing
+                )
             ]
         )
     }

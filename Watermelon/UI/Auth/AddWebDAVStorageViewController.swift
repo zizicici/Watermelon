@@ -128,7 +128,10 @@ final class AddWebDAVStorageViewController: UIViewController {
             popAfterSave()
         } catch {
             setSaving(false)
-            presentAlert(title: String(localized: "auth.saveFailed"), message: error.localizedDescription)
+            presentAlert(
+                title: String(localized: "auth.saveFailed"),
+                message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
+            )
         }
     }
 
@@ -409,7 +412,7 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
             cell.configure(
                 title: nil,
                 text: nameText,
-                placeholder: "WebDAV",
+                placeholder: String(localized: "auth.webdav.placeholder.name"),
                 autocapitalizationType: .words,
                 returnKeyType: .next,
                 inputAccessoryView: keyboardToolbar
@@ -421,7 +424,7 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
                 cell.configure(
                     title: String(localized: "auth.webdav.fieldEndpoint"),
                     text: endpointText,
-                    placeholder: "https://example.com/dav",
+                    placeholder: String(localized: "auth.webdav.placeholder.endpoint"),
                     keyboardType: .URL,
                     returnKeyType: .next,
                     inputAccessoryView: keyboardToolbar
@@ -432,7 +435,7 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
                 cell.configure(
                     title: String(localized: "auth.webdav.fieldBasePath"),
                     text: basePathText,
-                    placeholder: "/Watermelon",
+                    placeholder: String(localized: "auth.webdav.placeholder.basePath"),
                     returnKeyType: .next,
                     inputAccessoryView: keyboardToolbar
                 )
@@ -442,9 +445,9 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
         case .credentials:
             if indexPath.row == 0 {
                 cell.configure(
-                    title: "Username",
+                    title: String(localized: "auth.field.username"),
                     text: usernameText,
-                    placeholder: "user",
+                    placeholder: String(localized: "auth.webdav.placeholder.username"),
                     returnKeyType: .next,
                     inputAccessoryView: keyboardToolbar
                 )
@@ -452,9 +455,11 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
                 cell.onReturn = { [weak self] in self?.focusField(.password) }
             } else {
                 cell.configure(
-                    title: "Password",
+                    title: String(localized: "auth.field.password"),
                     text: passwordText,
-                    placeholder: editingProfile == nil ? "password" : String(localized: "auth.passwordPlaceholderEdit"),
+                    placeholder: editingProfile == nil
+                        ? String(localized: "auth.webdav.placeholder.password")
+                        : String(localized: "auth.passwordPlaceholderEdit"),
                     isSecure: true,
                     returnKeyType: .done,
                     inputAccessoryView: keyboardToolbar
