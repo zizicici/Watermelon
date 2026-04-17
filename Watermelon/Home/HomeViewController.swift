@@ -816,7 +816,10 @@ final class HomeViewController: UIViewController {
             gratefulConfig: GratefulCellConfiguration(
                 title: String(localized: "store.grateful.title"),
                 titleHighlight: "Pro",
-                content: String(localized: "store.grateful.content")
+                content: String(localized: "store.grateful.content"),
+                gradientColors: [.Material.LightGreen._700, .Material.LightGreen._600],
+                titleHighlightColor: .Material.Amber._200,
+                contentColor: .white.withAlphaComponent(0.85)
             ),
             email: "watermelon@zi.ci",
             appStoreId: "6762260596",
