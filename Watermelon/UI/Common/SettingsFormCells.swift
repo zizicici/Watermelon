@@ -56,8 +56,8 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
             self.textFieldLeadingToTitleConstraint = make.leading.greaterThanOrEqualTo(titleLabel.snp.trailing).offset(12).constraint
             self.textFieldLeadingToSuperviewConstraint = make.leading.equalToSuperview().inset(16).constraint
             make.trailing.equalToSuperview().inset(16)
-            make.top.bottom.equalToSuperview().inset(4)
-            make.height.equalTo(36)
+            make.top.bottom.equalToSuperview().inset(8)
+            make.height.greaterThanOrEqualTo(36)
         }
 
         textFieldLeadingToSuperviewConstraint?.deactivate()

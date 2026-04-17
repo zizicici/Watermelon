@@ -21,10 +21,15 @@ final class ManageStorageProfilesViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = .appBackground
         title = String(localized: "auth.manage.title")
         navigationItem.rightBarButtonItem = editButtonItem
         configureTableView()
+        reloadProfiles()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
         reloadProfiles()
     }
 
@@ -34,6 +39,7 @@ final class ManageStorageProfilesViewController: UIViewController {
     }
 
     private func configureTableView() {
+        tableView.backgroundColor = .appBackground
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "profile")
         tableView.dataSource = self
         tableView.delegate = self
@@ -51,17 +57,6 @@ final class ManageStorageProfilesViewController: UIViewController {
         editButtonItem.isEnabled = profiles.count > 1
     }
 
-    private func symbolImage(for profile: ServerProfileRecord) -> UIImage? {
-        switch profile.resolvedStorageType {
-        case .smb:
-            return UIImage(systemName: "server.rack")
-        case .webdav:
-            return UIImage(systemName: "network")
-        case .externalVolume:
-            return UIImage(systemName: "externaldrive")
-        }
-    }
-
     private func persistSortOrder() {
         let ids = profiles.compactMap(\.id)
         guard !ids.isEmpty else { return }
@@ -74,67 +69,13 @@ final class ManageStorageProfilesViewController: UIViewController {
         }
     }
 
-    private func editConnectionParameters(at index: Int) {
-        guard index >= 0, index < profiles.count else { return }
-        let profile = profiles[index]
-        switch profile.resolvedStorageType {
-        case .smb:
-            openSMBEditor(for: profile)
-        case .webdav:
-            openWebDAVEditor(for: profile)
-        case .externalVolume:
-            openExternalEditor(for: profile)
-        }
-    }
-
-    private func openSMBEditor(for profile: ServerProfileRecord) {
-        let draft = SMBServerLoginDraft(
-            name: profile.name,
-            host: profile.host,
-            port: profile.port,
-            username: profile.username,
-            domain: profile.domain
+    private func showDetail(for profile: ServerProfileRecord) {
+        let detail = StorageProfileDetailViewController(
+            dependencies: dependencies,
+            profile: profile,
+            onProfilesChanged: onProfilesChanged
         )
-        let editor = AddSMBServerLoginViewController(
-            dependencies: dependencies,
-            draft: draft,
-            editingProfile: profile,
-            shouldPopToRootOnSave: false
-        ) { [weak self] _, _ in
-            self?.handleConnectionProfileEdited(editedProfileID: profile.id)
-        }
-        navigationController?.pushViewController(editor, animated: true)
-    }
-
-    private func openExternalEditor(for profile: ServerProfileRecord) {
-        let editor = AddExternalStorageViewController(
-            dependencies: dependencies,
-            editingProfile: profile,
-            shouldPopToRootOnSave: false
-        ) { [weak self] _, _ in
-            self?.handleConnectionProfileEdited(editedProfileID: profile.id)
-        }
-        navigationController?.pushViewController(editor, animated: true)
-    }
-
-    private func openWebDAVEditor(for profile: ServerProfileRecord) {
-        let editor = AddWebDAVStorageViewController(
-            dependencies: dependencies,
-            editingProfile: profile,
-            shouldPopToRootOnSave: false
-        ) { [weak self] _, _ in
-            self?.handleConnectionProfileEdited(editedProfileID: profile.id)
-        }
-        navigationController?.pushViewController(editor, animated: true)
-    }
-
-    private func handleConnectionProfileEdited(editedProfileID: Int64?) {
-        if dependencies.appSession.activeProfile?.id == editedProfileID {
-            try? dependencies.databaseManager.setActiveServerProfileID(nil)
-            dependencies.appSession.clear()
-        }
-        reloadProfiles()
-        onProfilesChanged()
+        navigationController?.pushViewController(detail, animated: true)
     }
 
     private func deleteProfile(at index: Int) {
@@ -180,33 +121,12 @@ extension ManageStorageProfilesViewController: UITableViewDataSource, UITableVie
         var content = cell.defaultContentConfiguration()
         content.text = profile.storageProfile.displayTitle
         content.secondaryText = profile.storageProfile.displaySubtitle
-        content.image = symbolImage(for: profile)
+        content.image = StorageProfileIcon.image(for: profile.resolvedStorageType)
         cell.contentConfiguration = content
         cell.showsReorderControl = true
-
-        if profile.resolvedStorageType != .externalVolume {
-            let toggle = UISwitch()
-            toggle.isOn = profile.backgroundBackupEnabled
-            toggle.addTarget(self, action: #selector(backgroundBackupToggleChanged(_:)), for: .valueChanged)
-            cell.accessoryView = toggle
-            cell.accessoryType = .none
-        } else {
-            cell.accessoryView = nil
-            cell.accessoryType = (dependencies.appSession.activeProfile?.id == profile.id) ? .checkmark : .none
-        }
+        cell.accessoryView = nil
+        cell.accessoryType = .disclosureIndicator
         return cell
-    }
-
-    @objc private func backgroundBackupToggleChanged(_ sender: UISwitch) {
-        var view: UIView? = sender
-        while let v = view, !(v is UITableViewCell) { view = v.superview }
-        guard let cell = view as? UITableViewCell,
-              let indexPath = tableView.indexPath(for: cell),
-              indexPath.row < profiles.count,
-              let profileID = profiles[indexPath.row].id
-        else { return }
-        try? dependencies.databaseManager.setBackgroundBackupEnabled(sender.isOn, profileID: profileID)
-        profiles[indexPath.row].backgroundBackupEnabled = sender.isOn
     }
 
     func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {
@@ -234,7 +154,9 @@ extension ManageStorageProfilesViewController: UITableViewDataSource, UITableVie
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard !tableView.isEditing else { return }
-        editConnectionParameters(at: indexPath.row)
+        guard !tableView.isEditing,
+              indexPath.row < profiles.count
+        else { return }
+        showDetail(for: profiles[indexPath.row])
     }
 }
