@@ -807,7 +807,11 @@ final class HomeViewController: UIViewController {
                     String(localized: "store.promotion.feature.1"),
                     String(localized: "store.promotion.feature.2"),
                     String(localized: "store.promotion.feature.3"),
-                ].map { "- \($0)" }
+                ].map { "- \($0)" },
+                gradientColors: [.Material.Green._700, .Material.Green._600],
+                titleHighlightColor: .Material.Amber._200,
+                featureColor: .white.withAlphaComponent(0.85),
+                buttonTextColor: .Material.Green._800
             ),
             gratefulConfig: GratefulCellConfiguration(
                 title: String(localized: "store.grateful.title"),
