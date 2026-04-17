@@ -50,7 +50,7 @@ struct StorageProfile {
             if let path = record.externalVolumeParams?.displayPath, !path.isEmpty {
                 return Self.relativeExternalPath(from: path)
             }
-            return "外接存储"
+            return String(localized: "storage.error.externalFallback")
         }
     }
 
@@ -122,17 +122,17 @@ extension ServerProfileRecord {
 
     func userFacingStorageErrorMessage(_ error: Error) -> String {
         if isExternalStorageUnavailableError(error) {
-            return "外接存储不可用，可能已拔出。请重新连接硬盘后再试。"
+            return String(localized: "storage.error.externalUnavailable")
         }
         if resolvedStorageType == .smb, SMBErrorClassifier.isConnectionUnavailable(error) {
-            return "SMB 连接不可用，可能已断开或超时。请检查网络与服务器状态后再试。"
+            return String(localized: "storage.error.smbUnavailable")
         }
         if resolvedStorageType == .webdav {
             if let statusCode = Self.webDAVErrorCode(from: error), statusCode == 401 {
-                return "WebDAV 认证失败（401）。请检查用户名/密码，并确认 Endpoint URL 与备份根路径有访问权限。建议 Endpoint 填 WebDAV 根地址，目录放到“备份根路径”里。"
+                return String(localized: "storage.error.webdav401")
             }
             if let statusCode = Self.webDAVErrorCode(from: error), statusCode == 403 {
-                return "WebDAV 权限不足（403）。请确认该账号对 Endpoint 与备份根路径有 PROPFIND/MKCOL/PUT/MOVE/DELETE 权限。"
+                return String(localized: "storage.error.webdav403")
             }
         }
         return error.localizedDescription

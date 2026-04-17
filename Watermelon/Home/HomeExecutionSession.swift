@@ -195,16 +195,16 @@ struct HomeExecutionSession {
         case .failed(let message):
             applyUploadTargetsFailed(reason: message)
             phase = .failed(message)
-            return .failed(AlertMessage(title: "上传失败", message: message))
+            return .failed(AlertMessage(title: String(localized: "home.execution.uploadFailed"), message: message))
 
         case .stopped:
             return .exit
 
         case .startFailed:
-            let message = "备份启动失败"
+            let message = String(localized: "home.execution.startFailed")
             applyUploadTargetsFailed(reason: message)
             phase = .failed(message)
-            return .failed(AlertMessage(title: "上传失败", message: message))
+            return .failed(AlertMessage(title: String(localized: "home.execution.uploadFailed"), message: message))
         }
     }
 
@@ -217,10 +217,10 @@ struct HomeExecutionSession {
     }
 
     mutating func failForMissingConnection() -> AlertMessage {
-        let message = "未连接远端存储"
+        let message = String(localized: "home.execution.notConnected")
         applyEvent(.failed(reason: message), where: { !$0.isTerminal })
         phase = .failed(message)
-        return AlertMessage(title: "错误", message: message)
+        return AlertMessage(title: String(localized: "common.error"), message: message)
     }
 
     mutating func beginDownloadMonth(_ month: LibraryMonthKey) {
@@ -246,14 +246,14 @@ struct HomeExecutionSession {
     }
 
     func phaseLabel(for month: LibraryMonthKey) -> String {
-        monthPlans[month]?.needsUpload == true ? "同步" : "下载"
+        monthPlans[month]?.needsUpload == true ? String(localized: "home.execution.phaseSync") : String(localized: "home.execution.phaseDownload")
     }
 
     mutating func finishExecution() {
         for key in monthPlans.keys {
             monthPlans[key]?.apply(.completed)
         }
-        phase = monthPlans.values.contains(where: \.isFailed) ? .failed("部分月份失败") : .completed
+        phase = monthPlans.values.contains(where: \.isFailed) ? .failed(String(localized: "home.execution.partialFailed")) : .completed
     }
 
     mutating func markLocalIndexPreflightCompleted() {
@@ -263,7 +263,7 @@ struct HomeExecutionSession {
     mutating func failExecution(reason: String) -> AlertMessage {
         applyEvent(.failed(reason: reason), where: { !$0.isTerminal })
         phase = .failed(reason)
-        return AlertMessage(title: "错误", message: reason)
+        return AlertMessage(title: String(localized: "common.error"), message: reason)
     }
 
     private mutating func buildUploadScope(

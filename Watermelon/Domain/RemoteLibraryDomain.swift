@@ -140,8 +140,18 @@ struct LibraryMonthKey: Hashable, Comparable, Sendable {
     }
 
     var displayText: String {
-        String(format: "%04d年%02d月", year, month)
+        let components = DateComponents(year: year, month: month)
+        guard let date = Calendar.current.date(from: components) else {
+            return text
+        }
+        return Self.displayTextFormatter.string(from: date)
     }
+
+    private static let displayTextFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("yyyyMMM")
+        return f
+    }()
 
     static func < (lhs: LibraryMonthKey, rhs: LibraryMonthKey) -> Bool {
         if lhs.year == rhs.year {

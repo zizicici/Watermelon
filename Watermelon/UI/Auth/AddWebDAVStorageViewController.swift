@@ -23,7 +23,7 @@ final class AddWebDAVStorageViewController: UIViewController {
 
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
     private lazy var saveBarButtonItem = UIBarButtonItem(
-        title: "保存",
+        title: String(localized: "common.save"),
         style: .prominentStyle,
         target: self,
         action: #selector(saveTapped)
@@ -35,7 +35,7 @@ final class AddWebDAVStorageViewController: UIViewController {
         toolbar.sizeToFit()
         toolbar.items = [
             UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
-            UIBarButtonItem(title: "Done", style: .plain, target: self, action: #selector(dismissKeyboard))
+            UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(dismissKeyboard))
         ]
         return toolbar
     }()
@@ -70,7 +70,7 @@ final class AddWebDAVStorageViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .appBackground
-        title = editingProfile == nil ? "添加 WebDAV 存储" : "编辑 WebDAV 存储"
+        title = editingProfile == nil ? String(localized: "auth.webdav.title") : String(localized: "auth.webdav.editTitle")
 
         fillInitialValues()
         configureUI()
@@ -128,7 +128,7 @@ final class AddWebDAVStorageViewController: UIViewController {
             popAfterSave()
         } catch {
             setSaving(false)
-            presentAlert(title: "保存失败", message: error.localizedDescription)
+            presentAlert(title: String(localized: "auth.saveFailed"), message: error.localizedDescription)
         }
     }
 
@@ -138,7 +138,7 @@ final class AddWebDAVStorageViewController: UIViewController {
 
         let username = usernameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !username.isEmpty else {
-            throw NSError(domain: "AddWebDAVStorage", code: 1, userInfo: [NSLocalizedDescriptionKey: "请填写用户名"])
+            throw NSError(domain: "AddWebDAVStorage", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.validationUsername")])
         }
 
         let trimmedPassword = passwordText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -150,7 +150,7 @@ final class AddWebDAVStorageViewController: UIViewController {
                   !saved.isEmpty {
             password = saved
         } else {
-            throw NSError(domain: "AddWebDAVStorage", code: 2, userInfo: [NSLocalizedDescriptionKey: "请填写密码"])
+            throw NSError(domain: "AddWebDAVStorage", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.validationPassword")])
         }
 
         let rawBasePath = basePathText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -167,7 +167,7 @@ final class AddWebDAVStorageViewController: UIViewController {
             throw NSError(
                 domain: "AddWebDAVStorage",
                 code: 3,
-                userInfo: [NSLocalizedDescriptionKey: "已存在相同的 WebDAV 连接配置"]
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.duplicateConfig")]
             )
         }
 
@@ -209,7 +209,7 @@ final class AddWebDAVStorageViewController: UIViewController {
 
     private func parseEndpointURL(_ input: String) throws -> URL {
         guard !input.isEmpty else {
-            throw NSError(domain: "AddWebDAVStorage", code: 4, userInfo: [NSLocalizedDescriptionKey: "请填写 Endpoint URL"])
+            throw NSError(domain: "AddWebDAVStorage", code: 4, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.validationEndpoint")])
         }
 
         let normalizedInput = input.contains("://") ? input : "https://\(input)"
@@ -217,7 +217,7 @@ final class AddWebDAVStorageViewController: UIViewController {
               let scheme = url.scheme?.lowercased(),
               (scheme == "http" || scheme == "https"),
               url.host != nil else {
-            throw NSError(domain: "AddWebDAVStorage", code: 5, userInfo: [NSLocalizedDescriptionKey: "Endpoint URL 格式不正确"])
+            throw NSError(domain: "AddWebDAVStorage", code: 5, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.invalidEndpoint")])
         }
         return url
     }
@@ -279,7 +279,7 @@ final class AddWebDAVStorageViewController: UIViewController {
 
     private func presentAlert(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "确定", style: .default))
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
         present(alert, animated: true)
     }
 
@@ -375,11 +375,11 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
         guard let section = Section(rawValue: section) else { return nil }
         switch section {
         case .name:
-            return "名称"
+            return String(localized: "auth.section.name")
         case .connection:
-            return "连接信息"
+            return String(localized: "auth.section.connection")
         case .credentials:
-            return "认证"
+            return String(localized: "auth.section.auth")
         }
     }
 
@@ -389,9 +389,9 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
         case .name:
             return nil
         case .connection:
-            return "Endpoint 可以直接填写完整 URL；备份根路径默认为 /Watermelon。"
+            return String(localized: "auth.webdav.footerNew")
         case .credentials:
-            return editingProfile == nil ? nil : "密码留空时会继续使用已保存的密码。"
+            return editingProfile == nil ? nil : String(localized: "auth.smb.login.footerEdit")
         }
     }
 
@@ -419,7 +419,7 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
         case .connection:
             if indexPath.row == 0 {
                 cell.configure(
-                    title: "Endpoint URL",
+                    title: String(localized: "auth.webdav.fieldEndpoint"),
                     text: endpointText,
                     placeholder: "https://example.com/dav",
                     keyboardType: .URL,
@@ -430,7 +430,7 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
                 cell.onReturn = { [weak self] in self?.focusField(.basePath) }
             } else {
                 cell.configure(
-                    title: "备份根路径",
+                    title: String(localized: "auth.webdav.fieldBasePath"),
                     text: basePathText,
                     placeholder: "/Watermelon",
                     returnKeyType: .next,
@@ -454,7 +454,7 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
                 cell.configure(
                     title: "Password",
                     text: passwordText,
-                    placeholder: editingProfile == nil ? "password" : "留空表示不变",
+                    placeholder: editingProfile == nil ? "password" : String(localized: "auth.passwordPlaceholderEdit"),
                     isSecure: true,
                     returnKeyType: .done,
                     inputAccessoryView: keyboardToolbar

@@ -18,7 +18,7 @@ final class SMBSharePathPickerViewController: UIViewController {
 
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
     private lazy var nextBarButtonItem = UIBarButtonItem(
-        title: "下一步",
+        title: String(localized: "common.next"),
         style: .prominentStyle,
         target: self,
         action: #selector(nextTapped)
@@ -58,7 +58,7 @@ final class SMBSharePathPickerViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .appBackground
-        title = "选择 Share 与路径"
+        title = String(localized: "auth.smb.share.title")
 
         configureUI()
         startLoadDirectories()
@@ -88,7 +88,7 @@ final class SMBSharePathPickerViewController: UIViewController {
     @objc
     private func nextTapped() {
         guard let selectedShare else {
-            presentAlert(title: "未选择 Share", message: "请先选择 Share")
+            presentAlert(title: String(localized: "auth.smb.share.noShareSelected"), message: String(localized: "auth.smb.share.selectShareFirst"))
             return
         }
 
@@ -139,7 +139,7 @@ final class SMBSharePathPickerViewController: UIViewController {
                 await MainActor.run {
                     guard requestID == self.loadRequestID else { return }
                     self.setLoading(false)
-                    self.presentAlert(title: "读取目录失败", message: error.localizedDescription)
+                    self.presentAlert(title: String(localized: "auth.smb.share.readFailed"), message: error.localizedDescription)
                 }
             }
         }
@@ -173,7 +173,7 @@ final class SMBSharePathPickerViewController: UIViewController {
     @MainActor
     private func presentAlert(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "确定", style: .default))
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
         present(alert, animated: true)
     }
 }
@@ -203,9 +203,9 @@ extension SMBSharePathPickerViewController: UITableViewDataSource, UITableViewDe
         guard let section = TableSection(rawValue: section) else { return nil }
         switch section {
         case .shares:
-            return "Share"
+            return String(localized: "auth.smb.share.sectionShare")
         case .paths:
-            return "路径"
+            return String(localized: "auth.smb.share.sectionPath")
         }
     }
 
@@ -215,7 +215,7 @@ extension SMBSharePathPickerViewController: UITableViewDataSource, UITableViewDe
         case .shares:
             return nil
         case .paths:
-            return "当前路径: \(currentPath)"
+            return String(format: String(localized: "auth.smb.share.currentPath"), currentPath)
         }
     }
 
@@ -231,8 +231,8 @@ extension SMBSharePathPickerViewController: UITableViewDataSource, UITableViewDe
         switch section {
         case .shares:
             if shares.isEmpty {
-                content.text = "未发现可用 Share"
-                content.secondaryText = "请返回上一步检查权限"
+                content.text = String(localized: "auth.smb.share.noSharesFound")
+                content.secondaryText = String(localized: "auth.smb.share.noSharesHint")
                 cell.selectionStyle = .none
                 cell.accessoryType = .none
             } else {
@@ -246,7 +246,7 @@ extension SMBSharePathPickerViewController: UITableViewDataSource, UITableViewDe
             let hasParent = currentPath != "/"
             if hasParent && indexPath.row == 0 {
                 content.text = ".."
-                content.secondaryText = "返回上一级"
+                content.secondaryText = String(localized: "auth.smb.share.parentDir")
                 cell.accessoryType = .disclosureIndicator
             } else {
                 let adjustedIndex = indexPath.row - (hasParent ? 1 : 0)

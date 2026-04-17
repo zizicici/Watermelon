@@ -11,8 +11,17 @@ struct HomeMonthSummary {
     let totalSizeBytes: Int64?
 
     var monthTitle: String {
-        String(format: "%02d月", month.month)
+        guard let date = Calendar.current.date(from: DateComponents(year: 2000, month: month.month)) else {
+            return String(format: "%02d", month.month)
+        }
+        return Self.monthFormatter.string(from: date)
     }
+
+    private static let monthFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("MMM")
+        return f
+    }()
 
     func countAttributedText(color: UIColor) -> NSAttributedString {
         let font = UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
@@ -54,7 +63,18 @@ struct HomeMergedYearSection {
     let year: Int
     let rows: [HomeMonthRow]
 
-    var title: String { "\(year)年" }
+    var title: String {
+        guard let date = Calendar.current.date(from: DateComponents(year: year)) else {
+            return String(year)
+        }
+        return Self.yearFormatter.string(from: date)
+    }
+
+    private static let yearFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("yyyy")
+        return f
+    }()
 
     var localPhotoCount: Int { rows.compactMap(\.local).reduce(0) { $0 + $1.photoCount } }
     var localVideoCount: Int { rows.compactMap(\.local).reduce(0) { $0 + $1.videoCount } }

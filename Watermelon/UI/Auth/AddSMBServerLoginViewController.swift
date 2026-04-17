@@ -26,7 +26,7 @@ final class AddSMBServerLoginViewController: UIViewController {
 
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
     private lazy var nextBarButtonItem = UIBarButtonItem(
-        title: "下一步",
+        title: String(localized: "common.next"),
         style: .prominentStyle,
         target: self,
         action: #selector(nextTapped)
@@ -38,7 +38,7 @@ final class AddSMBServerLoginViewController: UIViewController {
         toolbar.sizeToFit()
         toolbar.items = [
             UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
-            UIBarButtonItem(title: "Done", style: .plain, target: self, action: #selector(dismissKeyboard))
+            UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(dismissKeyboard))
         ]
         return toolbar
     }()
@@ -76,7 +76,7 @@ final class AddSMBServerLoginViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .appBackground
-        title = editingProfile == nil ? "登录 SMB" : "编辑 SMB"
+        title = editingProfile == nil ? String(localized: "auth.smb.login.title") : String(localized: "auth.smb.login.editTitle")
 
         fillDraft()
         configureUI()
@@ -135,7 +135,7 @@ final class AddSMBServerLoginViewController: UIViewController {
                 await MainActor.run {
                     self.setLoading(false)
                     if shares.isEmpty {
-                        self.presentAlert(title: "未发现 Share", message: "登录成功，但服务器没有可用 Share。")
+                        self.presentAlert(title: String(localized: "auth.smb.login.noShares"), message: String(localized: "auth.smb.login.noSharesMessage"))
                         return
                     }
                     let picker = SMBSharePathPickerViewController(
@@ -151,7 +151,7 @@ final class AddSMBServerLoginViewController: UIViewController {
             } catch {
                 await MainActor.run {
                     self.setLoading(false)
-                    self.presentAlert(title: "登录失败", message: error.localizedDescription)
+                    self.presentAlert(title: String(localized: "auth.smb.login.loginFailed"), message: error.localizedDescription)
                 }
             }
         }
@@ -176,7 +176,7 @@ final class AddSMBServerLoginViewController: UIViewController {
         }
 
         guard !host.isEmpty, !username.isEmpty, !password.isEmpty else {
-            throw NSError(domain: "AddSMBServerLogin", code: 1, userInfo: [NSLocalizedDescriptionKey: "请填写 host / username / password"])
+            throw NSError(domain: "AddSMBServerLogin", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.smb.login.validation")])
         }
 
         return SMBServerAuthContext(
@@ -204,7 +204,7 @@ final class AddSMBServerLoginViewController: UIViewController {
 
     private func presentAlert(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "确定", style: .default))
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
         present(alert, animated: true)
     }
 
@@ -297,11 +297,11 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
         guard let section = Section(rawValue: section) else { return nil }
         switch section {
         case .name:
-            return "名称"
+            return String(localized: "auth.section.name")
         case .server:
-            return "服务器"
+            return String(localized: "auth.section.server")
         case .credentials:
-            return "认证"
+            return String(localized: "auth.section.auth")
         }
     }
 
@@ -311,7 +311,7 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
         case .name, .server:
             return nil
         case .credentials:
-            return editingProfile == nil ? "登录成功后继续选择 Share 与路径。" : "密码留空时会继续使用已保存的密码。"
+            return editingProfile == nil ? String(localized: "auth.smb.login.footerNew") : String(localized: "auth.smb.login.footerEdit")
         }
     }
 
@@ -375,7 +375,7 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
                 cell.configure(
                     title: "Password",
                     text: passwordText,
-                    placeholder: editingProfile == nil ? "password" : "留空表示不变",
+                    placeholder: editingProfile == nil ? "password" : String(localized: "auth.passwordPlaceholderEdit"),
                     isSecure: true,
                     returnKeyType: .next,
                     inputAccessoryView: keyboardToolbar

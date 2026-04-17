@@ -52,7 +52,7 @@ final class SMBLocalDiscoveryViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .appBackground
-        title = "发现本地 SMB"
+        title = String(localized: "auth.smb.discovery.title")
 
         browser.delegate = self
 
@@ -134,7 +134,7 @@ final class SMBLocalDiscoveryViewController: UIViewController {
 
     private func openDiscoveredService(_ row: ServiceRow) {
         guard let host = row.resolvedHost, let port = row.port else {
-            presentAlert(title: "尚未就绪", message: "该 SMB 服务还在解析中，请稍后再试。")
+            presentAlert(title: String(localized: "auth.smb.discovery.notReady"), message: String(localized: "auth.smb.discovery.notReadyMessage"))
             return
         }
 
@@ -156,7 +156,7 @@ final class SMBLocalDiscoveryViewController: UIViewController {
 
     private func presentAlert(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "确定", style: .default))
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
         present(alert, animated: true)
     }
 }
@@ -188,7 +188,7 @@ extension SMBLocalDiscoveryViewController: NetServiceBrowserDelegate, NetService
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
         finishDiscoveryIfNeeded()
-        browserErrorMessage = "无法发现本地 SMB 服务，请检查本地网络权限或稍后重试。"
+        browserErrorMessage = String(localized: "auth.smb.discovery.failedToDiscover")
         tableView.reloadData()
     }
 
@@ -203,7 +203,7 @@ extension SMBLocalDiscoveryViewController: NetServiceBrowserDelegate, NetService
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
         updateRow(for: sender) { row in
-            row.resolveError = "解析失败"
+            row.resolveError = String(localized: "auth.smb.discovery.resolveFailed")
         }
     }
 }
@@ -218,11 +218,11 @@ extension SMBLocalDiscoveryViewController: UITableViewDataSource, UITableViewDel
     }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        "局域网 SMB"
+        String(localized: "auth.smb.discovery.sectionTitle")
     }
 
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        browserErrorMessage ?? "点选一个已发现的 SMB 服务后，会进入登录页并自动填好名称、Host 和 Port。"
+        browserErrorMessage ?? String(localized: "auth.smb.discovery.sectionFooter")
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -230,8 +230,8 @@ extension SMBLocalDiscoveryViewController: UITableViewDataSource, UITableViewDel
         var content = UIListContentConfiguration.subtitleCell()
 
         if rows.isEmpty {
-            content.text = browserErrorMessage == nil ? "未发现可用 SMB 服务" : "发现失败"
-            content.secondaryText = browserErrorMessage == nil ? "下拉或点右上角刷新重试" : browserErrorMessage
+            content.text = browserErrorMessage == nil ? String(localized: "auth.smb.discovery.noServices") : String(localized: "auth.smb.discovery.discoveryFailed")
+            content.secondaryText = browserErrorMessage == nil ? String(localized: "auth.smb.discovery.noServicesHint") : browserErrorMessage
             cell.selectionStyle = .none
             cell.accessoryType = .none
         } else {
@@ -245,7 +245,7 @@ extension SMBLocalDiscoveryViewController: UITableViewDataSource, UITableViewDel
                 content.secondaryText = resolveError
                 cell.accessoryType = .none
             } else {
-                content.secondaryText = "解析中..."
+                content.secondaryText = String(localized: "auth.smb.discovery.resolving")
                 cell.accessoryType = .none
             }
             cell.selectionStyle = .default

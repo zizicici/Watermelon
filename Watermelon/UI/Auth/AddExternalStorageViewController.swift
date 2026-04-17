@@ -16,7 +16,7 @@ final class AddExternalStorageViewController: UIViewController {
 
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
     private lazy var saveBarButtonItem = UIBarButtonItem(
-        title: "保存",
+        title: String(localized: "common.save"),
         style: .prominentStyle,
         target: self,
         action: #selector(saveTapped)
@@ -26,7 +26,7 @@ final class AddExternalStorageViewController: UIViewController {
         toolbar.sizeToFit()
         toolbar.items = [
             UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
-            UIBarButtonItem(title: "Done", style: .plain, target: self, action: #selector(dismissKeyboard))
+            UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(dismissKeyboard))
         ]
         return toolbar
     }()
@@ -57,7 +57,7 @@ final class AddExternalStorageViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .appBackground
-        title = editingProfile == nil ? "添加外接存储" : "编辑外接存储"
+        title = editingProfile == nil ? String(localized: "auth.external.title") : String(localized: "auth.external.editTitle")
 
         fillInitialValues()
         configureUI()
@@ -138,7 +138,7 @@ final class AddExternalStorageViewController: UIViewController {
                 selectedDisplayPath = existingPath
                 encodedParams = existingParams
             } else {
-                presentAlert(title: "未选择目录", message: "请先选择要备份到的外接存储目录")
+                presentAlert(title: String(localized: "auth.external.noDirSelected"), message: String(localized: "auth.external.noDirMessage"))
                 return
             }
 
@@ -149,7 +149,7 @@ final class AddExternalStorageViewController: UIViewController {
                 throw NSError(
                     domain: "AddExternalStorage",
                     code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "已存在相同的外接存储目录"]
+                    userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.external.duplicateDir")]
                 )
             }
 
@@ -181,7 +181,7 @@ final class AddExternalStorageViewController: UIViewController {
             onSaved(profile, "")
             popAfterSave()
         } catch {
-            presentAlert(title: "保存失败", message: error.localizedDescription)
+            presentAlert(title: String(localized: "auth.saveFailed"), message: error.localizedDescription)
         }
     }
 
@@ -208,7 +208,7 @@ final class AddExternalStorageViewController: UIViewController {
 
     private func presentAlert(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "确定", style: .default))
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
         present(alert, animated: true)
     }
 
@@ -266,9 +266,9 @@ extension AddExternalStorageViewController: UITableViewDataSource, UITableViewDe
         guard let section = Section(rawValue: section) else { return nil }
         switch section {
         case .name:
-            return "名称"
+            return String(localized: "auth.section.name")
         case .location:
-            return "目录"
+            return String(localized: "auth.section.directory")
         }
     }
 
@@ -278,7 +278,7 @@ extension AddExternalStorageViewController: UITableViewDataSource, UITableViewDe
         case .name:
             return nil
         case .location:
-            return currentDisplayPath() ?? "请选择要备份到的外接存储目录。"
+            return currentDisplayPath() ?? String(localized: "auth.external.footerNoDir")
         }
     }
 
@@ -311,7 +311,7 @@ extension AddExternalStorageViewController: UITableViewDataSource, UITableViewDe
             if let path = currentDisplayPath() {
                 content.text = URL(fileURLWithPath: path).lastPathComponent
             } else {
-                content.text = "选择目录"
+                content.text = String(localized: "auth.external.selectDir")
             }
             content.textProperties.color = .label
             cell.contentConfiguration = content

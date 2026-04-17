@@ -22,7 +22,7 @@ final class ManageStorageProfilesViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        title = "管理存储"
+        title = String(localized: "auth.manage.title")
         navigationItem.rightBarButtonItem = editButtonItem
         configureTableView()
         reloadProfiles()
@@ -69,7 +69,7 @@ final class ManageStorageProfilesViewController: UIViewController {
             try dependencies.databaseManager.saveServerProfileSortOrder(profileIDs: ids)
             onProfilesChanged()
         } catch {
-            presentAlert(title: "排序保存失败", message: error.localizedDescription)
+            presentAlert(title: String(localized: "auth.manage.sortFailed"), message: error.localizedDescription)
             reloadProfiles()
         }
     }
@@ -157,13 +157,13 @@ final class ManageStorageProfilesViewController: UIViewController {
             editButtonItem.isEnabled = profiles.count > 1
             onProfilesChanged()
         } catch {
-            presentAlert(title: "删除失败", message: error.localizedDescription)
+            presentAlert(title: String(localized: "auth.manage.deleteFailed"), message: error.localizedDescription)
         }
     }
 
     private func presentAlert(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "确定", style: .default))
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
         present(alert, animated: true)
     }
 }
@@ -225,7 +225,7 @@ extension ManageStorageProfilesViewController: UITableViewDataSource, UITableVie
     }
 
     func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        let delete = UIContextualAction(style: .destructive, title: "删除") { [weak self] _, _, completion in
+        let delete = UIContextualAction(style: .destructive, title: String(localized: "common.delete")) { [weak self] _, _, completion in
             self?.deleteProfile(at: indexPath.row)
             completion(true)
         }

@@ -8,6 +8,20 @@
 import Foundation
 import MoreKit
 
+// MARK: - App Name
+
+enum AppName {
+    static var localized: String {
+        if let name = Bundle.main.localizedInfoDictionary?["CFBundleDisplayName"] as? String, !name.isEmpty {
+            return name
+        }
+        if let name = Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String, !name.isEmpty {
+            return name
+        }
+        return "Watermelon"
+    }
+}
+
 // MARK: - BackupWorkerCountMode
 
 enum BackupWorkerCountMode: Int, CaseIterable, Codable {
@@ -43,35 +57,30 @@ extension BackupWorkerCountMode: UserDefaultSettable {
     }
 
     static func getHeader() -> String? {
-        "上传并发 Worker"
+        String(localized: "settings.worker.header")
     }
 
     static func getFooter() -> String? {
-        """
-        自动模式会按存储协议使用默认并发（SMB/WebDAV=2，本地存储=3）。
-        手动模式会覆盖协议默认值。
-        若启用“允许访问 iCloud 原件”且当前范围内检测到仅存于 iCloud 的资源，执行会自动改为 1 个 Worker。
-        若当前已有进行中的备份任务，需要先停止并重新开始，新设置才会生效。
-        """
+        String(localized: "settings.worker.footer")
     }
 
     func getName() -> String {
         switch self {
         case .automatic:
-            return "自动（按协议）"
+            return String(localized: "settings.worker.automatic")
         case .one:
-            return "1 个 Worker"
+            return String(format: String(localized: "settings.worker.count"), 1)
         case .two:
-            return "2 个 Worker"
+            return String(format: String(localized: "settings.worker.count"), 2)
         case .three:
-            return "3 个 Worker"
+            return String(format: String(localized: "settings.worker.count"), 3)
         case .four:
-            return "4 个 Worker"
+            return String(format: String(localized: "settings.worker.count"), 4)
         }
     }
 
     static func getTitle() -> String {
-        "上传并发"
+        String(localized: "settings.worker.title")
     }
 }
 
@@ -96,29 +105,24 @@ extension ICloudPhotoBackupMode: UserDefaultSettable {
     }
 
     static func getHeader() -> String? {
-        "允许访问 iCloud 原件"
+        String(localized: "settings.icloud.header")
     }
 
     static func getFooter() -> String? {
-        """
-        Enable 后允许 Watermelon 在备份、同步、下载前的去重过程中按需访问 iCloud 原件。
-        若当前范围内检测到仅存于 iCloud 的资源，执行会自动改为 1 个 Worker。
-        Disable 时仅处理已经在本机的资源。
-        若当前已有进行中的备份任务，需要先停止并重新开始，新设置才会生效。
-        """
+        String(format: String(localized: "settings.icloud.footer"), AppName.localized)
     }
 
     func getName() -> String {
         switch self {
         case .disable:
-            return "Disable"
+            return String(localized: "settings.common.disable")
         case .enable:
-            return "Enable"
+            return String(localized: "settings.common.enable")
         }
     }
 
     static func getTitle() -> String {
-        "允许访问 iCloud 原件"
+        String(localized: "settings.icloud.header")
     }
 }
 
@@ -139,28 +143,24 @@ extension BackgroundBackupSetting: UserDefaultSettable {
     }
 
     static func getHeader() -> String? {
-        "后台自动备份"
+        String(localized: "settings.background.header")
     }
 
     static func getFooter() -> String? {
-        """
-        启用后，设备连接电源并使用 Wi-Fi 时，Watermelon 会在后台自动备份最近两个月的照片和视频。
-        更早的月份请在应用内手动备份。
-        支持 SMB 和 WebDAV（不支持外接存储）。此功能需要 Pro。
-        """
+        String(format: String(localized: "settings.background.footer"), AppName.localized)
     }
 
     func getName() -> String {
         switch self {
         case .disable:
-            return "Disable"
+            return String(localized: "settings.common.disable")
         case .enable:
-            return "Enable"
+            return String(localized: "settings.common.enable")
         }
     }
 
     static func getTitle() -> String {
-        "后台自动备份"
+        String(localized: "settings.background.header")
     }
 
     static func setCurrent(_ value: BackgroundBackupSetting) throws {
@@ -175,7 +175,7 @@ enum BackgroundBackupSettingError: LocalizedError {
     case requiresPro
 
     var errorDescription: String? {
-        "后台自动备份是 Pro 专属功能。请升级到 Pro 以启用此功能。"
+        String(localized: "settings.background.requiresPro")
     }
 }
 
@@ -236,11 +236,11 @@ extension ExecutionLogFilterPreference: UserDefaultSettable {
     }
 
     static func getHeader() -> String? {
-        "执行日志筛选"
+        String(localized: "settings.logFilter.header")
     }
 
     static func getFooter() -> String? {
-        "保存执行日志页右上角筛选菜单的已选日志级别。"
+        String(localized: "settings.logFilter.footer")
     }
 
     func getName() -> String {
@@ -251,7 +251,7 @@ extension ExecutionLogFilterPreference: UserDefaultSettable {
     }
 
     static func getTitle() -> String {
-        "执行日志筛选"
+        String(localized: "settings.logFilter.header")
     }
 
     static func getOptions() -> [ExecutionLogFilterPreference] {

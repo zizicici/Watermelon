@@ -15,7 +15,7 @@ final class AddSMBServerViewController: UIViewController {
 
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
     private lazy var saveBarButtonItem = UIBarButtonItem(
-        title: "保存",
+        title: String(localized: "common.save"),
         style: .prominentStyle,
         target: self,
         action: #selector(saveTapped)
@@ -25,7 +25,7 @@ final class AddSMBServerViewController: UIViewController {
         toolbar.sizeToFit()
         toolbar.items = [
             UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
-            UIBarButtonItem(title: "Done", style: .plain, target: self, action: #selector(dismissKeyboard))
+            UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(dismissKeyboard))
         ]
         return toolbar
     }()
@@ -55,7 +55,7 @@ final class AddSMBServerViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .appBackground
-        title = editingProfile == nil ? "确认并保存" : "确认并更新"
+        title = editingProfile == nil ? String(localized: "auth.smb.save.title") : String(localized: "auth.smb.save.editTitle")
 
         nameText = editingProfile?.name ?? context.auth.name
         configureUI()
@@ -92,7 +92,7 @@ final class AddSMBServerViewController: UIViewController {
             onSaved(profile, password)
             popAfterSave()
         } catch {
-            presentAlert(title: "保存失败", message: error.localizedDescription)
+            presentAlert(title: String(localized: "auth.saveFailed"), message: error.localizedDescription)
         }
     }
 
@@ -172,7 +172,7 @@ final class AddSMBServerViewController: UIViewController {
 
     private func presentAlert(title: String, message: String) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "确定", style: .default))
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
         present(alert, animated: true)
     }
 }
@@ -190,9 +190,9 @@ extension AddSMBServerViewController: UITableViewDataSource, UITableViewDelegate
         guard let section = Section(rawValue: section) else { return nil }
         switch section {
         case .name:
-            return "名称"
+            return String(localized: "auth.section.name")
         case .summary:
-            return "连接信息"
+            return String(localized: "auth.section.connection")
         }
     }
 
@@ -202,7 +202,7 @@ extension AddSMBServerViewController: UITableViewDataSource, UITableViewDelegate
         case .name:
             return nil
         case .summary:
-            return "保存后会直接连接到该 SMB 存储。"
+            return String(localized: "auth.smb.save.footer")
         }
     }
 

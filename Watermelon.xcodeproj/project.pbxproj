@@ -148,6 +148,17 @@
 				en,
 				Base,
 				"zh-Hans",
+				"zh-HK",
+				"zh-Hant",
+				de,
+				fr,
+				ja,
+				"pt-BR",
+				"pt-PT",
+				ko,
+				uk,
+				es,
+				"es-419",
 			);
 			mainGroup = 148EF9492F4EABFE0025F409;
 			minimizedProjectReferenceProxies = 1;
@@ -212,7 +223,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zizicici.watermelon;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -249,7 +260,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zizicici.watermelon;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

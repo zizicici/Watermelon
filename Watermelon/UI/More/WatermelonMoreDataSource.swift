@@ -41,8 +41,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         if dependencies != nil {
             sections.append(.custom(MoreCustomSection(
                 id: "remoteStorage",
-                header: "远端存储",
-                items: [MoreCustomItem(id: ItemID.manageProfiles, title: "管理存储")]
+                header: String(localized: "more.section.remoteStorage"),
+                items: [MoreCustomItem(id: ItemID.manageProfiles, title: String(localized: "more.item.manageStorage"))]
             )))
             sections.append(.custom(MoreCustomSection(
                 id: "backup",
@@ -50,17 +50,17 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 items: [
                     MoreCustomItem(
                         id: ItemID.workerCount,
-                        title: "上传并发",
+                        title: String(localized: "more.item.workerCount"),
                         value: BackupWorkerCountMode.getValue().getName()
                     ),
                     MoreCustomItem(
                         id: ItemID.iCloudPhotoBackup,
-                        title: "允许访问 iCloud 原件",
+                        title: String(localized: "more.item.iCloudAccess"),
                         value: ICloudPhotoBackupMode.getValue().getName()
                     ),
                     MoreCustomItem(
                         id: ItemID.backgroundBackup,
-                        title: "后台自动备份",
+                        title: String(localized: "more.item.backgroundBackup"),
                         value: BackgroundBackupSetting.getValue().getName()
                     )
                 ]

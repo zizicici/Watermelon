@@ -28,17 +28,17 @@ final class SelectionActionPanel: UIView {
     private let categoryRowStack = UIStackView()
     private(set) var backupCategoryButton = SelectionActionPanel.makeSelectionCategoryButton(
         iconName: "arrow.right",
-        subtitle: "备份",
+        subtitle: String(localized: "panel.backup"),
         color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
     )
     private(set) var downloadCategoryButton = SelectionActionPanel.makeSelectionCategoryButton(
         iconName: "arrow.left",
-        subtitle: "下载",
+        subtitle: String(localized: "panel.download"),
         color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
     )
     private(set) var syncCategoryButton = SelectionActionPanel.makeSelectionCategoryButton(
         iconName: "arrow.left.arrow.right",
-        subtitle: "同步",
+        subtitle: String(localized: "panel.sync"),
         color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
     )
     private let executionInfoStack = UIStackView()
@@ -327,21 +327,21 @@ final class SelectionActionPanel: UIView {
             button: backupCategoryButton,
             count: state.backupCount,
             iconName: "arrow.right",
-            subtitle: "备份",
+            subtitle: String(localized: "panel.backup"),
             color: .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
         )
         applySelectionCategory(
             button: downloadCategoryButton,
             count: state.downloadCount,
             iconName: "arrow.left",
-            subtitle: "下载",
+            subtitle: String(localized: "panel.download"),
             color: .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
         )
         applySelectionCategory(
             button: syncCategoryButton,
             count: state.syncCount,
             iconName: "arrow.left.arrow.right",
-            subtitle: "同步",
+            subtitle: String(localized: "panel.sync"),
             color: .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
         )
 

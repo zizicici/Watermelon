@@ -80,6 +80,18 @@ final class HomeViewController: UIViewController {
 
     private static let headerAreaHeight: CGFloat = 96
 
+    private static let monthFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("MMM")
+        return f
+    }()
+
+    private static let yearFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("yyyy")
+        return f
+    }()
+
     private struct HeaderSummary {
         let photoCount: Int
         let videoCount: Int
@@ -180,7 +192,7 @@ final class HomeViewController: UIViewController {
         leftToggle.setContentCompressionResistancePriority(.required, for: .horizontal)
         leftToggle.addTarget(self, action: #selector(leftToggleTapped), for: .touchUpInside)
 
-        leftHeaderLabel.text = "本地相册"
+        leftHeaderLabel.text = String(localized: "home.header.localAlbum")
         leftHeaderLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         leftHeaderLabel.textColor = headerTextColor
         leftHeaderLabel.textAlignment = .center
@@ -337,7 +349,7 @@ final class HomeViewController: UIViewController {
         btnCfg.image = UIImage(systemName: "chevron.down", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11))
         btnCfg.imagePlacement = .trailing
         btnCfg.imagePadding = 4
-        btnCfg.title = "选择存储"
+        btnCfg.title = String(localized: "home.overlay.selectStorage")
         remoteOverlayButton.configuration = btnCfg
         remoteOverlayButton.showsMenuAsPrimaryAction = true
         remoteOverlayButton.menu = buildDestinationMenu()
@@ -499,7 +511,7 @@ final class HomeViewController: UIViewController {
         }
 
         store.onConnectFailed = { [weak self] profile, error in
-            self?.showAlert(title: "连接失败", message: profile.userFacingStorageErrorMessage(error))
+            self?.showAlert(title: String(localized: "home.alert.connectionFailed"), message: profile.userFacingStorageErrorMessage(error))
         }
     }
 
@@ -800,7 +812,7 @@ final class HomeViewController: UIViewController {
             gratefulConfig: GratefulCellConfiguration(
                 title: String(localized: "store.grateful.title"),
                 titleHighlight: "Pro",
-                content: String(localized: "store.grateful.content")
+                content: String(format: String(localized: "store.grateful.content"), AppName.localized)
             ),
             email: "watermelon@zi.ci",
             appStoreId: "6762260596",
@@ -956,13 +968,13 @@ final class HomeViewController: UIViewController {
         case .notDetermined:
             localOverlay.isHidden = false
             localOverlaySpinner.stopAnimating()
-            localOverlayLabel.text = "需要授权访问本地相册"
-            updateLocalOverlayButton(title: "允许访问")
+            localOverlayLabel.text = String(localized: "home.overlay.authRequired")
+            updateLocalOverlayButton(title: String(localized: "home.overlay.allowAccess"))
         case .denied:
             localOverlay.isHidden = false
             localOverlaySpinner.stopAnimating()
-            localOverlayLabel.text = "未授权访问本地相册"
-            updateLocalOverlayButton(title: "前往设置")
+            localOverlayLabel.text = String(localized: "home.overlay.noAuth")
+            updateLocalOverlayButton(title: String(localized: "home.overlay.goToSettings"))
         }
     }
 
@@ -971,12 +983,12 @@ final class HomeViewController: UIViewController {
         case .connecting:
             remoteOverlay.isHidden = false
             remoteOverlaySpinner.startAnimating()
-            remoteOverlayLabel.text = "连接中..."
+            remoteOverlayLabel.text = String(localized: "home.overlay.connecting")
             remoteOverlayButton.isHidden = true
         case .disconnected:
             remoteOverlay.isHidden = false
             remoteOverlaySpinner.stopAnimating()
-            remoteOverlayLabel.text = "未连接远端存储"
+            remoteOverlayLabel.text = String(localized: "home.overlay.notConnected")
             remoteOverlayButton.isHidden = false
         case .connected:
             remoteOverlay.isHidden = true
@@ -991,7 +1003,7 @@ final class HomeViewController: UIViewController {
         case .connected(let profile):
             rightHeaderLabel.text = profile.storageProfile.indicatorText
         case .disconnected:
-            rightHeaderLabel.text = "远端存储"
+            rightHeaderLabel.text = String(localized: "home.header.remoteStorage")
         }
         refreshDestinationMenus()
     }
@@ -1050,7 +1062,7 @@ final class HomeViewController: UIViewController {
 
     private func configureRightHeaderButton() {
         let headerTextColor = UIColor.materialOnContainer(light: .Material.Green._900, dark: .Material.Green._100)
-        rightHeaderLabel.text = "远端存储"
+        rightHeaderLabel.text = String(localized: "home.header.remoteStorage")
         rightHeaderLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         rightHeaderLabel.textColor = headerTextColor
         rightHeaderLabel.textAlignment = .center
@@ -1079,7 +1091,7 @@ final class HomeViewController: UIViewController {
         let disconnected = !store.connectionState.isConnected
 
         let disconnectAction = UIAction(
-            title: "未连接",
+            title: String(localized: "home.menu.notConnected"),
             state: disconnected ? .on : .off
         ) { [weak self] _ in
             self?.store.disconnect()
@@ -1100,17 +1112,17 @@ final class HomeViewController: UIViewController {
 
         let profileSection = UIMenu(title: "", options: .displayInline, children: profileActions)
         let addStorageMenu = UIMenu(
-            title: "新增存储",
+            title: String(localized: "home.menu.addStorage"),
             image: UIImage(systemName: "plus.circle"),
             children: [
                 UIMenu(
                     title: "SMB",
                     image: UIImage(systemName: "server.rack"),
                     children: [
-                        UIAction(title: "手动添加") { [weak self] _ in
+                        UIAction(title: String(localized: "home.menu.smbManual")) { [weak self] _ in
                             self?.openNewStorageFlow(.smb)
                         },
-                        UIAction(title: "发现本地 SMB", image: UIImage(systemName: "bonjour")) { [weak self] _ in
+                        UIAction(title: String(localized: "home.menu.smbDiscovery"), image: UIImage(systemName: "bonjour")) { [weak self] _ in
                             self?.openNewStorageFlow(.smbDiscovery)
                         }
                     ]
@@ -1118,7 +1130,7 @@ final class HomeViewController: UIViewController {
                 UIAction(title: "WebDAV", image: UIImage(systemName: "network")) { [weak self] _ in
                     self?.openNewStorageFlow(.webdav)
                 },
-                UIAction(title: "外接存储", image: UIImage(systemName: "externaldrive")) { [weak self] _ in
+                UIAction(title: String(localized: "home.menu.externalStorage"), image: UIImage(systemName: "externaldrive")) { [weak self] _ in
                     self?.openNewStorageFlow(.externalVolume)
                 }
             ]
@@ -1171,16 +1183,16 @@ final class HomeViewController: UIViewController {
 
     private func presentProUpgradeAlert() {
         let alert = UIAlertController(
-            title: "升级到 Pro",
-            message: "免费版仅支持 1 个存储目标。升级 Pro 解锁无限存储目标。",
+            title: String(localized: "home.alert.upgradeTitle"),
+            message: String(localized: "home.alert.upgradeMessage"),
             preferredStyle: .alert
         )
         if let price = Store.shared.membershipDisplayPrice() {
-            alert.addAction(UIAlertAction(title: "升级 (\(price))", style: .default) { _ in
+            alert.addAction(UIAlertAction(title: String(format: String(localized: "home.alert.upgradeAction"), price), style: .default) { _ in
                 Task { try? await Store.shared.purchaseLifetimeMembership() }
             })
         }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
         present(alert, animated: true)
     }
 
@@ -1254,39 +1266,39 @@ final class HomeViewController: UIViewController {
         guard counts.backup > 0 || counts.download > 0 || counts.sync > 0 else { return }
 
         var lines: [String] = []
-        if counts.backup > 0 { lines.append("备份 \(counts.backup) 个月份") }
-        if counts.download > 0 { lines.append("下载 \(counts.download) 个月份") }
-        if counts.sync > 0 { lines.append("同步 \(counts.sync) 个月份") }
+        if counts.backup > 0 { lines.append(String(format: String(localized: "home.confirm.backupMonths"), counts.backup)) }
+        if counts.download > 0 { lines.append(String(format: String(localized: "home.confirm.downloadMonths"), counts.download)) }
+        if counts.sync > 0 { lines.append(String(format: String(localized: "home.confirm.syncMonths"), counts.sync)) }
 
         let upload = store.selection.months(for: .toRemote)
         let download = store.selection.months(for: .toLocal)
         let sync = store.selection.months(for: .sync)
 
-        let alert = UIAlertController(title: "确认执行", message: lines.joined(separator: "\n"), preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "开始", style: .default) { [weak self] _ in
+        let alert = UIAlertController(title: String(localized: "home.alert.confirmExecute"), message: lines.joined(separator: "\n"), preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "common.start"), style: .default) { [weak self] _ in
             self?.store.startExecution(upload: upload, download: download, sync: sync)
         })
         present(alert, animated: true)
     }
 
     private func confirmStop() {
-        let alert = UIAlertController(title: "确认停止", message: "停止后需要重新选择月份执行", preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "停止", style: .destructive) { [weak self] _ in
+        let alert = UIAlertController(title: String(localized: "home.alert.confirmStop"), message: String(localized: "home.alert.confirmStopMessage"), preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "common.stop"), style: .destructive) { [weak self] _ in
             self?.store.stopExecution()
         })
         present(alert, animated: true)
     }
 
     private func presentPasswordPrompt(for profile: ServerProfileRecord, completion: @escaping (String) -> Void) {
-        let alert = UIAlertController(title: "输入密码", message: profile.name, preferredStyle: .alert)
+        let alert = UIAlertController(title: String(localized: "home.alert.passwordPrompt"), message: profile.name, preferredStyle: .alert)
         alert.addTextField { textField in
-            textField.placeholder = "Password"
+            textField.placeholder = String(localized: "home.alert.passwordPlaceholder")
             textField.isSecureTextEntry = true
         }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "连接", style: .default) { _ in
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "common.connect"), style: .default) { _ in
             guard let password = alert.textFields?.first?.text, !password.isEmpty else { return }
             completion(password)
         })
@@ -1308,18 +1320,21 @@ final class HomeViewController: UIViewController {
         for month in months { byYear[month.year, default: []].append(month) }
 
         let yearMenus = byYear.keys.sorted().map { year -> UIMenu in
-            let actions = byYear[year]!.map { month -> UIAction in
+            let actions = (byYear[year] ?? []).map { month -> UIAction in
                 let row = store.rowLookup[month]
-                let title = String(format: "%02d月", month.month)
+                let monthDate = Calendar.current.date(from: DateComponents(year: 2000, month: month.month))
+                let title = monthDate.map(Self.monthFormatter.string(from:)) ?? String(format: "%02d", month.month)
                 var parts: [String] = []
-                if let lc = row?.local?.assetCount { parts.append("本地 \(lc) 张") }
-                if let rc = row?.remote?.assetCount { parts.append("远端 \(rc) 张") }
+                if let lc = row?.local?.assetCount { parts.append(String(format: String(localized: "home.data.localCount"), lc)) }
+                if let rc = row?.remote?.assetCount { parts.append(String(format: String(localized: "home.data.remoteCount"), rc)) }
                 let subtitle = parts.isEmpty ? nil : parts.joined(separator: " · ")
                 return UIAction(title: title, subtitle: subtitle) { [weak self] _ in
                     self?.scrollToMonth(month)
                 }
             }
-            return UIMenu(title: "\(year)年", options: .displayInline, children: actions)
+            let yearDate = Calendar.current.date(from: DateComponents(year: year))
+            let yearTitle = yearDate.map(Self.yearFormatter.string(from:)) ?? String(year)
+            return UIMenu(title: yearTitle, options: .displayInline, children: actions)
         }
         return UIMenu(children: yearMenus)
     }

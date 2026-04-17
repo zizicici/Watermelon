@@ -19,14 +19,14 @@ final class HomeExecutionLogViewController: UIViewController {
     private let copyButton = UIButton(type: .system)
 
     private lazy var filterBarButtonItem = UIBarButtonItem(
-        title: "筛选",
+        title: String(localized: "log.filter"),
         image: UIImage(systemName: "line.3.horizontal.decrease.circle"),
         primaryAction: nil,
         menu: makeFilterMenu()
     )
 
     private var logObserverID: UUID?
-    private var snapshot = HomeExecutionLogSnapshot(statusText: "未开始", entries: [])
+    private var snapshot = HomeExecutionLogSnapshot(statusText: String(localized: "home.execution.notStarted"), entries: [])
     private var selectedLevels = ExecutionLogFilterPreference.getValue().enabledLevels
 
     init(coordinator: HomeExecutionCoordinator) {
@@ -50,7 +50,7 @@ final class HomeExecutionLogViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        title = "执行日志"
+        title = String(localized: "log.title")
         navigationItem.rightBarButtonItem = filterBarButtonItem
 
         buildUI()
@@ -67,7 +67,7 @@ final class HomeExecutionLogViewController: UIViewController {
 
         statusTitleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         statusTitleLabel.textColor = .secondaryLabel
-        statusTitleLabel.text = "当前状态"
+        statusTitleLabel.text = String(localized: "log.status")
 
         statusLabel.font = .systemFont(ofSize: 18, weight: .semibold)
         statusLabel.textColor = .label
@@ -83,7 +83,7 @@ final class HomeExecutionLogViewController: UIViewController {
         logTextView.textContainerInset = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
 
         var copyConfig = UIButton.Configuration.filled()
-        copyConfig.title = "复制当前日志"
+        copyConfig.title = String(localized: "log.copyButton")
         copyConfig.cornerStyle = .medium
         copyConfig.baseBackgroundColor = .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
         copyConfig.baseForegroundColor = .materialOnPrimary(dark: .Material.Green._800)
@@ -150,7 +150,7 @@ final class HomeExecutionLogViewController: UIViewController {
 
         guard !entries.isEmpty else {
             return NSAttributedString(
-                string: "当前筛选下没有日志。",
+                string: String(localized: "log.empty"),
                 attributes: [
                     .font: messageFont,
                     .foregroundColor: secondaryLogColor()
@@ -204,7 +204,7 @@ final class HomeExecutionLogViewController: UIViewController {
 
     private func makeFilterMenu() -> UIMenu {
         let allAction = UIAction(
-            title: "显示全部",
+            title: String(localized: "log.showAll"),
             image: UIImage(systemName: "line.3.horizontal.decrease.circle"),
             state: selectedLevels.count == ExecutionLogLevel.allCases.count ? .on : .off
         ) { [weak self] _ in
@@ -231,10 +231,10 @@ final class HomeExecutionLogViewController: UIViewController {
         }
 
         return UIMenu(
-            title: "筛选日志级别",
+            title: String(localized: "log.filterTitle"),
             children: [
                 allAction,
-                UIMenu(title: "日志级别", options: .displayInline, children: levelActions)
+                UIMenu(title: String(localized: "log.levelSection"), options: .displayInline, children: levelActions)
             ]
         )
     }
@@ -251,13 +251,13 @@ final class HomeExecutionLogViewController: UIViewController {
     private func title(for level: ExecutionLogLevel) -> String {
         switch level {
         case .debug:
-            return "调试"
+            return String(localized: "log.level.debug")
         case .info:
-            return "信息"
+            return String(localized: "log.level.info")
         case .warning:
-            return "警告"
+            return String(localized: "log.level.warning")
         case .error:
-            return "错误"
+            return String(localized: "log.level.error")
         }
     }
 
@@ -303,7 +303,7 @@ final class HomeExecutionLogViewController: UIViewController {
     private func copyTapped() {
         UIPasteboard.general.string = formattedLogText(for: snapshot)
 
-        let alert = UIAlertController(title: nil, message: "已复制执行日志", preferredStyle: .alert)
+        let alert = UIAlertController(title: nil, message: String(localized: "log.copied"), preferredStyle: .alert)
         present(alert, animated: true)
         Task { @MainActor [weak alert] in
             try? await Task.sleep(nanoseconds: 800_000_000)

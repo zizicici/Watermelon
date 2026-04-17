@@ -102,7 +102,7 @@ final class AssetProcessor: Sendable {
                 if !context.iCloudPhotoBackupMode.allowsNetworkAccess,
                    PhotoLibraryService.isNetworkAccessRequiredError(error) {
                     eventStream.emitLog(
-                        "跳过 iCloud 资源：\(displayName)。资源未下载到本机，且“允许访问 iCloud 原件”未开启。",
+                        "跳过 iCloud 资源：\(displayName)。资源未下载到本机，且"允许访问 iCloud 原件"未开启。",
                         level: .warning
                     )
                     return Self.makeICloudDisabledSkipResult(
