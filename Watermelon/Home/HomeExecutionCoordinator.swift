@@ -86,7 +86,6 @@ final class HomeExecutionCoordinator {
 
     private static let syncThrottleInterval: CFAbsoluteTime = 2.0
     private static let logNotifyCoalesceInterval: CFAbsoluteTime = 0.5
-    private static let localAvailabilityProbeWorkerCount = 2
     private static let localIndexPreflightWorkerCount = 2
     private static let localIndexICloudPreflightWorkerCount = 1
 
@@ -290,7 +289,7 @@ final class HomeExecutionCoordinator {
                     self.notifyStateChanged()
                 }
 
-                let prepared = await self.prepareExecutionIfNeeded()
+                let prepared = await self.prepareLocalIndexIfNeeded()
                 guard !Task.isCancelled else { return }
                 guard prepared else { return }
 
@@ -431,62 +430,9 @@ final class HomeExecutionCoordinator {
         onStateChanged?()
     }
 
-    private func prepareExecutionIfNeeded() async -> Bool {
-        if !(await prepareLocalAvailabilityProbeIfNeeded()) {
-            return false
-        }
-        return await prepareLocalIndexIfNeeded()
-    }
-
-    private func prepareLocalAvailabilityProbeIfNeeded() async -> Bool {
+    private func prepareLocalIndexIfNeeded() async -> Bool {
         forcedUploadWorkerCountOverride = nil
 
-        let settings = activeExecutionSettingsSnapshot()
-
-        guard session.shouldRunUploadPhase else { return true }
-        guard settings.iCloudPhotoBackupMode == .enable else { return true }
-
-        let assetIDs = selectedLocalAssetIDsForUploadPhase()
-        guard !assetIDs.isEmpty else { return true }
-
-        do {
-            let progressHandler = makePreflightProgressHandler()
-            appendInfoLog(String(format: String(localized: "home.execution.log.icloudProbeStart"), assetIDs.count))
-            setStatusText(String(localized: "home.execution.log.icloudProbeStatus"))
-            let probeResult = try await dependencies.localHashIndexBuildService.probeAvailability(
-                for: assetIDs,
-                workerCount: Self.localAvailabilityProbeWorkerCount,
-                progressHandler: progressHandler
-            )
-            guard !Task.isCancelled else { return false }
-
-            if probeResult.requiresSingleWorker {
-                forcedUploadWorkerCountOverride = 1
-                let unavailableCount = probeResult.unavailableAssetIDs.count
-                let failedCount = probeResult.failedAssetIDs.count
-                print("[HomeExecution] Availability probe requires conservative upload concurrency. unavailable=\(unavailableCount), failed=\(failedCount). Force upload worker count to 1.")
-                appendWarningLog(String(format: String(localized: "home.execution.log.icloudProbeDegraded"), unavailableCount, failedCount))
-            }
-            appendInfoLog(String(localized: "home.execution.log.icloudProbeDone"))
-            return true
-        } catch is CancellationError {
-            return false
-        } catch {
-            let errorMessage = UserFacingErrorLocalizer.message(
-                for: error,
-                profile: dependencies.appSession.activeProfile
-            )
-            let message = String(format: String(localized: "home.execution.log.icloudProbeFailed"), errorMessage)
-            let alert = session.failExecution(reason: message)
-            transientControlState = nil
-            setErrorStatus(message, log: String(format: String(localized: "home.execution.log.executionFailed"), message))
-            notifyStateChanged()
-            onAlert?(alert.title, alert.message)
-            return false
-        }
-    }
-
-    private func prepareLocalIndexIfNeeded() async -> Bool {
         let settings = activeExecutionSettingsSnapshot()
         let assetIDs = selectedLocalAssetIDsForExecution()
         guard !assetIDs.isEmpty else {
@@ -511,6 +457,18 @@ final class HomeExecutionCoordinator {
                 await dataRefresher.refreshLocalIndexAndNotify(initialResult.readyAssetIDs)
                 guard !Task.isCancelled else { return false }
                 appendDebugLog(String(format: String(localized: "home.execution.log.indexRefreshDone"), initialResult.readyAssetIDs.count))
+            }
+
+            if session.shouldRunUploadPhase,
+               settings.iCloudPhotoBackupMode == .enable,
+               !initialResult.unavailableAssetIDs.isEmpty {
+                let uploadScope = session.uploadScopeAssetIDs
+                let uploadUnavailable = initialResult.unavailableAssetIDs.intersection(uploadScope)
+                if !uploadUnavailable.isEmpty {
+                    let uploadFailed = initialResult.failedAssetIDs.intersection(uploadScope)
+                    forcedUploadWorkerCountOverride = 1
+                    appendWarningLog(String(format: String(localized: "home.execution.log.icloudUploadDegraded"), uploadUnavailable.count, uploadFailed.count))
+                }
             }
 
             let result: LocalHashIndexBuildResult
@@ -593,14 +551,6 @@ final class HomeExecutionCoordinator {
     private func selectedLocalAssetIDsForExecution() -> Set<String> {
         var assetIDs = Set<String>()
         for month in session.monthPlans.keys {
-            assetIDs.formUnion(dataAccess.localAssetIDs(month))
-        }
-        return assetIDs
-    }
-
-    private func selectedLocalAssetIDsForUploadPhase() -> Set<String> {
-        var assetIDs = Set<String>()
-        for month in session.uploadMonths + session.syncMonths {
             assetIDs.formUnion(dataAccess.localAssetIDs(month))
         }
         return assetIDs

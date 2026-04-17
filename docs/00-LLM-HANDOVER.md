@@ -28,8 +28,9 @@
 3. `HomeScreenStore.load()` 先跑 `HomeIncrementalDataManager.ensureLocalIndexLoaded()`，随后尝试自动连接上次激活的 profile。
 4. 连接成功后，`HomeConnectionController` 调 `BackupCoordinator.reloadRemoteIndex(...)`，共享的 `RemoteLibrarySnapshotCache` 被刷新。
 5. 首页月份选择完成后，`HomeExecutionCoordinator.enter(...)` 建立一次新的执行会话。
-6. 执行前会先冻结一次运行时设置；若启用了 `允许访问 iCloud 原件` 且本次包含上传，会先做 availability probe。
-7. 随后跑本地索引预检查；download / sync 在启用 `允许访问 iCloud 原件` 时允许对 `unavailableAssetIDs` 再做一次联网补索引。
+6. 执行前会先冻结一次运行时设置，然后跑一次离线本地索引预检查。
+7. 预检查中，cache-hit 资产仍会做一次轻量离线可用性探测，保证已被回收到 iCloud 的资产也能被识别为 `unavailable`。
+8. 第一轮结束后：若启用 `允许访问 iCloud 原件` 且上传范围内存在 `unavailableAssetIDs`，upload 强制降到 `1` 个 worker；download / sync 则对 `unavailableAssetIDs` 再做一次联网补索引。
 8. 上传由 `BackupSessionController` 驱动 `BackupCoordinator.runBackup(...)`；下载由 `DownloadWorkflowHelper + RestoreService` 完成。
 
 ## 4. Home 当前分层

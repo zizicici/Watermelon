@@ -18,17 +18,6 @@ struct LocalHashIndexBuildResult: Sendable {
     }
 }
 
-struct LocalAssetAvailabilityProbeResult: Sendable {
-    let requestedAssetIDs: Set<String>
-    let unavailableAssetIDs: Set<String>
-    let failedAssetIDs: Set<String>
-    let missingAssetIDs: Set<String>
-
-    var requiresSingleWorker: Bool {
-        !unavailableAssetIDs.isEmpty
-    }
-}
-
 private struct LocalHashIndexAssetRef: @unchecked Sendable {
     let asset: PHAsset
 }
@@ -140,71 +129,6 @@ private actor LocalHashIndexBuildProgressReporter {
                 total,
                 cacheHitCount,
                 rebuiltCount,
-                unavailableCount,
-                failedCount
-            ),
-            .debug
-        )
-    }
-}
-
-private actor LocalHashIndexAvailabilityProgressReporter {
-    private static let logCountStep = 2000
-
-    private let total: Int
-    private let phaseLabel: String
-    private let logHandler: LocalHashIndexProgressHandler?
-
-    private var processed = 0
-    private var readyCount = 0
-    private var unavailableCount = 0
-    private var failedCount = 0
-    private var lastLoggedProcessed = 0
-
-    init(
-        total: Int,
-        phaseLabel: String,
-        logHandler: LocalHashIndexProgressHandler?
-    ) {
-        self.total = total
-        self.phaseLabel = phaseLabel
-        self.logHandler = logHandler
-    }
-
-    func record(_ outcome: LocalHashIndexAssetOutcome) async {
-        processed += 1
-        switch outcome {
-        case .ready:
-            readyCount += 1
-        case .unavailable:
-            unavailableCount += 1
-        case .failed:
-            failedCount += 1
-        }
-        await maybeLog(force: false)
-    }
-
-    func finish() async {
-        await maybeLog(force: true)
-    }
-
-    private func maybeLog(force: Bool) async {
-        guard let logHandler, total > 0 else { return }
-
-        let shouldLog = force
-            || processed == total
-            || processed - lastLoggedProcessed >= Self.logCountStep
-        guard shouldLog else { return }
-        guard processed > lastLoggedProcessed || force else { return }
-
-        lastLoggedProcessed = processed
-        await logHandler(
-            String.localizedStringWithFormat(
-                String(localized: "backup.preflight.progressAvailability"),
-                phaseLabel,
-                processed,
-                total,
-                readyCount,
                 unavailableCount,
                 failedCount
             ),
@@ -370,102 +294,6 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         }
     }
 
-    func probeAvailability(
-        for assetIDs: Set<String>,
-        workerCount: Int = 2,
-        progressHandler: LocalHashIndexProgressHandler? = nil
-    ) async throws -> LocalAssetAvailabilityProbeResult {
-        guard !assetIDs.isEmpty else {
-            return LocalAssetAvailabilityProbeResult(
-                requestedAssetIDs: [],
-                unavailableAssetIDs: [],
-                failedAssetIDs: [],
-                missingAssetIDs: []
-            )
-        }
-
-        try await ensurePhotoAuthorization()
-        let phaseLabel = String(localized: "backup.preflight.phaseLabel.availabilityProbe")
-        let prepareStart = CFAbsoluteTimeGetCurrent()
-        await progressHandler?(
-            String.localizedStringWithFormat(
-                String(localized: "backup.preflight.prepareStart"),
-                phaseLabel,
-                assetIDs.count
-            ),
-            .info
-        )
-        let preparedInput = try await prepareAssetFetchInput(for: assetIDs)
-        let prepareElapsed = CFAbsoluteTimeGetCurrent() - prepareStart
-        let worklist = LocalHashIndexWorklist(assets: preparedInput.assets)
-        let effectiveWorkerCount = min(max(workerCount, 1), max(preparedInput.assets.count, 1))
-        await progressHandler?(
-            String.localizedStringWithFormat(
-                String(localized: "backup.preflight.prepareDoneAvailability"),
-                phaseLabel,
-                preparedInput.assets.count,
-                preparedInput.missingAssetIDs.count,
-                Self.formatElapsed(prepareElapsed)
-            ),
-            .debug
-        )
-        await progressHandler?(
-            String.localizedStringWithFormat(
-                String(localized: "backup.preflight.scanStart"),
-                phaseLabel,
-                effectiveWorkerCount
-            ),
-            .info
-        )
-        let progressReporter = LocalHashIndexAvailabilityProgressReporter(
-            total: preparedInput.assets.count,
-            phaseLabel: phaseLabel,
-            logHandler: progressHandler
-        )
-        let scanStart = CFAbsoluteTimeGetCurrent()
-
-        let aggregate = try await withThrowingTaskGroup(of: LocalHashIndexWorkerResult.self) { group in
-            for _ in 0 ..< effectiveWorkerCount {
-                group.addTask { [self, progressReporter] in
-                    var result = LocalHashIndexWorkerResult()
-
-                    while let assetRef = await worklist.nextAsset() {
-                        try Task.checkCancellation()
-                        let outcome = try await probeAssetAvailability(assetRef.asset)
-                        result.record(outcome)
-                        await progressReporter.record(outcome)
-                    }
-
-                    return result
-                }
-            }
-
-            var aggregate = LocalHashIndexWorkerResult()
-            for try await result in group {
-                aggregate.unavailableAssetIDs.formUnion(result.unavailableAssetIDs)
-                aggregate.failedAssetIDs.formUnion(result.failedAssetIDs)
-            }
-            return aggregate
-        }
-        await progressReporter.finish()
-        let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
-        await progressHandler?(
-            String.localizedStringWithFormat(
-                String(localized: "backup.preflight.scanDone"),
-                phaseLabel,
-                Self.formatElapsed(scanElapsed)
-            ),
-            .debug
-        )
-
-        return LocalAssetAvailabilityProbeResult(
-            requestedAssetIDs: assetIDs,
-            unavailableAssetIDs: aggregate.unavailableAssetIDs,
-            failedAssetIDs: aggregate.failedAssetIDs,
-            missingAssetIDs: preparedInput.missingAssetIDs
-        )
-    }
-
     private func ensurePhotoAuthorization() async throws {
         let status = photoLibraryService.authorizationStatus()
         if status != .authorized && status != .limited {
@@ -556,6 +384,32 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             selectedResources: selectedResources,
             cachedLocalHash: cachedLocalHash
         ) {
+            // Cache fingerprint stays valid across iCloud eviction, but the resource
+            // bytes may have been offloaded since — probe to keep `unavailable` signal
+            // accurate for the worker-count downgrade decision.
+            if !allowNetworkAccess {
+                do {
+                    for selected in selectedResources {
+                        try Task.checkCancellation()
+                        let isLocal = try await photoLibraryService.isResourceLocallyAvailable(
+                            selected.resource
+                        )
+                        if !isLocal {
+                            return LocalHashIndexProcessedAssetResult(
+                                outcome: .unavailable(asset.localIdentifier),
+                                reusedCache: true
+                            )
+                        }
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    return LocalHashIndexProcessedAssetResult(
+                        outcome: .failed(asset.localIdentifier),
+                        reusedCache: true
+                    )
+                }
+            }
             return LocalHashIndexProcessedAssetResult(
                 outcome: .ready(asset.localIdentifier),
                 reusedCache: true
@@ -624,34 +478,6 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 outcome: .failed(asset.localIdentifier),
                 reusedCache: false
             )
-        }
-    }
-
-    private func probeAssetAvailability(
-        _ asset: PHAsset
-    ) async throws -> LocalHashIndexAssetOutcome {
-        let selectedResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
-            from: PHAssetResource.assetResources(for: asset)
-        )
-        guard !selectedResources.isEmpty else {
-            return .failed(asset.localIdentifier)
-        }
-
-        do {
-            for selected in selectedResources {
-                try Task.checkCancellation()
-                let isLocallyAvailable = try await photoLibraryService.isResourceLocallyAvailable(
-                    selected.resource
-                )
-                if !isLocallyAvailable {
-                    return .unavailable(asset.localIdentifier)
-                }
-            }
-            return .ready(asset.localIdentifier)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            return .failed(asset.localIdentifier)
         }
     }
 

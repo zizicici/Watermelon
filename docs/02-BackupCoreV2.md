@@ -31,16 +31,13 @@
 1. `上传并发`
 2. `允许访问 iCloud 原件`
 
-这份快照会贯穿 probe / preflight / upload / resume，全程不再重新读取设置。
+这份快照会贯穿 preflight / upload / resume，全程不再重新读取设置。
 
 ## 3. 执行前的本地索引预检查
 
-执行一开始，`HomeExecutionCoordinator` 会先跑两步：
+执行一开始，`HomeExecutionCoordinator.prepareLocalIndexIfNeeded()` 只做一步本地 hash 索引预检查：
 
-1. 如果本次包含上传且启用了 `允许访问 iCloud 原件`，先做 availability probe：
-   `LocalHashIndexBuildService.probeAvailability(for:assetIDs, workerCount: 2)`
-2. 然后做本地 hash 索引预检查：
-   `LocalHashIndexBuildService.buildIndex(for:assetIDs, workerCount: 2, allowNetworkAccess: false)`
+`LocalHashIndexBuildService.buildIndex(for:assetIDs, workerCount: 2, allowNetworkAccess: false)`
 
 目的：
 
@@ -49,14 +46,13 @@
 
 关键规则：
 
-1. availability probe 只覆盖本次会进入上传阶段的本地资产，也就是 `upload + sync` 月份。
-2. 若 probe 检测到上传范围内存在 iCloud-only 本地资源，本次 upload 会强制降为 `1` 个 worker。
-3. 本地索引预检查第一轮始终离线执行，因此 iCloud-only 资源会先被标记为 `unavailable`。
-4. 如果本次 **只上传**，即使有少量本地索引仍不完整，也允许继续执行。
-5. 如果本次包含 **下载或同步**，且第一轮存在 `unavailableAssetIDs`：
+1. 第一轮始终离线执行，因此 iCloud-only 资源会被标记为 `unavailable`。cache-hit 资产也会顺带做一次轻量离线可用性探测，避免曾经建过索引、之后被系统回收到 iCloud 的资产漏检。
+2. 第一轮结束后，如果启用了 `允许访问 iCloud 原件` 且 **上传范围** (`upload + sync` 月份) 内存在 `unavailableAssetIDs`，本次 upload 会强制降为 `1` 个 worker——这一决定直接从第一轮结果推导。
+3. 如果本次 **只上传**，即使有少量本地索引仍不完整，也允许继续执行。
+4. 如果本次包含 **下载或同步**，且第一轮存在 `unavailableAssetIDs`：
    - 启用 `允许访问 iCloud 原件`：只对这些 `unavailableAssetIDs` 再跑一次 `buildIndex(... allowNetworkAccess: true)`，worker 固定为 `1`
    - 未启用：直接停止执行，并提示去设置启用该选项，或先在系统相册把原件下载到本机
-6. 如果联网补索引后仍有 `failedAssetIDs / unavailableAssetIDs`，则继续停止执行。
+5. 如果联网补索引后仍有 `failedAssetIDs / unavailableAssetIDs`，则继续停止执行。
 
 ## 4. 上传主流程
 
@@ -91,7 +87,7 @@
 1. `SMB / WebDAV = 2`
 2. `externalVolume = 3`
 3. 用户可在设置里手动覆盖 `1...4`
-4. 启用 `允许访问 iCloud 原件` 时，不会直接永远单 worker；只有 availability probe 命中 iCloud-only 上传资产时，才会把本次 upload 强制改为 `1`
+4. 启用 `允许访问 iCloud 原件` 时，不会直接永远单 worker；只有离线预检查在上传范围 (`upload + sync` 月份) 内产出 `unavailableAssetIDs`（包含 cache-hit 但已被系统回收到 iCloud 的资产）时，才会把本次 upload 强制改为 `1`
 5. 最终还会再按月份数裁剪
 
 ## 5. 并行执行面
@@ -218,9 +214,8 @@
 
 ## 12. 关键常量
 
-1. availability probe worker：`2`
-2. 本地索引离线预检查 worker：`2`
-3. iCloud recovery 预检查 worker：`1`
+1. 本地索引离线预检查 worker：`2`
+2. iCloud recovery 预检查 worker：`1`
 4. Home 侧远端同步节流：`2s`
 5. month seed 内存阈值：`120_000` 条目
 6. 并行执行的 PHAsset 批大小：`500`

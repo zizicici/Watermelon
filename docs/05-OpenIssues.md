@@ -7,13 +7,13 @@
 
 ## 2. iCloud-only 资源仍有重复 I/O 成本
 
-1. 当前首页执行已支持 `允许访问 iCloud 原件`：会先做 availability probe，download / sync 还支持对 `unavailableAssetIDs` 做联网补索引。
+1. 当前首页执行已支持 `允许访问 iCloud 原件`：离线预检查可识别 cache-hit 但已被回收到 iCloud 的资产，download / sync 还支持对 `unavailableAssetIDs` 做联网补索引。
 2. 但在某些场景，同一条 iCloud-only 本地资源仍可能被重复读取：
-   - probe 先做一次轻量本地可用性判断
+   - 预检查对 cache-hit 资产做一次轻量本地可用性判断
    - 联网补索引时完整导出一次原件并计算 hash
    - 上传阶段若远端未命中，可能再次完整导出并上传
 3. 对大视频、Live Photo 或蜂窝网络场景，这个额外成本会比较明显。
-4. 后续可评估复用 preflight 产物，或把 probe 结果传给离线 preflight，减少重复尝试。
+4. 后续可评估复用 preflight 产物到上传阶段，减少重复完整导出。
 
 ## 3. full run 的恢复成本仍高
 
@@ -64,5 +64,5 @@
 
 1. 优先补首页执行链路的自动化测试，特别是暂停 / 恢复 / stop / 连接丢失。
 2. 评估为 full run 持久化 pending 集，减少恢复时重扫。
-3. 评估复用 iCloud recovery / probe 结果，降低 iCloud-only 资源的重复 I/O 成本。
+3. 评估复用 iCloud recovery 结果到上传阶段，降低 iCloud-only 资源的重复 I/O 成本。
 4. 评估按失败率和吞吐量自适应调整 worker 数。

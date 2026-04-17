@@ -58,6 +58,10 @@ struct HomeExecutionSession {
 
     var shouldRunUploadPhase: Bool { !uploadPhaseCompleted }
 
+    var uploadScopeAssetIDs: Set<String> {
+        uploadAssetIDsByMonth.values.reduce(into: Set<String>()) { $0.formUnion($1) }
+    }
+
     mutating func enter(
         upload: [LibraryMonthKey],
         download: [LibraryMonthKey],

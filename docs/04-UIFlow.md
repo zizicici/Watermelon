@@ -118,9 +118,9 @@ App 启动后直接进入 `HomeViewController`。
 
 然后执行前置检查：
 
-1. 如果本次包含上传且启用了 `允许访问 iCloud 原件`，会先对 `upload + sync` 月份做 availability probe
-2. 若 probe 发现仅存于 iCloud 的本地上传资源，本次 upload 自动改为 `1` 个 worker
-3. 随后对本次涉及的所有本地 asset 做离线 hash 预检查，默认 2 个 worker
+1. 对本次涉及的所有本地 asset 做离线 hash 预检查 (`buildIndex(allowNetworkAccess: false)`)，默认 2 个 worker
+2. 预检查中，cache-hit 资产会额外做一次轻量离线可用性探测：命中 iCloud-only 的话会被标成 `unavailable`，保证已被系统回收的资产能被识别出来
+3. 第一轮结束后，若启用了 `允许访问 iCloud 原件` 且 **上传范围** (`upload + sync` 月份) 内存在 `unavailableAssetIDs`，本次 upload 自动改为 `1` 个 worker
 4. 如果本次包含下载或同步，且第一轮仍有 `unavailableAssetIDs`：
    - 启用 `允许访问 iCloud 原件`：只对这些资产再做一次联网补索引，worker 固定为 `1`
    - 未启用：直接失败并弹窗
