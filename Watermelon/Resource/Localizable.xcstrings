@@ -16421,7 +16421,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16433,13 +16433,13 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld Workers"
+                  "value": "%lld"
                 }
               },
               "one": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16451,7 +16451,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16463,7 +16463,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16475,7 +16475,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16487,7 +16487,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16499,7 +16499,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16511,7 +16511,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16523,7 +16523,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16535,7 +16535,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16547,7 +16547,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld 个 Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16559,7 +16559,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld 個 Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16571,7 +16571,7 @@
               "other": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "%lld 個 Worker"
+                  "value": "%lld"
                 }
               }
             }
@@ -16666,79 +16666,79 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Upload-Parallelität Worker"
+            "value": "Upload-Parallelität"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Upload Concurrency Workers"
+            "value": "Upload Concurrency"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Workers de subida simultánea"
+            "value": "Concurrencia de subida"
           }
         },
         "es-419": {
           "stringUnit": {
             "state": "translated",
-            "value": "Workers de subida simultánea"
+            "value": "Concurrencia de subida"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Workers de téléversement simultanés"
+            "value": "Simultanéité d'envoi"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "アップロード同時実行 Worker"
+            "value": "アップロード同時実行数"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "업로드 동시 실행 Worker"
+            "value": "업로드 동시 실행"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Workers de envio simultâneo"
+            "value": "Concorrência de envio"
           }
         },
         "pt-PT": {
           "stringUnit": {
             "state": "translated",
-            "value": "Workers de envio simultâneo"
+            "value": "Concorrência de envio"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "Worker паралельного завантаження"
+            "value": "Паралельність завантаження"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "上传并发 Worker"
+            "value": "上传并发"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "上傳並行 Worker"
+            "value": "上傳並行"
           }
         },
         "zh-HK": {
           "stringUnit": {
             "state": "translated",
-            "value": "上傳並行 Worker"
+            "value": "上傳並行"
           }
         }
       }
