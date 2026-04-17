@@ -7058,79 +7058,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "„Zugriff auf iCloud-Fotos erlauben“ ist aktiviert. Watermelon kann iCloud-Originale bei Bedarf laden. Wenn nur in iCloud vorhandene lokale Ressourcen erkannt werden, wird dieser Lauf automatisch auf 1 Worker umgestellt."
+            "value" : "„Zugriff auf iCloud-Fotos erlauben“ ist aktiviert. Watermelon kann iCloud-Originale bei Bedarf laden. Wenn nur in iCloud vorhandene lokale Ressourcen erkannt werden, wird die Parallelität dieses Laufs automatisch auf 1 gesetzt."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allow iCloud Photo Access is enabled. Watermelon may download iCloud originals on demand. If iCloud-only local resources are detected, this run will automatically switch to 1 worker."
+            "value" : "Allow iCloud Photo Access is enabled. Watermelon may download iCloud originals on demand. If iCloud-only local resources are detected, this run will automatically switch concurrency to 1."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“Permitir acceso a fotos de iCloud” está activado. Watermelon puede descargar originales de iCloud cuando sea necesario. Si se detectan recursos locales solo en iCloud, esta ejecución cambiará automáticamente a 1 worker."
+            "value" : "“Permitir acceso a fotos de iCloud” está activado. Watermelon puede descargar originales de iCloud cuando sea necesario. Si se detectan recursos locales solo en iCloud, esta ejecución cambiará automáticamente la concurrencia a 1."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“Permitir acceso a fotos de iCloud” está activado. Watermelon puede descargar originales de iCloud cuando sea necesario. Si se detectan recursos locales solo en iCloud, esta ejecución cambiará automáticamente a 1 worker."
+            "value" : "“Permitir acceso a fotos de iCloud” está activado. Watermelon puede descargar originales de iCloud cuando sea necesario. Si se detectan recursos locales solo en iCloud, esta ejecución cambiará automáticamente la concurrencia a 1."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "« Autoriser l’accès aux photos iCloud » est activé. Watermelon peut télécharger les originaux iCloud à la demande. Si des ressources locales uniquement présentes sur iCloud sont détectées, cette exécution passera automatiquement à 1 worker."
+            "value" : "« Autoriser l’accès aux photos iCloud » est activé. Watermelon peut télécharger les originaux iCloud à la demande. Si des ressources locales uniquement présentes sur iCloud sont détectées, cette exécution réduira automatiquement la simultanéité à 1."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「iCloud 写真へのアクセスを許可」が有効です。Watermelon は必要に応じて iCloud のオリジナルをダウンロードできます。iCloud のみに存在するローカルリソースが検出された場合、この実行は自動的に 1 worker に切り替わります。"
+            "value" : "「iCloud 写真へのアクセスを許可」が有効です。Watermelon は必要に応じて iCloud のオリジナルをダウンロードできます。iCloud のみに存在するローカルリソースが検出された場合、この実行の同時実行数は自動的に 1 に切り替わります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "\"iCloud 사진 접근 허용\"이 활성화되어 있습니다. Watermelon은 필요할 때 iCloud 원본을 다운로드할 수 있습니다. iCloud에만 있는 로컬 리소스가 감지되면 이번 실행은 자동으로 1 worker로 전환됩니다."
+            "value" : "\"iCloud 사진 접근 허용\"이 활성화되어 있습니다. Watermelon은 필요할 때 iCloud 원본을 다운로드할 수 있습니다. iCloud에만 있는 로컬 리소스가 감지되면 이번 실행의 동시 실행 수가 자동으로 1로 전환됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“Permitir acesso às fotos do iCloud” está ativado. O Watermelon pode baixar originais do iCloud sob demanda. Se forem detectados recursos locais apenas no iCloud, esta execução mudará automaticamente para 1 worker."
+            "value" : "“Permitir acesso às fotos do iCloud” está ativado. O Watermelon pode baixar originais do iCloud sob demanda. Se forem detectados recursos locais apenas no iCloud, esta execução mudará automaticamente a concorrência para 1."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“Permitir acesso às fotos do iCloud” está ativado. O Watermelon pode descarregar originais do iCloud sob demanda. Se forem detetados recursos locais apenas no iCloud, esta execução mudará automaticamente para 1 worker."
+            "value" : "“Permitir acesso às fotos do iCloud” está ativado. O Watermelon pode descarregar originais do iCloud sob demanda. Se forem detetados recursos locais apenas no iCloud, esta execução mudará automaticamente a concorrência para 1."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Увімкнено «Дозволити доступ до фото iCloud». Watermelon може завантажувати оригінали iCloud за потреби. Якщо буде виявлено локальні ресурси лише в iCloud, цей запуск автоматично переключиться на 1 worker."
+            "value" : "Увімкнено «Дозволити доступ до фото iCloud». Watermelon може завантажувати оригінали iCloud за потреби. Якщо буде виявлено локальні ресурси лише в iCloud, цей запуск автоматично зменшить паралельність до 1."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已启用「允许访问 iCloud 原件」：Watermelon 可按需下载 iCloud 原件。若检测到仅存于 iCloud 的本地资源，本次执行会自动切换为 1 个 Worker。"
+            "value" : "已启用「允许访问 iCloud 原件」：Watermelon 可按需下载 iCloud 原件。若检测到仅存于 iCloud 的本地资源，本次执行会自动将并发数改为 1。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已啟用「允許存取 iCloud 原件」：Watermelon 可按需下載 iCloud 原件。若偵測到僅存於 iCloud 的本機資源，本次執行會自動切換為 1 個 Worker。"
+            "value" : "已啟用「允許存取 iCloud 原件」：Watermelon 可按需下載 iCloud 原件。若偵測到僅存於 iCloud 的本機資源，本次執行會自動將並行數改為 1。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已啟用「允許存取 iCloud 原件」：Watermelon 可按需下載 iCloud 原件。若偵測到僅存於 iCloud 的本機資源，本次執行會自動切換為 1 個 Worker。"
+            "value" : "已啟用「允許存取 iCloud 原件」：Watermelon 可按需下載 iCloud 原件。若偵測到僅存於 iCloud 的本機資源，本次執行會自動將並行數改為 1。"
           }
         }
       }
@@ -24702,79 +24702,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Im automatischen Modus wird die Standard-Parallelität pro Protokoll verwendet (SMB/WebDAV=2, lokaler Speicher=3).\nIm manuellen Modus wird der Protokoll-Standard überschrieben.\nWenn „iCloud-Fotozugriff erlauben“ aktiviert ist und nur in iCloud vorhandene Ressourcen erkannt werden, wird die Ausführung automatisch auf 1 Worker umgestellt.\nWenn bereits eine Sicherungsaufgabe läuft, müssen Sie diese stoppen und neu starten, damit die neue Einstellung wirksam wird."
+            "value" : "Im automatischen Modus wird die Standard-Parallelität pro Protokoll verwendet (SMB/WebDAV=2, lokaler Speicher=3).\nIm manuellen Modus wird der Protokoll-Standard überschrieben.\nWenn „iCloud-Fotozugriff erlauben“ aktiviert ist und nur in iCloud vorhandene Ressourcen erkannt werden, wird die Parallelität automatisch auf 1 gesetzt.\nWenn bereits eine Sicherungsaufgabe läuft, müssen Sie diese stoppen und neu starten, damit die neue Einstellung wirksam wird."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Automatic mode uses default concurrency per protocol (SMB/WebDAV=2, local storage=3).\nManual mode overrides the protocol default.\nIf \"Allow iCloud Photo Access\" is enabled and iCloud-only resources are detected, execution will automatically switch to 1 worker.\nIf a backup task is already in progress, you need to stop and restart it for the new setting to take effect."
+            "value" : "Automatic mode uses default concurrency per protocol (SMB/WebDAV=2, local storage=3).\nManual mode overrides the protocol default.\nIf \"Allow iCloud Photo Access\" is enabled and iCloud-only resources are detected, execution will automatically switch concurrency to 1.\nIf a backup task is already in progress, you need to stop and restart it for the new setting to take effect."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El modo automático usa la concurrencia predeterminada por protocolo (SMB/WebDAV=2, almacenamiento local=3).\nEl modo manual anula el valor predeterminado del protocolo.\nSi \"Permitir acceso a fotos de iCloud\" está activado y se detectan recursos solo en iCloud, la ejecución cambiará automáticamente a 1 worker.\nSi ya hay una tarea de respaldo en curso, debe detenerla y reiniciarla para que la nueva configuración surta efecto."
+            "value" : "El modo automático usa la concurrencia predeterminada por protocolo (SMB/WebDAV=2, almacenamiento local=3).\nEl modo manual anula el valor predeterminado del protocolo.\nSi \"Permitir acceso a fotos de iCloud\" está activado y se detectan recursos solo en iCloud, la ejecución cambiará automáticamente la concurrencia a 1.\nSi ya hay una tarea de respaldo en curso, debe detenerla y reiniciarla para que la nueva configuración surta efecto."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El modo automático usa la concurrencia predeterminada por protocolo (SMB/WebDAV=2, almacenamiento local=3).\nEl modo manual anula el valor predeterminado del protocolo.\nSi \"Permitir acceso a fotos de iCloud\" está activado y se detectan recursos solo en iCloud, la ejecución cambiará automáticamente a 1 worker.\nSi ya hay una tarea de respaldo en curso, debes detenerla y reiniciarla para que la nueva configuración surta efecto."
+            "value" : "El modo automático usa la concurrencia predeterminada por protocolo (SMB/WebDAV=2, almacenamiento local=3).\nEl modo manual anula el valor predeterminado del protocolo.\nSi \"Permitir acceso a fotos de iCloud\" está activado y se detectan recursos solo en iCloud, la ejecución cambiará automáticamente la concurrencia a 1.\nSi ya hay una tarea de respaldo en curso, debes detenerla y reiniciarla para que la nueva configuración surta efecto."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le mode automatique utilise la simultanéité par défaut selon le protocole (SMB/WebDAV=2, stockage local=3).\nLe mode manuel remplace la valeur par défaut du protocole.\nSi « Autoriser l’accès aux photos iCloud » est activé et que des ressources uniquement sur iCloud sont détectées, l’exécution passera automatiquement à 1 worker.\nSi une sauvegarde est déjà en cours, vous devez l’arrêter et la relancer pour que le nouveau réglage prenne effet."
+            "value" : "Le mode automatique utilise la simultanéité par défaut selon le protocole (SMB/WebDAV=2, stockage local=3).\nLe mode manuel remplace la valeur par défaut du protocole.\nSi « Autoriser l’accès aux photos iCloud » est activé et que des ressources uniquement sur iCloud sont détectées, l’exécution réduira automatiquement la simultanéité à 1.\nSi une sauvegarde est déjà en cours, vous devez l’arrêter et la relancer pour que le nouveau réglage prenne effet."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自動モードはプロトコルごとのデフォルト同時実行数を使用します（SMB/WebDAV=2、ローカルストレージ=3）。\n手動モードはプロトコルのデフォルトを上書きします。\n「iCloud 写真アクセスを許可」が有効で iCloud のみのリソースが検出された場合、実行は自動的に Worker 1 に切り替わります。\nバックアップタスクが進行中の場合、新しい設定を反映するには停止してから再開する必要があります。"
+            "value" : "自動モードはプロトコルごとのデフォルト同時実行数を使用します（SMB/WebDAV=2、ローカルストレージ=3）。\n手動モードはプロトコルのデフォルトを上書きします。\n「iCloud 写真アクセスを許可」が有効で iCloud のみのリソースが検出された場合、同時実行数は自動的に 1 に切り替わります。\nバックアップタスクが進行中の場合、新しい設定を反映するには停止してから再開する必要があります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "자동 모드는 프로토콜별 기본 동시 실행 수를 사용합니다(SMB/WebDAV=2, 로컬 저장소=3).\n수동 모드는 프로토콜 기본값을 재정의합니다.\n\"iCloud 사진 접근 허용\"이 활성화되어 있고 iCloud 전용 리소스가 감지되면 실행이 자동으로 Worker 1개로 전환됩니다.\n백업 작업이 진행 중인 경우 새 설정을 적용하려면 중지 후 다시 시작해야 합니다."
+            "value" : "자동 모드는 프로토콜별 기본 동시 실행 수를 사용합니다(SMB/WebDAV=2, 로컬 저장소=3).\n수동 모드는 프로토콜 기본값을 재정의합니다.\n\"iCloud 사진 접근 허용\"이 활성화되어 있고 iCloud 전용 리소스가 감지되면 동시 실행 수가 자동으로 1로 전환됩니다.\n백업 작업이 진행 중인 경우 새 설정을 적용하려면 중지 후 다시 시작해야 합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O modo automático usa a concorrência padrão por protocolo (SMB/WebDAV=2, armazenamento local=3).\nO modo manual substitui o padrão do protocolo.\nSe \"Permitir acesso a fotos do iCloud\" estiver ativado e forem detectados recursos apenas no iCloud, a execução mudará automaticamente para 1 worker.\nSe uma tarefa de backup já estiver em andamento, você precisa pará-la e reiniciá-la para que a nova configuração tenha efeito."
+            "value" : "O modo automático usa a concorrência padrão por protocolo (SMB/WebDAV=2, armazenamento local=3).\nO modo manual substitui o padrão do protocolo.\nSe \"Permitir acesso a fotos do iCloud\" estiver ativado e forem detectados recursos apenas no iCloud, a execução mudará automaticamente a concorrência para 1.\nSe uma tarefa de backup já estiver em andamento, você precisa pará-la e reiniciá-la para que a nova configuração tenha efeito."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O modo automático usa a concorrência predefinida por protocolo (SMB/WebDAV=2, armazenamento local=3).\nO modo manual substitui o predefinido do protocolo.\nSe «Permitir acesso a fotos do iCloud» estiver ativado e forem detetados recursos apenas no iCloud, a execução mudará automaticamente para 1 worker.\nSe uma tarefa de cópia já estiver em curso, tem de a parar e reiniciar para que a nova definição tenha efeito."
+            "value" : "O modo automático usa a concorrência predefinida por protocolo (SMB/WebDAV=2, armazenamento local=3).\nO modo manual substitui o predefinido do protocolo.\nSe «Permitir acesso a fotos do iCloud» estiver ativado e forem detetados recursos apenas no iCloud, a execução mudará automaticamente a concorrência para 1.\nSe uma tarefa de cópia já estiver em curso, tem de a parar e reiniciar para que a nova definição tenha efeito."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Автоматичний режим використовує стандартну паралельність за протоколом (SMB/WebDAV=2, локальне сховище=3).\nРучний режим перевизначає стандартне значення протоколу.\nЯкщо увімкнено «Дозволити доступ до фото iCloud» і виявлено ресурси лише в iCloud, виконання автоматично переключиться на 1 worker.\nЯкщо резервне копіювання вже виконується, потрібно зупинити і перезапустити його, щоб нове налаштування набуло чинності."
+            "value" : "Автоматичний режим використовує стандартну паралельність за протоколом (SMB/WebDAV=2, локальне сховище=3).\nРучний режим перевизначає стандартне значення протоколу.\nЯкщо увімкнено «Дозволити доступ до фото iCloud» і виявлено ресурси лише в iCloud, виконання автоматично зменшить паралельність до 1.\nЯкщо резервне копіювання вже виконується, потрібно зупинити і перезапустити його, щоб нове налаштування набуло чинності."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自动模式会按存储协议使用默认并发（SMB/WebDAV=2，本地存储=3）。\n手动模式会覆盖协议默认值。\n若启用「允许访问 iCloud 原件」且当前范围内检测到仅存于 iCloud 的资源，执行会自动改为 1 个 Worker。\n若当前已有进行中的备份任务，需要先停止并重新开始，新设置才会生效。"
+            "value" : "自动模式会按存储协议使用默认并发（SMB/WebDAV=2，本地存储=3）。\n手动模式会覆盖协议默认值。\n若启用「允许访问 iCloud 原件」且当前范围内检测到仅存于 iCloud 的资源，执行会自动将并发数改为 1。\n若当前已有进行中的备份任务，需要先停止并重新开始，新设置才会生效。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自動模式會按儲存協定使用預設並行（SMB/WebDAV=2，本機儲存=3）。\n手動模式會覆蓋協定預設值。\n若啟用「允許存取 iCloud 原件」且目前範圍內偵測到僅存於 iCloud 的資源，執行會自動改為 1 個 Worker。\n若目前已有進行中的備份任務，需要先停止並重新開始，新設定才會生效。"
+            "value" : "自動模式會按儲存協定使用預設並行（SMB/WebDAV=2，本機儲存=3）。\n手動模式會覆蓋協定預設值。\n若啟用「允許存取 iCloud 原件」且目前範圍內偵測到僅存於 iCloud 的資源，執行會自動將並行數改為 1。\n若目前已有進行中的備份任務，需要先停止並重新開始，新設定才會生效。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "自動模式會按儲存協定使用預設並行（SMB/WebDAV=2，本機儲存=3）。\n手動模式會覆蓋協定預設值。\n若啟用「允許存取 iCloud 原件」且目前範圍內偵測到僅存於 iCloud 的資源，執行會自動改為 1 個 Worker。\n若目前已有進行中的備份任務，需要先停止並重新開始，新設定才會生效。"
+            "value" : "自動模式會按儲存協定使用預設並行（SMB/WebDAV=2，本機儲存=3）。\n手動模式會覆蓋協定預設值。\n若啟用「允許存取 iCloud 原件」且目前範圍內偵測到僅存於 iCloud 的資源，執行會自動將並行數改為 1。\n若目前已有進行中的備份任務，需要先停止並重新開始，新設定才會生效。"
           }
         }
       }
@@ -26178,79 +26178,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Vielen Dank für Ihre Unterstützung von %@!"
+            "value" : "Vielen Dank für Ihre Unterstützung!"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Thank you for supporting %@!"
+            "value" : "Thank you for your support!"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "¡Gracias por apoyar %@!"
+            "value" : "¡Gracias por tu apoyo!"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "¡Gracias por apoyar %@!"
+            "value" : "¡Gracias por tu apoyo!"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Merci de soutenir %@ !"
+            "value" : "Merci pour votre soutien !"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ をご支援いただきありがとうございます！"
+            "value" : "ご支援いただきありがとうございます！"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@을(를) 지원해 주셔서 감사합니다!"
+            "value" : "지원해 주셔서 감사합니다!"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Obrigado por apoiar o %@!"
+            "value" : "Obrigado pelo seu apoio!"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Obrigado por apoiar o %@!"
+            "value" : "Obrigado pelo seu apoio!"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Дякуємо за підтримку %@!"
+            "value" : "Дякуємо за вашу підтримку!"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "感谢你对 %@ 的支持！"
+            "value" : "感谢你的支持！"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "感謝你對 %@ 的支持！"
+            "value" : "感謝你的支持！"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "感謝你對 %@ 的支持！"
+            "value" : "感謝你的支持！"
           }
         }
       }
