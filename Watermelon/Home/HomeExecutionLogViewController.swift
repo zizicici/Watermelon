@@ -4,6 +4,8 @@ import UIKit
 
 @MainActor
 final class HomeExecutionLogViewController: UIViewController {
+    private enum Section: Hashable { case main }
+
     private let coordinator: HomeExecutionCoordinator
 
     private let statusCardView = UIView()
@@ -22,10 +24,11 @@ final class HomeExecutionLogViewController: UIViewController {
 
     private var logObserverID: UUID?
     private var statusText = String(localized: "home.execution.notStarted")
-    private var allEntries: [ExecutionLogEntry] = []
-    private var displayedEntries: [ExecutionLogEntry] = []
-    private var lastEntryAnchor: (index: Int, id: UUID)?
+    private var currentEntries: [ExecutionLogEntry] = []
+    private var entriesByID: [UUID: ExecutionLogEntry] = [:]
+    private var lastAppliedSignature: (count: Int, lastID: UUID?)?
     private var selectedLevels = ExecutionLogFilterPreference.getValue().enabledLevels
+    private var dataSource: UITableViewDiffableDataSource<Section, UUID>!
 
     init(coordinator: HomeExecutionCoordinator) {
         self.coordinator = coordinator
@@ -52,6 +55,7 @@ final class HomeExecutionLogViewController: UIViewController {
         navigationItem.rightBarButtonItem = filterBarButtonItem
 
         buildUI()
+        configureDataSource()
 
         logObserverID = coordinator.addLogObserver { [weak self] snapshot in
             self?.apply(snapshot)
@@ -76,7 +80,6 @@ final class HomeExecutionLogViewController: UIViewController {
         logTableView.layer.cornerRadius = 12
         logTableView.layer.masksToBounds = true
         logTableView.separatorStyle = .none
-        logTableView.dataSource = self
         logTableView.estimatedRowHeight = 32
         logTableView.rowHeight = UITableView.automaticDimension
         logTableView.keyboardDismissMode = .onDrag
@@ -132,67 +135,55 @@ final class HomeExecutionLogViewController: UIViewController {
         }
     }
 
+    private func configureDataSource() {
+        dataSource = UITableViewDiffableDataSource<Section, UUID>(tableView: logTableView) { [weak self] tableView, indexPath, id in
+            let cell = tableView.dequeueReusableCell(withIdentifier: ExecutionLogEntryCell.reuseIdentifier, for: indexPath)
+            if let cell = cell as? ExecutionLogEntryCell, let entry = self?.entriesByID[id] {
+                cell.configure(with: entry)
+            }
+            return cell
+        }
+        dataSource.defaultRowAnimation = .none
+    }
+
     private func apply(_ snapshot: HomeExecutionLogSnapshot) {
         statusText = snapshot.statusText
         statusLabel.text = snapshot.statusText
 
-        let previousAllCount = allEntries.count
-        let newAllCount = snapshot.entries.count
-
-        let anchorMatches: Bool = {
-            guard let anchor = lastEntryAnchor else { return previousAllCount == 0 }
-            guard anchor.index < newAllCount else { return false }
-            return snapshot.entries[anchor.index].id == anchor.id
-        }()
-
-        let isAppendOnly = anchorMatches && newAllCount > previousAllCount
-
-        if isAppendOnly {
-            let appended = snapshot.entries[previousAllCount..<newAllCount]
-            allEntries = snapshot.entries
-            updateLastEntryAnchor()
-            let appendedDisplayed = appended.filter { selectedLevels.contains($0.level) }
-            if !appendedDisplayed.isEmpty {
-                let stickToBottom = shouldStickToBottom()
-                let startIndex = displayedEntries.count
-                displayedEntries.append(contentsOf: appendedDisplayed)
-                let indexPaths = (startIndex..<displayedEntries.count).map { IndexPath(row: $0, section: 0) }
-                logTableView.performBatchUpdates({
-                    logTableView.insertRows(at: indexPaths, with: .none)
-                }, completion: { [weak self] _ in
-                    guard let self, stickToBottom, let last = indexPaths.last else { return }
-                    self.logTableView.scrollToRow(at: last, at: .bottom, animated: false)
-                })
-            }
-            refreshEmptyState()
-        } else {
-            allEntries = snapshot.entries
-            updateLastEntryAnchor()
-            reloadDisplayed(scrollToBottom: true)
+        let signature: (count: Int, lastID: UUID?) = (snapshot.entries.count, snapshot.entries.last?.id)
+        if let last = lastAppliedSignature, last == signature {
+            updateExportAvailability()
+            return
         }
 
+        currentEntries = snapshot.entries
+        entriesByID = Dictionary(uniqueKeysWithValues: snapshot.entries.map { ($0.id, $0) })
+        lastAppliedSignature = signature
+
+        applyFilteredSnapshot(considerStickyBottom: true)
         updateExportAvailability()
     }
 
-    private func updateLastEntryAnchor() {
-        if let last = allEntries.last {
-            lastEntryAnchor = (allEntries.count - 1, last.id)
-        } else {
-            lastEntryAnchor = nil
+    private func applyFilteredSnapshot(considerStickyBottom: Bool) {
+        let ids = currentEntries.compactMap { selectedLevels.contains($0.level) ? $0.id : nil }
+
+        var snap = NSDiffableDataSourceSnapshot<Section, UUID>()
+        snap.appendSections([.main])
+        snap.appendItems(ids, toSection: .main)
+
+        let stickToBottom = considerStickyBottom && shouldStickToBottom()
+
+        dataSource.apply(snap, animatingDifferences: false) { [weak self] in
+            guard let self else { return }
+            self.refreshEmptyState(itemCount: ids.count)
+            guard stickToBottom, let lastID = ids.last,
+                  let indexPath = self.dataSource.indexPath(for: lastID) else { return }
+            self.logTableView.scrollToRow(at: indexPath, at: .bottom, animated: false)
         }
     }
 
-    private func reloadDisplayed(scrollToBottom: Bool) {
-        displayedEntries = allEntries.filter { selectedLevels.contains($0.level) }
-        logTableView.reloadData()
-        refreshEmptyState()
-        guard scrollToBottom, !displayedEntries.isEmpty else { return }
-        let last = IndexPath(row: displayedEntries.count - 1, section: 0)
-        logTableView.scrollToRow(at: last, at: .bottom, animated: false)
-    }
-
-    private func refreshEmptyState() {
-        emptyLabel.isHidden = !displayedEntries.isEmpty
+    private func refreshEmptyState(itemCount: Int) {
+        emptyLabel.isHidden = itemCount > 0
     }
 
     private func updateExportAvailability() {
@@ -202,7 +193,7 @@ final class HomeExecutionLogViewController: UIViewController {
     private func shouldStickToBottom() -> Bool {
         let visibleBottom = logTableView.contentOffset.y + logTableView.bounds.height - logTableView.adjustedContentInset.bottom
         let contentBottom = logTableView.contentSize.height
-        return visibleBottom >= contentBottom - 80 || displayedEntries.isEmpty
+        return visibleBottom >= contentBottom - 80 || dataSource.snapshot().numberOfItems == 0
     }
 
     private func makeFilterMenu() -> UIMenu {
@@ -248,7 +239,7 @@ final class HomeExecutionLogViewController: UIViewController {
 
     private func refreshFilteredDisplay() {
         refreshFilterMenu()
-        reloadDisplayed(scrollToBottom: false)
+        applyFilteredSnapshot(considerStickyBottom: false)
     }
 
     private func title(for level: ExecutionLogLevel) -> String {
@@ -279,19 +270,5 @@ final class HomeExecutionLogViewController: UIViewController {
         activityController.popoverPresentationController?.sourceView = exportButton
         activityController.popoverPresentationController?.sourceRect = exportButton.bounds
         present(activityController, animated: true)
-    }
-}
-
-extension HomeExecutionLogViewController: UITableViewDataSource {
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        displayedEntries.count
-    }
-
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: ExecutionLogEntryCell.reuseIdentifier, for: indexPath)
-        if let cell = cell as? ExecutionLogEntryCell {
-            cell.configure(with: displayedEntries[indexPath.row])
-        }
-        return cell
     }
 }

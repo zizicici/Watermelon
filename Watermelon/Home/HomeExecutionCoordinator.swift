@@ -81,8 +81,11 @@ final class HomeExecutionCoordinator {
     private(set) var currentSessionLogURL: URL?
     private var sessionLogStreamContinuation: AsyncStream<ExecutionLogEntry>.Continuation?
     private var sessionLogDrainTask: Task<Void, Never>?
+    private var lastLogNotifyTime: CFAbsoluteTime = 0
+    private var pendingLogNotifyTask: Task<Void, Never>?
 
     private static let syncThrottleInterval: CFAbsoluteTime = 2.0
+    private static let logNotifyCoalesceInterval: CFAbsoluteTime = 0.5
     private static let localAvailabilityProbeWorkerCount = 2
     private static let localIndexPreflightWorkerCount = 2
     private static let localIndexICloudPreflightWorkerCount = 1
@@ -870,6 +873,27 @@ final class HomeExecutionCoordinator {
     }
 
     private func notifyLogObservers() {
+        let now = CFAbsoluteTimeGetCurrent()
+        let elapsed = now - lastLogNotifyTime
+        if elapsed >= Self.logNotifyCoalesceInterval {
+            pendingLogNotifyTask?.cancel()
+            pendingLogNotifyTask = nil
+            lastLogNotifyTime = now
+            deliverLogSnapshot()
+            return
+        }
+        if pendingLogNotifyTask != nil { return }
+        let remaining = Self.logNotifyCoalesceInterval - elapsed
+        pendingLogNotifyTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            self.pendingLogNotifyTask = nil
+            self.lastLogNotifyTime = CFAbsoluteTimeGetCurrent()
+            self.deliverLogSnapshot()
+        }
+    }
+
+    private func deliverLogSnapshot() {
         let snapshot = currentLogSnapshot
         logObservers.values.forEach { $0(snapshot) }
     }
