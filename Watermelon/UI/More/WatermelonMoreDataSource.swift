@@ -18,6 +18,12 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let pipProgress = "pipProgress"
     }
 
+    private static let proBadge = MoreBadgeStyle(
+        text: "PRO",
+        textColor: .materialOnPrimary(dark: .Material.Green._800),
+        backgroundColor: .materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
+    )
+
     private let dependencies: DependencyContainer?
     private let onProfilesChanged: (() -> Void)?
 
@@ -64,12 +70,14 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                     MoreCustomItem(
                         id: ItemID.backgroundBackup,
                         title: String(localized: "more.item.backgroundBackup"),
-                        value: BackgroundBackupSetting.getValue().getName()
+                        value: BackgroundBackupSetting.getValue().getName(),
+                        badge: Self.proBadge
                     ),
                     MoreCustomItem(
                         id: ItemID.pipProgress,
                         title: String(localized: "more.item.pipProgress"),
-                        value: PiPProgressSetting.getValue().getName()
+                        value: PiPProgressSetting.getValue().getName(),
+                        badge: Self.proBadge
                     )
                 ]
             )))
