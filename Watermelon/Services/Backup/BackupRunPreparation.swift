@@ -160,7 +160,7 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord,
         password: String,
         eventStream: BackupEventStream? = nil,
-        onMonthSynced: (@Sendable () -> Void)? = nil
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteLibrarySnapshot {
         let client = try makeStorageClient(profile: profile, password: password)
         try await client.connect()
@@ -170,7 +170,7 @@ struct BackupRunPreparationService: Sendable {
                 client: client,
                 profile: profile,
                 eventStream: eventStream,
-                onMonthSynced: onMonthSynced
+                onSyncProgress: onSyncProgress
             )
             eventStream?.emitLog(
                 String.localizedStringWithFormat(

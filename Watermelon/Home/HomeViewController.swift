@@ -510,6 +510,7 @@ final class HomeViewController: UIViewController {
             case .selection:           self.renderSelectionChange()
             case .execution(let months): self.renderExecutionChange(changedMonths: months)
             case .connection:          self.renderConnectionChange()
+            case .connectionProgress:  self.updateRemoteOverlay()
             case .structural:          self.renderStructuralChange()
             }
         }
@@ -1004,7 +1005,15 @@ final class HomeViewController: UIViewController {
         case .connecting:
             remoteOverlay.isHidden = false
             remoteOverlaySpinner.startAnimating()
-            remoteOverlayLabel.text = String(localized: "home.overlay.connecting")
+            if let progress = store.remoteSyncProgress {
+                remoteOverlayLabel.text = String.localizedStringWithFormat(
+                    String(localized: "home.overlay.processingMonths"),
+                    progress.current,
+                    progress.total
+                )
+            } else {
+                remoteOverlayLabel.text = String(localized: "home.overlay.scanningIndex")
+            }
             remoteOverlayButton.isHidden = true
         case .disconnected:
             remoteOverlay.isHidden = false

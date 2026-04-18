@@ -74,14 +74,14 @@ final class RemoteIndexSyncService: Sendable {
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream? = nil,
-        onMonthSynced: (@Sendable () -> Void)? = nil
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteLibrarySnapshot {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
                 client: client,
                 profile: profile,
                 eventStream: eventStream,
-                onMonthSynced: onMonthSynced
+                onSyncProgress: onSyncProgress
             )
         }
     }
@@ -90,7 +90,7 @@ final class RemoteIndexSyncService: Sendable {
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream?,
-        onMonthSynced: (@Sendable () -> Void)?
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
     ) async throws -> RemoteLibrarySnapshot {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
@@ -124,6 +124,8 @@ final class RemoteIndexSyncService: Sendable {
         }
 
         let removedMonths = previousMonths.subtracting(remoteMonths)
+        let totalMonthsToProcess = changedMonths.count + removedMonths.count
+        onSyncProgress?(RemoteSyncProgress(current: 0, total: totalMonthsToProcess))
 
         if changedMonths.isEmpty, removedMonths.isEmpty {
             let snapshot = snapshotCache.current()
@@ -140,6 +142,7 @@ final class RemoteIndexSyncService: Sendable {
 
         var appliedChangedMonths = 0
         var appliedRemovedMonths = 0
+        var processedMonthCount = 0
 
         for month in changedMonths.sorted() {
             let monthStart = CFAbsoluteTimeGetCurrent()
@@ -171,8 +174,9 @@ final class RemoteIndexSyncService: Sendable {
                 assetResourceLinks: snapshot.links
             ) {
                 appliedChangedMonths += 1
-                onMonthSynced?()
             }
+            processedMonthCount += 1
+            onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
             let processElapsed = CFAbsoluteTimeGetCurrent() - processStart
             syncLog.info(
                 "[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(snapshot.assets.count), resources=\(snapshot.resources.count), links=\(snapshot.links.count)"
@@ -182,8 +186,9 @@ final class RemoteIndexSyncService: Sendable {
         for month in removedMonths.sorted() {
             if snapshotCache.removeMonth(month) {
                 appliedRemovedMonths += 1
-                onMonthSynced?()
             }
+            processedMonthCount += 1
+            onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
         }
 
         await state.updateRemoteManifestDigests(remoteDigests)

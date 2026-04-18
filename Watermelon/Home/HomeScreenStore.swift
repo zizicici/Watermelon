@@ -31,6 +31,7 @@ final class HomeScreenStore {
     private(set) var localPhotoAccessState: LocalPhotoAccessState
 
     var connectionState: ConnectionState { connectionController.state }
+    var remoteSyncProgress: RemoteSyncProgress? { connectionController.syncProgress }
     var executionState: HomeExecutionState? { executionCoordinator.currentState }
 
     var isSelectable: Bool {
@@ -113,6 +114,9 @@ final class HomeScreenStore {
         }
         connectionController.onStateChanged = { [weak self] in
             self?.handleConnectionChange()
+        }
+        connectionController.onSyncProgressChanged = { [weak self] in
+            self?.onChange?(.connectionProgress)
         }
         // Remote snapshot data accumulates in snapshotCache on the connection thread;
         // processing happens in handleConnectionChange once connected.

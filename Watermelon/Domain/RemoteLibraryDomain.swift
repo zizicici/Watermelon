@@ -188,6 +188,11 @@ struct RemoteLibrarySnapshotState {
     let monthDeltas: [RemoteLibraryMonthDelta]
 }
 
+struct RemoteSyncProgress: Hashable, Sendable {
+    let current: Int
+    let total: Int
+}
+
 enum ResourceTypeCode {
     static let photo = 1              // PHAssetResourceType.photo
     static let video = 2              // .video

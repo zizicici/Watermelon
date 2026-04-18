@@ -277,6 +277,7 @@ enum HomeChangeKind {
     case selection
     case execution(Set<LibraryMonthKey>)
     case connection
+    case connectionProgress
     case structural
 }
 

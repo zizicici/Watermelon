@@ -19,9 +19,10 @@ final class HomeConnectionController {
     }
 
     private(set) var savedProfiles: [ServerProfileRecord] = []
+    private(set) var syncProgress: RemoteSyncProgress?
 
     var onStateChanged: (() -> Void)?
-    var onMonthSynced: (() -> Void)?
+    var onSyncProgressChanged: (() -> Void)?
     var onNeedsPasswordPrompt: ((ServerProfileRecord, _ completion: @escaping (String) -> Void) -> Void)?
     var onConnectFailed: ((ServerProfileRecord, Error) -> Void)?
 
@@ -83,8 +84,19 @@ final class HomeConnectionController {
         connectTask?.cancel()
         connectTask = nil
         connectingProfile = nil
+        clearSyncProgress()
         try? dependencies.databaseManager.setActiveServerProfileID(nil)
         dependencies.appSession.clear()
+    }
+
+    private func updateSyncProgress(_ progress: RemoteSyncProgress?) {
+        guard syncProgress != progress else { return }
+        syncProgress = progress
+        onSyncProgressChanged?()
+    }
+
+    private func clearSyncProgress() {
+        updateSyncProgress(nil)
     }
 
     func resolvedSessionPassword(for profile: ServerProfileRecord) -> String? {
@@ -96,6 +108,7 @@ final class HomeConnectionController {
     private func connect(profile: ServerProfileRecord, password: String, reportFailure: Bool = true) {
         guard connectingProfile == nil else { return }
         connectingProfile = profile
+        clearSyncProgress()
         onStateChanged?()
 
         connectTask = Task { [weak self] in
@@ -104,10 +117,10 @@ final class HomeConnectionController {
                 _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
                     profile: profile,
                     password: password,
-                    onMonthSynced: { [weak self] in
+                    onSyncProgress: { [weak self] progress in
                         Task { @MainActor [weak self] in
                             guard let self, self.connectingProfile?.id == profile.id else { return }
-                            self.onMonthSynced?()
+                            self.updateSyncProgress(progress)
                         }
                     }
                 )
@@ -116,6 +129,7 @@ final class HomeConnectionController {
                 self.connectingProfile = nil
                 self.connectTask = nil
                 self.dependencies.appSession.activate(profile: profile, password: password)
+                self.clearSyncProgress()
             } catch {
                 guard !Task.isCancelled else { return }
 
@@ -126,12 +140,13 @@ final class HomeConnectionController {
                     _ = try? await self.dependencies.backupCoordinator.reloadRemoteIndex(
                         profile: prev,
                         password: prevPassword,
-                        onMonthSynced: nil
+                        onSyncProgress: nil
                     )
                 }
 
                 self.connectingProfile = nil
                 self.connectTask = nil
+                self.clearSyncProgress()
                 self.onStateChanged?()
                 if reportFailure {
                     self.onConnectFailed?(profile, error)
