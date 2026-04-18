@@ -283,7 +283,8 @@ final class HomeExecutionCoordinator {
         executionTask = Task { [weak self] in
             guard let self else { return }
 
-            if self.session.needsLocalIndexPreflight {
+            if self.session.needsLocalIndexPreflight,
+               self.shouldRunLocalIndexPreflight() {
                 await MainActor.run {
                     self.transientControlState = .starting
                     self.notifyStateChanged()
@@ -428,6 +429,11 @@ final class HomeExecutionCoordinator {
 
     private func notifyStateChanged() {
         onStateChanged?()
+    }
+
+    private func shouldRunLocalIndexPreflight() -> Bool {
+        if session.requiresCompleteLocalIndexBeforeExecution { return true }
+        return activeExecutionSettingsSnapshot().iCloudPhotoBackupMode != .disable
     }
 
     private func prepareLocalIndexIfNeeded() async -> Bool {
