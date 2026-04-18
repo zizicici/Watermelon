@@ -258,79 +258,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon benötigt Schreibzugriff, um ausgewählte Sicherungen in Ihre Fotomediathek wiederherzustellen."
+            "value" : "Watermelon schreibt nur dann in deine Fotomediathek, wenn du Fotos oder Videos aus einer Sicherung wiederherstellst, und fügt die ausgewählten Elemente wieder zur Fotos-App hinzu."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon needs write access to restore selected backups into your photo library."
+            "value" : "Watermelon writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon necesita acceso de escritura para restaurar las copias de seguridad seleccionadas en tu fototeca."
+            "value" : "Watermelon solo escribe en tu fototeca cuando restauras fotos o vídeos desde una copia de seguridad, devolviendo los elementos seleccionados a la app Fotos."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon necesita acceso de escritura para restaurar los respaldos seleccionados en tu fototeca."
+            "value" : "Watermelon solo escribe en tu fototeca cuando restauras fotos o videos desde un respaldo, devolviendo los elementos seleccionados a la app Fotos."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon a besoin d'un accès en écriture pour restaurer les sauvegardes sélectionnées dans votre photothèque."
+            "value" : "Watermelon n'écrit dans votre photothèque que lorsque vous restaurez des photos ou des vidéos depuis une sauvegarde, pour ajouter à nouveau les éléments sélectionnés dans l'app Photos."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon は選択したバックアップを写真ライブラリに復元するために書き込みアクセスが必要です。"
+            "value" : "バックアップから写真や動画を復元する場合にのみ、Watermelonは写真ライブラリに書き込み、選択した項目を「写真」Appに戻します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon은(는) 선택한 백업을 사진 라이브러리로 복원하기 위해 쓰기 권한이 필요합니다."
+            "value" : "Watermelon은 백업에서 사진이나 동영상을 복원할 때에만 사진 라이브러리에 기록하여 선택한 항목을 사진 앱에 다시 추가합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon precisa de acesso de gravação para restaurar os backups selecionados na sua biblioteca de fotos."
+            "value" : "O Watermelon só grava na sua biblioteca de fotos quando você restaura fotos ou vídeos a partir de um backup, devolvendo os itens selecionados ao app Fotos."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon precisa de acesso de escrita para restaurar as cópias de segurança selecionadas na sua biblioteca de fotos."
+            "value" : "O Watermelon só escreve na sua biblioteca de fotos quando restaura fotos ou vídeos a partir de uma cópia de segurança, colocando novamente os itens selecionados na app Fotos."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon потребує доступ на запис для відновлення вибраних резервних копій у вашу фотобібліотеку."
+            "value" : "Watermelon записує до фотобібліотеки лише під час відновлення фотографій або відео з резервної копії, повертаючи обрані елементи до програми «Фото»."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜备份 需要写入权限来将所选备份恢复到你的照片库中。"
+            "value" : "仅当你从备份中还原照片或视频时，西瓜备份才会写入你的照片图库，把所选内容重新加入「照片」App。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜備份 需要寫入權限來將所選備份還原到你的照片庫中。"
+            "value" : "僅當你從備份還原照片或影片時，西瓜備份才會寫入你的照片圖庫，將所選項目重新加入「照片」App。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜備份 需要寫入權限來將所選備份還原到你的相片庫中。"
+            "value" : "僅當你從備份還原相片或影片時，西瓜備份才會寫入你的相片圖庫，將所選項目重新加入「相片」App。"
           }
         }
       }
@@ -341,79 +341,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon benötigt Lesezugriff, um originale Foto- und Videoressourcen zu sichern."
+            "value" : "Watermelon liest deine Fotos und Videos, um die Originale auf den von dir eingerichteten SMB-Server, WebDAV-Server oder ein externes Speichergerät zu sichern. Deine Dateien werden niemals auf die Server von Watermelon hochgeladen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon needs read access to back up original photo and video resources."
+            "value" : "Watermelon reads your photos and videos to back up the originals to the SMB server, WebDAV server, or external drive you set up. Your files are never uploaded to Watermelon's servers."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon necesita acceso de lectura para hacer copias de seguridad de los recursos de fotos y vídeos originales."
+            "value" : "Watermelon lee tus fotos y vídeos para hacer una copia de seguridad de los originales en el servidor SMB, servidor WebDAV o unidad externa que tú configures. Tus archivos nunca se envían a los servidores de Watermelon."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon necesita acceso de lectura para respaldar los recursos originales de fotos y videos."
+            "value" : "Watermelon lee tus fotos y videos para respaldar los originales en el servidor SMB, servidor WebDAV o unidad externa que tú configures. Tus archivos nunca se envían a los servidores de Watermelon."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon a besoin d'un accès en lecture pour sauvegarder les ressources photo et vidéo originales."
+            "value" : "Watermelon lit vos photos et vidéos afin de sauvegarder les originaux sur le serveur SMB, le serveur WebDAV ou le support de stockage externe que vous configurez. Vos fichiers ne sont jamais envoyés aux serveurs de Watermelon."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon はオリジナルの写真と動画リソースをバックアップするために読み取りアクセスが必要です。"
+            "value" : "Watermelonは、ご自身で設定されたSMBサーバ、WebDAVサーバ、または外付けストレージに写真と動画のオリジナルをバックアップするためにライブラリを読み取ります。ファイルがWatermelonのサーバに送信されることはありません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon은(는) 원본 사진 및 동영상 리소스를 백업하기 위해 읽기 권한이 필요합니다."
+            "value" : "Watermelon은 사용자가 직접 설정한 SMB 서버, WebDAV 서버 또는 외장 저장 장치로 원본 사진과 동영상을 백업하기 위해 라이브러리를 읽습니다. 파일은 Watermelon의 서버로 업로드되지 않습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon precisa de acesso de leitura para fazer backup dos recursos originais de fotos e vídeos."
+            "value" : "O Watermelon lê suas fotos e vídeos para fazer backup dos originais no servidor SMB, servidor WebDAV ou unidade externa configurada por você. Seus arquivos nunca são enviados para os servidores do Watermelon."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon precisa de acesso de leitura para fazer cópia de segurança dos recursos originais de fotos e vídeos."
+            "value" : "O Watermelon lê as suas fotos e vídeos para fazer cópias de segurança dos originais no servidor SMB, servidor WebDAV ou unidade externa que configurar. Os seus ficheiros nunca são enviados para os servidores do Watermelon."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon потребує доступ на читання для резервного копіювання оригінальних ресурсів фотографій та відео."
+            "value" : "Watermelon читає ваші фотографії та відео, щоб створювати резервні копії оригіналів на SMB-сервері, WebDAV-сервері або зовнішньому накопичувачі, який ви налаштували. Ваші файли ніколи не надсилаються на сервери Watermelon."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜备份 需要读取权限来备份原始照片和视频资源。"
+            "value" : "西瓜备份会读取你的照片和视频，以便将原始文件备份到你自行配置的 SMB 服务器、WebDAV 服务器或外接存储设备。文件不会上传到西瓜备份的服务器。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜備份 需要讀取權限來備份原始照片和影片資源。"
+            "value" : "西瓜備份會讀取你的照片和影片，以便將原始檔案備份至你自行設定的 SMB 伺服器、WebDAV 伺服器或外接儲存裝置。檔案不會上傳至西瓜備份的伺服器。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜備份 需要讀取權限來備份原始相片和影片資源。"
+            "value" : "西瓜備份會讀取你的相片和影片，以便將原始檔案備份至你自行設定的 SMB 伺服器、WebDAV 伺服器或外接儲存裝置。檔案不會上傳至西瓜備份的伺服器。"
           }
         }
       }

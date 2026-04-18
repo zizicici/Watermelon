@@ -9,9 +9,9 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Watermelon uses your local network to connect to SMB servers and back up your photos.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Watermelon needs write access to restore selected backups into your photo library.</string>
+	<string>Watermelon writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Watermelon needs read access to back up original photo and video resources.</string>
+	<string>Watermelon reads your photos and videos to back up the originals to the SMB server, WebDAV server, or external drive you set up. Your files are never uploaded to Watermelon's servers.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
