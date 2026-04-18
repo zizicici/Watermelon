@@ -214,9 +214,7 @@
 
 ### 本地持久化
 
-1. `DatabaseManager` 使用 GRDB，当前迁移包含：
-2. `v7_dev_schema_reset`
-3. `v8_server_profiles_smb_identity`
+1. `DatabaseManager` 使用 GRDB，迁移：`v1_initial`
 
 本地主要表：
 
@@ -228,7 +226,7 @@
 ### 远端持久化
 
 1. 每个月一个 `.watermelon_manifest.sqlite`
-2. `MonthManifestStore` 迁移名：`month_manifest_v3_dev_schema_reset`
+2. `MonthManifestStore` 迁移名：`month_manifest_v1_initial`
 
 ### 会话态
 

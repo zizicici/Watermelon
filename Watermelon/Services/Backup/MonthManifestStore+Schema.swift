@@ -4,13 +4,7 @@ import GRDB
 extension MonthManifestStore {
     static func migrate(_ queue: DatabaseQueue) throws {
         var migrator = DatabaseMigrator()
-        migrator.registerMigration("month_manifest_v3_dev_schema_reset") { db in
-            try db.execute(sql: "DROP INDEX IF EXISTS idx_asset_resources_hash")
-            try db.execute(sql: "DROP INDEX IF EXISTS idx_asset_resources_asset")
-            try db.execute(sql: "DROP INDEX IF EXISTS idx_resources_contentHash")
-            try db.execute(sql: "DROP TABLE IF EXISTS asset_resources")
-            try db.execute(sql: "DROP TABLE IF EXISTS assets")
-            try db.execute(sql: "DROP TABLE IF EXISTS resources")
+        migrator.registerMigration("month_manifest_v1_initial") { db in
             try ensureSchemaBaseline(db)
         }
         try migrator.migrate(queue)

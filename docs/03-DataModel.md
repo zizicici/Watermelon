@@ -2,10 +2,7 @@
 
 ## 1. 本地数据库（`DatabaseManager`）
 
-当前本地数据库由 GRDB 管理，迁移顺序：
-
-1. `v7_dev_schema_reset`
-2. `v8_server_profiles_smb_identity`
+当前本地数据库由 GRDB 管理，迁移：`v1_initial`。
 
 ### `server_profiles`
 
@@ -23,6 +20,7 @@ CREATE TABLE server_profiles (
   username TEXT NOT NULL,
   domain TEXT,
   credentialRef TEXT NOT NULL,
+  backgroundBackupEnabled INTEGER NOT NULL DEFAULT 1,
   createdAt DATETIME NOT NULL,
   updatedAt DATETIME NOT NULL
 );
@@ -136,9 +134,7 @@ struct ExternalVolumeConnectionParams: Codable {
 
 1. `/{YYYY}/{MM}/.watermelon_manifest.sqlite`
 
-当前迁移：
-
-1. `month_manifest_v3_dev_schema_reset`
+当前迁移：`month_manifest_v1_initial`
 
 ### `resources`
 

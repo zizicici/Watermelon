@@ -196,10 +196,7 @@ Pure download months still run after the upload phase finishes.
 
 #### Local SQLite (`DatabaseManager`)
 
-Migrations:
-
-- `v7_dev_schema_reset`
-- `v8_server_profiles_smb_identity`
+Migration: `v1_initial`
 
 Tables:
 
@@ -218,7 +215,7 @@ Tables:
 - `assets`
 - `asset_resources`
 
-Migration: `month_manifest_v3_dev_schema_reset`
+Migration: `month_manifest_v1_initial`
 
 #### In-Memory Remote Snapshot
 

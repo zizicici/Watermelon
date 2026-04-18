@@ -13,13 +13,7 @@ final class DatabaseManager {
 
     private var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
-        migrator.registerMigration("v7_dev_schema_reset") { db in
-            try db.execute(sql: "DROP INDEX IF EXISTS idx_server_profiles_unique_smb")
-            try db.execute(sql: "DROP TABLE IF EXISTS \(LocalAssetResourceRecord.databaseTableName)")
-            try db.execute(sql: "DROP TABLE IF EXISTS \(LocalAssetRecord.databaseTableName)")
-            try db.execute(sql: "DROP TABLE IF EXISTS \(SyncStateRecord.databaseTableName)")
-            try db.execute(sql: "DROP TABLE IF EXISTS \(ServerProfileRecord.databaseTableName)")
-
+        migrator.registerMigration("v1_initial") { db in
             try db.create(table: ServerProfileRecord.databaseTableName) { table in
                 table.autoIncrementedPrimaryKey("id")
                 table.column("name", .text).notNull()
@@ -33,6 +27,7 @@ final class DatabaseManager {
                 table.column("username", .text).notNull()
                 table.column("domain", .text)
                 table.column("credentialRef", .text).notNull()
+                table.column("backgroundBackupEnabled", .integer).notNull().defaults(to: 1)
                 table.column("createdAt", .datetime).notNull()
                 table.column("updatedAt", .datetime).notNull()
             }
@@ -69,26 +64,6 @@ final class DatabaseManager {
                 table.primaryKey(["assetLocalIdentifier", "role", "slot"])
             }
             try db.create(index: "idx_local_asset_resources_hash", on: LocalAssetResourceRecord.databaseTableName, columns: ["contentHash"])
-        }
-
-        migrator.registerMigration("v8_server_profiles_smb_identity") { db in
-            try db.execute(sql: "DROP INDEX IF EXISTS idx_server_profiles_unique_smb")
-            try db.execute(
-                sql: """
-                CREATE UNIQUE INDEX idx_server_profiles_unique_smb
-                ON \(ServerProfileRecord.databaseTableName)(host, port, shareName, basePath, username, IFNULL(domain, ''))
-                WHERE storageType = 'smb'
-                """
-            )
-        }
-
-        migrator.registerMigration("v9_add_background_backup_enabled") { db in
-            try db.execute(
-                sql: """
-                ALTER TABLE \(ServerProfileRecord.databaseTableName)
-                ADD COLUMN backgroundBackupEnabled INTEGER NOT NULL DEFAULT 1
-                """
-            )
         }
 
         return migrator
