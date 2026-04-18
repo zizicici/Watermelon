@@ -6,6 +6,11 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
 
     private let titleLabel = UILabel()
     let textField = UITextField()
+    private lazy var focusTapGestureRecognizer: UITapGestureRecognizer = {
+        let gesture = UITapGestureRecognizer(target: self, action: #selector(handleCellTap))
+        gesture.cancelsTouchesInView = false
+        return gesture
+    }()
 
     private var textFieldLeadingToTitleConstraint: Constraint?
     private var textFieldLeadingToSuperviewConstraint: Constraint?
@@ -46,6 +51,7 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
 
         contentView.addSubview(titleLabel)
         contentView.addSubview(textField)
+        contentView.addGestureRecognizer(focusTapGestureRecognizer)
 
         titleLabel.snp.makeConstraints { make in
             make.leading.equalToSuperview().inset(16)
@@ -113,6 +119,12 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
     @objc
     private func textDidChange() {
         onTextChanged?(textField.text ?? "")
+    }
+
+    @objc
+    private func handleCellTap() {
+        guard !textField.isFirstResponder else { return }
+        textField.becomeFirstResponder()
     }
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
