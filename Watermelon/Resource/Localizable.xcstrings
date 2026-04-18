@@ -9026,79 +9026,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld hat Monat %2$@ übernommen. Assets=%3$lld, geschätzt=%4$@."
+            "value" : "Parallelität #%1$lld hat Monat %2$@ übernommen. Assets=%3$lld, geschätzt=%4$@."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld claimed month %2$@. assets=%3$lld, estimated=%4$@."
+            "value" : "Concurrent #%1$lld claimed month %2$@. assets=%3$lld, estimated=%4$@."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El worker %1$lld tomó el mes %2$@. recursos=%3$lld, estimado=%4$@."
+            "value" : "El Concurrencia #%1$lld tomó el mes %2$@. recursos=%3$lld, estimado=%4$@."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El worker %1$lld tomó el mes %2$@. recursos=%3$lld, estimado=%4$@."
+            "value" : "El Concurrencia #%1$lld tomó el mes %2$@. recursos=%3$lld, estimado=%4$@."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le worker %1$lld a pris en charge le mois %2$@. éléments=%3$lld, estimation=%4$@."
+            "value" : "Le Simultanéité #%1$lld a pris en charge le mois %2$@. éléments=%3$lld, estimation=%4$@."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld が月 %2$@ を取得しました。アセット=%3$lld、見積り=%4$@。"
+            "value" : "同時実行 #%1$lld が月 %2$@ を取得しました。アセット=%3$lld、見積り=%4$@。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld가 %2$@월 작업을 가져왔습니다. 에셋=%3$lld, 예상=%4$@."
+            "value" : "동시 실행 #%1$lld가 %2$@월 작업을 가져왔습니다. 에셋=%3$lld, 예상=%4$@."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O worker %1$lld assumiu o mês %2$@. itens=%3$lld, estimado=%4$@."
+            "value" : "O Concorrência #%1$lld assumiu o mês %2$@. itens=%3$lld, estimado=%4$@."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O worker %1$lld assumiu o mês %2$@. itens=%3$lld, estimado=%4$@."
+            "value" : "O Concorrência #%1$lld assumiu o mês %2$@. itens=%3$lld, estimado=%4$@."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld узяв місяць %2$@. ресурсів=%3$lld, оцінка=%4$@."
+            "value" : "Паралельність #%1$lld узяв місяць %2$@. ресурсів=%3$lld, оцінка=%4$@."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 已领取月份 %2$@。资源=%3$lld，预估=%4$@。"
+            "value" : "并发 #%1$lld 已领取月份 %2$@。资源=%3$lld，预估=%4$@。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 已領取月份 %2$@。資源=%3$lld，預估=%4$@。"
+            "value" : "並行 #%1$lld 已領取月份 %2$@。資源=%3$lld，預估=%4$@。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 已領取月份 %2$@。資源=%3$lld，預估=%4$@。"
+            "value" : "並行 #%1$lld 已領取月份 %2$@。資源=%3$lld，預估=%4$@。"
           }
         }
       }
@@ -9190,79 +9190,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: Abbruch während der Finalisierung für Monat %2$@ angefordert."
+            "value" : "Parallelität #%1$lld: Abbruch während der Finalisierung für Monat %2$@ angefordert."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancellation requested during finalization for month %2$@."
+            "value" : "Concurrent #%1$lld: cancellation requested during finalization for month %2$@."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: se solicitó cancelación durante la finalización del mes %2$@."
+            "value" : "Concurrencia #%1$lld: se solicitó cancelación durante la finalización del mes %2$@."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: se solicitó cancelación durante la finalización del mes %2$@."
+            "value" : "Concurrencia #%1$lld: se solicitó cancelación durante la finalización del mes %2$@."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld : annulation demandée pendant la finalisation du mois %2$@."
+            "value" : "Simultanéité #%1$lld : annulation demandée pendant la finalisation du mois %2$@."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld: 月 %2$@ の最終処理中にキャンセルが要求されました。"
+            "value" : "同時実行 #%1$lld: 月 %2$@ の最終処理中にキャンセルが要求されました。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld: %2$@월 마무리 중 취소가 요청되었습니다."
+            "value" : "동시 실행 #%1$lld: %2$@월 마무리 중 취소가 요청되었습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancelamento solicitado durante a finalização do mês %2$@."
+            "value" : "Concorrência #%1$lld: cancelamento solicitado durante a finalização do mês %2$@."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancelamento solicitado durante a finalização do mês %2$@."
+            "value" : "Concorrência #%1$lld: cancelamento solicitado durante a finalização do mês %2$@."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: під час завершення місяця %2$@ запитано скасування."
+            "value" : "Паралельність #%1$lld: під час завершення місяця %2$@ запитано скасування."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：月份 %2$@ 收尾时收到取消请求。"
+            "value" : "并发 #%1$lld：月份 %2$@ 收尾时收到取消请求。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：月份 %2$@ 收尾時收到取消請求。"
+            "value" : "並行 #%1$lld：月份 %2$@ 收尾時收到取消請求。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：月份 %2$@ 收尾時收到取消請求。"
+            "value" : "並行 #%1$lld：月份 %2$@ 收尾時收到取消請求。"
           }
         }
       }
@@ -9272,79 +9272,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: Finalisierung für Monat %2$@ fehlgeschlagen: %3$@"
+            "value" : "Parallelität #%1$lld: Finalisierung für Monat %2$@ fehlgeschlagen: %3$@"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld month %2$@ finalization failed: %3$@"
+            "value" : "Concurrent #%1$lld month %2$@ finalization failed: %3$@"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: falló la finalización del mes %2$@: %3$@"
+            "value" : "Concurrencia #%1$lld: falló la finalización del mes %2$@: %3$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: falló la finalización del mes %2$@: %3$@"
+            "value" : "Concurrencia #%1$lld: falló la finalización del mes %2$@: %3$@"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld : échec de finalisation du mois %2$@ : %3$@"
+            "value" : "Simultanéité #%1$lld : échec de finalisation du mois %2$@ : %3$@"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld の月 %2$@ の最終処理に失敗しました: %3$@"
+            "value" : "同時実行 #%1$lld の月 %2$@ の最終処理に失敗しました: %3$@"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld의 %2$@월 마무리에 실패했습니다: %3$@"
+            "value" : "동시 실행 #%1$lld의 %2$@월 마무리에 실패했습니다: %3$@"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: falha ao finalizar o mês %2$@: %3$@"
+            "value" : "Concorrência #%1$lld: falha ao finalizar o mês %2$@: %3$@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: falha ao finalizar o mês %2$@: %3$@"
+            "value" : "Concorrência #%1$lld: falha ao finalizar o mês %2$@: %3$@"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: помилка завершення місяця %2$@: %3$@"
+            "value" : "Паралельність #%1$lld: помилка завершення місяця %2$@: %3$@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 的月份 %2$@ 收尾失败：%3$@"
+            "value" : "并发 #%1$lld 的月份 %2$@ 收尾失败：%3$@"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 的月份 %2$@ 收尾失敗：%3$@"
+            "value" : "並行 #%1$lld 的月份 %2$@ 收尾失敗：%3$@"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 的月份 %2$@ 收尾失敗：%3$@"
+            "value" : "並行 #%1$lld 的月份 %2$@ 收尾失敗：%3$@"
           }
         }
       }
@@ -9354,79 +9354,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: Warnung zum lokalen Hash-Cache für Monat %2$@: %3$@"
+            "value" : "Parallelität #%1$lld: Warnung zum lokalen Hash-Cache für Monat %2$@: %3$@"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld local hash cache warning for month %2$@: %3$@"
+            "value" : "Concurrent #%1$lld local hash cache warning for month %2$@: %3$@"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: advertencia de caché hash local para el mes %2$@: %3$@"
+            "value" : "Concurrencia #%1$lld: advertencia de caché hash local para el mes %2$@: %3$@"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: advertencia de caché hash local para el mes %2$@: %3$@"
+            "value" : "Concurrencia #%1$lld: advertencia de caché hash local para el mes %2$@: %3$@"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld : avertissement du cache de hachage local pour le mois %2$@ : %3$@"
+            "value" : "Simultanéité #%1$lld : avertissement du cache de hachage local pour le mois %2$@ : %3$@"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld の月 %2$@ のローカルハッシュキャッシュ警告: %3$@"
+            "value" : "同時実行 #%1$lld の月 %2$@ のローカルハッシュキャッシュ警告: %3$@"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld의 %2$@월 로컬 해시 캐시 경고: %3$@"
+            "value" : "동시 실행 #%1$lld의 %2$@월 로컬 해시 캐시 경고: %3$@"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: aviso de cache hash local para o mês %2$@: %3$@"
+            "value" : "Concorrência #%1$lld: aviso de cache hash local para o mês %2$@: %3$@"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: aviso de cache hash local para o mês %2$@: %3$@"
+            "value" : "Concorrência #%1$lld: aviso de cache hash local para o mês %2$@: %3$@"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: попередження локального кешу хешів для місяця %2$@: %3$@"
+            "value" : "Паралельність #%1$lld: попередження локального кешу хешів для місяця %2$@: %3$@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 在月份 %2$@ 的本地哈希缓存告警：%3$@"
+            "value" : "并发 #%1$lld 在月份 %2$@ 的本地哈希缓存告警：%3$@"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 在月份 %2$@ 的本機雜湊快取警告：%3$@"
+            "value" : "並行 #%1$lld 在月份 %2$@ 的本機雜湊快取警告：%3$@"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 在月份 %2$@ 的本機雜湊快取警告：%3$@"
+            "value" : "並行 #%1$lld 在月份 %2$@ 的本機雜湊快取警告：%3$@"
           }
         }
       }
@@ -9436,79 +9436,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld Monat %2$@: Fehlende Assets im Fotomediathek-Snapshot=%3$lld."
+            "value" : "Parallelität #%1$lld Monat %2$@: Fehlende Assets im Fotomediathek-Snapshot=%3$lld."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld month %2$@: missing assets in photo library snapshot=%3$lld."
+            "value" : "Concurrent #%1$lld month %2$@: missing assets in photo library snapshot=%3$lld."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld mes %2$@: recursos faltantes en la instantánea de la fototeca=%3$lld."
+            "value" : "Concurrencia #%1$lld mes %2$@: recursos faltantes en la instantánea de la fototeca=%3$lld."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld mes %2$@: recursos faltantes en la instantánea de la fototeca=%3$lld."
+            "value" : "Concurrencia #%1$lld mes %2$@: recursos faltantes en la instantánea de la fototeca=%3$lld."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld mois %2$@ : éléments manquants dans l’instantané de la photothèque = %3$lld."
+            "value" : "Simultanéité #%1$lld mois %2$@ : éléments manquants dans l’instantané de la photothèque = %3$lld."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld 月 %2$@: 写真ライブラリスナップショットで不足しているアセット=%3$lld。"
+            "value" : "同時実行 #%1$lld 月 %2$@: 写真ライブラリスナップショットで不足しているアセット=%3$lld。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld %2$@월: 사진 라이브러리 스냅샷에서 누락된 에셋=%3$lld."
+            "value" : "동시 실행 #%1$lld %2$@월: 사진 라이브러리 스냅샷에서 누락된 에셋=%3$lld."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld mês %2$@: itens ausentes no snapshot da fototeca=%3$lld."
+            "value" : "Concorrência #%1$lld mês %2$@: itens ausentes no snapshot da fototeca=%3$lld."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld mês %2$@: itens em falta no snapshot da fototeca=%3$lld."
+            "value" : "Concorrência #%1$lld mês %2$@: itens em falta no snapshot da fototeca=%3$lld."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld місяць %2$@: відсутніх об’єктів у знімку фототеки=%3$lld."
+            "value" : "Паралельність #%1$lld місяць %2$@: відсутніх об’єктів у знімку фототеки=%3$lld."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 的月份 %2$@ 在照片库快照中缺失资源=%3$lld。"
+            "value" : "并发 #%1$lld 的月份 %2$@ 在照片库快照中缺失资源=%3$lld。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 的月份 %2$@ 在照片圖庫快照中缺失資源=%3$lld。"
+            "value" : "並行 #%1$lld 的月份 %2$@ 在照片圖庫快照中缺失資源=%3$lld。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld 的月份 %2$@ 在照片圖庫快照中缺失資源=%3$lld。"
+            "value" : "並行 #%1$lld 的月份 %2$@ 在照片圖庫快照中缺失資源=%3$lld。"
           }
         }
       }
@@ -9518,79 +9518,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: Monat %2$@ wurde vor Abschluss wegen eines schwerwiegenden Upload-Fehlers beendet."
+            "value" : "Parallelität #%1$lld: Monat %2$@ wurde vor Abschluss wegen eines schwerwiegenden Upload-Fehlers beendet."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: month %2$@ stopped before completion because of a fatal upload error."
+            "value" : "Concurrent #%1$lld: month %2$@ stopped before completion because of a fatal upload error."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: el mes %2$@ se detuvo antes de completarse debido a un error fatal de subida."
+            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse debido a un error fatal de subida."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: el mes %2$@ se detuvo antes de completarse debido a un error fatal de subida."
+            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse debido a un error fatal de subida."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld : le mois %2$@ s’est arrêté avant la fin en raison d’une erreur d’envoi fatale."
+            "value" : "Simultanéité #%1$lld : le mois %2$@ s’est arrêté avant la fin en raison d’une erreur d’envoi fatale."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld: 月 %2$@ は致命的なアップロードエラーのため完了前に停止しました。"
+            "value" : "同時実行 #%1$lld: 月 %2$@ は致命的なアップロードエラーのため完了前に停止しました。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld: %2$@월 작업이 치명적인 업로드 오류로 완료 전에 중단되었습니다."
+            "value" : "동시 실행 #%1$lld: %2$@월 작업이 치명적인 업로드 오류로 완료 전에 중단되었습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: o mês %2$@ foi interrompido antes da conclusão devido a um erro fatal de upload."
+            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão devido a um erro fatal de upload."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: o mês %2$@ foi interrompido antes da conclusão devido a um erro fatal de envio."
+            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão devido a um erro fatal de envio."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: місяць %2$@ зупинено до завершення через фатальну помилку вивантаження."
+            "value" : "Паралельність #%1$lld: місяць %2$@ зупинено до завершення через фатальну помилку вивантаження."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：月份 %2$@ 因致命上传错误在完成前中止。"
+            "value" : "并发 #%1$lld：月份 %2$@ 因致命上传错误在完成前中止。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：月份 %2$@ 因致命上傳錯誤在完成前中止。"
+            "value" : "並行 #%1$lld：月份 %2$@ 因致命上傳錯誤在完成前中止。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：月份 %2$@ 因致命上傳錯誤在完成前中止。"
+            "value" : "並行 #%1$lld：月份 %2$@ 因致命上傳錯誤在完成前中止。"
           }
         }
       }
@@ -9600,79 +9600,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: Abbruch angefordert. Monat %2$@ wurde vor Abschluss pausiert."
+            "value" : "Parallelität #%1$lld: Abbruch angefordert. Monat %2$@ wurde vor Abschluss pausiert."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancellation requested. Month %2$@ paused before completion."
+            "value" : "Concurrent #%1$lld: cancellation requested. Month %2$@ paused before completion."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancelación solicitada. El mes %2$@ se pausó antes de completarse."
+            "value" : "Concurrencia #%1$lld: cancelación solicitada. El mes %2$@ se pausó antes de completarse."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancelación solicitada. El mes %2$@ se pausó antes de completarse."
+            "value" : "Concurrencia #%1$lld: cancelación solicitada. El mes %2$@ se pausó antes de completarse."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld : annulation demandée. Le mois %2$@ a été mis en pause avant la fin."
+            "value" : "Simultanéité #%1$lld : annulation demandée. Le mois %2$@ a été mis en pause avant la fin."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld: キャンセルが要求されました。月 %2$@ は完了前に一時停止しました。"
+            "value" : "同時実行 #%1$lld: キャンセルが要求されました。月 %2$@ は完了前に一時停止しました。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld: 취소가 요청되었습니다. %2$@월 작업이 완료 전에 일시 중지되었습니다."
+            "value" : "동시 실행 #%1$lld: 취소가 요청되었습니다. %2$@월 작업이 완료 전에 일시 중지되었습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancelamento solicitado. O mês %2$@ foi pausado antes da conclusão."
+            "value" : "Concorrência #%1$lld: cancelamento solicitado. O mês %2$@ foi pausado antes da conclusão."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancelamento solicitado. O mês %2$@ foi pausado antes da conclusão."
+            "value" : "Concorrência #%1$lld: cancelamento solicitado. O mês %2$@ foi pausado antes da conclusão."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: запитано скасування. Місяць %2$@ призупинено до завершення."
+            "value" : "Паралельність #%1$lld: запитано скасування. Місяць %2$@ призупинено до завершення."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：收到取消请求。月份 %2$@ 在完成前已暂停。"
+            "value" : "并发 #%1$lld：收到取消请求。月份 %2$@ 在完成前已暂停。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：收到取消請求。月份 %2$@ 在完成前已暫停。"
+            "value" : "並行 #%1$lld：收到取消請求。月份 %2$@ 在完成前已暫停。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：收到取消請求。月份 %2$@ 在完成前已暫停。"
+            "value" : "並行 #%1$lld：收到取消請求。月份 %2$@ 在完成前已暫停。"
           }
         }
       }
@@ -9682,79 +9682,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: Abbruch angefordert. Das Manifest für Monat %2$@ wurde vor dem Beenden geschrieben."
+            "value" : "Parallelität #%1$lld: Abbruch angefordert. Das Manifest für Monat %2$@ wurde vor dem Beenden geschrieben."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancellation requested. Month %2$@ manifest was flushed before exit."
+            "value" : "Concurrent #%1$lld: cancellation requested. Month %2$@ manifest was flushed before exit."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancelación solicitada. El manifiesto del mes %2$@ se guardó antes de salir."
+            "value" : "Concurrencia #%1$lld: cancelación solicitada. El manifiesto del mes %2$@ se guardó antes de salir."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancelación solicitada. El manifiesto del mes %2$@ se guardó antes de salir."
+            "value" : "Concurrencia #%1$lld: cancelación solicitada. El manifiesto del mes %2$@ se guardó antes de salir."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld : annulation demandée. Le manifeste du mois %2$@ a été enregistré avant la sortie."
+            "value" : "Simultanéité #%1$lld : annulation demandée. Le manifeste du mois %2$@ a été enregistré avant la sortie."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld: キャンセルが要求されました。月 %2$@ のマニフェストは終了前に flush 済みです。"
+            "value" : "同時実行 #%1$lld: キャンセルが要求されました。月 %2$@ のマニフェストは終了前に flush 済みです。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld: 취소가 요청되었습니다. %2$@월 매니페스트는 종료 전에 flush되었습니다."
+            "value" : "동시 실행 #%1$lld: 취소가 요청되었습니다. %2$@월 매니페스트는 종료 전에 flush되었습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancelamento solicitado. O manifesto do mês %2$@ foi gravado antes de sair."
+            "value" : "Concorrência #%1$lld: cancelamento solicitado. O manifesto do mês %2$@ foi gravado antes de sair."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: cancelamento solicitado. O manifesto do mês %2$@ foi gravado antes de sair."
+            "value" : "Concorrência #%1$lld: cancelamento solicitado. O manifesto do mês %2$@ foi gravado antes de sair."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: запитано скасування. Маніфест місяця %2$@ було записано перед виходом."
+            "value" : "Паралельність #%1$lld: запитано скасування. Маніфест місяця %2$@ було записано перед виходом."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：收到取消请求。月份 %2$@ 已在退出前 flush manifest。"
+            "value" : "并发 #%1$lld：收到取消请求。月份 %2$@ 已在退出前 flush manifest。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：收到取消請求。月份 %2$@ 已在退出前 flush manifest。"
+            "value" : "並行 #%1$lld：收到取消請求。月份 %2$@ 已在退出前 flush manifest。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：收到取消請求。月份 %2$@ 已在退出前 flush manifest。"
+            "value" : "並行 #%1$lld：收到取消請求。月份 %2$@ 已在退出前 flush manifest。"
           }
         }
       }
@@ -9846,79 +9846,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Paralleler Monatsplaner: Monate=%1$lld, Worker=%2$lld, Verbindungspool=%3$lld, Strategie=dynamic-pull, Quelle=%4$@, Speicher=%5$@."
+            "value" : "Paralleler Monatsplaner: Monate=%1$lld, Parallelität=%2$lld, Verbindungspool=%3$lld, Strategie=dynamic-pull, Quelle=%4$@, Speicher=%5$@."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallel month scheduler: months=%1$lld, workers=%2$lld, connectionPool=%3$lld, strategy=dynamic-pull, source=%4$@, storage=%5$@."
+            "value" : "Parallel month scheduler: months=%1$lld, concurrency=%2$lld, connectionPool=%3$lld, strategy=dynamic-pull, source=%4$@, storage=%5$@."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Planificador paralelo por mes: meses=%1$lld, workers=%2$lld, pool de conexiones=%3$lld, estrategia=dynamic-pull, origen=%4$@, almacenamiento=%5$@."
+            "value" : "Planificador paralelo por mes: meses=%1$lld, concurrencia=%2$lld, pool de conexiones=%3$lld, estrategia=dynamic-pull, origen=%4$@, almacenamiento=%5$@."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Planificador paralelo por mes: meses=%1$lld, workers=%2$lld, pool de conexiones=%3$lld, estrategia=dynamic-pull, origen=%4$@, almacenamiento=%5$@."
+            "value" : "Planificador paralelo por mes: meses=%1$lld, concurrencia=%2$lld, pool de conexiones=%3$lld, estrategia=dynamic-pull, origen=%4$@, almacenamiento=%5$@."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Planificateur parallèle par mois : mois=%1$lld, workers=%2$lld, pool de connexions=%3$lld, stratégie=dynamic-pull, source=%4$@, stockage=%5$@."
+            "value" : "Planificateur parallèle par mois : mois=%1$lld, simultanéité=%2$lld, pool de connexions=%3$lld, stratégie=dynamic-pull, source=%4$@, stockage=%5$@."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "並列月スケジューラ: 月=%1$lld、worker=%2$lld、接続プール=%3$lld、戦略=dynamic-pull、ソース=%4$@、ストレージ=%5$@。"
+            "value" : "並列月スケジューラ: 月=%1$lld、同時実行=%2$lld、接続プール=%3$lld、戦略=dynamic-pull、ソース=%4$@、ストレージ=%5$@。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "병렬 월 스케줄러: 월=%1$lld, worker=%2$lld, 연결 풀=%3$lld, 전략=dynamic-pull, 소스=%4$@, 저장소=%5$@."
+            "value" : "병렬 월 스케줄러: 월=%1$lld, 동시 실행=%2$lld, 연결 풀=%3$lld, 전략=dynamic-pull, 소스=%4$@, 저장소=%5$@."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agendador paralelo por mês: meses=%1$lld, workers=%2$lld, pool de conexões=%3$lld, estratégia=dynamic-pull, origem=%4$@, armazenamento=%5$@."
+            "value" : "Agendador paralelo por mês: meses=%1$lld, concorrência=%2$lld, pool de conexões=%3$lld, estratégia=dynamic-pull, origem=%4$@, armazenamento=%5$@."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agendador paralelo por mês: meses=%1$lld, workers=%2$lld, pool de ligações=%3$lld, estratégia=dynamic-pull, origem=%4$@, armazenamento=%5$@."
+            "value" : "Agendador paralelo por mês: meses=%1$lld, concorrência=%2$lld, pool de ligações=%3$lld, estratégia=dynamic-pull, origem=%4$@, armazenamento=%5$@."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Паралельний планувальник місяців: місяців=%1$lld, worker=%2$lld, пул з’єднань=%3$lld, стратегія=dynamic-pull, джерело=%4$@, сховище=%5$@."
+            "value" : "Паралельний планувальник місяців: місяців=%1$lld, паралельність=%2$lld, пул з’єднань=%3$lld, стратегія=dynamic-pull, джерело=%4$@, сховище=%5$@."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "并行月份调度：月份=%1$lld，Worker=%2$lld，连接池=%3$lld，策略=dynamic-pull，来源=%4$@，存储=%5$@。"
+            "value" : "并行月份调度：月份=%1$lld，并发=%2$lld，连接池=%3$lld，策略=dynamic-pull，来源=%4$@，存储=%5$@。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "並行月份調度：月份=%1$lld，Worker=%2$lld，連線池=%3$lld，策略=dynamic-pull，來源=%4$@，儲存=%5$@。"
+            "value" : "並行月份調度：月份=%1$lld，並行=%2$lld，連線池=%3$lld，策略=dynamic-pull，來源=%4$@，儲存=%5$@。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "並行月份調度：月份=%1$lld，Worker=%2$lld，連線池=%3$lld，策略=dynamic-pull，來源=%4$@，儲存=%5$@。"
+            "value" : "並行月份調度：月份=%1$lld，並行=%2$lld，連線池=%3$lld，策略=dynamic-pull，來源=%4$@，儲存=%5$@。"
           }
         }
       }
@@ -9928,79 +9928,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: Monat %2$@ wurde vor Abschluss beendet, weil der Remote-Speicher nicht mehr verfügbar war. Das Schreiben des Manifests wurde übersprungen."
+            "value" : "Parallelität #%1$lld: Monat %2$@ wurde vor Abschluss beendet, weil der Remote-Speicher nicht mehr verfügbar war. Das Schreiben des Manifests wurde übersprungen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: month %2$@ stopped before completion because remote storage became unavailable. Manifest flush skipped."
+            "value" : "Concurrent #%1$lld: month %2$@ stopped before completion because remote storage became unavailable. Manifest flush skipped."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: el mes %2$@ se detuvo antes de completarse porque el almacenamiento remoto dejó de estar disponible. Se omitió el guardado del manifiesto."
+            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse porque el almacenamiento remoto dejó de estar disponible. Se omitió el guardado del manifiesto."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: el mes %2$@ se detuvo antes de completarse porque el almacenamiento remoto dejó de estar disponible. Se omitió el guardado del manifiesto."
+            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse porque el almacenamiento remoto dejó de estar disponible. Se omitió el guardado del manifiesto."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld : le mois %2$@ s’est arrêté avant la fin car le stockage distant est devenu indisponible. L’écriture du manifeste a été ignorée."
+            "value" : "Simultanéité #%1$lld : le mois %2$@ s’est arrêté avant la fin car le stockage distant est devenu indisponible. L’écriture du manifeste a été ignorée."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld: リモートストレージが利用できなくなったため、月 %2$@ は完了前に停止しました。マニフェストの flush はスキップされました。"
+            "value" : "同時実行 #%1$lld: リモートストレージが利用できなくなったため、月 %2$@ は完了前に停止しました。マニフェストの flush はスキップされました。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker %1$lld: 원격 저장소를 사용할 수 없게 되어 %2$@월 작업이 완료 전에 중단되었습니다. 매니페스트 flush를 건너뜁니다."
+            "value" : "동시 실행 #%1$lld: 원격 저장소를 사용할 수 없게 되어 %2$@월 작업이 완료 전에 중단되었습니다. 매니페스트 flush를 건너뜁니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: o mês %2$@ foi interrompido antes da conclusão porque o armazenamento remoto ficou indisponível. O flush do manifesto foi ignorado."
+            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão porque o armazenamento remoto ficou indisponível. O flush do manifesto foi ignorado."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: o mês %2$@ foi interrompido antes da conclusão porque o armazenamento remoto ficou indisponível. O flush do manifesto foi ignorado."
+            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão porque o armazenamento remoto ficou indisponível. O flush do manifesto foi ignorado."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld: місяць %2$@ зупинено до завершення, оскільки віддалене сховище стало недоступним. Запис маніфесту пропущено."
+            "value" : "Паралельність #%1$lld: місяць %2$@ зупинено до завершення, оскільки віддалене сховище стало недоступним. Запис маніфесту пропущено."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：月份 %2$@ 因远端存储不可用而在完成前中止，已跳过 manifest flush。"
+            "value" : "并发 #%1$lld：月份 %2$@ 因远端存储不可用而在完成前中止，已跳过 manifest flush。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：月份 %2$@ 因遠端儲存不可用而在完成前中止，已跳過 manifest flush。"
+            "value" : "並行 #%1$lld：月份 %2$@ 因遠端儲存不可用而在完成前中止，已跳過 manifest flush。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker %1$lld：月份 %2$@ 因遠端儲存不可用而在完成前中止，已跳過 manifest flush。"
+            "value" : "並行 #%1$lld：月份 %2$@ 因遠端儲存不可用而在完成前中止，已跳過 manifest flush。"
           }
         }
       }
@@ -10010,79 +10010,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker-Anzahl angepasst: angefordert=%1$lld, effektiv=%2$lld, Grund=month-count(%3$lld)."
+            "value" : "Parallelität angepasst: angefordert=%1$lld, effektiv=%2$lld, Grund=month-count(%3$lld)."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker override adjusted: requested=%1$lld, effective=%2$lld, reason=month-count(%3$lld)."
+            "value" : "Concurrent override adjusted: requested=%1$lld, effective=%2$lld, reason=month-count(%3$lld)."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ajuste de workers: solicitados=%1$lld, efectivos=%2$lld, motivo=month-count(%3$lld)."
+            "value" : "Ajuste de concurrencia: solicitada=%1$lld, efectiva=%2$lld, motivo=month-count(%3$lld)."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ajuste de workers: solicitados=%1$lld, efectivos=%2$lld, motivo=month-count(%3$lld)."
+            "value" : "Ajuste de concurrencia: solicitada=%1$lld, efectiva=%2$lld, motivo=month-count(%3$lld)."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ajustement du nombre de workers : demandé=%1$lld, effectif=%2$lld, raison=month-count(%3$lld)."
+            "value" : "Ajustement de la simultanéité : demandé=%1$lld, effectif=%2$lld, raison=month-count(%3$lld)."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker 数を調整しました: 要求=%1$lld、実際=%2$lld、理由=month-count(%3$lld)。"
+            "value" : "同時実行数を調整しました: 要求=%1$lld、実際=%2$lld、理由=month-count(%3$lld)。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "worker 수 조정: 요청=%1$lld, 적용=%2$lld, 이유=month-count(%3$lld)."
+            "value" : "동시 실행 수 조정: 요청=%1$lld, 적용=%2$lld, 이유=month-count(%3$lld)."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ajuste de workers: solicitado=%1$lld, efetivo=%2$lld, motivo=month-count(%3$lld)."
+            "value" : "Ajuste de concorrência: solicitada=%1$lld, efetiva=%2$lld, motivo=month-count(%3$lld)."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ajuste de workers: pedido=%1$lld, efetivo=%2$lld, motivo=month-count(%3$lld)."
+            "value" : "Ajuste de concorrência: pedida=%1$lld, efetiva=%2$lld, motivo=month-count(%3$lld)."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Кількість worker змінено: запитано=%1$lld, фактично=%2$lld, причина=month-count(%3$lld)."
+            "value" : "Паралельність змінено: запитано=%1$lld, фактично=%2$lld, причина=month-count(%3$lld)."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker 数调整：请求=%1$lld，实际=%2$lld，原因=month-count(%3$lld)。"
+            "value" : "并发数调整：请求=%1$lld，实际=%2$lld，原因=month-count(%3$lld)。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker 數調整：請求=%1$lld，實際=%2$lld，原因=month-count(%3$lld)。"
+            "value" : "並行數調整：請求=%1$lld，實際=%2$lld，原因=month-count(%3$lld)。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Worker 數調整：請求=%1$lld，實際=%2$lld，原因=month-count(%3$lld)。"
+            "value" : "並行數調整：請求=%1$lld，實際=%2$lld，原因=month-count(%3$lld)。"
           }
         }
       }
@@ -10584,79 +10584,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: Scan gestartet. Worker=%2$lld."
+            "value" : "%1$@: Scan gestartet. Parallelität=%2$lld."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: scanning started. workers=%2$lld."
+            "value" : "%1$@: scanning started. concurrency=%2$lld."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: escaneo iniciado. workers=%2$lld."
+            "value" : "%1$@: escaneo iniciado. concurrencia=%2$lld."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: escaneo iniciado. workers=%2$lld."
+            "value" : "%1$@: escaneo iniciado. concurrencia=%2$lld."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ : analyse démarrée. workers=%2$lld."
+            "value" : "%1$@ : analyse démarrée. simultanéité=%2$lld."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: スキャン開始。worker=%2$lld。"
+            "value" : "%1$@: スキャン開始。同時実行=%2$lld。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: 스캔 시작. worker=%2$lld."
+            "value" : "%1$@: 스캔 시작. 동시 실행=%2$lld."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: varredura iniciada. workers=%2$lld."
+            "value" : "%1$@: varredura iniciada. concorrência=%2$lld."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: análise iniciada. workers=%2$lld."
+            "value" : "%1$@: análise iniciada. concorrência=%2$lld."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@: сканування розпочато. worker=%2$lld."
+            "value" : "%1$@: сканування розпочато. паралельність=%2$lld."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@：开始扫描，worker %2$lld。"
+            "value" : "%1$@：开始扫描，并发 #%2$lld。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@：開始掃描，worker %2$lld。"
+            "value" : "%1$@：開始掃描，並行 #%2$lld。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@：開始掃描，worker %2$lld。"
+            "value" : "%1$@：開始掃描，並行 #%2$lld。"
           }
         }
       }
@@ -24948,79 +24948,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wenn aktiviert, sichert %@ im Hintergrund automatisch Fotos und Videos der letzten zwei Monate, wenn das Gerät geladen wird und mit WLAN verbunden ist.\nÄltere Monate müssen manuell in der App gesichert werden.\nUnterstützt SMB und WebDAV (kein externer Speicher). Pro erforderlich."
+            "value" : "Wenn aktiviert, sichert %@ im Hintergrund automatisch Fotos und Videos der letzten zwei Monate, wenn das Gerät geladen wird und mit WLAN verbunden ist.\nÄltere Monate müssen manuell in der App gesichert werden.\nUnterstützt SMB und WebDAV (kein externer Speicher)."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When enabled, %@ will automatically back up photos and videos from the last two months in the background when the device is charging and connected to Wi-Fi.\nOlder months must be backed up manually in the app.\nSupports SMB and WebDAV (external storage not supported). This feature requires Pro."
+            "value" : "When enabled, %@ will automatically back up photos and videos from the last two months in the background when the device is charging and connected to Wi-Fi.\nOlder months must be backed up manually in the app.\nSupports SMB and WebDAV (external storage not supported)."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ respaldará automáticamente fotos y vídeos de los últimos dos meses en segundo plano cuando el dispositivo esté cargando y conectado a Wi-Fi.\nLos meses más antiguos deben respaldarse manualmente.\nCompatible con SMB y WebDAV (no almacenamiento externo). Requiere Pro."
+            "value" : "Cuando está activado, %@ respaldará automáticamente fotos y vídeos de los últimos dos meses en segundo plano cuando el dispositivo esté cargando y conectado a Wi-Fi.\nLos meses más antiguos deben respaldarse manualmente.\nCompatible con SMB y WebDAV (no almacenamiento externo)."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ respaldará automáticamente fotos y videos de los últimos dos meses en segundo plano cuando el dispositivo esté cargando y conectado a Wi-Fi.\nLos meses más antiguos deben respaldarse manualmente.\nCompatible con SMB y WebDAV (sin almacenamiento externo). Requiere Pro."
+            "value" : "Cuando está activado, %@ respaldará automáticamente fotos y videos de los últimos dos meses en segundo plano cuando el dispositivo esté cargando y conectado a Wi-Fi.\nLos meses más antiguos deben respaldarse manualmente.\nCompatible con SMB y WebDAV (sin almacenamiento externo)."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lorsque activé, %@ sauvegardera automatiquement les photos et vidéos des deux derniers mois en arrière-plan lorsque l'appareil est en charge et connecté au Wi-Fi.\nLes mois plus anciens doivent être sauvegardés manuellement.\nPrise en charge de SMB et WebDAV (pas de stockage externe). Pro requis."
+            "value" : "Lorsque activé, %@ sauvegardera automatiquement les photos et vidéos des deux derniers mois en arrière-plan lorsque l'appareil est en charge et connecté au Wi-Fi.\nLes mois plus anciens doivent être sauvegardés manuellement.\nPrise en charge de SMB et WebDAV (pas de stockage externe)."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有効にすると、デバイスが充電中かつ Wi-Fi に接続されているときに、%@ がバックグラウンドで直近 2 か月分の写真と動画を自動バックアップします。\nそれ以前の月はアプリ内で手動バックアップしてください。\nSMB と WebDAV に対応（外部ストレージ非対応）。Pro が必要です。"
+            "value" : "有効にすると、デバイスが充電中かつ Wi-Fi に接続されているときに、%@ がバックグラウンドで直近 2 か月分の写真と動画を自動バックアップします。\nそれ以前の月はアプリ内で手動バックアップしてください。\nSMB と WebDAV に対応（外部ストレージ非対応）。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "활성화하면 기기가 충전 중이고 Wi-Fi에 연결되어 있을 때 %@이(가) 백그라운드에서 최근 2개월의 사진과 동영상을 자동으로 백업합니다.\n이전 월은 앱에서 수동으로 백업하세요.\nSMB 및 WebDAV 지원 (외장 저장소 미지원). Pro가 필요합니다."
+            "value" : "활성화하면 기기가 충전 중이고 Wi-Fi에 연결되어 있을 때 %@이(가) 백그라운드에서 최근 2개월의 사진과 동영상을 자동으로 백업합니다.\n이전 월은 앱에서 수동으로 백업하세요.\nSMB 및 WebDAV 지원 (외장 저장소 미지원)."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ fará backup automático de fotos e vídeos dos últimos dois meses em segundo plano quando o dispositivo estiver carregando e conectado ao Wi-Fi.\nMeses mais antigos devem ser copiados manualmente.\nCompatível com SMB e WebDAV (sem armazenamento externo). Requer Pro."
+            "value" : "Quando ativado, o %@ fará backup automático de fotos e vídeos dos últimos dois meses em segundo plano quando o dispositivo estiver carregando e conectado ao Wi-Fi.\nMeses mais antigos devem ser copiados manualmente.\nCompatível com SMB e WebDAV (sem armazenamento externo)."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ fará cópia automática de fotos e vídeos dos últimos dois meses em segundo plano quando o dispositivo estiver a carregar e ligado ao Wi-Fi.\nMeses mais antigos devem ser copiados manualmente.\nCompatível com SMB e WebDAV (sem armazenamento externo). Requer Pro."
+            "value" : "Quando ativado, o %@ fará cópia automática de fotos e vídeos dos últimos dois meses em segundo plano quando o dispositivo estiver a carregar e ligado ao Wi-Fi.\nMeses mais antigos devem ser copiados manualmente.\nCompatível com SMB e WebDAV (sem armazenamento externo)."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Коли увімкнено, %@ автоматично створюватиме резервні копії фотографій та відео за останні два місяці у фоновому режимі, коли пристрій заряджається та підключений до Wi-Fi.\nСтаріші місяці потрібно копіювати вручну.\nПідтримує SMB та WebDAV (зовнішнє сховище не підтримується). Потрібен Pro."
+            "value" : "Коли увімкнено, %@ автоматично створюватиме резервні копії фотографій та відео за останні два місяці у фоновому режимі, коли пристрій заряджається та підключений до Wi-Fi.\nСтаріші місяці потрібно копіювати вручну.\nПідтримує SMB та WebDAV (зовнішнє сховище не підтримується)."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "启用后，设备连接电源并使用 Wi-Fi 时，%@ 会在后台自动备份最近两个月的照片和视频。\n更早的月份请在应用内手动备份。\n支持 SMB 和 WebDAV（不支持外接存储）。此功能需要 Pro。"
+            "value" : "启用后，设备连接电源并使用 Wi-Fi 时，%@ 会在后台自动备份最近两个月的照片和视频。\n更早的月份请在应用内手动备份。\n支持 SMB 和 WebDAV（不支持外接存储）。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後，裝置連接電源並使用 Wi-Fi 時，%@ 會在背景自動備份最近兩個月的照片和影片。\n更早的月份請在 App 內手動備份。\n支援 SMB 和 WebDAV（不支援外接儲存）。此功能需要 Pro。"
+            "value" : "啟用後，裝置連接電源並使用 Wi-Fi 時，%@ 會在背景自動備份最近兩個月的照片和影片。\n更早的月份請在 App 內手動備份。\n支援 SMB 和 WebDAV（不支援外接儲存）。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後，裝置連接電源並使用 Wi-Fi 時，%@ 會在背景自動備份最近兩個月的相片和影片。\n更早的月份請在 App 內手動備份。\n支援 SMB 和 WebDAV（不支援外接儲存）。此功能需要 Pro。"
+            "value" : "啟用後，裝置連接電源並使用 Wi-Fi 時，%@ 會在背景自動備份最近兩個月的相片和影片。\n更早的月份請在 App 內手動備份。\n支援 SMB 和 WebDAV（不支援外接儲存）。"
           }
         }
       }
@@ -25353,84 +25353,166 @@
         }
       }
     },
-    "settings.icloud.footer" : {
+    "settings.common.requiresProFooter" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wenn aktiviert, kann %@ während der Sicherung, Synchronisierung und Deduplizierung auf iCloud-Originale zugreifen.\nWenn nur in iCloud vorhandene Ressourcen erkannt werden, wird automatisch auf 1 Worker umgeschaltet.\nBei Deaktivierung werden nur Ressourcen auf dem Gerät verarbeitet.\nLaufende Sicherungsaufgaben müssen gestoppt und neu gestartet werden."
+            "value" : "Diese Funktion erfordert Pro."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When enabled, %@ may access iCloud originals during backup, sync, and download deduplication.\nIf iCloud-only resources are detected, execution will automatically switch to 1 worker.\nWhen disabled, only on-device resources are processed.\nIf a backup task is already in progress, you need to stop and restart it for the new setting to take effect."
+            "value" : "This feature requires Pro."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ puede acceder a originales de iCloud durante la copia de seguridad, sincronización y deduplicación.\nSi se detectan recursos solo en iCloud, se cambiará automáticamente a 1 worker.\nDesactivado: solo se procesan recursos en el dispositivo.\nSi hay una tarea en curso, deténgala y reiníciela."
+            "value" : "Esta función requiere Pro."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cuando está activado, %@ puede acceder a originales de iCloud durante el respaldo, sincronización y deduplicación.\nSi se detectan recursos solo en iCloud, se cambiará automáticamente a 1 worker.\nDesactivado: solo se procesan recursos en el dispositivo.\nSi hay una tarea en curso, deténgala y reiníciela."
+            "value" : "Esta función requiere Pro."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lorsque activé, %@ peut accéder aux originaux iCloud lors de la sauvegarde, synchronisation et déduplication.\nSi des ressources iCloud uniquement sont détectées, le nombre de workers passe à 1.\nDésactivé : seules les ressources sur l'appareil sont traitées.\nRedémarrage nécessaire si une sauvegarde est en cours."
+            "value" : "Cette fonctionnalité nécessite Pro."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有効にすると、%@ はバックアップ、同期、ダウンロード重複排除時に iCloud オリジナルにアクセスできます。\niCloud のみのリソースが検出された場合、自動的に 1 ワーカーに切り替わります。\n無効時はデバイス上のリソースのみ処理されます。\nバックアップタスクが進行中の場合、新設定の適用には停止・再開始が必要です。"
+            "value" : "この機能は Pro が必要です。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "활성화하면 %@이(가) 백업, 동기화, 다운로드 중복 제거 시 iCloud 원본에 접근할 수 있습니다.\niCloud 전용 리소스가 감지되면 자동으로 1개 Worker로 전환됩니다.\n비활성화 시 기기에 있는 리소스만 처리됩니다.\n백업 작업이 진행 중인 경우, 새 설정 적용을 위해 중지 후 재시작이 필요합니다."
+            "value" : "이 기능을 사용하려면 Pro가 필요합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ pode acessar originais do iCloud durante backup, sincronização e deduplicação.\nSe recursos apenas no iCloud forem detectados, mudará automaticamente para 1 worker.\nDesativado: apenas recursos no dispositivo são processados.\nSe um backup estiver em andamento, pare e reinicie."
+            "value" : "Este recurso requer Pro."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quando ativado, o %@ pode aceder a originais do iCloud durante cópia de segurança, sincronização e deduplicação.\nSe forem detetados recursos apenas no iCloud, mudará automaticamente para 1 worker.\nDesativado: apenas recursos no dispositivo são processados.\nSe uma tarefa estiver em curso, pare e reinicie."
+            "value" : "Esta funcionalidade requer Pro."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Коли увімкнено, %@ може отримувати доступ до оригіналів iCloud під час резервного копіювання, синхронізації та дедуплікації.\nЯкщо виявлено ресурси лише в iCloud, виконання перемикнеться на 1 worker.\nВимкнено: обробляються лише ресурси на пристрої.\nЯкщо виконується резервне копіювання, зупиніть і перезапустіть."
+            "value" : "Ця функція потребує Pro."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "启用后允许 %@ 在备份、同步、下载前的去重过程中按需访问 iCloud 原件。\n若当前范围内检测到仅存于 iCloud 的资源，执行会自动改为 1 个 Worker。\n停用时仅处理已经在本机的资源。\n若当前已有进行中的备份任务，需要先停止并重新开始，新设置才会生效。"
+            "value" : "此功能需要 Pro。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後允許 %@ 在備份、同步、下載前的去重過程中按需存取 iCloud 原件。\n若偵測到僅存於 iCloud 的資源，會自動改為 1 個 Worker。\n停用時僅處理已在本機的資源。\n若目前已有進行中的備份任務，需要先停止並重新開始，新設定才會生效。"
+            "value" : "此功能需要 Pro。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "啟用後允許 %@ 在備份、同步、下載前的去重過程中按需存取 iCloud 原件。\n若偵測到僅存於 iCloud 的資源，會自動改為 1 個 Worker。\n停用時僅處理已在本機的資源。\n若目前已有進行中的備份任務，需要先停止並重新開始，新設定才會生效。"
+            "value" : "此功能需要 Pro。"
+          }
+        }
+      }
+    },
+    "settings.icloud.footer" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn aktiviert, kann %@ während der Sicherung, Synchronisierung und Deduplizierung auf iCloud-Originale zugreifen.\nWenn nur in iCloud vorhandene Ressourcen erkannt werden, wird die Parallelität automatisch auf 1 gesetzt.\nBei Deaktivierung werden nur Ressourcen auf dem Gerät verarbeitet.\nLaufende Sicherungsaufgaben müssen gestoppt und neu gestartet werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When enabled, %@ may access iCloud originals during backup, sync, and download deduplication.\nIf iCloud-only resources are detected, execution will automatically switch concurrency to 1.\nWhen disabled, only on-device resources are processed.\nIf a backup task is already in progress, you need to stop and restart it for the new setting to take effect."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuando está activado, %@ puede acceder a originales de iCloud durante la copia de seguridad, sincronización y deduplicación.\nSi se detectan recursos solo en iCloud, se cambiará automáticamente la concurrencia a 1.\nDesactivado: solo se procesan recursos en el dispositivo.\nSi hay una tarea en curso, deténgala y reiníciela."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuando está activado, %@ puede acceder a originales de iCloud durante el respaldo, sincronización y deduplicación.\nSi se detectan recursos solo en iCloud, se cambiará automáticamente a 1 concurrencia.\nDesactivado: solo se procesan recursos en el dispositivo.\nSi hay una tarea en curso, deténgala y reiníciela."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lorsque activé, %@ peut accéder aux originaux iCloud lors de la sauvegarde, synchronisation et déduplication.\nSi des ressources iCloud uniquement sont détectées, la simultanéité passe à 1.\nDésactivé : seules les ressources sur l'appareil sont traitées.\nRedémarrage nécessaire si une sauvegarde est en cours."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有効にすると、%@ はバックアップ、同期、ダウンロード重複排除時に iCloud オリジナルにアクセスできます。\niCloud のみのリソースが検出された場合、同時実行数が自動的に 1 に切り替わります。\n無効時はデバイス上のリソースのみ処理されます。\nバックアップタスクが進行中の場合、新設定の適用には停止・再開始が必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "활성화하면 %@이(가) 백업, 동기화, 다운로드 중복 제거 시 iCloud 원본에 접근할 수 있습니다.\niCloud 전용 리소스가 감지되면 동시 실행 수가 자동으로 1로 전환됩니다.\n비활성화 시 기기에 있는 리소스만 처리됩니다.\n백업 작업이 진행 중인 경우, 새 설정 적용을 위해 중지 후 재시작이 필요합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quando ativado, o %@ pode acessar originais do iCloud durante backup, sincronização e deduplicação.\nSe recursos apenas no iCloud forem detectados, mudará automaticamente a concorrência para 1.\nDesativado: apenas recursos no dispositivo são processados.\nSe um backup estiver em andamento, pare e reinicie."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quando ativado, o %@ pode aceder a originais do iCloud durante cópia de segurança, sincronização e deduplicação.\nSe forem detetados recursos apenas no iCloud, mudará automaticamente para 1 concorrência.\nDesativado: apenas recursos no dispositivo são processados.\nSe uma tarefa estiver em curso, pare e reinicie."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Коли увімкнено, %@ може отримувати доступ до оригіналів iCloud під час резервного копіювання, синхронізації та дедуплікації.\nЯкщо виявлено ресурси лише в iCloud, виконання автоматично зменшить паралельність до 1.\nВимкнено: обробляються лише ресурси на пристрої.\nЯкщо виконується резервне копіювання, зупиніть і перезапустіть."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用后允许 %@ 在备份、同步、下载前的去重过程中按需访问 iCloud 原件。\n若当前范围内检测到仅存于 iCloud 的资源，执行会自动将并发数改为 1。\n停用时仅处理已经在本机的资源。\n若当前已有进行中的备份任务，需要先停止并重新开始，新设置才会生效。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟用後允許 %@ 在備份、同步、下載前的去重過程中按需存取 iCloud 原件。\n若偵測到僅存於 iCloud 的資源，會自動將並行數改為 1。\n停用時僅處理已在本機的資源。\n若目前已有進行中的備份任務，需要先停止並重新開始，新設定才會生效。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟用後允許 %@ 在備份、同步、下載前的去重過程中按需存取 iCloud 原件。\n若偵測到僅存於 iCloud 的資源，會自動改為 並行數為 1。\n停用時僅處理已在本機的資源。\n若目前已有進行中的備份任務，需要先停止並重新開始，新設定才會生效。"
           }
         }
       }

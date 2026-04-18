@@ -124,6 +124,10 @@ extension ICloudPhotoBackupMode: UserDefaultSettable {
     static func getTitle() -> String {
         String(localized: "settings.icloud.header")
     }
+
+    static func getOptions() -> [ICloudPhotoBackupMode] {
+        [.enable, .disable]
+    }
 }
 
 // MARK: - Background Backup
@@ -147,7 +151,9 @@ extension BackgroundBackupSetting: UserDefaultSettable {
     }
 
     static func getFooter() -> String? {
-        String(format: String(localized: "settings.background.footer"), AppName.localized)
+        let prefix = String(localized: "settings.common.requiresProFooter")
+        let body = String(format: String(localized: "settings.background.footer"), AppName.localized)
+        return "\(prefix)\n\(body)"
     }
 
     func getName() -> String {
@@ -163,12 +169,16 @@ extension BackgroundBackupSetting: UserDefaultSettable {
         String(localized: "settings.background.header")
     }
 
-    @MainActor
     static func setCurrent(_ value: BackgroundBackupSetting) throws {
-        if value == .enable && !ProStatus.isPro {
+        let isPro = MainActor.assumeIsolated { ProStatus.isPro }
+        if value == .enable && !isPro {
             throw BackgroundBackupSettingError.requiresPro
         }
         setValue(value)
+    }
+
+    static func getOptions() -> [BackgroundBackupSetting] {
+        [.enable, .disable]
     }
 }
 
@@ -199,7 +209,9 @@ extension PiPProgressSetting: UserDefaultSettable {
     }
 
     static func getFooter() -> String? {
-        String(localized: "settings.pipProgress.footer")
+        let prefix = String(localized: "settings.common.requiresProFooter")
+        let body = String(localized: "settings.pipProgress.footer")
+        return "\(prefix)\n\(body)"
     }
 
     func getName() -> String {
@@ -215,12 +227,16 @@ extension PiPProgressSetting: UserDefaultSettable {
         String(localized: "settings.pipProgress.header")
     }
 
-    @MainActor
     static func setCurrent(_ value: PiPProgressSetting) throws {
-        if value == .enable && !ProStatus.isPro {
+        let isPro = MainActor.assumeIsolated { ProStatus.isPro }
+        if value == .enable && !isPro {
             throw PiPProgressSettingError.requiresPro
         }
         setValue(value)
+    }
+
+    static func getOptions() -> [PiPProgressSetting] {
+        [.enable, .disable]
     }
 }
 

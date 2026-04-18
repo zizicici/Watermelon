@@ -50,7 +50,7 @@ final class HomeExecutionLogViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = .appBackground
         title = String(localized: "log.title")
         navigationItem.rightBarButtonItem = filterBarButtonItem
 
@@ -63,7 +63,7 @@ final class HomeExecutionLogViewController: UIViewController {
     }
 
     private func buildUI() {
-        statusCardView.backgroundColor = .secondarySystemBackground
+        statusCardView.backgroundColor = .appPaper
         statusCardView.layer.cornerRadius = 12
         statusCardView.layer.masksToBounds = true
 
@@ -76,7 +76,7 @@ final class HomeExecutionLogViewController: UIViewController {
         statusLabel.numberOfLines = 0
         statusLabel.text = statusText
 
-        logTableView.backgroundColor = .secondarySystemBackground
+        logTableView.backgroundColor = .appPaper
         logTableView.layer.cornerRadius = 12
         logTableView.layer.masksToBounds = true
         logTableView.separatorStyle = .none

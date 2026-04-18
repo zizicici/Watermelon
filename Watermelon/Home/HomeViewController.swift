@@ -5,6 +5,19 @@ import SnapKit
 import UIKit
 
 final class HomeViewController: UIViewController {
+    private static let privacyPolicyEnglishURL = "https://github.com/zizicici/PublicContent/blob/main/Watermelon/PrivacyPolicy.en.md"
+    private static let privacyPolicyChineseURL = "https://github.com/zizicici/PublicContent/blob/main/Watermelon/PrivacyPolicy.zh-Hans.md"
+
+    private static var privacyPolicyURLString: String {
+        let preferredLanguage = Bundle.main.preferredLocalizations.first?.lowercased()
+            ?? Locale.preferredLanguages.first?.lowercased()
+            ?? ""
+        if preferredLanguage.hasPrefix("zh") {
+            return privacyPolicyChineseURL
+        }
+        return privacyPolicyEnglishURL
+    }
+
     private enum NewStorageDestination {
         case smb
         case smbDiscovery
@@ -823,7 +836,7 @@ final class HomeViewController: UIViewController {
             ),
             email: "watermelon@zi.ci",
             appStoreId: "6762260596",
-            privacyPolicyURL: "https://zizicici.medium.com/privacy-policy-for-off-day-app-6f7f26f68c7c",
+            privacyPolicyURL: Self.privacyPolicyURLString,
             specificationsConfig: SpecificationsConfiguration(
                 summaryItems: [
                     .init(type: .name, value: SpecificationsViewController.getAppName() ?? ""),

@@ -31,8 +31,9 @@ final class ExecutionLogHistoryViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = String(localized: "log.history.title")
-        view.backgroundColor = .systemGroupedBackground
+        view.backgroundColor = .appBackground
 
+        tableView.backgroundColor = .appBackground
         tableView.dataSource = self
         tableView.delegate = self
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "session")
@@ -142,7 +143,7 @@ final class ExecutionLogHistoryDetailViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = .appBackground
         title = Self.titleDateFormatter.string(from: session.startedAt)
 
         navigationItem.rightBarButtonItem = UIBarButtonItem(
@@ -152,7 +153,7 @@ final class ExecutionLogHistoryDetailViewController: UIViewController {
             action: #selector(exportTapped)
         )
 
-        tableView.backgroundColor = .secondarySystemBackground
+        tableView.backgroundColor = .appPaper
         tableView.separatorStyle = .none
         tableView.dataSource = self
         tableView.estimatedRowHeight = 32

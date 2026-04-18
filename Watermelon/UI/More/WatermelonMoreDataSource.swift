@@ -75,6 +75,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
             )))
         }
 
+        sections.append(contentsOf: [.contact, .appjun, .about])
+
         sections.append(.custom(MoreCustomSection(
             id: "diagnostics",
             header: String(localized: "more.section.diagnostics"),
@@ -86,7 +88,6 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
             ]
         )))
 
-        sections.append(contentsOf: [.contact, .appjun, .about])
         return sections
     }
 
