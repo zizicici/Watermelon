@@ -274,6 +274,7 @@ struct HomeExecutionState {
 
 enum HomeChangeKind {
     case data(Set<LibraryMonthKey>)
+    case fileSizes(Set<LibraryMonthKey>)
     case selection
     case execution(Set<LibraryMonthKey>)
     case connection

@@ -279,7 +279,8 @@ final class AssetProcessor: Sendable {
                     fileSize: $0.fileSize
                 )
             },
-            totalFileSizeBytes: totalFileSizeBytes
+            totalFileSizeBytes: totalFileSizeBytes,
+            modificationDateNs: context.asset.modificationDate?.nanosecondsSinceEpoch
         )
         timing.databaseSeconds += Self.elapsedSeconds(since: snapshotWriteStart)
 
@@ -344,7 +345,8 @@ final class AssetProcessor: Sendable {
                 assetLocalIdentifier: context.asset.localIdentifier,
                 assetFingerprint: cachedFingerprint,
                 resourceCount: context.selectedResources.count,
-                totalFileSizeBytes: totalFileSizeBytes
+                totalFileSizeBytes: totalFileSizeBytes,
+                modificationDateNs: context.asset.modificationDate?.nanosecondsSinceEpoch
             )
             timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
             return AssetProcessResult(
@@ -398,7 +400,8 @@ final class AssetProcessor: Sendable {
             assetLocalIdentifier: context.asset.localIdentifier,
             assetFingerprint: cachedFingerprint,
             resourceCount: context.selectedResources.count,
-            totalFileSizeBytes: totalFileSizeBytes
+            totalFileSizeBytes: totalFileSizeBytes,
+            modificationDateNs: context.asset.modificationDate?.nanosecondsSinceEpoch
         )
         timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
 

@@ -16,6 +16,7 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         let fingerprint: Data?
         let hashes: [Data]
         let creationDateNs: Int64
+        let modificationDateNs: Int64?
         let isBackedUp: Bool
         let mediaKind: AlbumMediaKind
     }
@@ -68,6 +69,7 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
                 fingerprint: fingerprint,
                 hashes: hashes,
                 creationDateNs: creationDate.nanosecondsSinceEpoch,
+                modificationDateNs: asset.modificationDate?.nanosecondsSinceEpoch,
                 isBackedUp: isBackedUp,
                 mediaKind: mediaKind
             )
@@ -355,21 +357,41 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         localAssetIDsByMonth[month] ?? []
     }
 
-    func computeFileSize(for month: LibraryMonthKey, cachedSizes: [String: Int64]) -> Int64 {
-        guard let assetIDs = localAssetIDsByMonth[month] else { return 0 }
+    func computeFileSize(
+        for month: LibraryMonthKey,
+        sizes: [String: AssetSizeSnapshot]
+    ) -> (total: Int64, updates: [AssetSizeUpdate]) {
+        guard let assetIDs = localAssetIDsByMonth[month] else { return (0, []) }
         var total: Int64 = 0
+        var updates: [AssetSizeUpdate] = []
+
         for assetID in assetIDs {
-            if let cached = cachedSizes[assetID], cached > 0 {
-                total += cached
-            } else {
-                guard let state = localStatesByAssetID[assetID] else { continue }
-                let resources = PHAssetResource.assetResources(for: state.asset)
-                for resource in resources {
-                    total += PhotoLibraryService.resourceFileSize(resource)
-                }
+            guard let state = localStatesByAssetID[assetID] else { continue }
+
+            if let mtime = state.modificationDateNs,
+               let snapshot = sizes[assetID],
+               snapshot.modificationDateNs == mtime {
+                total += snapshot.totalFileSizeBytes
+                continue
+            }
+
+            let resources = PHAssetResource.assetResources(for: state.asset)
+            let computedSize = resources.reduce(Int64(0)) { partial, resource in
+                partial + max(PhotoLibraryService.resourceFileSize(resource), 0)
+            }
+            let safeSize = max(computedSize, 0)
+            total += safeSize
+
+            if let mtime = state.modificationDateNs {
+                updates.append(AssetSizeUpdate(
+                    assetLocalIdentifier: assetID,
+                    totalFileSizeBytes: safeSize,
+                    modificationDateNs: mtime
+                ))
             }
         }
-        return total
+
+        return (total, updates)
     }
 
     func setMonthFileSize(_ size: Int64, for month: LibraryMonthKey) {
@@ -408,12 +430,15 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         let creationDate = asset.creationDate ?? Date(timeIntervalSince1970: 0)
         let creationDateNs = creationDate.nanosecondsSinceEpoch
 
+        let modificationDateNs = asset.modificationDate?.nanosecondsSinceEpoch
+
         let previousFingerprint = localStatesByAssetID[assetID]?.fingerprint
         replaceAssetID(assetID, oldFingerprint: previousFingerprint, newFingerprint: fingerprint)
 
         if let previous = localStatesByAssetID[assetID],
            previous.month == month,
            previous.creationDateNs == creationDateNs,
+           previous.modificationDateNs == modificationDateNs,
            previous.isBackedUp == isBackedUp,
            previous.mediaKind == mediaKind,
            previous.hashes == hashes,
@@ -424,6 +449,7 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
                 fingerprint: fingerprint,
                 hashes: hashes,
                 creationDateNs: creationDateNs,
+                modificationDateNs: modificationDateNs,
                 isBackedUp: isBackedUp,
                 mediaKind: mediaKind
             )
@@ -452,6 +478,7 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
             fingerprint: fingerprint,
             hashes: hashes,
             creationDateNs: creationDateNs,
+            modificationDateNs: modificationDateNs,
             isBackedUp: isBackedUp,
             mediaKind: mediaKind
         )
@@ -781,15 +808,11 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
         }
 
         let status = photoLibraryService.authorizationStatus()
-        let authorized: Bool
-        if status == .authorized || status == .limited {
-            authorized = true
-        } else {
-            let requested = await photoLibraryService.requestAuthorization()
-            authorized = (requested == .authorized || requested == .limited)
-        }
+        let authorized = (status == .authorized || status == .limited)
 
         guard authorized else {
+            // Don't trigger the system prompt here. The Home overlay owns that flow via
+            // HomeScreenStore.requestLocalPhotoAccessIfNeeded() when the user taps "Allow Access".
             let changedMonths = await withCheckedContinuation { continuation in
                 processingQueue.async {
                     let result = self.reconcileLocked(self.localIndex.clearIfNeeded())
@@ -987,13 +1010,16 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
-    func updateFileSize(for month: LibraryMonthKey, cachedSizes: [String: Int64]) async {
+    func updateFileSize(
+        for month: LibraryMonthKey,
+        sizes: [String: AssetSizeSnapshot]
+    ) async -> [AssetSizeUpdate] {
         await withCheckedContinuation { continuation in
             processingQueue.async {
-                let size = self.localIndex.computeFileSize(for: month, cachedSizes: cachedSizes)
+                let (size, updates) = self.localIndex.computeFileSize(for: month, sizes: sizes)
                 self.localIndex.setMonthFileSize(size, for: month)
                 self.cachedLocalSummaries[month] = self.localIndex.localMonthSummary(for: month)
-                continuation.resume()
+                continuation.resume(returning: updates)
             }
         }
     }
@@ -1021,6 +1047,14 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
 
 @MainActor
 final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
+    private static let fileSizeUpdateCoalescingDelayNs: UInt64 = 250_000_000
+    private static let assetSizeWriteBackBatchSize = 200
+
+    private enum FileSizeScanNotificationMode {
+        case coalesced
+        case byYear
+    }
+
     private let contentHashIndexRepository: ContentHashIndexRepository
     private let processingWorker: HomeDataProcessingWorker
 
@@ -1028,6 +1062,12 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     private var processingMutationCount = 0
     private var deferredPhotoChanges: [PHChange] = []
     private var isDrainingDeferredPhotoChanges = false
+    private var pendingFileSizeMonths = Set<LibraryMonthKey>()
+    private var fileSizeUpdateTask: Task<Void, Never>?
+    private var assetSizeSnapshot: [String: AssetSizeSnapshot] = [:]
+    private var assetSizeSnapshotLoaded = false
+    private var assetSizeSnapshotLoadTask: Task<[String: AssetSizeSnapshot], Never>?
+    private var assetSizeSnapshotGeneration = 0
 
     var onMonthsChanged: ((Set<LibraryMonthKey>) -> Void)?
     var onFileSizesUpdated: ((Set<LibraryMonthKey>) -> Void)?
@@ -1142,6 +1182,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
             unregisterPhotoLibraryObserverIfNeeded()
             fileSizeScanTask?.cancel()
             fileSizeScanTask = nil
+            resetPendingFileSizeUpdates()
         }
         return !result.changedMonths.isEmpty
     }
@@ -1157,27 +1198,167 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     private func rescanFileSizes(for months: Set<LibraryMonthKey>) {
-        scanFileSizes(months: Array(months), tracked: false)
+        scanFileSizes(months: Array(months), tracked: false, notificationMode: .coalesced)
     }
 
     private func startFileSizeScan() {
         fileSizeScanTask?.cancel()
+        resetPendingFileSizeUpdates()
+        // Drop the in-memory snapshot: hash-builder paths (AssetProcessor) write
+        // mtime into local_assets during execution without notifying us, so after
+        // a forceReload the DB is more up-to-date than our cached dict.
+        invalidateAssetSizeSnapshot()
         let months = processingWorker.localMonthsForFileSizeScan()
-        scanFileSizes(months: months, tracked: true)
+        scanFileSizes(months: months, tracked: true, notificationMode: .byYear)
     }
 
-    private func scanFileSizes(months: [LibraryMonthKey], tracked: Bool) {
-        let cachedSizes = (try? contentHashIndexRepository.fetchFileSizeByAsset()) ?? [:]
-        let task = Task { [weak self] in
-            for month in months {
-                guard let self, !Task.isCancelled else { return }
-                await self.processingWorker.updateFileSize(for: month, cachedSizes: cachedSizes)
-                guard !Task.isCancelled else { return }
-                self.onFileSizesUpdated?([month])
+    private func invalidateAssetSizeSnapshot() {
+        assetSizeSnapshot.removeAll()
+        assetSizeSnapshotLoaded = false
+        assetSizeSnapshotLoadTask?.cancel()
+        assetSizeSnapshotLoadTask = nil
+        assetSizeSnapshotGeneration &+= 1
+    }
+
+    private func scanFileSizes(
+        months: [LibraryMonthKey],
+        tracked: Bool,
+        notificationMode: FileSizeScanNotificationMode
+    ) {
+        let repository = contentHashIndexRepository
+        let task = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            await self.ensureAssetSizeSnapshotLoaded(repository: repository)
+
+            let orderedMonths = notificationMode == .byYear ? months.sorted(by: >) : months
+            var pendingYearMonths = Set<LibraryMonthKey>()
+            var writeBackBuffer: [AssetSizeUpdate] = []
+
+            for (index, month) in orderedMonths.enumerated() {
+                guard !Task.isCancelled else {
+                    Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
+                    return
+                }
+                let updates = await self.processingWorker.updateFileSize(
+                    for: month,
+                    sizes: self.assetSizeSnapshot
+                )
+                guard !Task.isCancelled else {
+                    self.mergeIntoAssetSizeSnapshot(updates)
+                    writeBackBuffer.append(contentsOf: updates)
+                    Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
+                    return
+                }
+
+                self.mergeIntoAssetSizeSnapshot(updates)
+                writeBackBuffer.append(contentsOf: updates)
+                if writeBackBuffer.count >= Self.assetSizeWriteBackBatchSize {
+                    Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
+                }
+
+                switch notificationMode {
+                case .coalesced:
+                    self.enqueueFileSizeUpdate(for: month)
+                case .byYear:
+                    pendingYearMonths.insert(month)
+                    let nextYear = index + 1 < orderedMonths.count ? orderedMonths[index + 1].year : nil
+                    if nextYear != month.year {
+                        self.onFileSizesUpdated?(pendingYearMonths)
+                        pendingYearMonths.removeAll(keepingCapacity: true)
+                    }
+                }
+
                 await Task.yield()
+            }
+
+            Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
+
+            guard !Task.isCancelled else { return }
+            if notificationMode == .coalesced {
+                self.flushPendingFileSizeUpdates()
             }
         }
         if tracked { fileSizeScanTask = task }
+    }
+
+    private func ensureAssetSizeSnapshotLoaded(repository: ContentHashIndexRepository) async {
+        guard !assetSizeSnapshotLoaded else { return }
+        let generation = assetSizeSnapshotGeneration
+
+        let task: Task<[String: AssetSizeSnapshot], Never>
+        if let existing = assetSizeSnapshotLoadTask {
+            task = existing
+        } else {
+            task = Task.detached(priority: .utility) {
+                (try? repository.fetchAssetSizes()) ?? [:]
+            }
+            assetSizeSnapshotLoadTask = task
+        }
+
+        let loaded = await task.value
+        // If invalidated mid-flight, a newer generation is already loading fresh data; drop ours.
+        guard !assetSizeSnapshotLoaded, generation == assetSizeSnapshotGeneration else { return }
+        assetSizeSnapshot = loaded
+        assetSizeSnapshotLoaded = true
+        assetSizeSnapshotLoadTask = nil
+    }
+
+    private func mergeIntoAssetSizeSnapshot(_ updates: [AssetSizeUpdate]) {
+        guard !updates.isEmpty else { return }
+        for update in updates {
+            assetSizeSnapshot[update.assetLocalIdentifier] = AssetSizeSnapshot(
+                totalFileSizeBytes: update.totalFileSizeBytes,
+                modificationDateNs: update.modificationDateNs
+            )
+        }
+    }
+
+    private static func flushAssetSizeWriteBack(
+        _ buffer: inout [AssetSizeUpdate],
+        repository: ContentHashIndexRepository
+    ) {
+        guard !buffer.isEmpty else { return }
+        let entries = buffer
+        buffer.removeAll(keepingCapacity: true)
+        Task.detached(priority: .background) {
+            do {
+                try repository.upsertAssetSizes(entries)
+            } catch {
+                dataLog.error("[HomeData] upsertAssetSizes failed: \(String(describing: error))")
+            }
+        }
+    }
+
+    private func enqueueFileSizeUpdate(for month: LibraryMonthKey) {
+        pendingFileSizeMonths.insert(month)
+        guard fileSizeUpdateTask == nil else { return }
+
+        fileSizeUpdateTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: Self.fileSizeUpdateCoalescingDelayNs)
+            } catch {
+                return
+            }
+
+            guard let self, !Task.isCancelled else { return }
+            self.flushPendingFileSizeUpdates()
+        }
+    }
+
+    private func flushPendingFileSizeUpdates() {
+        let months = pendingFileSizeMonths
+        pendingFileSizeMonths.removeAll()
+        fileSizeUpdateTask?.cancel()
+        fileSizeUpdateTask = nil
+
+        guard !months.isEmpty else { return }
+        onFileSizesUpdated?(months)
+    }
+
+    private func resetPendingFileSizeUpdates() {
+        pendingFileSizeMonths.removeAll()
+        fileSizeUpdateTask?.cancel()
+        fileSizeUpdateTask = nil
     }
 
     private func registerPhotoLibraryObserverIfNeeded() {

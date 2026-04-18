@@ -47,13 +47,20 @@ final class DatabaseManager {
 
             try db.create(table: LocalAssetRecord.databaseTableName) { table in
                 table.column("assetLocalIdentifier", .text).notNull()
-                table.column("assetFingerprint", .blob).notNull()
-                table.column("resourceCount", .integer).notNull()
+                table.column("assetFingerprint", .blob)
+                table.column("resourceCount", .integer).notNull().defaults(to: 0)
                 table.column("totalFileSizeBytes", .integer).notNull().defaults(to: 0)
+                table.column("modificationDateNs", .integer)
                 table.column("updatedAt", .datetime).notNull()
                 table.primaryKey(["assetLocalIdentifier"])
             }
-            try db.create(index: "idx_local_assets_fingerprint", on: LocalAssetRecord.databaseTableName, columns: ["assetFingerprint"])
+            try db.execute(
+                sql: """
+                CREATE INDEX idx_local_assets_has_fingerprint
+                ON \(LocalAssetRecord.databaseTableName)(assetLocalIdentifier)
+                WHERE assetFingerprint IS NOT NULL
+                """
+            )
 
             try db.create(table: LocalAssetResourceRecord.databaseTableName) { table in
                 table.column("assetLocalIdentifier", .text).notNull()

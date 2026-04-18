@@ -14,6 +14,17 @@ struct LocalAssetHashCache: Sendable {
     var hashesByRoleSlot: [AssetResourceRoleSlot: Data]
 }
 
+struct AssetSizeSnapshot: Sendable {
+    let totalFileSizeBytes: Int64
+    let modificationDateNs: Int64
+}
+
+struct AssetSizeUpdate: Sendable {
+    let assetLocalIdentifier: String
+    let totalFileSizeBytes: Int64
+    let modificationDateNs: Int64
+}
+
 struct LocalAssetResourceHashRecord: Sendable {
     let role: Int
     let slot: Int
@@ -40,31 +51,17 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         assetLocalIdentifier: String,
         assetFingerprint: Data,
         resources: [LocalAssetResourceHashRecord],
-        totalFileSizeBytes: Int64
+        totalFileSizeBytes: Int64,
+        modificationDateNs: Int64?
     ) throws {
         try databaseManager.write { db in
-            try db.execute(
-                sql: """
-                INSERT INTO local_assets (
-                    assetLocalIdentifier,
-                    assetFingerprint,
-                    resourceCount,
-                    totalFileSizeBytes,
-                    updatedAt
-                ) VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(assetLocalIdentifier) DO UPDATE SET
-                    assetFingerprint = excluded.assetFingerprint,
-                    resourceCount = excluded.resourceCount,
-                    totalFileSizeBytes = excluded.totalFileSizeBytes,
-                    updatedAt = excluded.updatedAt
-                """,
-                arguments: [
-                    assetLocalIdentifier,
-                    assetFingerprint,
-                    resources.count,
-                    totalFileSizeBytes,
-                    Date()
-                ]
+            try Self.writeLocalAssetRow(
+                db,
+                assetLocalIdentifier: assetLocalIdentifier,
+                assetFingerprint: assetFingerprint,
+                resourceCount: resources.count,
+                totalFileSizeBytes: totalFileSizeBytes,
+                modificationDateNs: modificationDateNs
             )
 
             try db.execute(
@@ -99,33 +96,58 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         assetLocalIdentifier: String,
         assetFingerprint: Data,
         resourceCount: Int,
-        totalFileSizeBytes: Int64
+        totalFileSizeBytes: Int64,
+        modificationDateNs: Int64?
     ) throws {
         try databaseManager.write { db in
-            try db.execute(
-                sql: """
-                INSERT INTO local_assets (
-                    assetLocalIdentifier,
-                    assetFingerprint,
-                    resourceCount,
-                    totalFileSizeBytes,
-                    updatedAt
-                ) VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(assetLocalIdentifier) DO UPDATE SET
-                    assetFingerprint = excluded.assetFingerprint,
-                    resourceCount = excluded.resourceCount,
-                    totalFileSizeBytes = excluded.totalFileSizeBytes,
-                    updatedAt = excluded.updatedAt
-                """,
-                arguments: [
-                    assetLocalIdentifier,
-                    assetFingerprint,
-                    resourceCount,
-                    totalFileSizeBytes,
-                    Date()
-                ]
+            try Self.writeLocalAssetRow(
+                db,
+                assetLocalIdentifier: assetLocalIdentifier,
+                assetFingerprint: assetFingerprint,
+                resourceCount: resourceCount,
+                totalFileSizeBytes: totalFileSizeBytes,
+                modificationDateNs: modificationDateNs
             )
         }
+    }
+
+    // COALESCE preserves the existing modificationDateNs when callers can't supply one
+    // (writeHashIndex from the remote-restore path passes nil). Size-only scans write
+    // mtime via upsertAssetSizes; a subsequent hash write must not null it out.
+    private static func writeLocalAssetRow(
+        _ db: Database,
+        assetLocalIdentifier: String,
+        assetFingerprint: Data,
+        resourceCount: Int,
+        totalFileSizeBytes: Int64,
+        modificationDateNs: Int64?
+    ) throws {
+        try db.execute(
+            sql: """
+            INSERT INTO local_assets (
+                assetLocalIdentifier,
+                assetFingerprint,
+                resourceCount,
+                totalFileSizeBytes,
+                modificationDateNs,
+                updatedAt
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(assetLocalIdentifier) DO UPDATE SET
+                assetFingerprint = excluded.assetFingerprint,
+                resourceCount = excluded.resourceCount,
+                totalFileSizeBytes = excluded.totalFileSizeBytes,
+                modificationDateNs = COALESCE(excluded.modificationDateNs, modificationDateNs),
+                updatedAt = excluded.updatedAt
+            """,
+            arguments: [
+                assetLocalIdentifier,
+                assetFingerprint,
+                resourceCount,
+                totalFileSizeBytes,
+                modificationDateNs,
+                Date()
+            ]
+        )
     }
 
     func fetchHashMapByAsset() throws -> [String: [Data]] {
@@ -182,6 +204,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 sql: """
                 SELECT assetLocalIdentifier, assetFingerprint
                 FROM local_assets
+                WHERE assetFingerprint IS NOT NULL
                 """
             )
             var result: [String: Data] = [:]
@@ -207,6 +230,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 SELECT assetLocalIdentifier, assetFingerprint
                 FROM local_assets
                 WHERE assetLocalIdentifier IN (\(placeholders))
+                  AND assetFingerprint IS NOT NULL
                 """,
                 arguments: StatementArguments(sortedIDs)
             )
@@ -240,6 +264,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                     SELECT assetLocalIdentifier, assetFingerprint, resourceCount, totalFileSizeBytes, updatedAt
                     FROM local_assets
                     WHERE assetLocalIdentifier IN (\(placeholders))
+                      AND assetFingerprint IS NOT NULL
                     """,
                     arguments: StatementArguments(chunk)
                 )
@@ -280,19 +305,66 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
-    func fetchFileSizeByAsset() throws -> [String: Int64] {
+    func fetchAssetSizes() throws -> [String: AssetSizeSnapshot] {
         try databaseManager.read { db in
-            var result: [String: Int64] = [:]
+            var result: [String: AssetSizeSnapshot] = [:]
             let rows = try Row.fetchAll(
                 db,
-                sql: "SELECT assetLocalIdentifier, totalFileSizeBytes FROM local_assets WHERE totalFileSizeBytes > 0"
+                sql: """
+                SELECT assetLocalIdentifier, totalFileSizeBytes, modificationDateNs
+                FROM local_assets
+                WHERE totalFileSizeBytes > 0 AND modificationDateNs IS NOT NULL
+                """
             )
+            result.reserveCapacity(rows.count)
             for row in rows {
                 let id: String = row["assetLocalIdentifier"]
                 let size: Int64 = row["totalFileSizeBytes"]
-                result[id] = size
+                let mtime: Int64 = row["modificationDateNs"]
+                result[id] = AssetSizeSnapshot(
+                    totalFileSizeBytes: size,
+                    modificationDateNs: mtime
+                )
             }
             return result
+        }
+    }
+
+    func upsertAssetSizes(_ entries: [AssetSizeUpdate]) throws {
+        guard !entries.isEmpty else { return }
+        try databaseManager.write { db in
+            let now = Date()
+            // On conflict:
+            // - Don't touch assetFingerprint/resourceCount: hash-indexed rows keep their identity.
+            // - Don't touch updatedAt: it tracks "last hash write", which AssetProcessor and
+            //   LocalHashIndexBuildService compare against PHAsset.modificationDate to decide
+            //   whether to reuse a cached hash. Bumping it from a size-only write would make
+            //   a post-modification scan look "newer than the photo edit" and silently revive
+            //   a stale hash.
+            // - Reject stale mtime writes: fire-and-forget detached write-backs are not ordered
+            //   across scans, so guard against an older batch overwriting a newer one.
+            let statement = try db.makeStatement(sql: """
+                INSERT INTO local_assets (
+                    assetLocalIdentifier,
+                    totalFileSizeBytes,
+                    modificationDateNs,
+                    updatedAt
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(assetLocalIdentifier) DO UPDATE SET
+                    totalFileSizeBytes = excluded.totalFileSizeBytes,
+                    modificationDateNs = excluded.modificationDateNs
+                WHERE modificationDateNs IS NULL
+                   OR excluded.modificationDateNs >= modificationDateNs
+                """)
+            for entry in entries {
+                try statement.setArguments([
+                    entry.assetLocalIdentifier,
+                    entry.totalFileSizeBytes,
+                    entry.modificationDateNs,
+                    now
+                ])
+                try statement.execute()
+            }
         }
     }
 
@@ -327,7 +399,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         try databaseManager.read { db in
             let assetCount = try Int.fetchOne(
                 db,
-                sql: "SELECT COUNT(*) FROM local_assets"
+                sql: "SELECT COUNT(*) FROM local_assets WHERE assetFingerprint IS NOT NULL"
             ) ?? 0
             let resourceCount = try Int.fetchOne(
                 db,
@@ -335,15 +407,15 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             ) ?? 0
             let oldest = try Date.fetchOne(
                 db,
-                sql: "SELECT MIN(updatedAt) FROM local_assets"
+                sql: "SELECT MIN(updatedAt) FROM local_assets WHERE assetFingerprint IS NOT NULL"
             )
             let newest = try Date.fetchOne(
                 db,
-                sql: "SELECT MAX(updatedAt) FROM local_assets"
+                sql: "SELECT MAX(updatedAt) FROM local_assets WHERE assetFingerprint IS NOT NULL"
             )
             let totalFileSizeBytes = try Int64.fetchOne(
                 db,
-                sql: "SELECT COALESCE(SUM(totalFileSizeBytes), 0) FROM local_assets"
+                sql: "SELECT COALESCE(SUM(totalFileSizeBytes), 0) FROM local_assets WHERE assetFingerprint IS NOT NULL"
             ) ?? 0
             return LocalHashIndexStats(
                 assetCount: assetCount,
@@ -366,7 +438,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         try databaseManager.read { db in
             try String.fetchAll(
                 db,
-                sql: "SELECT assetLocalIdentifier FROM local_assets"
+                sql: "SELECT assetLocalIdentifier FROM local_assets WHERE assetFingerprint IS NOT NULL"
             )
         }
     }
@@ -391,7 +463,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             assetLocalIdentifier: assetLocalIdentifier,
             assetFingerprint: remoteAssetFingerprint,
             resources: records,
-            totalFileSizeBytes: totalSize
+            totalFileSizeBytes: totalSize,
+            modificationDateNs: nil
         )
     }
 

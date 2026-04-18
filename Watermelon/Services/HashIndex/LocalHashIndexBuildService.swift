@@ -67,7 +67,7 @@ private actor LocalHashIndexWorklist {
 }
 
 private actor LocalHashIndexBuildProgressReporter {
-    private static let logCountStep = 2000
+    private static let logCountStep = 500
 
     private let total: Int
     private let phaseLabel: String
@@ -459,7 +459,8 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                         fileSize: item.fileSize
                     )
                 },
-                totalFileSizeBytes: totalFileSizeBytes
+                totalFileSizeBytes: totalFileSizeBytes,
+                modificationDateNs: asset.modificationDate?.nanosecondsSinceEpoch
             )
             return LocalHashIndexProcessedAssetResult(
                 outcome: .ready(asset.localIdentifier),

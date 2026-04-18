@@ -507,6 +507,7 @@ final class HomeViewController: UIViewController {
             guard let self else { return }
             switch kind {
             case .data(let months):    self.renderDataChange(months)
+            case .fileSizes(let months): self.renderFileSizeChange(months)
             case .selection:           self.renderSelectionChange()
             case .execution(let months): self.renderExecutionChange(changedMonths: months)
             case .connection:          self.renderConnectionChange()
@@ -531,6 +532,12 @@ final class HomeViewController: UIViewController {
     // MARK: - Render Methods
 
     private func renderDataChange(_ months: Set<LibraryMonthKey>) {
+        hasLoadedHeaderSummary = true
+        reconfigureMonths(months)
+        updateTopHeaderSummaries()
+    }
+
+    private func renderFileSizeChange(_ months: Set<LibraryMonthKey>) {
         hasLoadedHeaderSummary = true
         reconfigureMonths(months)
         updateTopHeaderSummaries()

@@ -47,9 +47,10 @@ struct LocalAssetRecord: Codable, FetchableRecord, MutablePersistableRecord {
     static let databaseTableName = "local_assets"
 
     var assetLocalIdentifier: String
-    var assetFingerprint: Data
+    var assetFingerprint: Data?
     var resourceCount: Int
     var totalFileSizeBytes: Int64
+    var modificationDateNs: Int64?
     var updatedAt: Date
 }
 

@@ -104,7 +104,7 @@ final class HomeScreenStore {
             self?.handleDataChange(months)
         }
         dataManager.onFileSizesUpdated = { [weak self] months in
-            self?.handleDataChange(months)
+            self?.handleFileSizeChange(months)
         }
         executionCoordinator.onStateChanged = { [weak self] in
             self?.handleExecutionChange()
@@ -285,6 +285,22 @@ final class HomeScreenStore {
         }
     }
 
+    private func handleFileSizeChange(_ months: Set<LibraryMonthKey>) {
+        guard !months.isEmpty else { return }
+
+        var changedMonths = Set<LibraryMonthKey>()
+        for month in months where rowLookup[month] != nil {
+            let updatedRow = dataManager.monthRow(for: month)
+            guard updatedRow.local != nil || updatedRow.remote != nil else { continue }
+            rowLookup[month] = updatedRow
+            changedMonths.insert(month)
+        }
+
+        guard !changedMonths.isEmpty else { return }
+        refreshSections(for: changedMonths)
+        onChange?(.fileSizes(changedMonths))
+    }
+
     private func handleExecutionChange() {
         pipBridge.observeStateChange()
 
@@ -387,6 +403,19 @@ final class HomeScreenStore {
         sections = rowsByYear
             .map { HomeMergedYearSection(year: $0.key, rows: $0.value.sorted { $0.month > $1.month }) }
             .sorted { $0.year > $1.year }
+    }
+
+    private func refreshSections(for months: Set<LibraryMonthKey>) {
+        guard !months.isEmpty else { return }
+
+        sections = sections.map { section in
+            let updatedRows = section.rows.map { row in
+                guard months.contains(row.month),
+                      let updatedRow = rowLookup[row.month] else { return row }
+                return updatedRow
+            }
+            return HomeMergedYearSection(year: section.year, rows: updatedRows)
+        }
     }
 
     private func refreshAllAndNotify() {
