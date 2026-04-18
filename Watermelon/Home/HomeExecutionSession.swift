@@ -41,6 +41,35 @@ struct HomeExecutionSession {
         monthPlans.values.contains(where: \.needsDownload)
     }
 
+    var phaseProgressCounter: (current: Int, total: Int)? {
+        switch phase {
+        case .uploading, .uploadPaused:
+            let targets = uploadMonths + syncMonths
+            guard !targets.isEmpty else { return nil }
+            let current = targets.reduce(into: 0) { acc, month in
+                if let plan = monthPlans[month], plan.phase != .pending {
+                    acc += 1
+                }
+            }
+            return (current, targets.count)
+        case .downloading, .downloadPaused:
+            let targets = downloadMonths + syncMonths
+            guard !targets.isEmpty else { return nil }
+            let downloadPhases: Set<MonthPlan.Phase> = [
+                .downloading, .downloadPaused,
+                .completed, .partiallyFailed, .failed,
+            ]
+            let current = targets.reduce(into: 0) { acc, month in
+                if let plan = monthPlans[month], downloadPhases.contains(plan.phase) {
+                    acc += 1
+                }
+            }
+            return (current, targets.count)
+        default:
+            return nil
+        }
+    }
+
     func currentState(controlState: ExecutionControlState, statusText: String) -> HomeExecutionState? {
         guard let phase else { return nil }
         return HomeExecutionState(

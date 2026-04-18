@@ -336,6 +336,9 @@ final class HomeExecutionCoordinator {
         if shouldSyncRemoteData {
             dataRefresher.scheduleRemoteSync()
         }
+        if transientControlState == nil, let text = phaseStatusText() {
+            setStatusText(text, notifyState: false)
+        }
         notifyStateChanged()
     }
 
@@ -396,7 +399,7 @@ final class HomeExecutionCoordinator {
 
         session.beginDownloadPhase()
         appendInfoLog(String(format: String(localized: "home.execution.log.startDownloadPhase"), remaining.count))
-        setStatusText(String(localized: "home.execution.downloading"), notifyState: false)
+        setStatusText(phaseStatusText() ?? String(localized: "home.execution.downloading"), notifyState: false)
         notifyStateChanged()
 
         for month in remaining {
@@ -419,7 +422,12 @@ final class HomeExecutionCoordinator {
     ) async {
         session.beginDownloadMonth(month)
         appendInfoLog(String(format: String(localized: "home.execution.log.startDownloadMonth"), phaseLabel, month.displayText))
-        setStatusText("\(phaseLabel) \(month.displayText)", notifyState: false)
+        let syncLabelOverride: String? = session.syncMonths.contains(month)
+            ? String(localized: "home.execution.syncing")
+            : nil
+        let monthStatus = phaseStatusText(phaseLabelOverride: syncLabelOverride)
+            ?? fallbackPhaseLabel()
+        setStatusText(monthStatus, notifyState: false)
         notifyStateChanged()
 
         let assetIDs = dataAccess.localAssetIDs(month)
@@ -625,7 +633,9 @@ final class HomeExecutionCoordinator {
         session.completeSyncMonthUpload(month)
         session.beginDownloadMonth(month)
         appendInfoLog(String(format: String(localized: "home.execution.log.uploadDoneStartPhase"), phaseLabel, month.displayText))
-        setStatusText("\(phaseLabel) \(month.displayText)", notifyState: false)
+        let syncLabel = String(localized: "home.execution.syncing")
+        let monthStatus = phaseStatusText(phaseLabelOverride: syncLabel) ?? syncLabel
+        setStatusText(monthStatus, notifyState: false)
         notifyStateChanged()
 
         guard let context else {
@@ -716,7 +726,7 @@ final class HomeExecutionCoordinator {
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadDoneMonth"), month.displayText))
             }
         case .started(let totalAssets):
-            setStatusText(String(localized: "home.execution.uploading"))
+            setStatusText(phaseStatusText() ?? String(localized: "home.execution.uploading"))
             appendInfoLog(String(format: String(localized: "home.execution.log.uploadPhaseStart"), totalAssets))
         case .finished(let result):
             appendLog(
@@ -802,14 +812,41 @@ final class HomeExecutionCoordinator {
             text = message
         case .uploadPaused, .downloadPaused:
             text = String(localized: "home.execution.paused")
-        case .uploading:
-            text = String(localized: "home.execution.uploading")
-        case .downloading:
-            text = String(localized: "home.execution.downloading")
+        case .uploading, .downloading:
+            text = phaseStatusText() ?? fallbackPhaseLabel()
         case nil:
             text = String(localized: "home.execution.notStarted")
         }
         setStatusText(text, notifyState: notifyState)
+    }
+
+    private func phaseStatusText(phaseLabelOverride: String? = nil) -> String? {
+        guard let counter = session.phaseProgressCounter, counter.current > 0 else { return nil }
+        let label: String
+        if let phaseLabelOverride {
+            label = phaseLabelOverride
+        } else {
+            switch session.phase {
+            case .uploading, .uploadPaused:
+                label = String(localized: "home.execution.uploading")
+            case .downloading, .downloadPaused:
+                label = String(localized: "home.execution.downloading")
+            default:
+                return nil
+            }
+        }
+        return "\(label) \(counter.current)/\(counter.total)"
+    }
+
+    private func fallbackPhaseLabel() -> String {
+        switch session.phase {
+        case .uploading, .uploadPaused:
+            return String(localized: "home.execution.uploading")
+        case .downloading, .downloadPaused:
+            return String(localized: "home.execution.downloading")
+        default:
+            return ""
+        }
     }
 
     private func makePreflightProgressHandler() -> LocalHashIndexProgressHandler {
