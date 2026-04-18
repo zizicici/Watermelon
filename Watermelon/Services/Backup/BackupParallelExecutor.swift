@@ -170,6 +170,34 @@ struct BackupParallelExecutor: Sendable {
                 var missingAssetCount = 0
                 var hasLoggedLocalHashCacheWarning = false
 
+                var skippedMonthShortCircuit = false
+                if monthAlreadyFullyBackedUp(
+                    monthAssetIDs: monthAssetIDs,
+                    monthStore: monthStore
+                ) {
+                    let progressState = await aggregator.recordMonthSkipped(count: monthAssetIDs.count)
+                    eventStream.emit(.progress(BackupProgress(
+                        succeeded: progressState.state.succeeded,
+                        failed: progressState.state.failed,
+                        skipped: progressState.state.skipped,
+                        total: progressState.state.total,
+                        message: String.localizedStringWithFormat(
+                            String(localized: "backup.parallel.monthPreCovered"),
+                            workerID + 1,
+                            monthKey.text,
+                            monthAssetIDs.count
+                        ),
+                        logLevel: .info,
+                        itemEvent: nil,
+                        transferState: nil
+                    )))
+                    if let timingSummary = progressState.timingSummary {
+                        eventStream.emitLog(timingSummary, level: .debug)
+                    }
+                    skippedMonthShortCircuit = true
+                }
+
+                if !skippedMonthShortCircuit {
                 for batchStart in stride(from: 0, to: monthAssetIDs.count, by: fetchBatchSize) {
                     let batchEnd = min(batchStart + fetchBatchSize, monthAssetIDs.count)
                     let batchAssetIDs = Array(monthAssetIDs[batchStart ..< batchEnd])
@@ -321,6 +349,7 @@ struct BackupParallelExecutor: Sendable {
                         level: .warning
                     )
                 }
+                }
 
                 let shouldFinishMonth = !workerState.paused && monthFatalError == nil
                 let hadDirtyManifestBeforeFinalize = monthStore.dirty
@@ -421,6 +450,37 @@ struct BackupParallelExecutor: Sendable {
             await clientPool.release(client, reusable: clientReusable)
             throw error
         }
+    }
+
+    private func monthAlreadyFullyBackedUp(
+        monthAssetIDs: [String],
+        monthStore: MonthManifestStore
+    ) -> Bool {
+        guard !monthAssetIDs.isEmpty else { return true }
+        guard !monthStore.assetsByFingerprint.isEmpty else { return false }
+
+        guard let cachedHashes = try? hashIndexRepository.fetchAssetHashCaches(
+            assetIDs: Set(monthAssetIDs)
+        ) else { return false }
+        guard cachedHashes.count == monthAssetIDs.count else { return false }
+
+        let fetchResult = PHAsset.fetchAssets(
+            withLocalIdentifiers: monthAssetIDs,
+            options: nil
+        )
+        guard fetchResult.count == monthAssetIDs.count else { return false }
+
+        for index in 0 ..< fetchResult.count {
+            let asset = fetchResult.object(at: index)
+            guard let cache = cachedHashes[asset.localIdentifier] else { return false }
+            if let modDate = asset.modificationDate, modDate > cache.updatedAt {
+                return false
+            }
+            if !monthStore.containsAssetFingerprint(cache.assetFingerprint) {
+                return false
+            }
+        }
+        return true
     }
 
     private func emitProgress(

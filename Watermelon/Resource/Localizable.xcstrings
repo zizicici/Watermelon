@@ -9431,6 +9431,34 @@
         }
       }
     },
+    "backup.parallel.monthPreCovered" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrent #%1$lld month %2$@: all %3$lld assets already in remote manifest, month skipped."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "并发 #%1$lld 的月份 %2$@：%3$lld 张资产已全部存在于远端 manifest，整月跳过。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 的月份 %2$@：%3$lld 張資產已全部存在於遠端 manifest，整月跳過。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 的月份 %2$@：%3$lld 張資產已全部存在於遠端 manifest，整月跳過。"
+          }
+        }
+      }
+    },
     "backup.parallel.remoteUnavailable" : {
       "localizations" : {
         "de" : {

@@ -278,6 +278,27 @@ actor ParallelBackupProgressAggregator {
         )
     }
 
+    func recordMonthSkipped(count: Int) -> AggregatedProgressState {
+        guard count > 0 else {
+            return AggregatedProgressState(
+                state: state,
+                position: max(state.processed, 1),
+                timingSummary: nil
+            )
+        }
+        state.skipped += count
+        stageTimingWindow.recordSkipped(count: count)
+        let summary = stageTimingWindow.takeSummaryIfNeeded(
+            processed: state.processed,
+            total: state.total
+        )
+        return AggregatedProgressState(
+            state: state,
+            position: max(state.processed, 1),
+            timingSummary: summary
+        )
+    }
+
     func markPaused() {
         state.paused = true
     }
@@ -313,6 +334,16 @@ struct StageTimingWindow {
     private var lastRecordAt: CFAbsoluteTime?
     private var firstUploadRecordAt: CFAbsoluteTime?
     private var lastUploadRecordAt: CFAbsoluteTime?
+
+    mutating func recordSkipped(count: Int) {
+        guard count > 0 else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        if firstRecordAt == nil {
+            firstRecordAt = now
+        }
+        lastRecordAt = now
+        processedCount += count
+    }
 
     mutating func record(_ result: AssetProcessResult?) {
         let now = CFAbsoluteTimeGetCurrent()
