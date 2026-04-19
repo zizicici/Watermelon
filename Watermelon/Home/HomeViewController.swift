@@ -863,8 +863,10 @@ final class HomeViewController: UIViewController {
                     .init(name: "SnapKit", version: "5.7.1", urlString: "https://github.com/SnapKit/SnapKit"),
                 ]
             ),
-            otherApps: [.moontake, .lemon, .offDay, .one, .pigeon, .pin, .coconut, .tagDay],
-            otherAppsDisplayCount: 3
+            appShowcase: AppShowcaseConfiguration(
+                apps: [.lemon, .moontake, .coconut, .festivals, .pigeon, .one, .offDay, .tagDay, .pin, .campfire, .doufu],
+                displayCount: 3
+            )
         )
 
         let dataSource = WatermelonMoreDataSource(dependencies: dependencies) { [weak self] in
