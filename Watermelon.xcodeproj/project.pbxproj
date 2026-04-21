@@ -214,7 +214,11 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Watermelon/Resource/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Watermelon;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Watermelon uses your local network to connect to SMB servers and back up your photos.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Watermelon writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Watermelon reads your photos and videos to back up the originals to the SMB server, WebDAV server, or external drive you set up. Your files are never uploaded to Watermelon's servers.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -251,7 +255,11 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Watermelon/Resource/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Watermelon;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Watermelon uses your local network to connect to SMB servers and back up your photos.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Watermelon writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Watermelon reads your photos and videos to back up the originals to the SMB server, WebDAV server, or external drive you set up. Your files are never uploaded to Watermelon's servers.";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
