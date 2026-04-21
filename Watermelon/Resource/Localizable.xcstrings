@@ -20792,79 +20792,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zugriff erlauben"
+            "value" : "Weiter"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Allow Access"
+            "value" : "Continue"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Permitir acceso"
+            "value" : "Continuar"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Permitir acceso"
+            "value" : "Continuar"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Autoriser l'accès"
+            "value" : "Continuer"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "アクセスを許可"
+            "value" : "続ける"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "접근 허용"
+            "value" : "계속"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Permitir acesso"
+            "value" : "Continuar"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Permitir acesso"
+            "value" : "Continuar"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Дозволити доступ"
+            "value" : "Продовжити"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允许访问"
+            "value" : "继续"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允許存取"
+            "value" : "繼續"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "允許存取"
+            "value" : "繼續"
           }
         }
       }

@@ -812,7 +812,7 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
 
         guard authorized else {
             // Don't trigger the system prompt here. The Home overlay owns that flow via
-            // HomeScreenStore.requestLocalPhotoAccessIfNeeded() when the user taps "Allow Access".
+            // HomeScreenStore.requestLocalPhotoAccessIfNeeded() when the user taps "Continue".
             let changedMonths = await withCheckedContinuation { continuation in
                 processingQueue.async {
                     let result = self.reconcileLocked(self.localIndex.clearIfNeeded())
