@@ -808,11 +808,23 @@ final class HomeViewController: UIViewController {
 
     private func configureSettingsFAB() {
         let symbolConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
-        var configuration = UIButton.Configuration.glass()
+        var configuration: UIButton.Configuration = {
+            if #available(iOS 26.0, *) {
+                return .glass()
+            } else {
+                return .borderedTinted()
+            }
+        }()
         configuration.image = UIImage(systemName: "ellipsis", withConfiguration: symbolConfig)
         configuration.cornerStyle = .capsule
         configuration.contentInsets = .zero
         settingsFAB.configuration = configuration
+        if #unavailable(iOS 26.0) {
+            settingsFAB.tintColor = .materialPrimary(
+                light: .Material.Green._600,
+                dark: .Material.Green._200
+            )
+        }
         settingsFAB.accessibilityLabel = String(localized: "controller.more.title")
         settingsFAB.addTarget(self, action: #selector(openSettings), for: .touchUpInside)
     }
