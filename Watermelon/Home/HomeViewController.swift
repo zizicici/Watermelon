@@ -926,6 +926,23 @@ final class HomeViewController: UIViewController {
         store.reloadProfiles()
     }
 
+    private func openManageProfiles() {
+        let viewController = ManageStorageProfilesViewController(dependencies: dependencies) { [weak self] in
+            self?.reloadProfiles()
+        }
+
+        if let navigationController {
+            navigationController.pushViewController(viewController, animated: ConsideringUser.pushAnimated)
+            return
+        }
+
+        let container = UINavigationController(rootViewController: viewController)
+        if let presentation = container.sheetPresentationController {
+            presentation.prefersGrabberVisible = true
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
     private func openExecutionLog() {
         guard store.executionState != nil else { return }
 
@@ -1209,8 +1226,14 @@ final class HomeViewController: UIViewController {
                 }
             ]
         )
+        let manageAction = UIAction(
+            title: String(localized: "more.item.manageStorage"),
+            image: UIImage(systemName: "list.bullet")
+        ) { [weak self] _ in
+            self?.openManageProfiles()
+        }
         let disconnectSection = UIMenu(title: "", options: .displayInline, children: [disconnectAction])
-        return UIMenu(children: [addStorageMenu, profileSection, disconnectSection])
+        return UIMenu(children: [addStorageMenu, manageAction, profileSection, disconnectSection])
     }
 
     // MARK: - User Actions
