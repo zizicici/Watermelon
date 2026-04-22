@@ -1,4 +1,3 @@
-import AppInfo
 import MarqueeLabel
 import MoreKit
 import SnapKit
