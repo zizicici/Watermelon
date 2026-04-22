@@ -11,7 +11,6 @@
 		144234A42F4EAFC200293274 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A32F4EAFC200293274 /* Kingfisher */; };
 		144234A72F4EAFE800293274 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A62F4EAFE800293274 /* GRDB */; };
 		144234AA2F4EAFF500293274 /* SnapKit in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A92F4EAFF500293274 /* SnapKit */; };
-		1487710E2F540EF800A21B69 /* AppInfo in Frameworks */ = {isa = PBXBuildFile; productRef = 1487710D2F540EF800A21B69 /* AppInfo */; };
 		14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; };
 		14B0C0A42F4F000100111111 /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		14C5C5692F84CEF200939535 /* MarqueeLabel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C5C5682F84CEF200939535 /* MarqueeLabel */; };
@@ -62,7 +61,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1487710E2F540EF800A21B69 /* AppInfo in Frameworks */,
 				144234A72F4EAFE800293274 /* GRDB in Frameworks */,
 				144234AA2F4EAFF500293274 /* SnapKit in Frameworks */,
 				14C5C5692F84CEF200939535 /* MarqueeLabel in Frameworks */,
@@ -118,7 +116,6 @@
 				144234A62F4EAFE800293274 /* GRDB */,
 				144234A92F4EAFF500293274 /* SnapKit */,
 				14B0C0A32F4F000100111111 /* AMSMB2 */,
-				1487710D2F540EF800A21B69 /* AppInfo */,
 				14C5C5682F84CEF200939535 /* MarqueeLabel */,
 				14D1E0032FA50EF800B21C69 /* MoreKit */,
 			);
@@ -168,7 +165,6 @@
 				144234A52F4EAFE800293274 /* XCRemoteSwiftPackageReference "GRDB" */,
 				144234A82F4EAFF500293274 /* XCRemoteSwiftPackageReference "SnapKit" */,
 				14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */,
-				1487710C2F540EF800A21B69 /* XCRemoteSwiftPackageReference "AppInfo" */,
 				14C5C5672F84CEF200939535 /* XCRemoteSwiftPackageReference "MarqueeLabel" */,
 				14D1E0022FA50EF800B21C69 /* XCRemoteSwiftPackageReference "MoreKit" */,
 			);
@@ -468,14 +464,6 @@
 				minimumVersion = 5.7.1;
 			};
 		};
-		1487710C2F540EF800A21B69 /* XCRemoteSwiftPackageReference "AppInfo" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/zizicici/AppInfo";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.4.0;
-			};
-		};
 		14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/amosavian/AMSMB2";
@@ -497,7 +485,7 @@
 			repositoryURL = "https://github.com/zizicici/MoreKit";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 1.8.1;
+				minimumVersion = 1.9.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -522,11 +510,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 144234A82F4EAFF500293274 /* XCRemoteSwiftPackageReference "SnapKit" */;
 			productName = SnapKit;
-		};
-		1487710D2F540EF800A21B69 /* AppInfo */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1487710C2F540EF800A21B69 /* XCRemoteSwiftPackageReference "AppInfo" */;
-			productName = AppInfo;
 		};
 		14B0C0A32F4F000100111111 /* AMSMB2 */ = {
 			isa = XCSwiftPackageProductDependency;

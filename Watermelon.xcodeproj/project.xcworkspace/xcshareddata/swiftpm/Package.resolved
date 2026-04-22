@@ -1,5 +1,5 @@
 {
-  "originHash" : "50325074a21c2964dcd75677137a45a5bbf807c11027e2e909ae3f8658919b00",
+  "originHash" : "cab2a2bac61621a9f69620e7a990458f78c80d22fb540fbc7087befb94473b61",
   "pins" : [
     {
       "identity" : "amsmb2",
@@ -8,15 +8,6 @@
       "state" : {
         "revision" : "1726aaaf7adf63d7d1d2a0c5d1b0e635028215c0",
         "version" : "4.0.3"
-      }
-    },
-    {
-      "identity" : "appinfo",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/zizicici/AppInfo",
-      "state" : {
-        "revision" : "37f8f1c2136c55c370aa779e54dcd88ffa6636f0",
-        "version" : "1.4.0"
       }
     },
     {
@@ -51,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/zizicici/MoreKit",
       "state" : {
-        "revision" : "ce42e8d2b448a9cea055ea8b19e14b0762ed5b03",
-        "version" : "1.8.1"
+        "revision" : "94ac0e9957f26cb5b5dba1984777e1ebddf89340",
+        "version" : "1.9.0"
       }
     },
     {
