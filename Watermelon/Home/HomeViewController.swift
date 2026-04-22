@@ -90,6 +90,7 @@ final class HomeViewController: UIViewController {
     private let rightHeaderBg = UIView()
     private var isPanelShown = false
     private var hasLoadedHeaderSummary = false
+    private var didRequestReviewForCurrentExecution = false
 
     private static let headerAreaHeight: CGFloat = 96
 
@@ -556,9 +557,20 @@ final class HomeViewController: UIViewController {
             updateTopHeaderSummaries()
             updateActionPanelFromExecution(exec)
             updateSelectionInteraction()
+            maybeRequestRatingPrompt(for: exec)
         } else {
+            didRequestReviewForCurrentExecution = false
             renderStructuralChange()
         }
+    }
+
+    private func maybeRequestRatingPrompt(for exec: HomeExecutionState) {
+        guard !didRequestReviewForCurrentExecution,
+              exec.phase == .completed,
+              exec.failedMonthInfos.isEmpty,
+              let scene = view.window?.windowScene else { return }
+        didRequestReviewForCurrentExecution = true
+        RatingPromptService.requestReviewIfEligible(in: scene)
     }
 
     private func renderConnectionChange() {
