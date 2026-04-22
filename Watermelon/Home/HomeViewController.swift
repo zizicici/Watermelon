@@ -866,7 +866,8 @@ final class HomeViewController: UIViewController {
                 gradientColors: [.Material.Green._700, .Material.Green._600],
                 titleHighlightColor: .Material.Amber._200,
                 featureColor: .white.withAlphaComponent(0.85),
-                buttonTextColor: .Material.Green._800
+                buttonTextColor: .Material.Green._800,
+                buttonTitle: String(localized: "store.promotion.buttonTitle")
             ),
             gratefulConfig: GratefulCellConfiguration(
                 title: String(localized: "store.grateful.title"),
