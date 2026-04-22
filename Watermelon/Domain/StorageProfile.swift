@@ -201,34 +201,9 @@ extension ServerProfileRecord {
             return String(localized: "storage.error.smbUnavailable")
         }
         if resolvedStorageType == .webdav {
-            if let statusCode = Self.webDAVErrorCode(from: error), statusCode == 401 {
-                return String(localized: "storage.error.webdav401")
-            }
-            if let statusCode = Self.webDAVErrorCode(from: error), statusCode == 403 {
-                return String(localized: "storage.error.webdav403")
-            }
+            return WebDAVErrorClassifier.describe(error)
         }
         return error.localizedDescription
-    }
-
-    static func webDAVErrorCode(from error: Error) -> Int? {
-        if let storageError = error as? RemoteStorageClientError {
-            switch storageError {
-            case .underlying(let underlying):
-                return webDAVErrorCode(from: underlying)
-            default:
-                return nil
-            }
-        }
-
-        let nsError = error as NSError
-        if nsError.domain == "WebDAVClient" {
-            return nsError.code
-        }
-        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
-            return webDAVErrorCode(from: underlying)
-        }
-        return nil
     }
 
     func resolvedSessionPassword(from session: AppSession) -> String? {

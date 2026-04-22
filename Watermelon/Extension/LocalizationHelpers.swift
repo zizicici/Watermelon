@@ -21,12 +21,7 @@ enum UserFacingErrorLocalizer {
                     return String(localized: "storage.error.smbUnavailable")
                 }
             case .webdav:
-                if let statusCode = ServerProfileRecord.webDAVErrorCode(from: error), statusCode == 401 {
-                    return String(localized: "storage.error.webdav401")
-                }
-                if let statusCode = ServerProfileRecord.webDAVErrorCode(from: error), statusCode == 403 {
-                    return String(localized: "storage.error.webdav403")
-                }
+                return WebDAVErrorClassifier.describe(error)
             }
         }
 

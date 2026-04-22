@@ -1,6 +1,8 @@
 import Foundation
 
 final actor WebDAVClient: RemoteStorageClientProtocol {
+    static let errorDomain = "WebDAVClient"
+
     struct Config {
         let endpointURL: URL
         let username: String
@@ -51,7 +53,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             parser.delegate = self
             guard parser.parse() else {
                 throw parser.parserError ?? NSError(
-                    domain: "WebDAVClient",
+                    domain: WebDAVClient.errorDomain,
                     code: -1001,
                     userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.parsePropfindResponse")]
                 )
@@ -206,7 +208,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             if status == 405 {
                 throw RemoteStorageClientError.underlying(
                     NSError(
-                        domain: "WebDAVClient",
+                        domain: WebDAVClient.errorDomain,
                         code: -1200,
                         userInfo: [
                             NSLocalizedDescriptionKey: String(localized: "webdav.error.notAService")
@@ -224,7 +226,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             guard looksLikeWebDAV else {
                 throw RemoteStorageClientError.underlying(
                     NSError(
-                        domain: "WebDAVClient",
+                        domain: WebDAVClient.errorDomain,
                         code: -1200,
                         userInfo: [
                             NSLocalizedDescriptionKey: String(localized: "webdav.error.notAService")
@@ -676,7 +678,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw NSError(
-                    domain: "WebDAVClient",
+                    domain: WebDAVClient.errorDomain,
                     code: -1100,
                     userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.unexpectedResponseType")]
                 )
@@ -695,7 +697,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             let (data, response) = try await session.upload(for: request, fromFile: fileURL)
             guard let http = response as? HTTPURLResponse else {
                 throw NSError(
-                    domain: "WebDAVClient",
+                    domain: WebDAVClient.errorDomain,
                     code: -1101,
                     userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.unexpectedUploadResponseType")]
                 )
@@ -714,7 +716,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             let (fileURL, response) = try await session.download(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw NSError(
-                    domain: "WebDAVClient",
+                    domain: WebDAVClient.errorDomain,
                     code: -1102,
                     userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.unexpectedDownloadResponseType")]
                 )
@@ -1028,7 +1030,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         let target = url?.absoluteString ?? "(unknown URL)"
         return .underlying(
             NSError(
-                domain: "WebDAVClient",
+                domain: WebDAVClient.errorDomain,
                 code: statusCode,
                 userInfo: [
                     NSLocalizedDescriptionKey: String.localizedStringWithFormat(
@@ -1046,7 +1048,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         let target = url?.absoluteString ?? "(unknown URL)"
         return .underlying(
             NSError(
-                domain: "WebDAVClient",
+                domain: WebDAVClient.errorDomain,
                 code: statusCode,
                 userInfo: [
                     NSLocalizedDescriptionKey: statusCode == 401
