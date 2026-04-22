@@ -121,21 +121,64 @@ final class AddWebDAVStorageViewController: UIViewController {
         dismissKeyboard()
         guard !isSaving else { return }
 
+        let draft: ValidatedDraft
         do {
-            setSaving(true)
-            let (profile, password) = try saveProfile()
-            onSaved(profile, password)
-            popAfterSave()
+            draft = try validateInputs()
         } catch {
-            setSaving(false)
             presentAlert(
                 title: String(localized: "auth.saveFailed"),
                 message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
             )
+            return
+        }
+
+        setSaving(true)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Self.verifyConnection(draft: draft)
+            } catch {
+                await MainActor.run {
+                    self.setSaving(false)
+                    self.presentAlert(
+                        title: String(localized: "auth.saveFailed"),
+                        message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
+                    )
+                }
+                return
+            }
+
+            await MainActor.run {
+                do {
+                    let profile = try self.commitProfile(draft: draft)
+                    self.onSaved(profile, draft.password)
+                    self.popAfterSave()
+                } catch {
+                    self.setSaving(false)
+                    self.presentAlert(
+                        title: String(localized: "auth.saveFailed"),
+                        message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
+                    )
+                }
+            }
         }
     }
 
-    private func saveProfile() throws -> (ServerProfileRecord, String) {
+    private struct ValidatedDraft {
+        let endpointURL: URL
+        let endpointURLString: String
+        let username: String
+        let password: String
+        let normalizedBasePath: String
+        let baseProfile: ServerProfileRecord?
+        let profileName: String
+        let endpointPath: String
+        let credentialRef: String
+        let host: String
+        let port: Int
+    }
+
+    private func validateInputs() throws -> ValidatedDraft {
         let endpointURL = try parseEndpointURL(endpointText.trimmingCharacters(in: .whitespacesAndNewlines))
         let endpointURLString = Self.normalizedEndpointURLString(endpointURL)
 
@@ -179,35 +222,67 @@ final class AddWebDAVStorageViewController: UIViewController {
         let profileName = finalName.isEmpty ? (endpointURL.host ?? "WebDAV") : finalName
         let endpointPath = endpointURL.path.isEmpty ? "/" : endpointURL.path
         let credentialRef = "webdav|\(endpointURLString)|\(username)"
+
+        return ValidatedDraft(
+            endpointURL: endpointURL,
+            endpointURLString: endpointURLString,
+            username: username,
+            password: password,
+            normalizedBasePath: normalizedBasePath,
+            baseProfile: baseProfile,
+            profileName: profileName,
+            endpointPath: endpointPath,
+            credentialRef: credentialRef,
+            host: endpointURL.host ?? "",
+            port: endpointURL.port ?? defaultPort(for: endpointURL)
+        )
+    }
+
+    private static func verifyConnection(draft: ValidatedDraft) async throws {
+        let client = WebDAVClient(config: WebDAVClient.Config(
+            endpointURL: draft.endpointURL,
+            username: draft.username,
+            password: draft.password
+        ))
+        do {
+            try await client.connect()
+        } catch {
+            await client.disconnect()
+            throw error
+        }
+        await client.disconnect()
+    }
+
+    private func commitProfile(draft: ValidatedDraft) throws -> ServerProfileRecord {
         let connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            WebDAVConnectionParams(endpointURLString: endpointURLString)
+            WebDAVConnectionParams(endpointURLString: draft.endpointURLString)
         )
 
         var profile = ServerProfileRecord(
-            id: baseProfile?.id,
-            name: profileName,
+            id: draft.baseProfile?.id,
+            name: draft.profileName,
             storageType: StorageType.webdav.rawValue,
             connectionParams: connectionParams,
-            sortOrder: baseProfile?.sortOrder ?? 0,
-            host: endpointURL.host ?? "",
-            port: endpointURL.port ?? defaultPort(for: endpointURL),
-            shareName: endpointPath,
-            basePath: normalizedBasePath,
-            username: username,
+            sortOrder: draft.baseProfile?.sortOrder ?? 0,
+            host: draft.host,
+            port: draft.port,
+            shareName: draft.endpointPath,
+            basePath: draft.normalizedBasePath,
+            username: draft.username,
             domain: nil,
-            credentialRef: credentialRef,
-            backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? true,
-            createdAt: baseProfile?.createdAt ?? Date(),
+            credentialRef: draft.credentialRef,
+            backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? true,
+            createdAt: draft.baseProfile?.createdAt ?? Date(),
             updatedAt: Date()
         )
 
         try dependencies.databaseManager.saveServerProfile(&profile)
-        try dependencies.keychainService.save(password: password, account: credentialRef)
+        try dependencies.keychainService.save(password: draft.password, account: draft.credentialRef)
         if let oldRef = editingProfile?.credentialRef,
-           oldRef != credentialRef {
+           oldRef != draft.credentialRef {
             try? dependencies.keychainService.delete(account: oldRef)
         }
-        return (profile, password)
+        return profile
     }
 
     private func parseEndpointURL(_ input: String) throws -> URL {

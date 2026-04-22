@@ -45,7 +45,8 @@ struct StorageProfile {
             if record.basePath == "/" {
                 return endpoint
             }
-            return "\(endpoint)\(record.basePath)"
+            let trimmedEndpoint = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
+            return "\(trimmedEndpoint)\(record.basePath)"
         case .externalVolume:
             if let path = record.externalVolumeParams?.displayPath, !path.isEmpty {
                 return Self.relativeExternalPath(from: path)
