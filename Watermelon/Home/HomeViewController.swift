@@ -692,10 +692,20 @@ final class HomeViewController: UIViewController {
             }
         }
 
-        leftToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(for: allMonths, side: .local)), withConfiguration: config), for: .normal)
-        leftToggle.tintColor = headerColor
-        rightToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(for: allMonths, side: .remote)), withConfiguration: config), for: .normal)
-        rightToggle.tintColor = headerColor
+        let localReady = store.localPhotoAccessState.isAuthorized
+        let remoteReady = store.connectionState.isConnected
+
+        leftToggle.isHidden = !localReady
+        if localReady {
+            leftToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(for: allMonths, side: .local)), withConfiguration: config), for: .normal)
+            leftToggle.tintColor = headerColor
+        }
+
+        rightToggle.isHidden = !remoteReady
+        if remoteReady {
+            rightToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(for: allMonths, side: .remote)), withConfiguration: config), for: .normal)
+            rightToggle.tintColor = headerColor
+        }
     }
 
     private func updateTopHeaderSummaries() {
