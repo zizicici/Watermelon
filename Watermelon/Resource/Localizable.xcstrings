@@ -9433,10 +9433,64 @@
     },
     "backup.parallel.monthPreCovered" : {
       "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parallel #%1$lld Monat %2$@: Alle %3$lld Assets bereits im Remote-Manifest, Monat übersprungen."
+          }
+        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Concurrent #%1$lld month %2$@: all %3$lld assets already in remote manifest, month skipped."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrente #%1$lld mes %2$@: los %3$lld recursos ya están en el manifiesto remoto, mes omitido."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrente #%1$lld mes %2$@: los %3$lld recursos ya están en el manifiesto remoto, mes omitido."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simultané #%1$lld mois %2$@ : les %3$lld éléments sont déjà dans le manifeste distant, mois ignoré."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld の月 %2$@：%3$lld 件のアセットはすべてリモートマニフェストに存在するため、月全体をスキップ。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동시 #%1$lld 월 %2$@: %3$lld개 항목이 이미 원격 매니페스트에 존재하여 월 전체를 건너뜀."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simultâneo #%1$lld mês %2$@: todos os %3$lld recursos já estão no manifesto remoto, mês ignorado."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrente #%1$lld mês %2$@: todos os %3$lld recursos já estão no manifesto remoto, mês ignorado."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Паралельно #%1$lld місяць %2$@: усі %3$lld ресурси вже є у віддаленому маніфесті, місяць пропущено."
           }
         },
         "zh-Hans" : {
