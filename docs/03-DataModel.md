@@ -55,16 +55,23 @@ CREATE TABLE sync_state (
 ```sql
 CREATE TABLE local_assets (
   assetLocalIdentifier TEXT NOT NULL,
-  assetFingerprint BLOB NOT NULL,
-  resourceCount INTEGER NOT NULL,
+  assetFingerprint BLOB,
+  resourceCount INTEGER NOT NULL DEFAULT 0,
   totalFileSizeBytes INTEGER NOT NULL DEFAULT 0,
+  modificationDateNs INTEGER,
   updatedAt DATETIME NOT NULL,
   PRIMARY KEY(assetLocalIdentifier)
 );
 
-CREATE INDEX idx_local_assets_fingerprint
-ON local_assets(assetFingerprint);
+CREATE INDEX idx_local_assets_has_fingerprint
+ON local_assets(assetLocalIdentifier)
+WHERE assetFingerprint IS NOT NULL;
 ```
+
+说明：
+
+1. `assetFingerprint` 可为 `NULL`，表示该资产尚未完成资源级 hash 建索引（比如仅存于 iCloud 的资产）
+2. `modificationDateNs` 用来做体积缓存失效判断，上传 / 体积扫描路径都会复用
 
 ### `local_asset_resources`
 

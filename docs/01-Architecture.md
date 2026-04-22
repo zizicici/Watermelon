@@ -239,9 +239,11 @@
 
 1. 首页右下角悬浮 `ellipsis` 按钮
 
-内容：
+自定义段落（`WatermelonMoreDataSource`）：
 
-1. `管理存储`
-2. `上传并发`
-3. `允许访问 iCloud 原件`
-4. 系统语言入口与 MoreKit 通用页内容
+1. 通用：系统语言入口
+2. 远端存储：`管理存储`
+3. 备份：`上传并发` / `允许访问 iCloud 原件` / `后台备份`（Pro） / `画中画进度`（Pro）
+4. 诊断：`执行日志历史`（`ExecutionLogHistoryViewController`）
+
+再叠加 MoreKit 自带的 `membership / contact / appjun / about` 段落。

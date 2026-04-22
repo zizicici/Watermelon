@@ -9,12 +9,12 @@ App 启动后直接进入 `HomeViewController`。
 左右两栏 header：
 
 1. 左侧：`本地相册`
-   - 全选 / 取消全选 toggle
+   - 全选 / 取消全选 toggle（本地相册未授权时隐藏）
    - 照片 / 视频 / 体积汇总
 2. 右侧：`远端存储`
    - 当前连接名称
    - profile 下拉菜单
-   - 全选 / 取消全选 toggle
+   - 全选 / 取消全选 toggle（远端未连接时隐藏）
    - 照片 / 视频 / 体积汇总
 
 右侧连接菜单内容：
@@ -63,10 +63,11 @@ App 启动后直接进入 `HomeViewController`。
 
 ### 可交互条件
 
-只有在下面两个条件都满足时，月份选择才允许：
+只有在下面三个条件都满足时，月份选择才允许：
 
 1. 已连接远端存储
-2. 当前不在执行态
+2. 已授权本地相册访问
+3. 当前不在执行态
 
 ### 选择行为
 
@@ -214,9 +215,16 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 
 1. 首页右下角 FAB
 
-当前自定义项：
+当前自定义项（`WatermelonMoreDataSource`）：
 
-1. `远端存储` → `管理存储`
-2. `备份` → `上传并发`
-3. `备份` → `允许访问 iCloud 原件`
-4. `通用` → 系统语言入口
+1. `通用` → 系统语言入口
+2. `远端存储` → `管理存储`
+3. `备份` → `上传并发`
+4. `备份` → `允许访问 iCloud 原件`
+5. `备份` → `后台备份`（Pro）
+6. `备份` → `画中画进度`（Pro）
+7. `诊断` → `执行日志历史`（`ExecutionLogHistoryViewController`）
+
+再叠加 MoreKit 自带的 `membership / contact / appjun / about` 段落。
+
+完成一次执行后，若距 DB 创建已满 7 天，会通过 `RatingPromptService.requestReviewIfEligible(in:)` 调用 `AppStore.requestReview(in:)` 请求系统评价框。
