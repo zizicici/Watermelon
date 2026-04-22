@@ -203,6 +203,17 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             if status == 401 || status == 403 {
                 throw Self.authenticationError(status, url: request.url)
             }
+            if status == 405 {
+                throw RemoteStorageClientError.underlying(
+                    NSError(
+                        domain: "WebDAVClient",
+                        code: -1200,
+                        userInfo: [
+                            NSLocalizedDescriptionKey: String(localized: "webdav.error.notAService")
+                        ]
+                    )
+                )
+            }
             throw Self.statusError(status, method: "PROPFIND", url: request.url)
         }
 

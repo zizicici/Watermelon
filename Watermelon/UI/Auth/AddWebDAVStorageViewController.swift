@@ -4,17 +4,22 @@ import UIKit
 final class AddWebDAVStorageViewController: UIViewController {
     private enum Section: Int, CaseIterable {
         case name
-        case connection
+        case server
+        case paths
         case credentials
     }
 
     private enum Field {
         case name
-        case endpoint
+        case host
+        case port
+        case mountPath
         case basePath
         case username
         case password
     }
+
+    private static let schemes = ["http", "https"]
 
     private let dependencies: DependencyContainer
     private let editingProfile: ServerProfileRecord?
@@ -44,7 +49,10 @@ final class AddWebDAVStorageViewController: UIViewController {
     private var isSaving = false
 
     private var nameText = ""
-    private var endpointText = ""
+    private var schemeIndex = 1 // default HTTPS
+    private var hostText = ""
+    private var portText = ""
+    private var mountPathText = "/"
     private var basePathText = ""
     private var usernameText = ""
     private var passwordText = ""
@@ -86,7 +94,13 @@ final class AddWebDAVStorageViewController: UIViewController {
             nameText = editingProfile.name
             usernameText = editingProfile.username
             basePathText = editingProfile.basePath
-            endpointText = editingProfile.webDAVParams?.endpointURLString ?? fallbackEndpointString(for: editingProfile)
+
+            let scheme = (editingProfile.webDAVParams?.scheme ?? "https").lowercased()
+            schemeIndex = Self.schemes.firstIndex(of: scheme) ?? 1
+            hostText = editingProfile.host
+            portText = editingProfile.port == 0 ? "" : String(editingProfile.port)
+            let rawMount = editingProfile.shareName.trimmingCharacters(in: .whitespacesAndNewlines)
+            mountPathText = rawMount.isEmpty ? "/" : RemotePathBuilder.normalizePath(rawMount)
             return
         }
         basePathText = "/Watermelon"
@@ -102,6 +116,7 @@ final class AddWebDAVStorageViewController: UIViewController {
         tableView.rowHeight = UITableView.automaticDimension
         tableView.estimatedRowHeight = 44
         tableView.register(SettingsTextFieldCell.self, forCellReuseIdentifier: SettingsTextFieldCell.reuseIdentifier)
+        tableView.register(WebDAVSchemeCell.self, forCellReuseIdentifier: WebDAVSchemeCell.reuseIdentifier)
 
         view.addSubview(tableView)
         tableView.snp.makeConstraints { make in
@@ -109,11 +124,16 @@ final class AddWebDAVStorageViewController: UIViewController {
         }
     }
 
-    private func fallbackEndpointString(for profile: ServerProfileRecord) -> String {
-        let scheme = profile.port == 443 ? "https" : "http"
-        let defaultPort = scheme == "https" ? 443 : 80
-        let portPart = profile.port == defaultPort ? "" : ":\(profile.port)"
-        return "\(scheme)://\(profile.host)\(portPart)\(profile.shareName)"
+    private func currentScheme() -> String {
+        Self.schemes[schemeIndex]
+    }
+
+    private func defaultPortForCurrentScheme() -> Int {
+        currentScheme() == "https" ? 443 : 80
+    }
+
+    private func portPlaceholder() -> String {
+        "\(defaultPortForCurrentScheme())"
     }
 
     @objc
@@ -165,22 +185,44 @@ final class AddWebDAVStorageViewController: UIViewController {
     }
 
     private struct ValidatedDraft {
-        let endpointURL: URL
-        let endpointURLString: String
-        let username: String
-        let password: String
-        let normalizedBasePath: String
-        let baseProfile: ServerProfileRecord?
-        let profileName: String
-        let endpointPath: String
-        let credentialRef: String
+        let scheme: String
         let host: String
         let port: Int
+        let normalizedMountPath: String
+        let normalizedBasePath: String
+        let username: String
+        let password: String
+        let endpointURL: URL
+        let endpointURLString: String
+        let credentialRef: String
+        let profileName: String
+        let baseProfile: ServerProfileRecord?
     }
 
     private func validateInputs() throws -> ValidatedDraft {
-        let endpointURL = try parseEndpointURL(endpointText.trimmingCharacters(in: .whitespacesAndNewlines))
-        let endpointURLString = Self.normalizedEndpointURLString(endpointURL)
+        let scheme = currentScheme()
+
+        let host = hostText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else {
+            throw NSError(domain: "AddWebDAVStorage", code: 10, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.validationHost")])
+        }
+
+        let trimmedPort = portText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let port: Int
+        if trimmedPort.isEmpty {
+            port = defaultPortForCurrentScheme()
+        } else {
+            guard let parsed = Int(trimmedPort), (1 ... 65535).contains(parsed) else {
+                throw NSError(domain: "AddWebDAVStorage", code: 11, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.validationPort")])
+            }
+            port = parsed
+        }
+
+        let rawMount = mountPathText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedMountPath = RemotePathBuilder.normalizePath(rawMount.isEmpty ? "/" : rawMount)
+
+        let rawBase = basePathText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedBasePath = RemotePathBuilder.normalizePath(rawBase.isEmpty ? "/Watermelon" : rawBase)
 
         let username = usernameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !username.isEmpty else {
@@ -199,11 +241,21 @@ final class AddWebDAVStorageViewController: UIViewController {
             throw NSError(domain: "AddWebDAVStorage", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.validationPassword")])
         }
 
-        let rawBasePath = basePathText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedBasePath = RemotePathBuilder.normalizePath(rawBasePath.isEmpty ? "/Watermelon" : rawBasePath)
+        guard let endpointURL = ServerProfileRecord.buildWebDAVEndpointURL(
+            scheme: scheme,
+            host: host,
+            port: port,
+            mountPath: normalizedMountPath
+        ) else {
+            throw NSError(domain: "AddWebDAVStorage", code: 5, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.invalidEndpoint")])
+        }
+        let endpointURLString = endpointURL.absoluteString
 
         let existing = try findExistingProfile(
-            endpointURLString: endpointURLString,
+            scheme: scheme,
+            host: host,
+            port: port,
+            mountPath: normalizedMountPath,
             basePath: normalizedBasePath,
             username: username
         )
@@ -219,22 +271,22 @@ final class AddWebDAVStorageViewController: UIViewController {
 
         let baseProfile = editingProfile ?? existing
         let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let profileName = finalName.isEmpty ? (endpointURL.host ?? "WebDAV") : finalName
-        let endpointPath = endpointURL.path.isEmpty ? "/" : endpointURL.path
+        let profileName = finalName.isEmpty ? host : finalName
         let credentialRef = "webdav|\(endpointURLString)|\(username)"
 
         return ValidatedDraft(
-            endpointURL: endpointURL,
-            endpointURLString: endpointURLString,
+            scheme: scheme,
+            host: host,
+            port: port,
+            normalizedMountPath: normalizedMountPath,
+            normalizedBasePath: normalizedBasePath,
             username: username,
             password: password,
-            normalizedBasePath: normalizedBasePath,
-            baseProfile: baseProfile,
-            profileName: profileName,
-            endpointPath: endpointPath,
+            endpointURL: endpointURL,
+            endpointURLString: endpointURLString,
             credentialRef: credentialRef,
-            host: endpointURL.host ?? "",
-            port: endpointURL.port ?? defaultPort(for: endpointURL)
+            profileName: profileName,
+            baseProfile: baseProfile
         )
     }
 
@@ -255,7 +307,7 @@ final class AddWebDAVStorageViewController: UIViewController {
 
     private func commitProfile(draft: ValidatedDraft) throws -> ServerProfileRecord {
         let connectionParams = try ServerProfileRecord.encodedConnectionParams(
-            WebDAVConnectionParams(endpointURLString: draft.endpointURLString)
+            WebDAVConnectionParams(scheme: draft.scheme)
         )
 
         var profile = ServerProfileRecord(
@@ -266,7 +318,7 @@ final class AddWebDAVStorageViewController: UIViewController {
             sortOrder: draft.baseProfile?.sortOrder ?? 0,
             host: draft.host,
             port: draft.port,
-            shareName: draft.endpointPath,
+            shareName: draft.normalizedMountPath,
             basePath: draft.normalizedBasePath,
             username: draft.username,
             domain: nil,
@@ -285,47 +337,22 @@ final class AddWebDAVStorageViewController: UIViewController {
         return profile
     }
 
-    private func parseEndpointURL(_ input: String) throws -> URL {
-        guard !input.isEmpty else {
-            throw NSError(domain: "AddWebDAVStorage", code: 4, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.validationEndpoint")])
-        }
-
-        let normalizedInput = input.contains("://") ? input : "https://\(input)"
-        guard let url = URL(string: normalizedInput),
-              let scheme = url.scheme?.lowercased(),
-              (scheme == "http" || scheme == "https"),
-              url.host != nil else {
-            throw NSError(domain: "AddWebDAVStorage", code: 5, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.invalidEndpoint")])
-        }
-        return url
-    }
-
-    private static func normalizedEndpointURLString(_ url: URL) -> String {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return url.absoluteString
-        }
-        components.query = nil
-        components.fragment = nil
-        components.user = nil
-        components.password = nil
-        if components.path.isEmpty {
-            components.path = "/"
-        } else if components.path.count > 1, components.path.hasSuffix("/") {
-            components.path.removeLast()
-        }
-        return (components.url ?? url).absoluteString
-    }
-
-    private func defaultPort(for endpointURL: URL) -> Int {
-        endpointURL.scheme?.lowercased() == "https" ? 443 : 80
-    }
-
-    private func findExistingProfile(endpointURLString: String, basePath: String, username: String) throws -> ServerProfileRecord? {
+    private func findExistingProfile(
+        scheme: String,
+        host: String,
+        port: Int,
+        mountPath: String,
+        basePath: String,
+        username: String
+    ) throws -> ServerProfileRecord? {
         let profiles = try dependencies.databaseManager.fetchServerProfiles()
         return profiles.first { profile in
             profile.resolvedStorageType == .webdav &&
-                profile.webDAVParams?.endpointURLString == endpointURLString &&
-                RemotePathBuilder.normalizePath(profile.basePath) == RemotePathBuilder.normalizePath(basePath) &&
+                profile.webDAVParams?.scheme == scheme &&
+                profile.host == host &&
+                profile.port == port &&
+                RemotePathBuilder.normalizePath(profile.shareName) == mountPath &&
+                RemotePathBuilder.normalizePath(profile.basePath) == basePath &&
                 profile.username == username
         }
     }
@@ -420,15 +447,23 @@ final class AddWebDAVStorageViewController: UIViewController {
         switch field {
         case .name:
             return IndexPath(row: 0, section: Section.name.rawValue)
-        case .endpoint:
-            return IndexPath(row: 0, section: Section.connection.rawValue)
+        case .host:
+            return IndexPath(row: 1, section: Section.server.rawValue)
+        case .port:
+            return IndexPath(row: 2, section: Section.server.rawValue)
+        case .mountPath:
+            return IndexPath(row: 0, section: Section.paths.rawValue)
         case .basePath:
-            return IndexPath(row: 1, section: Section.connection.rawValue)
+            return IndexPath(row: 1, section: Section.paths.rawValue)
         case .username:
             return IndexPath(row: 0, section: Section.credentials.rawValue)
         case .password:
             return IndexPath(row: 1, section: Section.credentials.rawValue)
         }
+    }
+
+    private func reloadPortCell() {
+        tableView.reloadRows(at: [indexPath(for: .port)], with: .none)
     }
 }
 
@@ -442,7 +477,9 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
         switch section {
         case .name:
             return 1
-        case .connection:
+        case .server:
+            return 3
+        case .paths:
             return 2
         case .credentials:
             return 2
@@ -454,8 +491,10 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
         switch section {
         case .name:
             return String(localized: "auth.section.name")
-        case .connection:
-            return String(localized: "auth.section.connection")
+        case .server:
+            return String(localized: "auth.section.server")
+        case .paths:
+            return String(localized: "auth.section.paths")
         case .credentials:
             return String(localized: "auth.section.auth")
         }
@@ -466,7 +505,9 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
         switch section {
         case .name:
             return nil
-        case .connection:
+        case .server:
+            return nil
+        case .paths:
             return String(localized: "auth.webdav.footerNew")
         case .credentials:
             return editingProfile == nil ? nil : String(localized: "auth.smb.login.footerEdit")
@@ -474,76 +515,231 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        guard let section = Section(rawValue: indexPath.section),
-              let cell = tableView.dequeueReusableCell(
-                withIdentifier: SettingsTextFieldCell.reuseIdentifier,
-                for: indexPath
-              ) as? SettingsTextFieldCell else {
+        guard let section = Section(rawValue: indexPath.section) else {
             return UITableViewCell()
         }
 
         switch section {
         case .name:
+            return nameCell(in: tableView, at: indexPath)
+        case .server:
+            return serverCell(in: tableView, at: indexPath)
+        case .paths:
+            return pathsCell(in: tableView, at: indexPath)
+        case .credentials:
+            return credentialsCell(in: tableView, at: indexPath)
+        }
+    }
+
+    private func nameCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {
+        guard let cell = tableView.dequeueReusableCell(
+            withIdentifier: SettingsTextFieldCell.reuseIdentifier,
+            for: indexPath
+        ) as? SettingsTextFieldCell else {
+            return UITableViewCell()
+        }
+        cell.configure(
+            title: nil,
+            text: nameText,
+            placeholder: String(localized: "auth.webdav.placeholder.name"),
+            autocapitalizationType: .words,
+            returnKeyType: .next,
+            inputAccessoryView: keyboardToolbar
+        )
+        cell.onTextChanged = { [weak self] in self?.nameText = $0 }
+        cell.onReturn = { [weak self] in self?.focusField(.host) }
+        return cell
+    }
+
+    private func serverCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {
+        switch indexPath.row {
+        case 0:
+            guard let cell = tableView.dequeueReusableCell(
+                withIdentifier: WebDAVSchemeCell.reuseIdentifier,
+                for: indexPath
+            ) as? WebDAVSchemeCell else {
+                return UITableViewCell()
+            }
             cell.configure(
-                title: nil,
-                text: nameText,
-                placeholder: String(localized: "auth.webdav.placeholder.name"),
-                autocapitalizationType: .words,
+                title: String(localized: "auth.webdav.fieldScheme"),
+                selectedIndex: schemeIndex
+            )
+            cell.onValueChanged = { [weak self] index in
+                guard let self else { return }
+                self.schemeIndex = index
+                self.reloadPortCell()
+            }
+            return cell
+        case 1:
+            guard let cell = tableView.dequeueReusableCell(
+                withIdentifier: SettingsTextFieldCell.reuseIdentifier,
+                for: indexPath
+            ) as? SettingsTextFieldCell else {
+                return UITableViewCell()
+            }
+            cell.configure(
+                title: String(localized: "auth.field.host"),
+                text: hostText,
+                placeholder: String(localized: "auth.webdav.placeholder.host"),
+                keyboardType: .URL,
                 returnKeyType: .next,
                 inputAccessoryView: keyboardToolbar
             )
-            cell.onTextChanged = { [weak self] in self?.nameText = $0 }
-            cell.onReturn = { [weak self] in self?.focusField(.endpoint) }
-        case .connection:
-            if indexPath.row == 0 {
-                cell.configure(
-                    title: String(localized: "auth.webdav.fieldEndpoint"),
-                    text: endpointText,
-                    placeholder: String(localized: "auth.webdav.placeholder.endpoint"),
-                    keyboardType: .URL,
-                    returnKeyType: .next,
-                    inputAccessoryView: keyboardToolbar
-                )
-                cell.onTextChanged = { [weak self] in self?.endpointText = $0 }
-                cell.onReturn = { [weak self] in self?.focusField(.basePath) }
-            } else {
-                cell.configure(
-                    title: String(localized: "auth.webdav.fieldBasePath"),
-                    text: basePathText,
-                    placeholder: String(localized: "auth.webdav.placeholder.basePath"),
-                    returnKeyType: .next,
-                    inputAccessoryView: keyboardToolbar
-                )
-                cell.onTextChanged = { [weak self] in self?.basePathText = $0 }
-                cell.onReturn = { [weak self] in self?.focusField(.username) }
+            cell.onTextChanged = { [weak self] in self?.hostText = $0 }
+            cell.onReturn = { [weak self] in self?.focusField(.port) }
+            return cell
+        default:
+            guard let cell = tableView.dequeueReusableCell(
+                withIdentifier: SettingsTextFieldCell.reuseIdentifier,
+                for: indexPath
+            ) as? SettingsTextFieldCell else {
+                return UITableViewCell()
             }
-        case .credentials:
-            if indexPath.row == 0 {
-                cell.configure(
-                    title: String(localized: "auth.field.username"),
-                    text: usernameText,
-                    placeholder: String(localized: "auth.webdav.placeholder.username"),
-                    returnKeyType: .next,
-                    inputAccessoryView: keyboardToolbar
-                )
-                cell.onTextChanged = { [weak self] in self?.usernameText = $0 }
-                cell.onReturn = { [weak self] in self?.focusField(.password) }
-            } else {
-                cell.configure(
-                    title: String(localized: "auth.field.password"),
-                    text: passwordText,
-                    placeholder: editingProfile == nil
-                        ? String(localized: "auth.webdav.placeholder.password")
-                        : String(localized: "auth.passwordPlaceholderEdit"),
-                    isSecure: true,
-                    returnKeyType: .done,
-                    inputAccessoryView: keyboardToolbar
-                )
-                cell.onTextChanged = { [weak self] in self?.passwordText = $0 }
-                cell.onReturn = { [weak self] in self?.focusField(nil) }
-            }
+            cell.configure(
+                title: String(localized: "auth.field.port"),
+                text: portText,
+                placeholder: portPlaceholder(),
+                keyboardType: .numberPad,
+                returnKeyType: .next,
+                inputAccessoryView: keyboardToolbar
+            )
+            cell.onTextChanged = { [weak self] in self?.portText = $0 }
+            cell.onReturn = { [weak self] in self?.focusField(.mountPath) }
+            return cell
+        }
+    }
+
+    private func pathsCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {
+        guard let cell = tableView.dequeueReusableCell(
+            withIdentifier: SettingsTextFieldCell.reuseIdentifier,
+            for: indexPath
+        ) as? SettingsTextFieldCell else {
+            return UITableViewCell()
         }
 
+        if indexPath.row == 0 {
+            cell.configure(
+                title: String(localized: "auth.webdav.fieldMountPath"),
+                text: mountPathText,
+                placeholder: String(localized: "auth.webdav.placeholder.mountPath"),
+                returnKeyType: .next,
+                inputAccessoryView: keyboardToolbar
+            )
+            cell.onTextChanged = { [weak self] in self?.mountPathText = $0 }
+            cell.onReturn = { [weak self] in self?.focusField(.basePath) }
+        } else {
+            cell.configure(
+                title: String(localized: "auth.webdav.fieldBasePath"),
+                text: basePathText,
+                placeholder: String(localized: "auth.webdav.placeholder.basePath"),
+                returnKeyType: .next,
+                inputAccessoryView: keyboardToolbar
+            )
+            cell.onTextChanged = { [weak self] in self?.basePathText = $0 }
+            cell.onReturn = { [weak self] in self?.focusField(.username) }
+        }
         return cell
+    }
+
+    private func credentialsCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {
+        guard let cell = tableView.dequeueReusableCell(
+            withIdentifier: SettingsTextFieldCell.reuseIdentifier,
+            for: indexPath
+        ) as? SettingsTextFieldCell else {
+            return UITableViewCell()
+        }
+
+        if indexPath.row == 0 {
+            cell.configure(
+                title: String(localized: "auth.field.username"),
+                text: usernameText,
+                placeholder: String(localized: "auth.webdav.placeholder.username"),
+                returnKeyType: .next,
+                inputAccessoryView: keyboardToolbar
+            )
+            cell.onTextChanged = { [weak self] in self?.usernameText = $0 }
+            cell.onReturn = { [weak self] in self?.focusField(.password) }
+        } else {
+            cell.configure(
+                title: String(localized: "auth.field.password"),
+                text: passwordText,
+                placeholder: editingProfile == nil
+                    ? String(localized: "auth.webdav.placeholder.password")
+                    : String(localized: "auth.passwordPlaceholderEdit"),
+                isSecure: true,
+                returnKeyType: .done,
+                inputAccessoryView: keyboardToolbar
+            )
+            cell.onTextChanged = { [weak self] in self?.passwordText = $0 }
+            cell.onReturn = { [weak self] in self?.focusField(nil) }
+        }
+        return cell
+    }
+}
+
+private final class WebDAVSchemeCell: UITableViewCell {
+    static let reuseIdentifier = "WebDAVSchemeCell"
+
+    private let titleLabel = UILabel()
+    private let segmentedControl = UISegmentedControl(items: ["HTTP", "HTTPS"])
+
+    var onValueChanged: ((Int) -> Void)?
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+
+        selectionStyle = .none
+
+        let background: UIBackgroundConfiguration
+        if #available(iOS 18.0, *) {
+            background = .listCell()
+        } else {
+            background = .listGroupedCell()
+        }
+        var configuredBackground = background
+        configuredBackground.backgroundColor = .secondarySystemGroupedBackground
+        backgroundConfiguration = configuredBackground
+
+        titleLabel.font = .preferredFont(forTextStyle: .body)
+        titleLabel.textColor = .label
+        titleLabel.setContentHuggingPriority(.required, for: .horizontal)
+        titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        segmentedControl.addTarget(self, action: #selector(valueChanged), for: .valueChanged)
+
+        contentView.addSubview(titleLabel)
+        contentView.addSubview(segmentedControl)
+
+        titleLabel.snp.makeConstraints { make in
+            make.leading.equalToSuperview().inset(16)
+            make.centerY.equalToSuperview()
+        }
+
+        segmentedControl.snp.makeConstraints { make in
+            make.leading.greaterThanOrEqualTo(titleLabel.snp.trailing).offset(12)
+            make.trailing.equalToSuperview().inset(16)
+            make.centerY.equalToSuperview()
+            make.top.bottom.equalToSuperview().inset(8)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        onValueChanged = nil
+    }
+
+    func configure(title: String, selectedIndex: Int) {
+        titleLabel.text = title
+        segmentedControl.selectedSegmentIndex = selectedIndex
+    }
+
+    @objc
+    private func valueChanged() {
+        onValueChanged?(segmentedControl.selectedSegmentIndex)
     }
 }

@@ -1805,6 +1805,88 @@
         }
       }
     },
+    "auth.section.paths" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pfade"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paths"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rutas"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rutas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chemins"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パス"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "경로"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Caminhos"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Caminhos"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Шляхи"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "路径"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "路徑"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "路徑"
+          }
+        }
+      }
+    },
     "auth.section.server" : {
       "localizations" : {
         "de" : {
@@ -5496,6 +5578,7 @@
       }
     },
     "auth.webdav.fieldEndpoint" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -5577,84 +5660,248 @@
         }
       }
     },
-    "auth.webdav.footerNew" : {
+    "auth.webdav.fieldMountPath" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sie können die vollständige URL für den Endpoint eingeben; der Backup-Stammordner ist standardmäßig /Watermelon."
+            "value" : "WebDAV-Pfad"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "You can enter the full URL for the Endpoint; the backup root path defaults to /Watermelon."
+            "value" : "WebDAV Path"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Puede ingresar la URL completa del Endpoint; la ruta raíz de respaldo por defecto es /Watermelon."
+            "value" : "Ruta WebDAV"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Puedes ingresar la URL completa del Endpoint; la ruta raíz de respaldo por defecto es /Watermelon."
+            "value" : "Ruta WebDAV"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Vous pouvez entrer l'URL complète pour le point de terminaison ; le chemin racine de sauvegarde par défaut est /Watermelon."
+            "value" : "Chemin WebDAV"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Endpoint にはフル URL を入力できます。バックアップのルートパスのデフォルトは /Watermelon です。"
+            "value" : "WebDAV パス"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Endpoint에 전체 URL을 입력할 수 있습니다. 백업 루트 경로의 기본값은 /Watermelon입니다."
+            "value" : "WebDAV 경로"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você pode inserir a URL completa para o Endpoint; o caminho raiz de backup padrão é /Watermelon."
+            "value" : "Caminho WebDAV"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pode introduzir o URL completo para o Endpoint; o caminho raiz de cópia predefinido é /Watermelon."
+            "value" : "Caminho WebDAV"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ви можете ввести повну URL-адресу для Endpoint; кореневий шлях резервного копіювання за замовчуванням /Watermelon."
+            "value" : "Шлях WebDAV"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Endpoint 可以直接填写完整 URL；备份根路径默认为 /Watermelon。"
+            "value" : "WebDAV 路径"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Endpoint 可以直接填寫完整 URL；備份根路徑預設為 /Watermelon。"
+            "value" : "WebDAV 路徑"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Endpoint 可以直接填寫完整 URL；備份根路徑預設為 /Watermelon。"
+            "value" : "WebDAV 路徑"
+          }
+        }
+      }
+    },
+    "auth.webdav.fieldScheme" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protokoll"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protocol"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protocolo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protocolo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protocole"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロトコル"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로토콜"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protocolo"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Protocolo"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Протокол"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "协议"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "協定"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "協定"
+          }
+        }
+      }
+    },
+    "auth.webdav.footerNew" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der WebDAV-Pfad ist der Mount-Pfad auf dem Server (z. B. /webdav oder /remote.php/dav/…); der Backup-Stammordner ist standardmäßig /Watermelon."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV Path is the mount path on the server (e.g. /webdav or /remote.php/dav/…); the backup root path defaults to /Watermelon."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ruta WebDAV es la ruta de montaje en el servidor (por ejemplo /webdav o /remote.php/dav/…); la ruta raíz de respaldo por defecto es /Watermelon."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ruta WebDAV es la ruta de montaje en el servidor (por ejemplo /webdav o /remote.php/dav/…); la ruta raíz de respaldo por defecto es /Watermelon."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le chemin WebDAV est le chemin de montage sur le serveur (ex. /webdav ou /remote.php/dav/…) ; le chemin racine de sauvegarde par défaut est /Watermelon."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV パスはサーバー上のマウントパスです（例：/webdav や /remote.php/dav/…）。バックアップのルートパスのデフォルトは /Watermelon です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 경로는 서버의 마운트 경로입니다 (예: /webdav 또는 /remote.php/dav/…). 백업 루트 경로의 기본값은 /Watermelon입니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O caminho WebDAV é o caminho de montagem no servidor (ex.: /webdav ou /remote.php/dav/…); o caminho raiz de backup padrão é /Watermelon."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O caminho WebDAV é o caminho de montagem no servidor (p. ex., /webdav ou /remote.php/dav/…); o caminho raiz de cópia predefinido é /Watermelon."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Шлях WebDAV — це точка монтування на сервері (наприклад, /webdav або /remote.php/dav/…); кореневий шлях резервного копіювання за замовчуванням /Watermelon."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 路径是服务器上的挂载路径（例如 /webdav 或 /remote.php/dav/…）；备份根路径默认为 /Watermelon。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 路徑是伺服器上的掛載路徑（例如 /webdav 或 /remote.php/dav/…）；備份根路徑預設為 /Watermelon。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 路徑是伺服器上的掛載路徑（例如 /webdav 或 /remote.php/dav/…）；備份根路徑預設為 /Watermelon。"
           }
         }
       }
@@ -5824,6 +6071,7 @@
       }
     },
     "auth.webdav.placeholder.endpoint" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -5901,6 +6149,170 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "https://example.com/dav"
+          }
+        }
+      }
+    },
+    "auth.webdav.placeholder.host" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "z. B. webdav.example.com"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "e.g. webdav.example.com"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ej.: webdav.example.com"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ej.: webdav.example.com"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ex. webdav.example.com"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例: webdav.example.com"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예: webdav.example.com"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ex.: webdav.example.com"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ex.: webdav.example.com"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "наприклад, webdav.example.com"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例: webdav.example.com"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例：webdav.example.com"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例:webdav.example.com"
+          }
+        }
+      }
+    },
+    "auth.webdav.placeholder.mountPath" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "z. B. /webdav"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "e.g. /webdav"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ej.: /webdav"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ej.: /webdav"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ex. /webdav"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例: /webdav"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예: /webdav"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ex.: /webdav"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ex.: /webdav"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "наприклад, /webdav"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例: /webdav"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例：/webdav"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例：/webdav"
           }
         }
       }
@@ -6234,6 +6646,7 @@
       }
     },
     "auth.webdav.validationEndpoint" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -6311,6 +6724,88 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "請填寫 Endpoint URL"
+          }
+        }
+      }
+    },
+    "auth.webdav.validationHost" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bitte geben Sie die WebDAV-Host-Adresse ein."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Please enter the WebDAV host."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introduce la dirección del host WebDAV."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ingresa la dirección del host WebDAV."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Veuillez saisir l'hôte WebDAV."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV ホストを入力してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 호스트를 입력해 주세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Informe o host WebDAV."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introduza o host WebDAV."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введіть адресу хоста WebDAV."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入主机地址。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請輸入主機地址。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請輸入主機地址。"
           }
         }
       }
@@ -6393,6 +6888,88 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "請填寫密碼"
+          }
+        }
+      }
+    },
+    "auth.webdav.validationPort" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Port muss eine ganze Zahl zwischen 1 und 65535 sein."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Port must be an integer between 1 and 65535."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El puerto debe ser un número entero entre 1 y 65535."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El puerto debe ser un número entero entre 1 y 65535."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le port doit être un entier entre 1 et 65535."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ポートは 1 から 65535 の整数で指定してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "포트는 1에서 65535 사이의 정수여야 합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A porta deve ser um número inteiro entre 1 e 65535."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A porta deve ser um número inteiro entre 1 e 65535."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Порт має бути цілим числом від 1 до 65535."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "端口必须是 1 到 65535 之间的整数。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接埠必須是 1 到 65535 之間的整數。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接埠必須是 1 到 65535 之間的整數。"
           }
         }
       }

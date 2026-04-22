@@ -6,7 +6,41 @@ struct ExternalVolumeConnectionParams: Codable {
 }
 
 struct WebDAVConnectionParams: Codable {
-    let endpointURLString: String
+    let scheme: String
+
+    init(scheme: String) {
+        self.scheme = scheme.lowercased()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scheme
+        case endpointURLString
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let scheme = try container.decodeIfPresent(String.self, forKey: .scheme),
+           !scheme.isEmpty {
+            self.scheme = scheme.lowercased()
+            return
+        }
+        if let legacy = try container.decodeIfPresent(String.self, forKey: .endpointURLString),
+           let urlScheme = URL(string: legacy)?.scheme?.lowercased(),
+           !urlScheme.isEmpty {
+            self.scheme = urlScheme
+            return
+        }
+        throw DecodingError.dataCorruptedError(
+            forKey: .scheme,
+            in: container,
+            debugDescription: "Missing WebDAV scheme and cannot derive it from legacy endpointURLString"
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(scheme, forKey: .scheme)
+    }
 }
 
 struct StorageProfile {
@@ -41,12 +75,12 @@ struct StorageProfile {
         case .smb:
             return "SMB://\(record.host)/\(record.shareName)\(record.basePath)"
         case .webdav:
-            let endpoint = record.webDAVParams?.endpointURLString ?? "WebDAV"
+            guard let endpoint = record.webDAVEndpointURLString else { return "WebDAV" }
             if record.basePath == "/" {
                 return endpoint
             }
-            let trimmedEndpoint = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
-            return "\(trimmedEndpoint)\(record.basePath)"
+            let trimmed = endpoint.hasSuffix("/") ? String(endpoint.dropLast()) : endpoint
+            return "\(trimmed)\(record.basePath)"
         case .externalVolume:
             if let path = record.externalVolumeParams?.displayPath, !path.isEmpty {
                 return Self.relativeExternalPath(from: path)
@@ -95,6 +129,44 @@ extension ServerProfileRecord {
 
     var webDAVParams: WebDAVConnectionParams? {
         decodedConnectionParams(as: WebDAVConnectionParams.self)
+    }
+
+    /// Canonical WebDAV endpoint built from the structured fields.
+    /// Returns nil when the profile lacks the minimum shape (scheme + host).
+    var webDAVEndpointURL: URL? {
+        guard resolvedStorageType == .webdav,
+              let scheme = webDAVParams?.scheme else { return nil }
+        return Self.buildWebDAVEndpointURL(
+            scheme: scheme,
+            host: host,
+            port: port,
+            mountPath: shareName
+        )
+    }
+
+    var webDAVEndpointURLString: String? {
+        webDAVEndpointURL?.absoluteString
+    }
+
+    static func buildWebDAVEndpointURL(
+        scheme: String,
+        host: String,
+        port: Int,
+        mountPath: String
+    ) -> URL? {
+        guard !host.isEmpty else { return nil }
+
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = host
+
+        let defaultPort = scheme == "https" ? 443 : 80
+        if port != 0, port != defaultPort {
+            components.port = port
+        }
+
+        components.path = RemotePathBuilder.normalizePath(mountPath)
+        return components.url
     }
 
     func decodedConnectionParams<T: Decodable>(as type: T.Type) -> T? {

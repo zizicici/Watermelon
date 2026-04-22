@@ -21,8 +21,7 @@ final class StorageClientFactory: @unchecked Sendable {
                 domain: profile.domain
             ))
         case .webdav:
-            guard let params = profile.webDAVParams,
-                  let endpointURL = URL(string: params.endpointURLString) else {
+            guard let endpointURL = profile.webDAVEndpointURL else {
                 throw RemoteStorageClientError.invalidConfiguration
             }
             return WebDAVClient(config: WebDAVClient.Config(
