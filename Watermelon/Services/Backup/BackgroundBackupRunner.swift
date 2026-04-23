@@ -107,18 +107,25 @@ final class BackgroundBackupRunner {
             try await client.connect()
         } catch {
             await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, String(describing: error)),
+                String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
                 level: .error
             )
             return
         }
 
-        await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
+        let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
         await client.disconnectSafely()
-        await writer.appendLog(
-            String(format: String(localized: "backup.auto.log.profileEnd"), profile.name),
-            level: .info
-        )
+        if anyMonthFailed {
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileFailed"), profile.name),
+                level: .error
+            )
+        } else {
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileEnd"), profile.name),
+                level: .info
+            )
+        }
     }
 
     // MARK: - Backup Loop
@@ -129,7 +136,7 @@ final class BackgroundBackupRunner {
         monthAssetIDs: [LibraryMonthKey: [String]],
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter
-    ) async {
+    ) async -> Bool {
 
         let eventStream = BackupEventStream()
         let drainTask = Task.detached {
@@ -138,7 +145,7 @@ final class BackgroundBackupRunner {
                 case .log(let message, let level):
                     await writer.appendLog(message, level: level)
                 case .progress(let progress):
-                    await writer.appendLog(progress.message, level: progress.logLevel)
+                    await writer.appendLog(progress.effectiveLogMessage, level: progress.logLevel)
                 case .started, .finished, .transferState, .monthChanged:
                     break
                 }
@@ -147,11 +154,14 @@ final class BackgroundBackupRunner {
 
         let iCloudMode = ICloudPhotoBackupMode.getValue()
         var uploadsSinceFlush = 0
+        var anyMonthFailed = false
 
         for monthKey in sortedMonths {
             if Task.isCancelled { break }
 
             guard let assetIDs = monthAssetIDs[monthKey], !assetIDs.isEmpty else { continue }
+
+            var monthHasAssetFailures = false
 
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.monthStart"), monthKey.displayText, assetIDs.count),
@@ -168,8 +178,9 @@ final class BackgroundBackupRunner {
                 )
             } catch {
                 if Task.isCancelled { break }
+                anyMonthFailed = true
                 await writer.appendLog(
-                    String(format: String(localized: "backup.auto.log.monthManifestFailed"), monthKey.displayText, String(describing: error)),
+                    String(format: String(localized: "backup.auto.log.monthManifestFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
                     level: .error
                 )
                 continue
@@ -182,9 +193,18 @@ final class BackgroundBackupRunner {
                 let batchEnd = min(batchStart + fetchBatchSize, assetIDs.count)
                 let batchIDs = Array(assetIDs[batchStart ..< batchEnd])
 
-                let batchLocalHashCache = (try? hashIndexRepository.fetchAssetHashCaches(
-                    assetIDs: Set(batchIDs)
-                )) ?? [:]
+                let batchLocalHashCache: [String: LocalAssetHashCache]
+                do {
+                    batchLocalHashCache = try hashIndexRepository.fetchAssetHashCaches(
+                        assetIDs: Set(batchIDs)
+                    )
+                } catch {
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.hashCacheWarning"), profile.userFacingStorageErrorMessage(error)),
+                        level: .warning
+                    )
+                    batchLocalHashCache = [:]
+                }
                 let batchResult = PHAsset.fetchAssets(
                     withLocalIdentifiers: batchIDs, options: nil
                 )
@@ -209,31 +229,86 @@ final class BackgroundBackupRunner {
                         totalAssets: 0
                     )
 
-                    if let result = try? await assetProcessor.process(
-                        context: context,
-                        client: client,
-                        eventStream: eventStream,
-                        cancellationController: nil
-                    ), result.status == .success {
-                        uploadsSinceFlush += 1
-                        if uploadsSinceFlush >= Self.flushInterval {
-                            _ = try? await monthStore.flushToRemote(ignoreCancellation: true)
-                            uploadsSinceFlush = 0
+                    let result: AssetProcessResult
+                    do {
+                        result = try await assetProcessor.process(
+                            context: context,
+                            client: client,
+                            eventStream: eventStream,
+                            cancellationController: nil
+                        )
+                    } catch {
+                        if !(error is CancellationError) {
+                            anyMonthFailed = true
+                            monthHasAssetFailures = true
+                            let displayName = BackupAssetResourcePlanner.assetDisplayName(
+                                asset: asset,
+                                selectedResources: resources
+                            )
+                            await writer.appendLog(
+                                String(format: String(localized: "backup.auto.log.assetFailed"), displayName, profile.userFacingStorageErrorMessage(error)),
+                                level: .error
+                            )
                         }
+                        continue
+                    }
+
+                    if result.status == .failed {
+                        anyMonthFailed = true
+                        monthHasAssetFailures = true
+                    }
+                    guard result.status == .success else { continue }
+                    uploadsSinceFlush += 1
+                    if uploadsSinceFlush >= Self.flushInterval {
+                        do {
+                            try await monthStore.flushToRemote(ignoreCancellation: true)
+                        } catch {
+                            await writer.appendErrorLog(
+                                String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
+                                unless: error
+                            )
+                        }
+                        uploadsSinceFlush = 0
                     }
                 }
             }
 
-            _ = try? await monthStore.flushToRemote(ignoreCancellation: true)
+            var monthFlushFailureReason: String?
+            do {
+                try await monthStore.flushToRemote(ignoreCancellation: true)
+            } catch {
+                if !(error is CancellationError) {
+                    let reason = profile.userFacingStorageErrorMessage(error)
+                    monthFlushFailureReason = reason
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
+                        level: .error
+                    )
+                }
+            }
             uploadsSinceFlush = 0
-            await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.monthEnd"), monthKey.displayText),
-                level: .info
-            )
+            if let monthFlushFailureReason {
+                anyMonthFailed = true
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.monthFailed"), monthKey.displayText, monthFlushFailureReason),
+                    level: .error
+                )
+            } else if monthHasAssetFailures {
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.monthFailed"), monthKey.displayText, String(localized: "backup.auto.log.monthAssetFailures")),
+                    level: .error
+                )
+            } else {
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.monthEnd"), monthKey.displayText),
+                    level: .info
+                )
+            }
         }
 
         eventStream.finish()
         await drainTask.value
+        return anyMonthFailed
     }
 
     // MARK: - Wi-Fi Check

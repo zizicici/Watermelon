@@ -6807,6 +6807,334 @@
         }
       }
     },
+    "backup.auto.log.assetFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hintergrund-Backup: Asset fehlgeschlagen %1$@ - %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background backup: asset failed %1$@ - %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano: recurso fallido %1$@ - %2$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano: recurso fallido %1$@ - %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarde en arrière-plan : échec de l’élément %1$@ - %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドバックアップ: アセット失敗 %1$@ - %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백그라운드 백업: 에셋 실패 %1$@ - %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup em segundo plano: falha no item %1$@ - %2$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópia em segundo plano: falha no item %1$@ - %2$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фонове резервне копіювання: помилка ресурсу %1$@ - %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台备份：资源失败 %1$@ - %2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份：資源失敗 %1$@ - %2$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份：資源失敗 %1$@ - %2$@"
+          }
+        }
+      }
+    },
+    "backup.auto.log.flushFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hintergrund-Backup: Schreiben des Remote-Manifests für Monat %1$@ fehlgeschlagen: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background backup: flush remote manifest failed for month %1$@: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano: falló escribir el manifiesto remoto del mes %1$@: %2$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano: falló escribir el manifiesto remoto del mes %1$@: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarde en arrière-plan : échec de l'écriture du manifeste distant du mois %1$@ : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドバックアップ: 月 %1$@ のリモートマニフェスト書き込みに失敗しました: %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백그라운드 백업: %1$@월 원격 매니페스트 쓰기에 실패했습니다: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup em segundo plano: falha ao gravar o manifesto remoto do mês %1$@: %2$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópia em segundo plano: falha ao gravar o manifesto remoto do mês %1$@: %2$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фонове резервне копіювання: не вдалося записати віддалений маніфест місяця %1$@: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台备份：月份 %1$@ 写入远端 manifest 失败：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份：月份 %1$@ 寫入遠端 manifest 失敗：%2$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份：月份 %1$@ 寫入遠端 manifest 失敗：%2$@"
+          }
+        }
+      }
+    },
+    "backup.auto.log.hashCacheWarning" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hintergrund-Backup: Lesen des lokalen Hash-Caches fehlgeschlagen: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background backup: local hash cache read failed: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano: falló leer la caché hash local: %@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano: falló leer la caché hash local: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarde en arrière-plan : échec de lecture du cache de hachage local : %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドバックアップ: ローカルハッシュキャッシュの読み込みに失敗しました: %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백그라운드 백업: 로컬 해시 캐시 읽기에 실패했습니다: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup em segundo plano: falha ao ler o cache hash local: %@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópia em segundo plano: falha ao ler a cache hash local: %@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фонове резервне копіювання: не вдалося прочитати локальний кеш хешів: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台备份：读取本地哈希缓存失败：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份：讀取本機雜湊快取失敗：%@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份：讀取本機雜湊快取失敗：%@"
+          }
+        }
+      }
+    },
+    "backup.auto.log.monthAssetFailures" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einige Assets fehlgeschlagen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Some assets failed"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algunos recursos fallaron"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algunos recursos fallaron"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certains éléments ont échoué"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一部のアセットが失敗しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "일부 에셋이 실패했습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alguns itens falharam"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alguns itens falharam"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Деякі ресурси не вдалися"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分资源失败"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分資源失敗"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分資源失敗"
+          }
+        }
+      }
+    },
     "backup.auto.log.monthEnd" : {
       "localizations" : {
         "de" : {
@@ -6885,6 +7213,88 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "月份 %@ — 完成"
+          }
+        }
+      }
+    },
+    "backup.auto.log.monthFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hintergrund-Backup: Monat %1$@ fehlgeschlagen: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background backup: month %1$@ failed: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano: mes %1$@ fallido: %2$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano: mes %1$@ fallido: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarde en arrière-plan : mois %1$@ en échec : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドバックアップ: 月 %1$@ 失敗: %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백그라운드 백업: %1$@월 실패: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup em segundo plano: mês %1$@ falhou: %2$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópia em segundo plano: mês %1$@ falhou: %2$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фонове резервне копіювання: місяць %1$@ не вдався: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台备份：月份 %1$@ — 失败：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份：月份 %1$@ — 失敗：%2$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份：月份 %1$@ — 失敗：%2$@"
           }
         }
       }
@@ -7213,6 +7623,88 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "設定檔 %@ — 完成"
+          }
+        }
+      }
+    },
+    "backup.auto.log.profileFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hintergrund-Backup: Profil %@ mit Fehlern beendet"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background backup: profile %@ ended with failures"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano: perfil %@ finalizó con errores"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo en segundo plano: perfil %@ finalizó con errores"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarde en arrière-plan : profil %@ terminé avec des erreurs"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックグラウンドバックアップ: プロファイル %@ はエラー付きで終了しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백그라운드 백업: 프로필 %@이(가) 오류와 함께 종료되었습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup em segundo plano: perfil %@ encerrado com falhas"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópia em segundo plano: perfil %@ terminou com falhas"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фонове резервне копіювання: профіль %@ завершено з помилками"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台备份：配置 %@ 结束但有失败"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份：設定檔 %@ 結束但有失敗"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景備份：設定檔 %@ 結束但有失敗"
           }
         }
       }
@@ -9021,6 +9513,170 @@
         }
       }
     },
+    "backup.parallel.clientAcquireFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parallelität #%1$lld: Speicherverbindung konnte nicht bezogen werden: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrent #%1$lld failed to acquire storage connection: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld: falló obtener la conexión de almacenamiento: %2$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld: falló obtener la conexión de almacenamiento: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simultanéité #%1$lld : échec d'obtention de la connexion de stockage : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同時実行 #%1$lld のストレージ接続取得に失敗しました: %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동시 실행 #%1$lld의 저장소 연결 획득에 실패했습니다: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld: falha ao obter conexão de armazenamento: %2$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld: falha ao obter ligação de armazenamento: %2$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Паралельність #%1$lld: не вдалося отримати з'єднання сховища: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "并发 #%1$lld 获取存储连接失败：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 取得儲存連線失敗：%2$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 取得儲存連線失敗：%2$@"
+          }
+        }
+      }
+    },
+    "backup.parallel.connectionLostDuringAsset" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parallelität #%1$lld: Verbindung verloren beim Verarbeiten von %2$@ (Monat %3$@): %4$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrent #%1$lld connection lost while processing %2$@ (month %3$@): %4$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld: conexión perdida al procesar %2$@ (mes %3$@): %4$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld: conexión perdida al procesar %2$@ (mes %3$@): %4$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simultanéité #%1$lld : connexion perdue lors du traitement de %2$@ (mois %3$@) : %4$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同時実行 #%1$lld: %2$@ の処理中に接続が切断されました (月 %3$@): %4$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동시 실행 #%1$lld: %2$@ 처리 중 연결이 끊어졌습니다 (%3$@월): %4$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld: conexão perdida ao processar %2$@ (mês %3$@): %4$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld: ligação perdida ao processar %2$@ (mês %3$@): %4$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Паралельність #%1$lld: з'єднання втрачено під час обробки %2$@ (місяць %3$@): %4$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "并发 #%1$lld 处理资源 %2$@ 时连接中断（月份 %3$@）：%4$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 處理資源 %2$@ 時連線中斷（月份 %3$@）：%4$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 處理資源 %2$@ 時連線中斷（月份 %3$@）：%4$@"
+          }
+        }
+      }
+    },
     "backup.parallel.failedAssetLog" : {
       "localizations" : {
         "de" : {
@@ -9263,6 +9919,170 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "並行 #%1$lld 的月份 %2$@ 收尾失敗：%3$@"
+          }
+        }
+      }
+    },
+    "backup.parallel.flushManifestFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parallelität #%1$lld: Schreiben des Remote-Manifests für Monat %2$@ fehlgeschlagen: %3$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrent #%1$lld month %2$@ flush remote manifest failed: %3$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld: falló escribir el manifiesto remoto del mes %2$@: %3$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld: falló escribir el manifiesto remoto del mes %2$@: %3$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simultanéité #%1$lld : échec de l'écriture du manifeste distant du mois %2$@ : %3$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同時実行 #%1$lld の月 %2$@ のリモートマニフェスト書き込みに失敗しました: %3$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동시 실행 #%1$lld의 %2$@월 원격 매니페스트 쓰기에 실패했습니다: %3$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld: falha ao gravar o manifesto remoto do mês %2$@: %3$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld: falha ao gravar o manifesto remoto do mês %2$@: %3$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Паралельність #%1$lld: не вдалося записати віддалений маніфест місяця %2$@: %3$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "并发 #%1$lld 的月份 %2$@ 写入远端 manifest 失败：%3$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 的月份 %2$@ 寫入遠端 manifest 失敗：%3$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 的月份 %2$@ 寫入遠端 manifest 失敗：%3$@"
+          }
+        }
+      }
+    },
+    "backup.parallel.loadManifestFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parallelität #%1$lld: Laden des Remote-Manifests für Monat %2$@ fehlgeschlagen: %3$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrent #%1$lld month %2$@ load remote manifest failed: %3$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld: falló cargar el manifiesto remoto del mes %2$@: %3$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld: falló cargar el manifiesto remoto del mes %2$@: %3$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simultanéité #%1$lld : échec du chargement du manifeste distant du mois %2$@ : %3$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同時実行 #%1$lld の月 %2$@ のリモートマニフェスト読み込みに失敗しました: %3$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동시 실행 #%1$lld의 %2$@월 원격 매니페스트 로딩에 실패했습니다: %3$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld: falha ao carregar o manifesto remoto do mês %2$@: %3$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld: falha ao carregar o manifesto remoto do mês %2$@: %3$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Паралельність #%1$lld: не вдалося завантажити віддалений маніфест місяця %2$@: %3$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "并发 #%1$lld 的月份 %2$@ 加载远端 manifest 失败：%3$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 的月份 %2$@ 載入遠端 manifest 失敗：%3$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 的月份 %2$@ 載入遠端 manifest 失敗：%3$@"
           }
         }
       }
@@ -9841,6 +10661,88 @@
         }
       }
     },
+    "backup.parallel.runAborted" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Upload-Phase abgebrochen: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Upload phase aborted: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fase de subida interrumpida: %@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fase de subida interrumpida: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Phase de téléversement interrompue : %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アップロードフェーズが中断されました: %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "업로드 단계가 중단되었습니다: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fase de envio interrompida: %@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fase de envio interrompida: %@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Фаза завантаження перервана: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上传阶段中止：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳階段中止：%@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳階段中止：%@"
+          }
+        }
+      }
+    },
     "backup.parallel.schedulerSummary" : {
       "localizations" : {
         "de" : {
@@ -10333,6 +11235,88 @@
         }
       }
     },
+    "backup.preflight.prepareFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup-Vorbereitung fehlgeschlagen: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup preparation failed: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparación del respaldo fallida: %@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparación del respaldo fallida: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec de la préparation de la sauvegarde : %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップの準備に失敗しました: %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업 준비에 실패했습니다: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha na preparação do backup: %@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha na preparação da cópia: %@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Помилка підготовки резервного копіювання: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份准备失败：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份準備失敗：%@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份準備失敗：%@"
+          }
+        }
+      }
+    },
     "backup.preflight.prepareStart" : {
       "localizations" : {
         "de" : {
@@ -10661,6 +11645,88 @@
         }
       }
     },
+    "backup.progress.assetContextSuffix" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " (Parallelität #%1$lld, Monat %2$@)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " (worker #%1$lld, month %2$@)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " (concurrencia #%1$lld, mes %2$@)"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " (concurrencia #%1$lld, mes %2$@)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " (simultanéité #%1$lld, mois %2$@)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（同時実行 #%1$lld、月 %2$@）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " (동시 실행 #%1$lld, 월 %2$@)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " (concorrência #%1$lld, mês %2$@)"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " (concorrência #%1$lld, mês %2$@)"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : " (паралельність #%1$lld, місяць %2$@)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（并发 #%1$lld，月份 %2$@）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（並行 #%1$lld，月份 %2$@）"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（並行 #%1$lld，月份 %2$@）"
+          }
+        }
+      }
+    },
     "backup.progress.assetDone" : {
       "localizations" : {
         "de" : {
@@ -10821,6 +11887,88 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "[%1$lld/%2$lld] 資源失敗 %3$@"
+          }
+        }
+      }
+    },
+    "backup.progress.assetFailedReason" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] Asset fehlgeschlagen %3$@ (%4$@)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] Asset failed %3$@ (%4$@)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] Recurso fallido %3$@ (%4$@)"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] Recurso fallido %3$@ (%4$@)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] Échec de l’élément %3$@ (%4$@)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] アセット失敗 %3$@（%4$@）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] 에셋 실패 %3$@ (%4$@)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] Falha no item %3$@ (%4$@)"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] Falha no item %3$@ (%4$@)"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] Помилка ресурсу %3$@ (%4$@)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] 资源失败 %3$@（%4$@）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] 資源失敗 %3$@（%4$@）"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[%1$lld/%2$lld] 資源失敗 %3$@（%4$@）"
           }
         }
       }
@@ -12461,6 +13609,88 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "繼續備份失敗"
+          }
+        }
+      }
+    },
+    "backup.session.resumePreparationFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fortsetzungsvorbereitung fehlgeschlagen: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume preparation failed: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparación de reanudación fallida: %@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparación de reanudación fallida: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec de la préparation de la reprise : %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再開の準備に失敗しました: %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "재개 준비에 실패했습니다: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha na preparação da retomada: %@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha na preparação da retoma: %@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Помилка підготовки відновлення: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续备份准备失败：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "繼續備份準備失敗：%@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "繼續備份準備失敗：%@"
           }
         }
       }

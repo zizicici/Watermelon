@@ -68,9 +68,12 @@ struct BackupProgress {
     let skipped: Int
     let total: Int
     let message: String
+    let logMessage: String?
     let logLevel: ExecutionLogLevel
     let itemEvent: BackupItemEvent?
     let transferState: BackupTransferState?
+
+    var effectiveLogMessage: String { logMessage ?? message }
 }
 
 enum BackupError: LocalizedError {

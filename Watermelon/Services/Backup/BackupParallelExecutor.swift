@@ -88,6 +88,14 @@ struct BackupParallelExecutor: Sendable {
             await clientPool.shutdown()
             if profile.isConnectionUnavailableError(error) {
                 eventStream.emitLog(String(localized: "backup.parallel.remoteUnavailable"), level: .error)
+            } else {
+                eventStream.emitErrorLog(
+                    String.localizedStringWithFormat(
+                        String(localized: "backup.parallel.runAborted"),
+                        profile.userFacingStorageErrorMessage(error)
+                    ),
+                    unless: error
+                )
             }
             throw error
         }
@@ -121,7 +129,20 @@ struct BackupParallelExecutor: Sendable {
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) async throws -> WorkerRunState {
         var workerState = WorkerRunState()
-        let client = try await clientPool.acquire()
+        let client: any RemoteStorageClientProtocol
+        do {
+            client = try await clientPool.acquire()
+        } catch {
+            eventStream.emitErrorLog(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.parallel.clientAcquireFailed"),
+                    workerID + 1,
+                    profile.userFacingStorageErrorMessage(error)
+                ),
+                unless: error
+            )
+            throw error
+        }
         var clientReusable = true
         do {
             while let monthPlan = await monthQueue.next() {
@@ -145,6 +166,15 @@ struct BackupParallelExecutor: Sendable {
                         workerState.paused = true
                         break
                     }
+                    eventStream.emitLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.parallel.loadManifestFailed"),
+                            workerID + 1,
+                            monthKey.text,
+                            profile.userFacingStorageErrorMessage(error)
+                        ),
+                        level: .error
+                    )
                     throw error
                 }
 
@@ -187,6 +217,7 @@ struct BackupParallelExecutor: Sendable {
                             monthKey.text,
                             monthAssetIDs.count
                         ),
+                        logMessage: nil,
                         logLevel: .info,
                         itemEvent: nil,
                         transferState: nil
@@ -284,7 +315,9 @@ struct BackupParallelExecutor: Sendable {
                                 state: progressState.state,
                                 result: result,
                                 position: progressState.position,
-                                asset: asset
+                                asset: asset,
+                                workerID: workerID + 1,
+                                monthText: monthKey.text
                             )
                             if let timingSummary = progressState.timingSummary {
                                 eventStream.emitLog(timingSummary, level: .debug)
@@ -294,24 +327,34 @@ struct BackupParallelExecutor: Sendable {
                                 workerState.paused = true
                                 break
                             }
-                            if profile.isConnectionUnavailableError(error) {
-                                clientReusable = false
-                                monthFatalError = error
-                                break
-                            }
-
                             let displayName = BackupAssetResourcePlanner.assetDisplayName(
                                 asset: asset,
                                 selectedResources: selectedResources
                             )
                             let errorMessage = profile.userFacingStorageErrorMessage(error)
+                            if profile.isConnectionUnavailableError(error) {
+                                clientReusable = false
+                                monthFatalError = error
+                                eventStream.emitLog(
+                                    String.localizedStringWithFormat(
+                                        String(localized: "backup.parallel.connectionLostDuringAsset"),
+                                        workerID + 1,
+                                        displayName,
+                                        monthKey.text,
+                                        errorMessage
+                                    ),
+                                    level: .error
+                                )
+                                break
+                            }
+
                             print("[BackupUpload] asset processing FAILED: asset=\(displayName), reason=\(errorMessage)")
                             eventStream.emitLog(
                                 String.localizedStringWithFormat(
                                     String(localized: "backup.parallel.failedAssetLog"),
                                     displayName,
                                     errorMessage
-                                ),
+                                ) + Self.contextSuffix(workerID: workerID + 1, monthText: monthKey.text),
                                 level: .error
                             )
 
@@ -322,7 +365,9 @@ struct BackupParallelExecutor: Sendable {
                                 asset: asset,
                                 displayName: displayName,
                                 errorMessage: errorMessage,
-                                position: progressState.position
+                                position: progressState.position,
+                                workerID: workerID + 1,
+                                monthText: monthKey.text
                             )
                             if let timingSummary = progressState.timingSummary {
                                 eventStream.emitLog(timingSummary, level: .debug)
@@ -428,6 +473,15 @@ struct BackupParallelExecutor: Sendable {
                             }
                         }
                     } catch {
+                        eventStream.emitErrorLog(
+                            String.localizedStringWithFormat(
+                                String(localized: "backup.parallel.flushManifestFailed"),
+                                workerID + 1,
+                                monthKey.text,
+                                profile.userFacingStorageErrorMessage(error)
+                            ),
+                            unless: error
+                        )
                         throw error
                     }
                 }
@@ -488,13 +542,24 @@ struct BackupParallelExecutor: Sendable {
         state: BackupRunState,
         result: AssetProcessResult,
         position: Int,
-        asset: PHAsset
+        asset: PHAsset,
+        workerID: Int,
+        monthText: String
     ) {
-        let message = Self.message(for: result, position: position, total: state.total)
+        let displayMessage = Self.message(for: result, position: position, total: state.total)
+        let logMessage = Self.logMessage(
+            for: result,
+            position: position,
+            total: state.total,
+            displayMessage: displayMessage,
+            workerID: workerID,
+            monthText: monthText
+        )
         eventStream.emit(.progress(BackupProgress(
             succeeded: state.succeeded, failed: state.failed,
             skipped: state.skipped, total: state.total,
-            message: message,
+            message: displayMessage,
+            logMessage: logMessage,
             logLevel: Self.logLevel(for: result),
             itemEvent: BackupItemEvent(
                 assetLocalIdentifier: asset.localIdentifier,
@@ -515,16 +580,20 @@ struct BackupParallelExecutor: Sendable {
         asset: PHAsset,
         displayName: String,
         errorMessage: String,
-        position: Int
+        position: Int,
+        workerID: Int,
+        monthText: String
     ) {
+        let displayMessage = Self.failureMessage(
+            position: position,
+            total: state.total,
+            displayName: displayName
+        )
         eventStream.emit(.progress(BackupProgress(
             succeeded: state.succeeded, failed: state.failed,
             skipped: state.skipped, total: state.total,
-            message: Self.failureMessage(
-                position: position,
-                total: state.total,
-                displayName: displayName
-            ),
+            message: displayMessage,
+            logMessage: displayMessage + Self.contextSuffix(workerID: workerID, monthText: monthText),
             logLevel: .error,
             itemEvent: BackupItemEvent(
                 assetLocalIdentifier: asset.localIdentifier,
@@ -539,7 +608,11 @@ struct BackupParallelExecutor: Sendable {
         )))
     }
 
-    private static func message(for result: AssetProcessResult, position: Int, total: Int) -> String {
+    private static func message(
+        for result: AssetProcessResult,
+        position: Int,
+        total: Int
+    ) -> String {
         switch result.status {
         case .success:
             return String.localizedStringWithFormat(
@@ -574,12 +647,45 @@ struct BackupParallelExecutor: Sendable {
         }
     }
 
-    private static func failureMessage(position: Int, total: Int, displayName: String) -> String {
+    private static func logMessage(
+        for result: AssetProcessResult,
+        position: Int,
+        total: Int,
+        displayMessage: String,
+        workerID: Int,
+        monthText: String
+    ) -> String {
+        let suffix = contextSuffix(workerID: workerID, monthText: monthText)
+        if result.status == .failed, let reason = result.reason {
+            return String.localizedStringWithFormat(
+                String(localized: "backup.progress.assetFailedReason"),
+                position,
+                max(total, 1),
+                result.displayName,
+                reason
+            ) + suffix
+        }
+        return displayMessage + suffix
+    }
+
+    private static func failureMessage(
+        position: Int,
+        total: Int,
+        displayName: String
+    ) -> String {
         String.localizedStringWithFormat(
             String(localized: "backup.progress.assetFailed"),
             position,
             max(total, 1),
             displayName
+        )
+    }
+
+    private static func contextSuffix(workerID: Int, monthText: String) -> String {
+        String.localizedStringWithFormat(
+            String(localized: "backup.progress.assetContextSuffix"),
+            workerID,
+            monthText
         )
     }
 

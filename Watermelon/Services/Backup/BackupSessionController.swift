@@ -617,6 +617,13 @@ enum State {
                 self.notifyObserversNow()
             } catch {
                 self.resumePreparationTask = nil
+                self.notifyEventObservers(.log(
+                    String.localizedStringWithFormat(
+                        String(localized: "backup.session.resumePreparationFailed"),
+                        connection.profile.userFacingStorageErrorMessage(error)
+                    ),
+                    level: .error
+                ))
                 self.session.failResumePreparation()
                 self.notifyObserversNow()
             }

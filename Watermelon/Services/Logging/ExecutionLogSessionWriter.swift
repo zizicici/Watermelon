@@ -37,6 +37,11 @@ actor ExecutionLogSessionWriter {
         }
     }
 
+    func appendErrorLog(_ message: @autoclosure () -> String, unless error: Error) {
+        guard !(error is CancellationError) else { return }
+        appendLog(message(), level: .error)
+    }
+
     func finalize() {
         guard !closed else { return }
         closed = true

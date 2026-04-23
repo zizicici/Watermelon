@@ -734,7 +734,7 @@ final class HomeExecutionCoordinator {
                 level: result.failed > 0 ? .warning : .info
             )
         case .progress(let progress):
-            appendLog(progress.message, level: progress.logLevel)
+            appendLog(progress.effectiveLogMessage, level: progress.logLevel)
         case .transferState:
             break
         }

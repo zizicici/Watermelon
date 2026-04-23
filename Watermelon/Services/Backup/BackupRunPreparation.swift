@@ -39,119 +39,130 @@ struct BackupRunPreparationService: Sendable {
         let password = request.password
         let onlyAssetLocalIdentifiers = request.onlyAssetLocalIdentifiers
 
-        try await ensurePhotoAuthorization()
-
-        if request.iCloudPhotoBackupMode == .enable {
-            eventStream.emitLog(
-                String(localized: "backup.log.icloudAccessEnabled"),
-                level: .info
-            )
-        }
-
-        let client = try makeStorageClient(profile: profile, password: password)
-        try await client.connect()
-
         do {
-            try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-            var snapshotSeedLookup: MonthSeedLookup?
+            try await ensurePhotoAuthorization()
+
+            if request.iCloudPhotoBackupMode == .enable {
+                eventStream.emitLog(
+                    String(localized: "backup.log.icloudAccessEnabled"),
+                    level: .info
+                )
+            }
+
+            let client = try makeStorageClient(profile: profile, password: password)
+            try await client.connect()
 
             do {
-                let digest = try await remoteIndexService.syncIndex(
-                    client: client,
-                    profile: profile,
+                try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
+                var snapshotSeedLookup: MonthSeedLookup?
+
+                do {
+                    let digest = try await remoteIndexService.syncIndex(
+                        client: client,
+                        profile: profile,
+                        eventStream: eventStream
+                    )
+                    snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
+                    eventStream.emitLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.log.remoteIndexSynced"),
+                            digest.resourceCount,
+                            digest.assetCount
+                        ),
+                        level: .info
+                    )
+                } catch {
+                    if profile.isConnectionUnavailableError(error) {
+                        throw error
+                    }
+                    eventStream.emitLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.log.remoteIndexScanWarning"),
+                            profile.userFacingStorageErrorMessage(error)
+                        ),
+                        level: .warning
+                    )
+                }
+
+                let retryMode = onlyAssetLocalIdentifiers != nil
+                let assetsResult: PHFetchResult<PHAsset>? = retryMode
+                    ? nil
+                    : photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
+                let retryAssets = loadRetryAssets(from: onlyAssetLocalIdentifiers)
+
+                let initialTotal = retryMode ? retryAssets.count : (assetsResult?.count ?? 0)
+                eventStream.emit(.started(totalAssets: initialTotal))
+
+                let monthAssetIDsByMonth: [MonthKey: [String]]
+                if retryMode {
+                    monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: retryAssets)
+                } else if let assetsResult {
+                    monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: assetsResult)
+                } else {
+                    monthAssetIDsByMonth = [:]
+                }
+
+                let totalAssetCount = monthAssetIDsByMonth.values.reduce(0) { partial, ids in
+                    partial + ids.count
+                }
+                if retryMode {
+                    let requested = onlyAssetLocalIdentifiers?.count ?? 0
+                    let missing = max(requested - retryAssets.count, 0)
+                    eventStream.emitLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.log.retryModeSummary"),
+                            requested,
+                            retryAssets.count,
+                            missing
+                        ),
+                        level: .info
+                    )
+                } else {
+                    eventStream.emitLog(String(localized: "backup.log.startBackupByAsset"), level: .info)
+                }
+
+                let estimatedBytesByMonth = fetchEstimatedBytesByMonth(
+                    monthAssetIDsByMonth: monthAssetIDsByMonth,
                     eventStream: eventStream
                 )
-                snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
-                eventStream.emitLog(
-                    String.localizedStringWithFormat(
-                        String(localized: "backup.log.remoteIndexSynced"),
-                        digest.resourceCount,
-                        digest.assetCount
-                    ),
-                    level: .info
+                let monthPlans = BackupMonthScheduler.buildMonthPlans(
+                    assetLocalIdentifiersByMonth: monthAssetIDsByMonth,
+                    estimatedBytesByMonth: estimatedBytesByMonth
+                )
+                let workerCount = BackupMonthScheduler.resolveWorkerCount(
+                    profile: profile,
+                    monthCount: monthPlans.count,
+                    override: request.workerCountOverride
+                )
+                let connectionPoolSize = BackupMonthScheduler.resolveConnectionPoolSize(
+                    profile: profile,
+                    workerCount: workerCount,
+                    override: request.workerCountOverride
+                )
+
+                return BackupPreparedRun(
+                    initialClient: client,
+                    snapshotSeedLookup: snapshotSeedLookup,
+                    monthPlans: monthPlans,
+                    workerCount: workerCount,
+                    connectionPoolSize: connectionPoolSize,
+                    totalAssetCount: totalAssetCount,
+                    makeClient: { [storageClientFactory, profile, password] in
+                        try storageClientFactory.makeClient(profile: profile, password: password)
+                    }
                 )
             } catch {
-                if profile.isConnectionUnavailableError(error) {
-                    throw error
-                }
-                eventStream.emitLog(
-                    String.localizedStringWithFormat(
-                        String(localized: "backup.log.remoteIndexScanWarning"),
-                        error.localizedDescription
-                    ),
-                    level: .warning
-                )
+                await client.disconnectSafely()
+                throw error
             }
-
-            let retryMode = onlyAssetLocalIdentifiers != nil
-            let assetsResult: PHFetchResult<PHAsset>? = retryMode
-                ? nil
-                : photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
-            let retryAssets = loadRetryAssets(from: onlyAssetLocalIdentifiers)
-
-            let initialTotal = retryMode ? retryAssets.count : (assetsResult?.count ?? 0)
-            eventStream.emit(.started(totalAssets: initialTotal))
-
-            let monthAssetIDsByMonth: [MonthKey: [String]]
-            if retryMode {
-                monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: retryAssets)
-            } else if let assetsResult {
-                monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: assetsResult)
-            } else {
-                monthAssetIDsByMonth = [:]
-            }
-
-            let totalAssetCount = monthAssetIDsByMonth.values.reduce(0) { partial, ids in
-                partial + ids.count
-            }
-            if retryMode {
-                let requested = onlyAssetLocalIdentifiers?.count ?? 0
-                let missing = max(requested - retryAssets.count, 0)
-                eventStream.emitLog(
-                    String.localizedStringWithFormat(
-                        String(localized: "backup.log.retryModeSummary"),
-                        requested,
-                        retryAssets.count,
-                        missing
-                    ),
-                    level: .info
-                )
-            } else {
-                eventStream.emitLog(String(localized: "backup.log.startBackupByAsset"), level: .info)
-            }
-
-            let estimatedBytesByMonth = fetchEstimatedBytesByMonth(
-                monthAssetIDsByMonth: monthAssetIDsByMonth,
-                eventStream: eventStream
-            )
-            let monthPlans = BackupMonthScheduler.buildMonthPlans(
-                assetLocalIdentifiersByMonth: monthAssetIDsByMonth,
-                estimatedBytesByMonth: estimatedBytesByMonth
-            )
-            let workerCount = BackupMonthScheduler.resolveWorkerCount(
-                profile: profile,
-                monthCount: monthPlans.count,
-                override: request.workerCountOverride
-            )
-            let connectionPoolSize = BackupMonthScheduler.resolveConnectionPoolSize(
-                profile: profile,
-                workerCount: workerCount,
-                override: request.workerCountOverride
-            )
-
-            return BackupPreparedRun(
-                initialClient: client,
-                snapshotSeedLookup: snapshotSeedLookup,
-                monthPlans: monthPlans,
-                workerCount: workerCount,
-                connectionPoolSize: connectionPoolSize,
-                totalAssetCount: totalAssetCount,
-                makeClient: { [storageClientFactory, profile, password] in
-                    try storageClientFactory.makeClient(profile: profile, password: password)
-                }
-            )
         } catch {
-            await client.disconnectSafely()
+            eventStream.emitErrorLog(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.preflight.prepareFailed"),
+                    profile.userFacingStorageErrorMessage(error)
+                ),
+                unless: error
+            )
             throw error
         }
     }

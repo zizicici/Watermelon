@@ -30,6 +30,14 @@ final class BackupEventStream: @unchecked Sendable {
         emit(.log(message, level: level))
     }
 
+    func emitErrorLog(
+        _ message: @autoclosure () -> String,
+        unless error: Error
+    ) {
+        guard !(error is CancellationError) else { return }
+        emit(.log(message(), level: .error))
+    }
+
     func finish() {
         let target: AsyncStream<BackupEvent>.Continuation? = lock.withLock {
             guard !finished else { return nil }
