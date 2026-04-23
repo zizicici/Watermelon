@@ -117,7 +117,7 @@ final class RemoteIndexSyncService: Sendable {
             changedMonths = remoteMonths
         } else {
             for (month, digest) in remoteDigests {
-                if previousDigests[month] != digest || digest.manifestModifiedAtNs == nil {
+                if previousDigests[month] != digest || digest.manifestModifiedAtMs == nil {
                     changedMonths.insert(month)
                 }
             }
@@ -191,6 +191,10 @@ final class RemoteIndexSyncService: Sendable {
             onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
         }
 
+        // Keep the scan-time digests even for months rewritten by
+        // loadManifestDirect: the stale cache costs one extra download per
+        // upgraded month next sync, while refreshing post-flush would race
+        // with concurrent remote writers and silently drop their updates.
         await state.updateRemoteManifestDigests(remoteDigests)
 
         let snapshot = snapshotCache.current()
@@ -269,11 +273,11 @@ final class RemoteIndexSyncService: Sendable {
                 }
 
                 let monthKey = LibraryMonthKey(year: year, month: month)
-                let modifiedNs = manifestEntry.modificationDate?.nanosecondsSinceEpoch
+                let modifiedMs = manifestEntry.modificationDate?.millisecondsSinceEpoch
                 digests[monthKey] = RemoteMonthManifestDigest(
                     month: monthKey,
                     manifestSize: manifestEntry.size,
-                    manifestModifiedAtNs: modifiedNs
+                    manifestModifiedAtMs: modifiedMs
                 )
             }
         }

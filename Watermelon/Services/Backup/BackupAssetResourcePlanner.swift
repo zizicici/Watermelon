@@ -61,6 +61,6 @@ enum BackupAssetResourcePlanner {
         if let first = selectedResources.first {
             return first.resource.originalFilename
         }
-        return "asset_\(asset.creationDate?.nanosecondsSinceEpoch ?? 0)"
+        return "asset_\(asset.creationDate?.millisecondsSinceEpoch ?? 0)"
     }
 }

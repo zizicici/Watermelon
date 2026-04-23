@@ -45,9 +45,9 @@ final class RestoreService {
         for (index, item) in items.enumerated() {
             try Task.checkCancellation()
             let creationDate = item.instances
-                .compactMap(\.creationDateNs)
+                .compactMap(\.creationDateMs)
                 .min()
-                .map { Date(nanosecondsSinceEpoch: $0) }
+                .map { Date(millisecondsSinceEpoch: $0) }
             let group = RestoreGroup(creationDate: creationDate, instances: item.instances)
             var restoredItem: RestoredItem?
             if let asset = try await restoreGroup(group, profile: profile, storageClient: storageClient) {

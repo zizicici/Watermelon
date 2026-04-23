@@ -32,7 +32,7 @@ extension AssetProcessor {
             }
         }
 
-        return "asset_\(asset.creationDate?.nanosecondsSinceEpoch ?? 0)"
+        return "asset_\(asset.creationDate?.millisecondsSinceEpoch ?? 0)"
     }
 
     static func preferredRemoteFileName(

@@ -50,7 +50,7 @@ struct LocalAssetRecord: Codable, FetchableRecord, MutablePersistableRecord {
     var assetFingerprint: Data?
     var resourceCount: Int
     var totalFileSizeBytes: Int64
-    var modificationDateNs: Int64?
+    var modificationDateMs: Int64?
     var updatedAt: Date
 }
 

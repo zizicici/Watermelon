@@ -62,21 +62,14 @@ extension MonthManifestStore {
             }
         }
 
-        var dbQueue: DatabaseQueue?
+        let prepared: PreparedManifestQueue
         do {
-            let queue = try DatabaseQueue(path: localURL.path)
-            dbQueue = queue
-            if manifestExists {
-                try Self.prepareExistingManifest(queue)
-            } else {
-                try Self.migrate(queue)
-            }
-            _ = try await queue.read { db in
-                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
-            }
+            prepared = try Self.prepareLocalManifest(
+                localURL: localURL,
+                origin: manifestExists ? .downloadedFromRemote : .freshlyCreated
+            )
         } catch {
-            Self.closeAndRemoveLocalManifest(at: localURL, queue: dbQueue)
-            dbQueue = nil
+            try? FileManager.default.removeItem(at: localURL)
             if manifestExists {
                 throw NSError(
                     domain: "MonthManifestStore",
@@ -90,16 +83,9 @@ extension MonthManifestStore {
                     ]
                 )
             }
-            let queue = try DatabaseQueue(path: localURL.path)
-            try Self.migrate(queue)
-            dbQueue = queue
-        }
-
-        guard let dbQueue else {
-            throw NSError(
-                domain: "MonthManifestStore",
-                code: -33,
-                userInfo: [NSLocalizedDescriptionKey: String(localized: "backup.manifest.error.initializeQueue")]
+            prepared = try Self.prepareLocalManifest(
+                localURL: localURL,
+                origin: .freshlyCreated
             )
         }
 
@@ -109,14 +95,16 @@ extension MonthManifestStore {
             year: year,
             month: month,
             localManifestURL: localURL,
-            dbQueue: dbQueue,
+            dbQueue: prepared.queue,
             remoteFilesByName: remoteFilesByName,
-            dirty: !manifestExists
+            dirty: prepared.requiresRemoteSync
         )
 
+        // reloadCache doubles as the integrity check: corruption surfaces
+        // here before flush can overwrite remote with a bad manifest.
         try store.reloadCache()
 
-        if !manifestExists {
+        if prepared.requiresRemoteSync {
             try await store.flushToRemote()
         }
 
@@ -215,16 +203,14 @@ extension MonthManifestStore {
             return nil
         }
 
-        var dbQueue: DatabaseQueue?
+        let prepared: PreparedManifestQueue
         do {
-            let queue = try DatabaseQueue(path: localURL.path)
-            dbQueue = queue
-            try Self.prepareExistingManifest(queue)
-            _ = try await queue.read { db in
-                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM resources") ?? 0
-            }
+            prepared = try Self.prepareLocalManifest(
+                localURL: localURL,
+                origin: .downloadedFromRemote
+            )
         } catch {
-            Self.closeAndRemoveLocalManifest(at: localURL, queue: dbQueue)
+            try? FileManager.default.removeItem(at: localURL)
             throw NSError(
                 domain: "MonthManifestStore",
                 code: -34,
@@ -238,25 +224,19 @@ extension MonthManifestStore {
             )
         }
 
-        guard let dbQueue else {
-            Self.closeAndRemoveLocalManifest(at: localURL, queue: nil)
-            return nil
-        }
-
         let store = MonthManifestStore(
             client: client,
             basePath: basePath,
             year: year,
             month: month,
             localManifestURL: localURL,
-            dbQueue: dbQueue,
+            dbQueue: prepared.queue,
             remoteFilesByName: [:],
-            dirty: false
+            dirty: prepared.requiresRemoteSync
         )
 
         do {
             try store.reloadCache()
-            return store
         } catch {
             throw NSError(
                 domain: "MonthManifestStore",
@@ -270,6 +250,12 @@ extension MonthManifestStore {
                 ]
             )
         }
+
+        if prepared.requiresRemoteSync {
+            try await store.flushToRemote()
+        }
+
+        return store
     }
 
     func seedDatabase(_ seed: Seed) throws {
@@ -286,8 +272,8 @@ extension MonthManifestStore {
                         contentHash,
                         fileSize,
                         resourceType,
-                        creationDateNs,
-                        backedUpAtNs
+                        creationDateMs,
+                        backedUpAtMs
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
@@ -295,8 +281,8 @@ extension MonthManifestStore {
                         resource.contentHash,
                         resource.fileSize,
                         resource.resourceType,
-                        resource.creationDateNs,
-                        resource.backedUpAtNs
+                        resource.creationDateMs,
+                        resource.backedUpAtMs
                     ]
                 )
             }
@@ -306,16 +292,16 @@ extension MonthManifestStore {
                     sql: """
                     INSERT INTO assets (
                         assetFingerprint,
-                        creationDateNs,
-                        backedUpAtNs,
+                        creationDateMs,
+                        backedUpAtMs,
                         resourceCount,
                         totalFileSizeBytes
                     ) VALUES (?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         asset.assetFingerprint,
-                        asset.creationDateNs,
-                        asset.backedUpAtNs,
+                        asset.creationDateMs,
+                        asset.backedUpAtMs,
                         asset.resourceCount,
                         asset.totalFileSizeBytes
                     ]
@@ -354,7 +340,7 @@ extension MonthManifestStore {
             try Row.fetchAll(
                 db,
                 sql: """
-                SELECT fileName, contentHash, fileSize, resourceType, creationDateNs, backedUpAtNs
+                SELECT fileName, contentHash, fileSize, resourceType, creationDateMs, backedUpAtMs
                 FROM resources
                 """
             )
@@ -373,8 +359,8 @@ extension MonthManifestStore {
                 contentHash: row["contentHash"],
                 fileSize: row["fileSize"],
                 resourceType: Int(row["resourceType"] as Int64),
-                creationDateNs: row["creationDateNs"],
-                backedUpAtNs: row["backedUpAtNs"]
+                creationDateMs: row["creationDateMs"],
+                backedUpAtMs: row["backedUpAtMs"]
             )
             resourcesByName[item.fileName] = item
             resourcesByHash[item.contentHash] = item.fileName
@@ -384,7 +370,7 @@ extension MonthManifestStore {
             try Row.fetchAll(
                 db,
                 sql: """
-                SELECT assetFingerprint, creationDateNs, backedUpAtNs, resourceCount, totalFileSizeBytes
+                SELECT assetFingerprint, creationDateMs, backedUpAtMs, resourceCount, totalFileSizeBytes
                 FROM assets
                 """
             )
@@ -399,8 +385,8 @@ extension MonthManifestStore {
                 year: year,
                 month: month,
                 assetFingerprint: fingerprint,
-                creationDateNs: row["creationDateNs"],
-                backedUpAtNs: row["backedUpAtNs"],
+                creationDateMs: row["creationDateMs"],
+                backedUpAtMs: row["backedUpAtMs"],
                 resourceCount: Int(row["resourceCount"] as Int64),
                 totalFileSizeBytes: row["totalFileSizeBytes"]
             )

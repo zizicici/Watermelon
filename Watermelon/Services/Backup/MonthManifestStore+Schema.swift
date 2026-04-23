@@ -2,6 +2,41 @@ import Foundation
 import GRDB
 
 extension MonthManifestStore {
+    enum ManifestOrigin {
+        case freshlyCreated
+        case downloadedFromRemote
+    }
+
+    struct PreparedManifestQueue {
+        let queue: DatabaseQueue
+        let requiresRemoteSync: Bool
+    }
+
+    /// Single entry point for opening a local manifest file. Migrations
+    /// applied here surface through `requiresRemoteSync`, so the caller's
+    /// flush path carries them back to remote and new schema changes don't
+    /// need per-loader wiring.
+    static func prepareLocalManifest(
+        localURL: URL,
+        origin: ManifestOrigin
+    ) throws -> PreparedManifestQueue {
+        let queue = try DatabaseQueue(path: localURL.path)
+        do {
+            let requiresRemoteSync: Bool
+            switch origin {
+            case .freshlyCreated:
+                try migrate(queue)
+                requiresRemoteSync = true
+            case .downloadedFromRemote:
+                requiresRemoteSync = try prepareExistingManifest(queue)
+            }
+            return PreparedManifestQueue(queue: queue, requiresRemoteSync: requiresRemoteSync)
+        } catch {
+            try? queue.close()
+            throw error
+        }
+    }
+
     static func migrate(_ queue: DatabaseQueue) throws {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("month_manifest_v1_initial") { db in
@@ -10,13 +45,47 @@ extension MonthManifestStore {
         try migrator.migrate(queue)
     }
 
-    // Downloaded manifests may not carry this build's GRDB migration history.
-    // Validate them in place instead of applying the destructive reset migration.
-    static func prepareExistingManifest(_ queue: DatabaseQueue) throws {
+    // Downloaded manifests may not carry this build's GRDB migration history,
+    // so apply inline legacy migrations here instead of the destructive reset
+    // migrator.
+    static func prepareExistingManifest(_ queue: DatabaseQueue) throws -> Bool {
         try queue.write { db in
+            let migrated = try migrateLegacyNsTimestamps(db)
             try validateExistingManifestSchema(db)
             try ensureSchemaIndexes(db)
+            return migrated
         }
+    }
+
+    private static func migrateLegacyNsTimestamps(_ db: Database) throws -> Bool {
+        let legacyToCurrent: [(legacy: String, current: String)] = [
+            ("creationDateNs", "creationDateMs"),
+            ("backedUpAtNs", "backedUpAtMs")
+        ]
+        var migrated = false
+        for table in ["resources", "assets"] {
+            let columns = try tableColumns(db, tableName: table)
+            for pair in legacyToCurrent {
+                guard columns.contains(pair.legacy), !columns.contains(pair.current) else { continue }
+                try db.execute(
+                    sql: "ALTER TABLE \(table) RENAME COLUMN \(pair.legacy) TO \(pair.current)"
+                )
+                try db.execute(
+                    sql: """
+                    UPDATE \(table)
+                    SET \(pair.current) = \(pair.current) / 1000000
+                    WHERE \(pair.current) IS NOT NULL
+                    """
+                )
+                migrated = true
+            }
+        }
+        return migrated
+    }
+
+    private static func tableColumns(_ db: Database, tableName: String) throws -> Set<String> {
+        let rows = try Row.fetchAll(db, sql: "PRAGMA table_info(\(tableName))")
+        return Set(rows.compactMap { $0["name"] as String? })
     }
 
     static func ensureSchemaBaseline(_ db: Database) throws {
@@ -27,8 +96,8 @@ extension MonthManifestStore {
               contentHash BLOB NOT NULL,
               fileSize INTEGER NOT NULL,
               resourceType INTEGER NOT NULL,
-              creationDateNs INTEGER,
-              backedUpAtNs INTEGER NOT NULL
+              creationDateMs INTEGER,
+              backedUpAtMs INTEGER NOT NULL
             )
             """
         )
@@ -36,8 +105,8 @@ extension MonthManifestStore {
             sql: """
             CREATE TABLE IF NOT EXISTS assets (
               assetFingerprint BLOB PRIMARY KEY NOT NULL,
-              creationDateNs INTEGER,
-              backedUpAtNs INTEGER NOT NULL,
+              creationDateMs INTEGER,
+              backedUpAtMs INTEGER NOT NULL,
               resourceCount INTEGER NOT NULL,
               totalFileSizeBytes INTEGER NOT NULL
             )
@@ -72,8 +141,8 @@ extension MonthManifestStore {
                 "contentHash",
                 "fileSize",
                 "resourceType",
-                "creationDateNs",
-                "backedUpAtNs"
+                "creationDateMs",
+                "backedUpAtMs"
             ]
         )
         try validateExistingManifestTable(
@@ -81,8 +150,8 @@ extension MonthManifestStore {
             tableName: "assets",
             requiredColumns: [
                 "assetFingerprint",
-                "creationDateNs",
-                "backedUpAtNs",
+                "creationDateMs",
+                "backedUpAtMs",
                 "resourceCount",
                 "totalFileSizeBytes"
             ]
@@ -104,14 +173,11 @@ extension MonthManifestStore {
         tableName: String,
         requiredColumns: Set<String>
     ) throws {
-        let rows = try Row.fetchAll(db, sql: "PRAGMA table_info(\(tableName))")
-        guard !rows.isEmpty else {
+        let existingColumns = try tableColumns(db, tableName: tableName)
+        guard !existingColumns.isEmpty else {
             throw incompatibleManifestSchemaError(tableName: tableName, missingColumns: requiredColumns)
         }
 
-        let existingColumns = Set(rows.compactMap { row in
-            row["name"] as String?
-        })
         let missingColumns = requiredColumns.subtracting(existingColumns)
         guard missingColumns.isEmpty else {
             throw incompatibleManifestSchemaError(tableName: tableName, missingColumns: missingColumns)
@@ -189,8 +255,4 @@ extension MonthManifestStore {
         }
     }
 
-    static func dateFromEpochNs(_ ns: Int64?) -> Date? {
-        guard let ns else { return nil }
-        return Date(nanosecondsSinceEpoch: ns)
-    }
 }

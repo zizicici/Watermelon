@@ -5,8 +5,8 @@ struct RemoteManifestAsset: Hashable, Identifiable {
     let year: Int
     let month: Int
     let assetFingerprint: Data
-    let creationDateNs: Int64?
-    let backedUpAtNs: Int64
+    let creationDateMs: Int64?
+    let backedUpAtMs: Int64
     let resourceCount: Int
     let totalFileSizeBytes: Int64
 
@@ -19,10 +19,10 @@ struct RemoteManifestAsset: Hashable, Identifiable {
     }
 
     var creationDate: Date {
-        if let creationDateNs {
-            return Date(nanosecondsSinceEpoch: creationDateNs)
+        if let creationDateMs {
+            return Date(millisecondsSinceEpoch: creationDateMs)
         }
-        return Date(nanosecondsSinceEpoch: backedUpAtNs)
+        return Date(millisecondsSinceEpoch: backedUpAtMs)
     }
 
     var assetFingerprintHex: String {
@@ -54,8 +54,8 @@ struct RemoteManifestResource: Hashable, Identifiable {
     let contentHash: Data
     let fileSize: Int64
     let resourceType: Int
-    let creationDateNs: Int64?
-    let backedUpAtNs: Int64
+    let creationDateMs: Int64?
+    let backedUpAtMs: Int64
 
     var id: String {
         monthKey + "/" + fileName
@@ -81,7 +81,7 @@ struct RemoteAssetResourceInstance: Hashable, Identifiable, Sendable {
     let fileName: String
     let fileSize: Int64
     let remoteRelativePath: String
-    let creationDateNs: Int64?
+    let creationDateMs: Int64?
 
     var id: String {
         "\(role)|\(slot)|\(resourceHash.hexString)"
@@ -179,7 +179,7 @@ struct RemoteLibraryMonthDelta {
 struct RemoteMonthManifestDigest: Hashable {
     let month: LibraryMonthKey
     let manifestSize: Int64
-    let manifestModifiedAtNs: Int64?
+    let manifestModifiedAtMs: Int64?
 }
 
 struct RemoteLibrarySnapshotState {

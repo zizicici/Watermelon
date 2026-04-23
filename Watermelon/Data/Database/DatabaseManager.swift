@@ -73,6 +73,17 @@ final class DatabaseManager {
             try db.create(index: "idx_local_asset_resources_hash", on: LocalAssetResourceRecord.databaseTableName, columns: ["contentHash"])
         }
 
+        migrator.registerMigration("v2_ms_timestamps") { db in
+            try db.execute(sql: "ALTER TABLE local_assets RENAME COLUMN modificationDateNs TO modificationDateMs")
+            try db.execute(
+                sql: """
+                UPDATE local_assets
+                SET modificationDateMs = modificationDateMs / 1000000
+                WHERE modificationDateMs IS NOT NULL
+                """
+            )
+        }
+
         return migrator
     }
 

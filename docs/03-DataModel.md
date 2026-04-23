@@ -58,7 +58,7 @@ CREATE TABLE local_assets (
   assetFingerprint BLOB,
   resourceCount INTEGER NOT NULL DEFAULT 0,
   totalFileSizeBytes INTEGER NOT NULL DEFAULT 0,
-  modificationDateNs INTEGER,
+  modificationDateMs INTEGER,
   updatedAt DATETIME NOT NULL,
   PRIMARY KEY(assetLocalIdentifier)
 );
@@ -71,7 +71,7 @@ WHERE assetFingerprint IS NOT NULL;
 说明：
 
 1. `assetFingerprint` 可为 `NULL`，表示该资产尚未完成资源级 hash 建索引（比如仅存于 iCloud 的资产）
-2. `modificationDateNs` 用来做体积缓存失效判断，上传 / 体积扫描路径都会复用
+2. `modificationDateMs` 用来做体积缓存失效判断，上传 / 体积扫描路径都会复用（Int64 毫秒；窗口 ±2.9 亿年，足够覆盖任何 `PHAsset` 时间戳）
 
 ### `local_asset_resources`
 
@@ -151,8 +151,8 @@ CREATE TABLE resources (
   contentHash BLOB NOT NULL,
   fileSize INTEGER NOT NULL,
   resourceType INTEGER NOT NULL,
-  creationDateNs INTEGER,
-  backedUpAtNs INTEGER NOT NULL
+  creationDateMs INTEGER,
+  backedUpAtMs INTEGER NOT NULL
 );
 
 CREATE UNIQUE INDEX idx_resources_contentHash
@@ -164,8 +164,8 @@ ON resources(contentHash);
 ```sql
 CREATE TABLE assets (
   assetFingerprint BLOB PRIMARY KEY NOT NULL,
-  creationDateNs INTEGER,
-  backedUpAtNs INTEGER NOT NULL,
+  creationDateMs INTEGER,
+  backedUpAtMs INTEGER NOT NULL,
   resourceCount INTEGER NOT NULL,
   totalFileSizeBytes INTEGER NOT NULL
 );
@@ -195,8 +195,8 @@ ON asset_resources(resourceHash);
 
 1. 一行对应远端月目录中的一个真实文件
 2. `resourceType` 保存 `PHAssetResourceType.rawValue`
-3. `creationDateNs` 尽量保留资源创建时间
-4. `backedUpAtNs` 是备份写入时间
+3. `creationDateMs` 尽量保留资源创建时间（Int64 毫秒）
+4. `backedUpAtMs` 是备份写入时间（Int64 毫秒）
 
 ### `assets`
 

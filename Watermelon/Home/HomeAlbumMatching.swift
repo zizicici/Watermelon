@@ -111,7 +111,7 @@ enum HomeAlbumMatching {
                         fileName: resource.fileName,
                         fileSize: resource.fileSize,
                         remoteRelativePath: resource.remoteRelativePath,
-                        creationDateNs: resource.creationDateNs
+                        creationDateMs: resource.creationDateMs
                     )
                 )
             }

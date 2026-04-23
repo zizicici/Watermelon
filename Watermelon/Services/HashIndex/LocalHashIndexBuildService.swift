@@ -460,7 +460,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                     )
                 },
                 totalFileSizeBytes: totalFileSizeBytes,
-                modificationDateNs: asset.modificationDate?.nanosecondsSinceEpoch
+                modificationDateMs: asset.modificationDate?.millisecondsSinceEpoch
             )
             return LocalHashIndexProcessedAssetResult(
                 outcome: .ready(asset.localIdentifier),

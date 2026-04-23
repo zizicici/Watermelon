@@ -256,8 +256,8 @@ final class AssetProcessor: Sendable {
             year: context.monthStore.year,
             month: context.monthStore.month,
             assetFingerprint: assetFingerprint,
-            creationDateNs: context.asset.creationDate?.nanosecondsSinceEpoch,
-            backedUpAtNs: Date().nanosecondsSinceEpoch,
+            creationDateMs: context.asset.creationDate?.millisecondsSinceEpoch,
+            backedUpAtMs: Date().millisecondsSinceEpoch,
             resourceCount: links.count,
             totalFileSizeBytes: totalFileSizeBytes
         )
@@ -280,7 +280,7 @@ final class AssetProcessor: Sendable {
                 )
             },
             totalFileSizeBytes: totalFileSizeBytes,
-            modificationDateNs: context.asset.modificationDate?.nanosecondsSinceEpoch
+            modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch
         )
         timing.databaseSeconds += Self.elapsedSeconds(since: snapshotWriteStart)
 
@@ -346,7 +346,7 @@ final class AssetProcessor: Sendable {
                 assetFingerprint: cachedFingerprint,
                 resourceCount: context.selectedResources.count,
                 totalFileSizeBytes: totalFileSizeBytes,
-                modificationDateNs: context.asset.modificationDate?.nanosecondsSinceEpoch
+                modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch
             )
             timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
             return AssetProcessResult(
@@ -385,8 +385,8 @@ final class AssetProcessor: Sendable {
             year: context.monthStore.year,
             month: context.monthStore.month,
             assetFingerprint: cachedFingerprint,
-            creationDateNs: context.asset.creationDate?.nanosecondsSinceEpoch,
-            backedUpAtNs: Date().nanosecondsSinceEpoch,
+            creationDateMs: context.asset.creationDate?.millisecondsSinceEpoch,
+            backedUpAtMs: Date().millisecondsSinceEpoch,
             resourceCount: links.count,
             totalFileSizeBytes: totalFileSizeBytes
         )
@@ -401,7 +401,7 @@ final class AssetProcessor: Sendable {
             assetFingerprint: cachedFingerprint,
             resourceCount: context.selectedResources.count,
             totalFileSizeBytes: totalFileSizeBytes,
-            modificationDateNs: context.asset.modificationDate?.nanosecondsSinceEpoch
+            modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch
         )
         timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
 

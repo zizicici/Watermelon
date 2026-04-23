@@ -124,23 +124,23 @@ final class MonthManifestStore {
                     contentHash,
                     fileSize,
                     resourceType,
-                    creationDateNs,
-                    backedUpAtNs
+                    creationDateMs,
+                    backedUpAtMs
                 ) VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(fileName) DO UPDATE SET
                     contentHash = excluded.contentHash,
                     fileSize = excluded.fileSize,
                     resourceType = excluded.resourceType,
-                    creationDateNs = excluded.creationDateNs,
-                    backedUpAtNs = excluded.backedUpAtNs
+                    creationDateMs = excluded.creationDateMs,
+                    backedUpAtMs = excluded.backedUpAtMs
                 """,
                 arguments: [
                     item.fileName,
                     item.contentHash,
                     item.fileSize,
                     item.resourceType,
-                    item.creationDateNs,
-                    item.backedUpAtNs
+                    item.creationDateMs,
+                    item.backedUpAtMs
                 ]
             )
         }
@@ -180,21 +180,21 @@ final class MonthManifestStore {
                 sql: """
                 INSERT INTO assets (
                     assetFingerprint,
-                    creationDateNs,
-                    backedUpAtNs,
+                    creationDateMs,
+                    backedUpAtMs,
                     resourceCount,
                     totalFileSizeBytes
                 ) VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(assetFingerprint) DO UPDATE SET
-                    creationDateNs = excluded.creationDateNs,
-                    backedUpAtNs = excluded.backedUpAtNs,
+                    creationDateMs = excluded.creationDateMs,
+                    backedUpAtMs = excluded.backedUpAtMs,
                     resourceCount = excluded.resourceCount,
                     totalFileSizeBytes = excluded.totalFileSizeBytes
                 """,
                 arguments: [
                     asset.assetFingerprint,
-                    asset.creationDateNs,
-                    asset.backedUpAtNs,
+                    asset.creationDateMs,
+                    asset.backedUpAtMs,
                     asset.resourceCount,
                     asset.totalFileSizeBytes
                 ]
@@ -288,25 +288,7 @@ final class MonthManifestStore {
             try Task.checkCancellation()
         }
         dirty = false
-        evictCaches()
         return true
-    }
-
-    func evictCaches() {
-        itemsByFileName.removeAll()
-        itemsByHash.removeAll()
-        assetsByFingerprint.removeAll()
-        assetLinksByFingerprint.removeAll()
-    }
-
-    private var cacheEvicted: Bool {
-        itemsByFileName.isEmpty && assetsByFingerprint.isEmpty
-    }
-
-    private func ensureCacheLoaded() throws {
-        if cacheEvicted {
-            try reloadCache()
-        }
     }
 
     private func moveReplacingExistingManifest(

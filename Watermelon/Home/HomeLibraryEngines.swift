@@ -15,8 +15,8 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         let month: LibraryMonthKey
         let fingerprint: Data?
         let hashes: [Data]
-        let creationDateNs: Int64
-        let modificationDateNs: Int64?
+        let creationDateMs: Int64
+        let modificationDateMs: Int64?
         let isBackedUp: Bool
         let mediaKind: AlbumMediaKind
     }
@@ -68,8 +68,8 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
                 month: month,
                 fingerprint: fingerprint,
                 hashes: hashes,
-                creationDateNs: creationDate.nanosecondsSinceEpoch,
-                modificationDateNs: asset.modificationDate?.nanosecondsSinceEpoch,
+                creationDateMs: creationDate.millisecondsSinceEpoch,
+                modificationDateMs: asset.modificationDate?.millisecondsSinceEpoch,
                 isBackedUp: isBackedUp,
                 mediaKind: mediaKind
             )
@@ -368,9 +368,9 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         for assetID in assetIDs {
             guard let state = localStatesByAssetID[assetID] else { continue }
 
-            if let mtime = state.modificationDateNs,
+            if let mtime = state.modificationDateMs,
                let snapshot = sizes[assetID],
-               snapshot.modificationDateNs == mtime {
+               snapshot.modificationDateMs == mtime {
                 total += snapshot.totalFileSizeBytes
                 continue
             }
@@ -382,11 +382,11 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
             let safeSize = max(computedSize, 0)
             total += safeSize
 
-            if let mtime = state.modificationDateNs {
+            if let mtime = state.modificationDateMs {
                 updates.append(AssetSizeUpdate(
                     assetLocalIdentifier: assetID,
                     totalFileSizeBytes: safeSize,
-                    modificationDateNs: mtime
+                    modificationDateMs: mtime
                 ))
             }
         }
@@ -428,17 +428,17 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         let isBackedUp = fingerprint.map { remoteFingerprintSet.contains($0) } ?? false
         let mediaKind = Self.mediaKind(for: asset)
         let creationDate = asset.creationDate ?? Date(timeIntervalSince1970: 0)
-        let creationDateNs = creationDate.nanosecondsSinceEpoch
+        let creationDateMs = creationDate.millisecondsSinceEpoch
 
-        let modificationDateNs = asset.modificationDate?.nanosecondsSinceEpoch
+        let modificationDateMs = asset.modificationDate?.millisecondsSinceEpoch
 
         let previousFingerprint = localStatesByAssetID[assetID]?.fingerprint
         replaceAssetID(assetID, oldFingerprint: previousFingerprint, newFingerprint: fingerprint)
 
         if let previous = localStatesByAssetID[assetID],
            previous.month == month,
-           previous.creationDateNs == creationDateNs,
-           previous.modificationDateNs == modificationDateNs,
+           previous.creationDateMs == creationDateMs,
+           previous.modificationDateMs == modificationDateMs,
            previous.isBackedUp == isBackedUp,
            previous.mediaKind == mediaKind,
            previous.hashes == hashes,
@@ -448,8 +448,8 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
                 month: month,
                 fingerprint: fingerprint,
                 hashes: hashes,
-                creationDateNs: creationDateNs,
-                modificationDateNs: modificationDateNs,
+                creationDateMs: creationDateMs,
+                modificationDateMs: modificationDateMs,
                 isBackedUp: isBackedUp,
                 mediaKind: mediaKind
             )
@@ -477,8 +477,8 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
             month: month,
             fingerprint: fingerprint,
             hashes: hashes,
-            creationDateNs: creationDateNs,
-            modificationDateNs: modificationDateNs,
+            creationDateMs: creationDateMs,
+            modificationDateMs: modificationDateMs,
             isBackedUp: isBackedUp,
             mediaKind: mediaKind
         )
@@ -1308,7 +1308,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         for update in updates {
             assetSizeSnapshot[update.assetLocalIdentifier] = AssetSizeSnapshot(
                 totalFileSizeBytes: update.totalFileSizeBytes,
-                modificationDateNs: update.modificationDateNs
+                modificationDateMs: update.modificationDateMs
             )
         }
     }

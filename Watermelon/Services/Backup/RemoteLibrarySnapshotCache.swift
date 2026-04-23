@@ -371,8 +371,8 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
 
     private static func sortedResources(_ resources: [RemoteManifestResource]) -> [RemoteManifestResource] {
         resources.sorted { lhs, rhs in
-            if lhs.creationDateNs != rhs.creationDateNs {
-                return (lhs.creationDateNs ?? lhs.backedUpAtNs) < (rhs.creationDateNs ?? rhs.backedUpAtNs)
+            if lhs.creationDateMs != rhs.creationDateMs {
+                return (lhs.creationDateMs ?? lhs.backedUpAtMs) < (rhs.creationDateMs ?? rhs.backedUpAtMs)
             }
             return lhs.fileName < rhs.fileName
         }
@@ -380,8 +380,8 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
 
     private static func sortedAssets(_ assets: [RemoteManifestAsset]) -> [RemoteManifestAsset] {
         assets.sorted { lhs, rhs in
-            if lhs.creationDateNs != rhs.creationDateNs {
-                return (lhs.creationDateNs ?? lhs.backedUpAtNs) < (rhs.creationDateNs ?? rhs.backedUpAtNs)
+            if lhs.creationDateMs != rhs.creationDateMs {
+                return (lhs.creationDateMs ?? lhs.backedUpAtMs) < (rhs.creationDateMs ?? rhs.backedUpAtMs)
             }
             return lhs.assetFingerprintHex < rhs.assetFingerprintHex
         }

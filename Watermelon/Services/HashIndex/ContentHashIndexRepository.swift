@@ -16,13 +16,13 @@ struct LocalAssetHashCache: Sendable {
 
 struct AssetSizeSnapshot: Sendable {
     let totalFileSizeBytes: Int64
-    let modificationDateNs: Int64
+    let modificationDateMs: Int64
 }
 
 struct AssetSizeUpdate: Sendable {
     let assetLocalIdentifier: String
     let totalFileSizeBytes: Int64
-    let modificationDateNs: Int64
+    let modificationDateMs: Int64
 }
 
 struct LocalAssetResourceHashRecord: Sendable {
@@ -52,7 +52,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         assetFingerprint: Data,
         resources: [LocalAssetResourceHashRecord],
         totalFileSizeBytes: Int64,
-        modificationDateNs: Int64?
+        modificationDateMs: Int64?
     ) throws {
         try databaseManager.write { db in
             try Self.writeLocalAssetRow(
@@ -61,7 +61,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 assetFingerprint: assetFingerprint,
                 resourceCount: resources.count,
                 totalFileSizeBytes: totalFileSizeBytes,
-                modificationDateNs: modificationDateNs
+                modificationDateMs: modificationDateMs
             )
 
             try db.execute(
@@ -97,7 +97,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         assetFingerprint: Data,
         resourceCount: Int,
         totalFileSizeBytes: Int64,
-        modificationDateNs: Int64?
+        modificationDateMs: Int64?
     ) throws {
         try databaseManager.write { db in
             try Self.writeLocalAssetRow(
@@ -106,12 +106,12 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 assetFingerprint: assetFingerprint,
                 resourceCount: resourceCount,
                 totalFileSizeBytes: totalFileSizeBytes,
-                modificationDateNs: modificationDateNs
+                modificationDateMs: modificationDateMs
             )
         }
     }
 
-    // COALESCE preserves the existing modificationDateNs when callers can't supply one
+    // COALESCE preserves the existing modificationDateMs when callers can't supply one
     // (writeHashIndex from the remote-restore path passes nil). Size-only scans write
     // mtime via upsertAssetSizes; a subsequent hash write must not null it out.
     private static func writeLocalAssetRow(
@@ -120,7 +120,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         assetFingerprint: Data,
         resourceCount: Int,
         totalFileSizeBytes: Int64,
-        modificationDateNs: Int64?
+        modificationDateMs: Int64?
     ) throws {
         try db.execute(
             sql: """
@@ -129,14 +129,14 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 assetFingerprint,
                 resourceCount,
                 totalFileSizeBytes,
-                modificationDateNs,
+                modificationDateMs,
                 updatedAt
             ) VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(assetLocalIdentifier) DO UPDATE SET
                 assetFingerprint = excluded.assetFingerprint,
                 resourceCount = excluded.resourceCount,
                 totalFileSizeBytes = excluded.totalFileSizeBytes,
-                modificationDateNs = COALESCE(excluded.modificationDateNs, modificationDateNs),
+                modificationDateMs = COALESCE(excluded.modificationDateMs, modificationDateMs),
                 updatedAt = excluded.updatedAt
             """,
             arguments: [
@@ -144,7 +144,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 assetFingerprint,
                 resourceCount,
                 totalFileSizeBytes,
-                modificationDateNs,
+                modificationDateMs,
                 Date()
             ]
         )
@@ -311,19 +311,19 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                SELECT assetLocalIdentifier, totalFileSizeBytes, modificationDateNs
+                SELECT assetLocalIdentifier, totalFileSizeBytes, modificationDateMs
                 FROM local_assets
-                WHERE totalFileSizeBytes > 0 AND modificationDateNs IS NOT NULL
+                WHERE totalFileSizeBytes > 0 AND modificationDateMs IS NOT NULL
                 """
             )
             result.reserveCapacity(rows.count)
             for row in rows {
                 let id: String = row["assetLocalIdentifier"]
                 let size: Int64 = row["totalFileSizeBytes"]
-                let mtime: Int64 = row["modificationDateNs"]
+                let mtime: Int64 = row["modificationDateMs"]
                 result[id] = AssetSizeSnapshot(
                     totalFileSizeBytes: size,
-                    modificationDateNs: mtime
+                    modificationDateMs: mtime
                 )
             }
             return result
@@ -347,20 +347,20 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 INSERT INTO local_assets (
                     assetLocalIdentifier,
                     totalFileSizeBytes,
-                    modificationDateNs,
+                    modificationDateMs,
                     updatedAt
                 ) VALUES (?, ?, ?, ?)
                 ON CONFLICT(assetLocalIdentifier) DO UPDATE SET
                     totalFileSizeBytes = excluded.totalFileSizeBytes,
-                    modificationDateNs = excluded.modificationDateNs
-                WHERE modificationDateNs IS NULL
-                   OR excluded.modificationDateNs >= modificationDateNs
+                    modificationDateMs = excluded.modificationDateMs
+                WHERE modificationDateMs IS NULL
+                   OR excluded.modificationDateMs >= modificationDateMs
                 """)
             for entry in entries {
                 try statement.setArguments([
                     entry.assetLocalIdentifier,
                     entry.totalFileSizeBytes,
-                    entry.modificationDateNs,
+                    entry.modificationDateMs,
                     now
                 ])
                 try statement.execute()
@@ -464,7 +464,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             assetFingerprint: remoteAssetFingerprint,
             resources: records,
             totalFileSizeBytes: totalSize,
-            modificationDateNs: nil
+            modificationDateMs: nil
         )
     }
 

@@ -182,8 +182,8 @@ extension AssetProcessor {
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
-            creationDateNs: local.asset.creationDate?.nanosecondsSinceEpoch,
-            backedUpAtNs: Date().nanosecondsSinceEpoch
+            creationDateMs: local.asset.creationDate?.millisecondsSinceEpoch,
+            backedUpAtMs: Date().millisecondsSinceEpoch
         )
 
         if monthStore.findResourceByHash(localHash) == nil {
@@ -378,7 +378,7 @@ extension AssetProcessor {
         let local = prepared.local
         let localHash = prepared.contentHash
         let localFileSize = prepared.fileSize
-        let backedUpAtNs = Date().nanosecondsSinceEpoch
+        let backedUpAtMs = Date().millisecondsSinceEpoch
         let manifestItem = RemoteManifestResource(
             year: monthStore.year,
             month: monthStore.month,
@@ -386,8 +386,8 @@ extension AssetProcessor {
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
-            creationDateNs: local.asset.creationDate?.nanosecondsSinceEpoch,
-            backedUpAtNs: backedUpAtNs
+            creationDateMs: local.asset.creationDate?.millisecondsSinceEpoch,
+            backedUpAtMs: backedUpAtMs
         )
         let inserted = try monthStore.upsertResource(manifestItem)
         monthStore.markRemoteFile(name: targetFileName, size: localFileSize)
