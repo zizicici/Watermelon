@@ -167,11 +167,11 @@ State for a single execution lives in `HomeExecutionSession` and is exposed as `
 
 Owns the Home data pipeline:
 
-- local photo-library index
-- remote snapshot index
-- reconciliation engine
+- local photo-library index (lightweight: month/mediaKind/fingerprint maps + per-month aggregates; no retained `PHAsset` per asset)
+- remote snapshot index (per-month fingerprint set + summary, keyed off `RemoteLibrarySnapshotCache` revisions)
+- on-demand item materialization — no standing reconcile cache; `remoteOnlyItems(for:)` is `async` and, in a single processing-queue hop, pulls the month's raw delta from `RemoteLibrarySnapshotCache` (via `BackupCoordinator.remoteMonthRawData(for:)`), builds `RemoteAlbumItem`s with `HomeAlbumMatching.buildRemoteItems`, and returns the subset whose fingerprints are not in the local fingerprint cache. No PHAsset or DB fetch happens outside the queue, so the remote/local view stays consistent against concurrent `PHChange`s.
 
-It registers as a `PHPhotoLibraryChangeObserver`, applies remote deltas on a processing queue, and scans file sizes on the main actor with `Task.yield()` between months.
+It registers as a `PHPhotoLibraryChangeObserver`, applies remote deltas on a processing queue, and scans file sizes on the main actor with `Task.yield()` between months. Two scan paths run independently: a startup/full scan (by-year notifications) and a PHChange-triggered rescan (coalesced, with a pending-months accumulator) — a shared refcount gates the asset-size snapshot release so one path can't pull the working set out from under the other.
 
 ### Backup Control Plane
 

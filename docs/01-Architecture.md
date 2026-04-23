@@ -63,11 +63,11 @@
 
 职责：
 
-1. 维护本地图库索引、远端快照索引、reconcile 结果
-2. 对外提供 `monthRow / allMonthRows / localAssetIDs / remoteOnlyItems / matchedCount`
+1. 维护本地图库索引、远端快照索引；**不再**缓存整库的 reconcile 结果，也不再做三元 (`.localOnly / .remoteOnly / .both`) 合并，按月匹配以月聚合的 `backedUpCount` 和 on-demand 构建的 `remoteOnlyItems` 取代
+2. 对外提供 `monthRow / allMonthRows / localAssetIDs / remoteOnlyItems / matchedCount`（`remoteOnlyItems(for:)` 已改为 `async`）
 3. 注册 `PHPhotoLibraryChangeObserver`
-4. 在处理队列上执行索引重建、远端增量同步与 reconcile
-5. 在主 actor 上调度文件大小扫描，并通过 `Task.yield()` 分摊大图库扫描成本
+4. 在处理队列上执行索引重建、远端增量同步；`remoteOnlyItems` 在单次处理队列 hop 里完成远端原始 delta 抓取、`HomeAlbumMatching.buildRemoteItems` 构建远端 items、以及本月本地 fingerprint 集合 snapshot，queue 外只做 fingerprint-set 差集过滤和按创建时间升序排序；全程不再走 `PHAsset` / `local_asset_resources` fetch
+5. 在主 actor 上调度文件大小扫描，并通过 `Task.yield()` 分摊大图库扫描成本；启动全量扫描与 `PHChange` 触发的增量 rescan 分两条 Task 各自跑（rescan 用 pending 集合合批），共用一个 refcount 避免 size snapshot 被提前释放
 
 ### `HomeExecutionCoordinator`
 
@@ -93,17 +93,18 @@
 
 ## 4. Home 数据引擎
 
-`HomeLibraryEngines.swift` 中的三层模型仍然存在，但已被 `HomeIncrementalDataManager` 封装：
+`HomeLibraryEngines.swift` 中的两个引擎被 `HomeIncrementalDataManager` 封装。此前的 `HomeReconcileEngine` 已被移除，reconcile 变成 **按月聚合 + 按需构建** 的派生数据：
 
 1. `HomeLocalIndexEngine`
-   - 本地 `PHAsset` 索引
-   - 维护月份分组、fingerprint、hash、是否已备份、媒体类型、体积缓存
+   - 不再持有 `PHAsset` 或每 asset 的 `LocalState`，只保存：月份分组、`assetID → month / mediaKind` 查表、`assetID → fingerprint` 镜像（与 `local_assets.assetFingerprint` 同步）、每月 `MonthAggregate`（assetCount / photoCount / videoCount / backedUpCount）、每月体积缓存
+   - `backedUpCount` 在 `recomputeAggregates` 中按月与 `HomeRemoteIndexEngine` 月级 fingerprint 集对比得出（用 fingerprint 去重，以防多本地指向同一远端）
 2. `HomeRemoteIndexEngine`
-   - 消费 `RemoteLibrarySnapshotState`
-   - 维护远端月份项、fingerprint 引用计数、snapshot revision
-3. `HomeReconcileEngine`
-   - 生成 `.localOnly / .remoteOnly / .both`
-   - 计算每个月的 `matchedCount`
+   - 消费 `RemoteLibrarySnapshotState`，只保留每月的 fingerprint 集合和 `HomeMonthSummary`（在 `resolveMonth` 里按 `buildRemoteItems` 的相同资源可解析规则计算 assetCount / photoCount / videoCount / totalSize）
+   - 不再缓存完整的 `remoteItemsByMonth` 或 fingerprint 引用计数；原始月 delta 需要时走 `RemoteLibrarySnapshotCache.monthRawData(for:)` 实时取
+
+月级 `matchedCount` 直接等同于 `HomeLocalIndexEngine` 的 `backedUpCount`；`remoteOnlyItems(for:)` 是一次 `async` 调用，纯 fingerprint-set 差集派生——在单次处理队列 hop 内抓齐远端 items 与本地月 fingerprint 集合，queue 外只做差集过滤 + 排序，已不再构造 `LocalAlbumItem` / `HomeAlbumItem` 或触发 `PHAsset` fetch。
+
+`HomeAlbumMatching.swift` 现已收窄为远端资源构造工具（`buildRemoteItems` + 代表资源选择），不再承担本地/远端合并；旧的 `mergeItems / LocalAlbumItem / HomeAlbumItem / ItemSourceTag` 均已移除。
 
 ## 5. 备份控制面
 

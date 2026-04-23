@@ -62,9 +62,13 @@ final class HomeScreenStore {
         self.localPhotoAccessState = LocalPhotoAccessState(
             authorizationStatus: dependencies.photoLibraryService.authorizationStatus()
         )
+        let backupCoordinator = dependencies.backupCoordinator
         self.dataManager = HomeIncrementalDataManager(
             photoLibraryService: dependencies.photoLibraryService,
-            contentHashIndexRepository: ContentHashIndexRepository(databaseManager: dependencies.databaseManager)
+            contentHashIndexRepository: ContentHashIndexRepository(databaseManager: dependencies.databaseManager),
+            remoteMonthSnapshot: { month in
+                backupCoordinator.remoteMonthRawData(for: month)
+            }
         )
         self.connectionController = HomeConnectionController(dependencies: dependencies)
         let connectionCtrl = self.connectionController
@@ -72,7 +76,7 @@ final class HomeScreenStore {
             dependencies: dependencies,
             dataAccess: HomeExecutionCoordinator.DataAccess(
                 localAssetIDs: { [dataManager] month in dataManager.localAssetIDs(for: month) },
-                remoteOnlyItems: { [dataManager] month in dataManager.remoteOnlyItems(for: month) },
+                remoteOnlyItems: { [dataManager] month in await dataManager.remoteOnlyItems(for: month) },
                 syncRemoteData: { [dataManager, dependencies, weak connectionCtrl] in
                     let active = connectionCtrl?.state.isConnected ?? false
                     let revision = dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)

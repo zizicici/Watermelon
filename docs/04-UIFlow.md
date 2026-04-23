@@ -182,13 +182,13 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 箭头百分比取：
 
 1. `BackupSessionController` 回传的 session 进度
-2. reconcile `matchedCount` 计算出的基线进度
+2. `matchedCount` 基线进度（本地月聚合 `backedUpCount`，按 fingerprint 匹配本地和远端）
 
 二者中的较大值，保证百分比单调前进。
 
 ### 下载 / 同步下载
 
-1. 直接依赖 reconcile `matchedCount`
+1. 直接依赖 `matchedCount`（本地月聚合 `backedUpCount`）
 2. 每个 item 下载成功后立即刷新本地索引，因此进度按 item 推进
 
 ## 9. 暂停 / 恢复 / 停止

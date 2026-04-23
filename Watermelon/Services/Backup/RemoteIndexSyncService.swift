@@ -208,6 +208,10 @@ final class RemoteIndexSyncService: Sendable {
         snapshotCache.monthSummaries()
     }
 
+    func remoteMonthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
+        snapshotCache.monthRawData(for: month)
+    }
+
     func currentState(since revision: UInt64?) -> RemoteLibrarySnapshotState {
         snapshotCache.state(since: revision)
     }

@@ -170,12 +170,12 @@
 2. `HomeExecutionCoordinator` 以 `2s` 节流触发远端同步
 3. 首页箭头百分比取：
    - `sessionPercent`
-   - `reconciliation baseline`
+   - 基线进度（`HomeIncrementalDataManager.matchedCount(for:)` / `HomeLocalIndexEngine` 月级 `backedUpCount`，按 fingerprint 匹配本地和远端）
    的较大值，保证不回退
 
 ### 下载阶段
 
-1. 纯下载和 sync 月份下载阶段都以 reconcile 的 `matchedCount` 为准
+1. 纯下载和 sync 月份下载阶段都以 `matchedCount`（本地月聚合中的 `backedUpCount`）为准
 2. 每个 item 成功后立即刷新本地索引，因此百分比会逐步前进
 
 ## 10. 暂停 / 恢复 / 停止

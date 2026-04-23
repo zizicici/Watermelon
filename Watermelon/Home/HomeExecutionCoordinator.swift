@@ -53,7 +53,7 @@ final class HomeExecutionCoordinator {
 
     struct DataAccess {
         let localAssetIDs: (LibraryMonthKey) -> Set<String>
-        let remoteOnlyItems: (LibraryMonthKey) -> [RemoteAlbumItem]
+        let remoteOnlyItems: (LibraryMonthKey) async -> [RemoteAlbumItem]
         let syncRemoteData: () async -> Set<LibraryMonthKey>
         let refreshLocalIndex: (Set<String>) async -> Set<LibraryMonthKey>
     }
@@ -666,7 +666,7 @@ final class HomeExecutionCoordinator {
             if Task.isCancelled { return .cancelled }
         }
 
-        let remoteItems = dataAccess.remoteOnlyItems(month)
+        let remoteItems = await dataAccess.remoteOnlyItems(month)
         appendDebugLog(String(format: String(localized: "home.execution.log.pendingDownload"), month.displayText, remoteItems.count))
         guard let downloadHelper else { return .cancelled }
         return await downloadHelper.downloadItems(remoteItems, context: context) { [weak self] assetID in

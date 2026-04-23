@@ -6,25 +6,34 @@ private let dataLog = Logger(subsystem: "com.zizicici.watermelon", category: "Ho
 
 private struct HomeRemoteDelta {
     let changedMonths: Set<LibraryMonthKey>
-    let changedFingerprints: Set<Data>
+}
+
+private func homeMediaKind(for asset: PHAsset) -> AlbumMediaKind {
+    if PhotoLibraryService.isLivePhoto(asset) {
+        return .livePhoto
+    }
+    if asset.mediaType == .video {
+        return .video
+    }
+    return .photo
 }
 
 private final class HomeLocalIndexEngine: @unchecked Sendable {
-    private struct LocalState {
-        let asset: PHAsset
-        let month: LibraryMonthKey
-        let fingerprint: Data?
-        let hashes: [Data]
-        let creationDateMs: Int64
-        let modificationDateMs: Int64?
-        let isBackedUp: Bool
-        let mediaKind: AlbumMediaKind
+    struct MonthAggregate {
+        let assetCount: Int
+        let photoCount: Int
+        let videoCount: Int
+        let backedUpCount: Int
     }
 
     private(set) var localFetchResult: PHFetchResult<PHAsset>?
-    private var localStatesByAssetID: [String: LocalState] = [:]
     private var localAssetIDsByMonth: [LibraryMonthKey: Set<String>] = [:]
-    private var localAssetIDsByFingerprint: [Data: Set<String>] = [:]
+    private var assetIDToMonth: [String: LibraryMonthKey] = [:]
+    private var mediaKindByAssetID: [String: AlbumMediaKind] = [:]
+    // In-memory mirror of `local_assets.assetFingerprint` so recomputeAggregates can
+    // compute backed-up counts without hitting the DB.
+    private var fingerprintByAssetID: [String: Data] = [:]
+    private var monthAggregates: [LibraryMonthKey: MonthAggregate] = [:]
     private(set) var monthFileSizes: [LibraryMonthKey: Int64] = [:]
 
     var hasLoadedIndex: Bool {
@@ -36,81 +45,126 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
     }
 
     func knownAssetIDs(in assetIDs: Set<String>) -> Set<String> {
-        Set(assetIDs.filter { localStatesByAssetID[$0] != nil })
+        var result: Set<String> = []
+        result.reserveCapacity(assetIDs.count)
+        for id in assetIDs where assetIDToMonth[id] != nil {
+            result.insert(id)
+        }
+        return result
+    }
+
+    func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
+        localAssetIDsByMonth[month] ?? []
+    }
+
+    func monthForAsset(_ assetID: String) -> LibraryMonthKey? {
+        assetIDToMonth[assetID]
+    }
+
+    func fingerprints(for assetIDs: Set<String>) -> [String: Data] {
+        guard !assetIDs.isEmpty else { return [:] }
+        var result: [String: Data] = [:]
+        result.reserveCapacity(assetIDs.count)
+        for id in assetIDs {
+            if let fp = fingerprintByAssetID[id] {
+                result[id] = fp
+            }
+        }
+        return result
+    }
+
+    func localMonthAssetCounts() -> [(month: LibraryMonthKey, count: Int)] {
+        localAssetIDsByMonth
+            .map { (month: $0.key, count: $0.value.count) }
+            .sorted { $0.month > $1.month }
+    }
+
+    func localMonthSummary(for month: LibraryMonthKey) -> HomeMonthSummary? {
+        guard let agg = monthAggregates[month] else { return nil }
+        return HomeMonthSummary(
+            month: month,
+            assetCount: agg.assetCount,
+            photoCount: agg.photoCount,
+            videoCount: agg.videoCount,
+            backedUpCount: agg.backedUpCount,
+            totalSizeBytes: monthFileSizes[month]
+        )
+    }
+
+    func setMonthFileSize(_ size: Int64, for month: LibraryMonthKey) {
+        monthFileSizes[month] = size
     }
 
     func reloadAll(
         fetchResult: PHFetchResult<PHAsset>,
-        hashMapByAsset: [String: [Data]],
         fingerprintByAsset: [String: Data],
-        remoteFingerprintSet: Set<Data>
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
-        var newStates: [String: LocalState] = [:]
-        newStates.reserveCapacity(fetchResult.count)
-
-        var newAssetIDsByMonth: [LibraryMonthKey: Set<String>] = [:]
-        newAssetIDsByMonth.reserveCapacity(24)
-
-        var newAssetIDsByFingerprint: [Data: Set<String>] = [:]
+        var newIDsByMonth: [LibraryMonthKey: Set<String>] = [:]
+        newIDsByMonth.reserveCapacity(24)
+        var newAssetIDToMonth: [String: LibraryMonthKey] = [:]
+        newAssetIDToMonth.reserveCapacity(fetchResult.count)
+        var newMediaKindByAssetID: [String: AlbumMediaKind] = [:]
+        newMediaKindByAssetID.reserveCapacity(fetchResult.count)
+        // Filtered copy of the DB snapshot that keeps only IDs present in the new fetchResult,
+        // so orphaned rows (asset deleted from PhotoKit but still in local_assets) don't linger.
+        var newFingerprintByAssetID: [String: Data] = [:]
+        newFingerprintByAssetID.reserveCapacity(fingerprintByAsset.count)
 
         for index in 0 ..< fetchResult.count {
             let asset = fetchResult.object(at: index)
             let assetID = asset.localIdentifier
-            let hashes = hashMapByAsset[assetID] ?? []
-            let fingerprint = fingerprintByAsset[assetID]
             let month = LibraryMonthKey.from(date: asset.creationDate)
-            let isBackedUp = fingerprint.map { remoteFingerprintSet.contains($0) } ?? false
-            let mediaKind = Self.mediaKind(for: asset)
-            let creationDate = asset.creationDate ?? Date(timeIntervalSince1970: 0)
-
-            newStates[assetID] = LocalState(
-                asset: asset,
-                month: month,
-                fingerprint: fingerprint,
-                hashes: hashes,
-                creationDateMs: creationDate.millisecondsSinceEpoch,
-                modificationDateMs: asset.modificationDate?.millisecondsSinceEpoch,
-                isBackedUp: isBackedUp,
-                mediaKind: mediaKind
-            )
-            newAssetIDsByMonth[month, default: []].insert(assetID)
-
-            if let fingerprint {
-                newAssetIDsByFingerprint[fingerprint, default: []].insert(assetID)
+            newIDsByMonth[month, default: []].insert(assetID)
+            newAssetIDToMonth[assetID] = month
+            newMediaKindByAssetID[assetID] = homeMediaKind(for: asset)
+            if let fp = fingerprintByAsset[assetID] {
+                newFingerprintByAssetID[assetID] = fp
             }
         }
 
-        let changedMonths = allMonths.union(newAssetIDsByMonth.keys)
+        let changedMonths = allMonths.union(newIDsByMonth.keys)
 
         localFetchResult = fetchResult
-        localStatesByAssetID = newStates
-        localAssetIDsByMonth = newAssetIDsByMonth
-        localAssetIDsByFingerprint = newAssetIDsByFingerprint
+        localAssetIDsByMonth = newIDsByMonth
+        assetIDToMonth = newAssetIDToMonth
+        mediaKindByAssetID = newMediaKindByAssetID
+        fingerprintByAssetID = newFingerprintByAssetID
+        monthAggregates.removeAll(keepingCapacity: true)
+        for month in monthFileSizes.keys where newIDsByMonth[month] == nil {
+            monthFileSizes[month] = nil
+        }
+
+        recomputeAggregates(
+            for: Set(newIDsByMonth.keys),
+            remoteFingerprintsForMonth: remoteFingerprintsForMonth
+        )
 
         return changedMonths
     }
 
     func clearIfNeeded() -> Set<LibraryMonthKey> {
-        guard !localStatesByAssetID.isEmpty || !localAssetIDsByMonth.isEmpty else {
-            return []
-        }
+        guard !localAssetIDsByMonth.isEmpty else { return [] }
 
         let changedMonths = allMonths
-
         localFetchResult = nil
-        localStatesByAssetID.removeAll()
         localAssetIDsByMonth.removeAll()
-        localAssetIDsByFingerprint.removeAll()
-
+        assetIDToMonth.removeAll()
+        mediaKindByAssetID.removeAll()
+        fingerprintByAssetID.removeAll()
+        monthAggregates.removeAll()
+        monthFileSizes.removeAll()
         return changedMonths
     }
 
+    /// `fetchedAssetsByID` must cover any inserts and any assets whose creationDate or
+    /// mediaType may have changed. Existing IDs without a refetched PHAsset keep their
+    /// current month/mediaKind.
     func refresh(
         assetIDs: Set<String>,
         fetchedAssetsByID: [String: PHAsset],
-        hashMapByAsset: [String: [Data]],
-        fingerprintByAsset: [String: Data],
-        remoteFingerprintSet: Set<Data>
+        fingerprintsForIDs: (Set<String>) -> [String: Data],
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty else { return [] }
         guard localFetchResult != nil else { return [] }
@@ -120,44 +174,48 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         guard !existingIDs.isEmpty || !insertedIDs.isEmpty else { return [] }
 
         var changedMonths = Set<LibraryMonthKey>()
-        for assetID in existingIDs {
-            guard let current = localStatesByAssetID[assetID] else { continue }
-            let hashes = hashMapByAsset[assetID] ?? []
-            let fingerprint = fingerprintByAsset[assetID]
-            changedMonths.formUnion(
-                upsertLocalState(
-                    asset: current.asset,
-                    hashes: hashes,
-                    fingerprint: fingerprint,
-                    remoteFingerprintSet: remoteFingerprintSet
-                )
-            )
+
+        for id in existingIDs {
+            // If the asset was refetched its month/mediaKind could have changed; otherwise
+            // membership is unchanged and only backed-up flag needs recompute in current month.
+            if let asset = fetchedAssetsByID[id] {
+                let newMonth = LibraryMonthKey.from(date: asset.creationDate)
+                let mediaKind = homeMediaKind(for: asset)
+                if let oldMonth = monthForAsset(id), oldMonth != newMonth {
+                    removeFromIDSets(id, month: oldMonth)
+                    changedMonths.insert(oldMonth)
+                }
+                insertAssetID(id, month: newMonth, mediaKind: mediaKind)
+                changedMonths.insert(newMonth)
+            } else if let month = monthForAsset(id) {
+                changedMonths.insert(month)
+            }
         }
 
-        for assetID in insertedIDs {
-            guard let asset = fetchedAssetsByID[assetID] else { continue }
-            let hashes = hashMapByAsset[assetID] ?? []
-            let fingerprint = fingerprintByAsset[assetID]
-            changedMonths.formUnion(
-                upsertLocalState(
-                    asset: asset,
-                    hashes: hashes,
-                    fingerprint: fingerprint,
-                    remoteFingerprintSet: remoteFingerprintSet
-                )
-            )
+        for id in insertedIDs {
+            guard let asset = fetchedAssetsByID[id] else { continue }
+            let month = LibraryMonthKey.from(date: asset.creationDate)
+            let mediaKind = homeMediaKind(for: asset)
+            insertAssetID(id, month: month, mediaKind: mediaKind)
+            changedMonths.insert(month)
         }
 
+        refreshFingerprintCache(
+            for: existingIDs.union(insertedIDs),
+            using: fingerprintsForIDs
+        )
+        recomputeAggregates(
+            for: changedMonths,
+            remoteFingerprintsForMonth: remoteFingerprintsForMonth
+        )
         return changedMonths
     }
 
     func applyPhotoLibraryChange(
         _ changeInstance: PHChange,
-        fetchHashMapByAsset: (Set<String>) -> [String: [Data]],
-        fetchFingerprintByAsset: (Set<String>) -> [String: Data],
-        fetchAllHashMapByAsset: () -> [String: [Data]],
-        fetchAllFingerprintByAsset: () -> [String: Data],
-        remoteFingerprintSet: Set<Data>
+        fingerprintsForIDs: (Set<String>) -> [String: Data],
+        fullFingerprintSnapshot: () -> [String: Data],
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
         guard let currentFetchResult = localFetchResult,
               let details = changeInstance.changeDetails(for: currentFetchResult) else {
@@ -170,9 +228,8 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         guard details.hasIncrementalChanges else {
             return reloadAll(
                 fetchResult: nextFetchResult,
-                hashMapByAsset: fetchAllHashMapByAsset(),
-                fingerprintByAsset: fetchAllFingerprintByAsset(),
-                remoteFingerprintSet: remoteFingerprintSet
+                fingerprintByAsset: fullFingerprintSnapshot(),
+                remoteFingerprintsForMonth: remoteFingerprintsForMonth
             )
         }
 
@@ -209,332 +266,138 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
 
         var changedMonths = Set<LibraryMonthKey>()
 
-        for assetID in removedAssetIDs {
-            if let changedMonth = removeLocalState(forAssetID: assetID) {
-                changedMonths.insert(changedMonth)
+        for id in removedAssetIDs {
+            if let month = monthForAsset(id) {
+                removeFromIDSets(id, month: month)
+                changedMonths.insert(month)
             }
         }
-
-        let upsertAssetIDs = Set(upsertAssetsByID.keys)
-        let hashMap = fetchHashMapByAsset(upsertAssetIDs)
-        let fingerprintMap = fetchFingerprintByAsset(upsertAssetIDs)
 
         for asset in upsertAssetsByID.values {
-            let hashes = hashMap[asset.localIdentifier] ?? []
-            let fingerprint = fingerprintMap[asset.localIdentifier]
-            changedMonths.formUnion(
-                upsertLocalState(
-                    asset: asset,
-                    hashes: hashes,
-                    fingerprint: fingerprint,
-                    remoteFingerprintSet: remoteFingerprintSet
-                )
-            )
-        }
-
-        return changedMonths
-    }
-
-    func refreshBackedUpState(
-        changedFingerprints: Set<Data>,
-        remoteFingerprintSet: Set<Data>
-    ) -> Set<LibraryMonthKey> {
-        guard !changedFingerprints.isEmpty else { return [] }
-
-        var targetAssetIDs = Set<String>()
-        for fingerprint in changedFingerprints {
-            targetAssetIDs.formUnion(localAssetIDsByFingerprint[fingerprint] ?? [])
-        }
-
-        guard !targetAssetIDs.isEmpty else { return [] }
-
-        var changedMonths = Set<LibraryMonthKey>()
-        for assetID in targetAssetIDs {
-            guard let state = localStatesByAssetID[assetID] else { continue }
-            changedMonths.formUnion(
-                upsertLocalState(
-                    asset: state.asset,
-                    hashes: state.hashes,
-                    fingerprint: state.fingerprint,
-                    remoteFingerprintSet: remoteFingerprintSet
-                )
-            )
-        }
-
-        return changedMonths
-    }
-
-    func localItems(for month: LibraryMonthKey) -> [LocalAlbumItem] {
-        (localAssetIDsByMonth[month] ?? [])
-            .compactMap { assetID -> LocalAlbumItem? in
-                guard let state = localStatesByAssetID[assetID] else { return nil }
-                return LocalAlbumItem(
-                    id: assetID,
-                    asset: state.asset,
-                    creationDate: state.asset.creationDate ?? Date(timeIntervalSince1970: 0),
-                    isBackedUp: state.isBackedUp,
-                    mediaKind: state.mediaKind,
-                    contentHashes: state.hashes,
-                    fingerprint: state.fingerprint
-                )
+            let id = asset.localIdentifier
+            let newMonth = LibraryMonthKey.from(date: asset.creationDate)
+            let mediaKind = homeMediaKind(for: asset)
+            if let oldMonth = monthForAsset(id), oldMonth != newMonth {
+                removeFromIDSets(id, month: oldMonth)
+                changedMonths.insert(oldMonth)
             }
-            .sorted {
-                if $0.creationDate != $1.creationDate {
-                    return $0.creationDate > $1.creationDate
-                }
-                return $0.id > $1.id
-            }
-    }
-
-    func localItemsSnapshot() -> [LocalAlbumItem] {
-        let months = localAssetIDsByMonth.keys.sorted(by: >)
-        var result: [LocalAlbumItem] = []
-        result.reserveCapacity(localStatesByAssetID.count)
-
-        for month in months {
-            result.append(contentsOf: localItems(for: month))
+            insertAssetID(id, month: newMonth, mediaKind: mediaKind)
+            changedMonths.insert(newMonth)
         }
 
-        return result
-    }
-
-    func localMonthAssetCounts() -> [(month: LibraryMonthKey, count: Int)] {
-        localAssetIDsByMonth
-            .map { (month: $0.key, count: $0.value.count) }
-            .sorted { $0.month > $1.month }
-    }
-
-    func localMonthMediaCounts() -> [LibraryMonthKey: (photoCount: Int, videoCount: Int)] {
-        var result: [LibraryMonthKey: (photoCount: Int, videoCount: Int)] = [:]
-        for (month, assetIDs) in localAssetIDsByMonth {
-            var photos = 0, videos = 0
-            for id in assetIDs {
-                guard let state = localStatesByAssetID[id] else { continue }
-                switch state.mediaKind {
-                case .photo, .livePhoto: photos += 1
-                case .video: videos += 1
-                }
-            }
-            result[month] = (photoCount: photos, videoCount: videos)
-        }
-        return result
-    }
-
-    func localMonthBackedUpCounts() -> [LibraryMonthKey: Int] {
-        var result: [LibraryMonthKey: Int] = [:]
-        for (month, assetIDs) in localAssetIDsByMonth {
-            var count = 0
-            for id in assetIDs {
-                if localStatesByAssetID[id]?.isBackedUp == true {
-                    count += 1
-                }
-            }
-            result[month] = count
-        }
-        return result
-    }
-
-    func localMonthSummary(for month: LibraryMonthKey) -> HomeMonthSummary? {
-        guard let assetIDs = localAssetIDsByMonth[month] else { return nil }
-        var photos = 0, videos = 0, backedUp = 0
-        for id in assetIDs {
-            guard let state = localStatesByAssetID[id] else { continue }
-            switch state.mediaKind {
-            case .photo, .livePhoto: photos += 1
-            case .video: videos += 1
-            }
-            if state.isBackedUp { backedUp += 1 }
-        }
-        return HomeMonthSummary(
-            month: month, assetCount: assetIDs.count,
-            photoCount: photos, videoCount: videos,
-            backedUpCount: backedUp,
-            totalSizeBytes: monthFileSizes[month]
+        refreshFingerprintCache(
+            for: Set(upsertAssetsByID.keys),
+            using: fingerprintsForIDs
         )
+        recomputeAggregates(
+            for: changedMonths,
+            remoteFingerprintsForMonth: remoteFingerprintsForMonth
+        )
+        return changedMonths
     }
 
-    func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
-        localAssetIDsByMonth[month] ?? []
+    /// Recompute backed-up count for months whose remote fingerprints changed.
+    func refreshBackedUpState(
+        affectedMonths: Set<LibraryMonthKey>,
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
+    ) -> Set<LibraryMonthKey> {
+        guard !affectedMonths.isEmpty else { return [] }
+        let knownMonths = affectedMonths.filter { localAssetIDsByMonth[$0] != nil }
+        recomputeAggregates(
+            for: knownMonths,
+            remoteFingerprintsForMonth: remoteFingerprintsForMonth
+        )
+        return knownMonths
     }
 
-    func computeFileSize(
-        for month: LibraryMonthKey,
-        sizes: [String: AssetSizeSnapshot]
-    ) -> (total: Int64, updates: [AssetSizeUpdate]) {
-        guard let assetIDs = localAssetIDsByMonth[month] else { return (0, []) }
-        var total: Int64 = 0
-        var updates: [AssetSizeUpdate] = []
+    private func refreshFingerprintCache(
+        for ids: Set<String>,
+        using fingerprintsForIDs: (Set<String>) -> [String: Data]
+    ) {
+        guard !ids.isEmpty else { return }
+        let fresh = fingerprintsForIDs(ids)
+        for id in ids {
+            // A missing key means the DB row has no fingerprint (e.g., size-only scan);
+            // assigning nil clears any stale cache entry.
+            fingerprintByAssetID[id] = fresh[id]
+        }
+    }
 
-        for assetID in assetIDs {
-            guard let state = localStatesByAssetID[assetID] else { continue }
-
-            if let mtime = state.modificationDateMs,
-               let snapshot = sizes[assetID],
-               snapshot.modificationDateMs == mtime {
-                total += snapshot.totalFileSizeBytes
+    private func recomputeAggregates(
+        for months: Set<LibraryMonthKey>,
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
+    ) {
+        // Per-month scratch Set reused across iterations to avoid repeated reallocations.
+        var seenBackedUpFingerprints = Set<Data>()
+        for month in months {
+            guard let ids = localAssetIDsByMonth[month], !ids.isEmpty else {
+                monthAggregates[month] = nil
+                monthFileSizes[month] = nil
+                localAssetIDsByMonth[month] = nil
                 continue
             }
-
-            let resources = PHAssetResource.assetResources(for: state.asset)
-            let computedSize = resources.reduce(Int64(0)) { partial, resource in
-                partial + max(PhotoLibraryService.resourceFileSize(resource), 0)
-            }
-            let safeSize = max(computedSize, 0)
-            total += safeSize
-
-            if let mtime = state.modificationDateMs {
-                updates.append(AssetSizeUpdate(
-                    assetLocalIdentifier: assetID,
-                    totalFileSizeBytes: safeSize,
-                    modificationDateMs: mtime
-                ))
-            }
-        }
-
-        return (total, updates)
-    }
-
-    func setMonthFileSize(_ size: Int64, for month: LibraryMonthKey) {
-        monthFileSizes[month] = size
-    }
-
-    private func removeLocalState(forAssetID assetID: String) -> LibraryMonthKey? {
-        guard let previous = localStatesByAssetID.removeValue(forKey: assetID) else { return nil }
-
-        if let previousFingerprint = previous.fingerprint {
-            removeAssetID(assetID, fromFingerprint: previousFingerprint)
-        }
-
-        if var ids = localAssetIDsByMonth[previous.month] {
-            ids.remove(assetID)
-            if ids.isEmpty {
-                localAssetIDsByMonth[previous.month] = nil
-            } else {
-                localAssetIDsByMonth[previous.month] = ids
-            }
-        }
-
-        return previous.month
-    }
-
-    private func upsertLocalState(
-        asset: PHAsset,
-        hashes: [Data],
-        fingerprint: Data?,
-        remoteFingerprintSet: Set<Data>
-    ) -> Set<LibraryMonthKey> {
-        let assetID = asset.localIdentifier
-        let month = LibraryMonthKey.from(date: asset.creationDate)
-        let isBackedUp = fingerprint.map { remoteFingerprintSet.contains($0) } ?? false
-        let mediaKind = Self.mediaKind(for: asset)
-        let creationDate = asset.creationDate ?? Date(timeIntervalSince1970: 0)
-        let creationDateMs = creationDate.millisecondsSinceEpoch
-
-        let modificationDateMs = asset.modificationDate?.millisecondsSinceEpoch
-
-        let previousFingerprint = localStatesByAssetID[assetID]?.fingerprint
-        replaceAssetID(assetID, oldFingerprint: previousFingerprint, newFingerprint: fingerprint)
-
-        if let previous = localStatesByAssetID[assetID],
-           previous.month == month,
-           previous.creationDateMs == creationDateMs,
-           previous.modificationDateMs == modificationDateMs,
-           previous.isBackedUp == isBackedUp,
-           previous.mediaKind == mediaKind,
-           previous.hashes == hashes,
-           previous.fingerprint == fingerprint {
-            localStatesByAssetID[assetID] = LocalState(
-                asset: asset,
-                month: month,
-                fingerprint: fingerprint,
-                hashes: hashes,
-                creationDateMs: creationDateMs,
-                modificationDateMs: modificationDateMs,
-                isBackedUp: isBackedUp,
-                mediaKind: mediaKind
-            )
-            return []
-        }
-
-        var changedMonths = Set<LibraryMonthKey>()
-
-        if let previous = localStatesByAssetID[assetID], previous.month != month {
-            if var ids = localAssetIDsByMonth[previous.month] {
-                ids.remove(assetID)
-                if ids.isEmpty {
-                    localAssetIDsByMonth[previous.month] = nil
-                } else {
-                    localAssetIDsByMonth[previous.month] = ids
+            let remoteSet = remoteFingerprintsForMonth(month)
+            var photos = 0
+            var videos = 0
+            seenBackedUpFingerprints.removeAll(keepingCapacity: true)
+            for id in ids {
+                // livePhoto is folded into photoCount to match HomeRemoteIndexEngine's two-
+                // bucket taxonomy (HomeMonthSummary has no livePhotoCount field).
+                switch mediaKindByAssetID[id] ?? .photo {
+                case .video:
+                    videos += 1
+                case .photo, .livePhoto:
+                    photos += 1
+                }
+                if let fp = fingerprintByAssetID[id], remoteSet.contains(fp) {
+                    // Dedup by fingerprint: two local assets sharing a fingerprint can match
+                    // only one remote asset within the month, so counting each occurrence
+                    // would over-report progress.
+                    seenBackedUpFingerprints.insert(fp)
                 }
             }
-            changedMonths.insert(previous.month)
-        }
-
-        localAssetIDsByMonth[month, default: []].insert(assetID)
-
-        localStatesByAssetID[assetID] = LocalState(
-            asset: asset,
-            month: month,
-            fingerprint: fingerprint,
-            hashes: hashes,
-            creationDateMs: creationDateMs,
-            modificationDateMs: modificationDateMs,
-            isBackedUp: isBackedUp,
-            mediaKind: mediaKind
-        )
-
-        changedMonths.insert(month)
-        return changedMonths
-    }
-
-    private func replaceAssetID(_ assetID: String, oldFingerprint: Data?, newFingerprint: Data?) {
-        if let oldFingerprint, oldFingerprint != newFingerprint {
-            removeAssetID(assetID, fromFingerprint: oldFingerprint)
-        }
-
-        guard let newFingerprint else { return }
-        localAssetIDsByFingerprint[newFingerprint, default: []].insert(assetID)
-    }
-
-    private func removeAssetID(_ assetID: String, fromFingerprint fingerprint: Data) {
-        guard var ids = localAssetIDsByFingerprint[fingerprint] else { return }
-        ids.remove(assetID)
-        if ids.isEmpty {
-            localAssetIDsByFingerprint[fingerprint] = nil
-        } else {
-            localAssetIDsByFingerprint[fingerprint] = ids
+            monthAggregates[month] = MonthAggregate(
+                assetCount: ids.count,
+                photoCount: photos,
+                videoCount: videos,
+                backedUpCount: seenBackedUpFingerprints.count
+            )
         }
     }
 
-    private static func mediaKind(for asset: PHAsset) -> AlbumMediaKind {
-        if PhotoLibraryService.isLivePhoto(asset) {
-            return .livePhoto
-        }
-        if asset.mediaType == .video {
-            return .video
-        }
-        return .photo
+    private func insertAssetID(_ id: String, month: LibraryMonthKey, mediaKind: AlbumMediaKind) {
+        localAssetIDsByMonth[month, default: []].insert(id)
+        assetIDToMonth[id] = month
+        mediaKindByAssetID[id] = mediaKind
     }
 
+    private func removeFromIDSets(_ id: String, month: LibraryMonthKey) {
+        if var ids = localAssetIDsByMonth[month] {
+            ids.remove(id)
+            localAssetIDsByMonth[month] = ids.isEmpty ? nil : ids
+        }
+        assetIDToMonth[id] = nil
+        mediaKindByAssetID[id] = nil
+        fingerprintByAssetID[id] = nil
+    }
 }
 
 private final class HomeRemoteIndexEngine: @unchecked Sendable {
-    private var remoteItemsByMonth: [LibraryMonthKey: [RemoteAlbumItem]] = [:]
     private var remoteFingerprintsByMonth: [LibraryMonthKey: Set<Data>] = [:]
-    private var remoteFingerprintRefCount: [Data: Int] = [:]
-    private var cachedFingerprintSet: Set<Data>?
+    private var summaryByMonth: [LibraryMonthKey: HomeMonthSummary] = [:]
 
     private(set) var snapshotRevision: UInt64?
 
     var allMonths: Set<LibraryMonthKey> {
-        Set(remoteItemsByMonth.keys)
+        Set(remoteFingerprintsByMonth.keys)
     }
 
-    var assetFingerprintSet: Set<Data> {
-        if let cached = cachedFingerprintSet { return cached }
-        let set = Set(remoteFingerprintRefCount.keys)
-        cachedFingerprintSet = set
-        return set
+    func fingerprints(for month: LibraryMonthKey) -> Set<Data> {
+        remoteFingerprintsByMonth[month] ?? []
+    }
+
+    func summary(for month: LibraryMonthKey) -> HomeMonthSummary? {
+        summaryByMonth[month]
     }
 
     func apply(
@@ -542,223 +405,115 @@ private final class HomeRemoteIndexEngine: @unchecked Sendable {
         hasActiveConnection: Bool
     ) -> HomeRemoteDelta {
         var changedMonths = Set<LibraryMonthKey>()
-        var changedFingerprints = Set<Data>()
 
         guard hasActiveConnection else {
-            if !remoteItemsByMonth.isEmpty || !remoteFingerprintRefCount.isEmpty {
-                changedMonths.formUnion(remoteItemsByMonth.keys)
-                changedFingerprints.formUnion(remoteFingerprintRefCount.keys)
+            if !remoteFingerprintsByMonth.isEmpty {
+                changedMonths.formUnion(remoteFingerprintsByMonth.keys)
                 clearRemoteState()
             }
             snapshotRevision = state.revision
-            return HomeRemoteDelta(changedMonths: changedMonths, changedFingerprints: changedFingerprints)
+            return HomeRemoteDelta(changedMonths: changedMonths)
         }
 
         if snapshotRevision == state.revision, !state.isFullSnapshot {
-            return HomeRemoteDelta(changedMonths: changedMonths, changedFingerprints: changedFingerprints)
+            return HomeRemoteDelta(changedMonths: changedMonths)
         }
 
         if state.isFullSnapshot {
-            changedMonths.formUnion(remoteItemsByMonth.keys)
-            changedFingerprints.formUnion(remoteFingerprintRefCount.keys)
+            changedMonths.formUnion(remoteFingerprintsByMonth.keys)
             clearRemoteState()
         }
 
         for monthDelta in state.monthDeltas {
             let month = monthDelta.month
+            changedMonths.insert(month)
 
-            let previousFingerprints = remoteFingerprintsByMonth[month] ?? []
-            let previousItems = remoteItemsByMonth[month] ?? []
-
-            let nextFingerprints = Set(monthDelta.assets.map(\.assetFingerprint))
-
-            let items = HomeAlbumMatching.buildRemoteItems(
-                assets: monthDelta.assets,
-                resources: monthDelta.resources,
-                links: monthDelta.assetResourceLinks
-            )
-
-            if hasActiveConnection, !monthDelta.assets.isEmpty, items.count != monthDelta.assets.count {
-                dataLog.warning(
-                    "[HomeData] remote month \(month.text): assets=\(monthDelta.assets.count), resources=\(monthDelta.resources.count), links=\(monthDelta.assetResourceLinks.count), items=\(items.count)"
-                )
-            }
-
-            let removedFingerprints = previousFingerprints.subtracting(nextFingerprints)
-            let addedFingerprints = nextFingerprints.subtracting(previousFingerprints)
-
-            guard !removedFingerprints.isEmpty || !addedFingerprints.isEmpty
-                    || !Self.sameRemoteItems(lhs: previousItems, rhs: items) else {
-                continue
-            }
-
-            for fingerprint in removedFingerprints {
-                let nextCount = max((remoteFingerprintRefCount[fingerprint] ?? 0) - 1, 0)
-                if nextCount == 0 {
-                    remoteFingerprintRefCount[fingerprint] = nil
-                    changedFingerprints.insert(fingerprint)
-                } else {
-                    remoteFingerprintRefCount[fingerprint] = nextCount
-                }
-            }
-
-            for fingerprint in addedFingerprints {
-                let oldCount = remoteFingerprintRefCount[fingerprint] ?? 0
-                remoteFingerprintRefCount[fingerprint] = oldCount + 1
-                if oldCount == 0 {
-                    changedFingerprints.insert(fingerprint)
-                }
-            }
-
-            remoteFingerprintsByMonth[month] = nextFingerprints.isEmpty ? nil : nextFingerprints
-            remoteItemsByMonth[month] = items.isEmpty ? nil : items
-
-            if !Self.sameRemoteItems(lhs: previousItems, rhs: items) {
-                changedMonths.insert(month)
-            }
+            let resolved = Self.resolveMonth(month, from: monthDelta)
+            remoteFingerprintsByMonth[month] = resolved.fingerprints.isEmpty ? nil : resolved.fingerprints
+            summaryByMonth[month] = resolved.summary
         }
 
-        if !changedFingerprints.isEmpty { cachedFingerprintSet = nil }
         snapshotRevision = state.revision
-        return HomeRemoteDelta(changedMonths: changedMonths, changedFingerprints: changedFingerprints)
-    }
-
-    func remoteMonthSummary(for month: LibraryMonthKey) -> HomeMonthSummary? {
-        guard let items = remoteItemsByMonth[month], !items.isEmpty else { return nil }
-        var photos = 0, videos = 0
-        var totalSize: Int64 = 0
-        for item in items {
-            switch item.mediaKind {
-            case .photo, .livePhoto: photos += 1
-            case .video: videos += 1
-            }
-            totalSize += item.resources.reduce(Int64(0)) { $0 + $1.fileSize }
-        }
-        return HomeMonthSummary(
-            month: month, assetCount: items.count,
-            photoCount: photos, videoCount: videos,
-            backedUpCount: nil,
-            totalSizeBytes: totalSize
-        )
-    }
-
-    func remoteItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
-        remoteItemsByMonth[month] ?? []
-    }
-
-    func remoteItemsSnapshot() -> [RemoteAlbumItem] {
-        let months = remoteItemsByMonth.keys.sorted(by: >)
-        var result: [RemoteAlbumItem] = []
-        result.reserveCapacity(remoteItemsByMonth.values.reduce(0) { $0 + $1.count })
-
-        for month in months {
-            let items = (remoteItemsByMonth[month] ?? []).sorted {
-                if $0.creationDate != $1.creationDate {
-                    return $0.creationDate > $1.creationDate
-                }
-                return $0.id > $1.id
-            }
-            result.append(contentsOf: items)
-        }
-
-        return result
+        return HomeRemoteDelta(changedMonths: changedMonths)
     }
 
     private func clearRemoteState() {
-        remoteItemsByMonth.removeAll()
         remoteFingerprintsByMonth.removeAll()
-        remoteFingerprintRefCount.removeAll()
-        cachedFingerprintSet = nil
+        summaryByMonth.removeAll()
     }
 
-    private static func sameRemoteItems(lhs: [RemoteAlbumItem], rhs: [RemoteAlbumItem]) -> Bool {
-        guard lhs.count == rhs.count else { return false }
-        for (left, right) in zip(lhs, rhs) {
-            if left.id != right.id ||
-                left.creationDate != right.creationDate ||
-                left.mediaKind != right.mediaKind ||
-                left.representative.id != right.representative.id ||
-                left.contentHashes != right.contentHashes {
-                return false
-            }
+    private struct ResolvedMonth {
+        let fingerprints: Set<Data>
+        let summary: HomeMonthSummary?
+    }
+
+    /// Applies the same drop rules as `HomeAlbumMatching.buildRemoteItems`: an asset is
+    /// included only when at least one of its links points at a resource present in
+    /// `delta.resources`. Bytes are summed over those resolvable resources (deduped by
+    /// hash) rather than `asset.totalFileSizeBytes`. This matters in the partial-flush
+    /// window where assets + links have landed but resources have not.
+    private static func resolveMonth(
+        _ month: LibraryMonthKey,
+        from delta: RemoteLibraryMonthDelta
+    ) -> ResolvedMonth {
+        guard !delta.assets.isEmpty else {
+            return ResolvedMonth(fingerprints: [], summary: nil)
         }
-        return true
-    }
-}
 
-private final class HomeReconcileEngine: @unchecked Sendable {
-    private var mergedByMonth: [LibraryMonthKey: [HomeAlbumItem]] = [:]
+        var resourceSizeByHash: [Data: Int64] = [:]
+        resourceSizeByHash.reserveCapacity(delta.resources.count)
+        for resource in delta.resources {
+            resourceSizeByHash[resource.contentHash] = resource.fileSize
+        }
 
-    func reconcile(
-        changedMonths: Set<LibraryMonthKey>,
-        localIndex: HomeLocalIndexEngine,
-        remoteIndex: HomeRemoteIndexEngine,
-        hasActiveConnection: Bool
-    ) -> Set<LibraryMonthKey> {
-        guard !changedMonths.isEmpty else { return [] }
+        // Per-asset: collect link roles and the dedup'd set of resolvable resource hashes.
+        // Same hash referenced by multiple role/slot pairs still contributes one resource
+        // upstream (buildRemoteItems uses seenHashes), so dedup here to match.
+        var rolesByAssetID: [String: [Int]] = [:]
+        var resolvableHashesByAssetID: [String: Set<Data>] = [:]
+        rolesByAssetID.reserveCapacity(delta.assets.count)
+        resolvableHashesByAssetID.reserveCapacity(delta.assets.count)
+        for link in delta.assetResourceLinks where resourceSizeByHash[link.resourceHash] != nil {
+            rolesByAssetID[link.assetID, default: []].append(link.role)
+            resolvableHashesByAssetID[link.assetID, default: []].insert(link.resourceHash)
+        }
 
-        for month in changedMonths {
-            let localItems = localIndex.localItems(for: month)
-            let remoteItems = remoteIndex.remoteItems(for: month)
-
-            if localItems.isEmpty, remoteItems.isEmpty {
-                mergedByMonth[month] = nil
-                continue
+        var fingerprints = Set<Data>()
+        fingerprints.reserveCapacity(delta.assets.count)
+        var assetCount = 0
+        var photoCount = 0
+        var videoCount = 0
+        var totalSize: Int64 = 0
+        for asset in delta.assets {
+            let roles = rolesByAssetID[asset.id] ?? []
+            guard !roles.isEmpty else { continue }
+            fingerprints.insert(asset.assetFingerprint)
+            assetCount += 1
+            for hash in resolvableHashesByAssetID[asset.id] ?? [] {
+                totalSize += resourceSizeByHash[hash] ?? 0
             }
-
-            let hashIndex = Self.localHashIndex(from: localItems)
-            let merged = HomeAlbumMatching.mergeItems(
-                localItems: localItems,
-                remoteItems: remoteItems,
-                localAssetIdentifierByHash: hashIndex,
-                hasActiveConnection: hasActiveConnection
-            )
-
-            if merged.isEmpty {
-                mergedByMonth[month] = nil
+            let hasPairedVideo = roles.contains { ResourceTypeCode.isPairedVideo($0) }
+            let hasPhotoLike = roles.contains { ResourceTypeCode.isPhotoLike($0) }
+            let hasVideo = roles.contains { ResourceTypeCode.isVideoLike($0) }
+            if hasPairedVideo, hasPhotoLike {
+                photoCount += 1  // livePhoto
+            } else if hasVideo {
+                videoCount += 1
             } else {
-                mergedByMonth[month] = merged.sorted {
-                    if $0.creationDate != $1.creationDate {
-                        return $0.creationDate > $1.creationDate
-                    }
-                    return $0.id > $1.id
-                }
+                photoCount += 1
             }
         }
-
-        return changedMonths
-    }
-
-    func mergedMonthItemsSnapshot() -> [(month: LibraryMonthKey, items: [HomeAlbumItem])] {
-        mergedByMonth.keys.sorted(by: >).compactMap { month in
-            guard let items = mergedByMonth[month], !items.isEmpty else { return nil }
-            return (month: month, items: items)
-        }
-    }
-
-    func remoteOnlyItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
-        guard let items = mergedByMonth[month] else { return [] }
-        return items
-            .filter { $0.sourceTag == .remoteOnly }
-            .compactMap(\.remoteItem)
-            .reversed()
-    }
-
-    func matchedCount(for month: LibraryMonthKey) -> Int {
-        guard let items = mergedByMonth[month] else { return 0 }
-        return items.count { $0.sourceTag == .both }
-    }
-
-    private static func localHashIndex(from localItems: [LocalAlbumItem]) -> [Data: [String]] {
-        var hashToAssetSet: [Data: Set<String>] = [:]
-
-        for item in localItems {
-            for hash in Set(item.contentHashes) {
-                hashToAssetSet[hash, default: []].insert(item.id)
-            }
-        }
-
-        return hashToAssetSet.mapValues { Array($0) }
+        let summary: HomeMonthSummary? = assetCount > 0
+            ? HomeMonthSummary(
+                month: month,
+                assetCount: assetCount,
+                photoCount: photoCount,
+                videoCount: videoCount,
+                backedUpCount: nil,
+                totalSizeBytes: totalSize
+            )
+            : nil
+        return ResolvedMonth(fingerprints: fingerprints, summary: summary)
     }
 }
 
@@ -768,9 +523,15 @@ private struct HomeDataLoadResult {
     let isAuthorized: Bool
 }
 
+private struct RemoteOnlyQueryResult: Sendable {
+    let remoteItems: [RemoteAlbumItem]
+    let localFingerprintSet: Set<Data>
+}
+
 private final class HomeDataProcessingWorker: @unchecked Sendable {
     private let photoLibraryService: PhotoLibraryService
     private let contentHashIndexRepository: ContentHashIndexRepository
+    private let remoteMonthSnapshot: @Sendable (LibraryMonthKey) -> RemoteLibraryMonthDelta?
     private let processingQueue = DispatchQueue(
         label: "com.zizicici.watermelon.homeData.processing",
         qos: .userInitiated
@@ -778,19 +539,18 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
 
     private let localIndex = HomeLocalIndexEngine()
     private let remoteIndex = HomeRemoteIndexEngine()
-    private let reconcileIndex = HomeReconcileEngine()
 
     private var hasActiveConnection = false
     private var needsRemoteBootstrap = false
-    private var cachedLocalSummaries: [LibraryMonthKey: HomeMonthSummary] = [:]
-    private var cachedRemoteSummaries: [LibraryMonthKey: HomeMonthSummary] = [:]
 
     init(
         photoLibraryService: PhotoLibraryService,
-        contentHashIndexRepository: ContentHashIndexRepository
+        contentHashIndexRepository: ContentHashIndexRepository,
+        remoteMonthSnapshot: @escaping @Sendable (LibraryMonthKey) -> RemoteLibraryMonthDelta?
     ) {
         self.photoLibraryService = photoLibraryService
         self.contentHashIndexRepository = contentHashIndexRepository
+        self.remoteMonthSnapshot = remoteMonthSnapshot
     }
 
     func remoteSnapshotRevisionForQuery(hasActiveConnection: Bool) -> UInt64? {
@@ -802,6 +562,49 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
+    // Helpers bound to the processing queue: the engines that accept these closures
+    // are only invoked while we're already executing on processingQueue.
+    private func fetchFingerprintsForIDs(_ ids: Set<String>) -> [String: Data] {
+        guard !ids.isEmpty else { return [:] }
+        do {
+            return try contentHashIndexRepository.fetchAssetFingerprintsByAsset(assetIDs: ids)
+        } catch {
+            dataLog.error("[HomeData] fetchAssetFingerprintsByAsset(assetIDs:) failed: \(String(describing: error))")
+            return [:]
+        }
+    }
+
+    private func fetchAllFingerprints() -> [String: Data] {
+        do {
+            return try contentHashIndexRepository.fetchAssetFingerprintsByAsset()
+        } catch {
+            dataLog.error("[HomeData] fetchAssetFingerprintsByAsset() failed: \(String(describing: error))")
+            return [:]
+        }
+    }
+
+    private func remoteFingerprintsForMonth(_ month: LibraryMonthKey) -> Set<Data> {
+        remoteIndex.fingerprints(for: month)
+    }
+
+    private func refreshBackedUpState(
+        connectionFlipped: Bool,
+        remoteChangedMonths: Set<LibraryMonthKey>
+    ) -> Set<LibraryMonthKey> {
+        if connectionFlipped {
+            return localIndex.refreshBackedUpState(
+                affectedMonths: localIndex.allMonths,
+                remoteFingerprintsForMonth: remoteFingerprintsForMonth
+            )
+        }
+
+        guard !remoteChangedMonths.isEmpty else { return [] }
+        return localIndex.refreshBackedUpState(
+            affectedMonths: remoteChangedMonths,
+            remoteFingerprintsForMonth: remoteFingerprintsForMonth
+        )
+    }
+
     func loadLocalIndex(forceReload: Bool) async -> HomeDataLoadResult {
         if !forceReload, processingQueue.sync(execute: { localIndex.hasLoadedIndex }) {
             return HomeDataLoadResult(didReload: false, changedMonths: [], isAuthorized: true)
@@ -811,31 +614,25 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
         let authorized = (status == .authorized || status == .limited)
 
         guard authorized else {
-            // Don't trigger the system prompt here. The Home overlay owns that flow via
-            // HomeScreenStore.requestLocalPhotoAccessIfNeeded() when the user taps "Continue".
             let changedMonths = await withCheckedContinuation { continuation in
                 processingQueue.async {
-                    let result = self.reconcileLocked(self.localIndex.clearIfNeeded())
-                    continuation.resume(returning: result)
+                    continuation.resume(returning: self.localIndex.clearIfNeeded())
                 }
             }
             return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: false)
         }
 
         let fetchResult = photoLibraryService.fetchAssetsResult()
-        let hashMapByAsset = (try? contentHashIndexRepository.fetchHashMapByAsset()) ?? [:]
-        let fingerprintByAsset = (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset()) ?? [:]
+        let fingerprintByAsset = fetchAllFingerprints()
 
         let changedMonths = await withCheckedContinuation { continuation in
             processingQueue.async {
                 let changed = self.localIndex.reloadAll(
                     fetchResult: fetchResult,
-                    hashMapByAsset: hashMapByAsset,
                     fingerprintByAsset: fingerprintByAsset,
-                    remoteFingerprintSet: self.remoteIndex.assetFingerprintSet
+                    remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
                 )
-                let result = self.reconcileLocked(changed)
-                continuation.resume(returning: result)
+                continuation.resume(returning: changed)
             }
         }
 
@@ -858,19 +655,16 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
                     return
                 }
 
-                let hashMap = (try? self.contentHashIndexRepository.fetchHashMapByAsset(assetIDs: targetIDs)) ?? [:]
-                let fingerprintMap = (try? self.contentHashIndexRepository.fetchAssetFingerprintsByAsset(assetIDs: targetIDs)) ?? [:]
                 let changedMonths = self.localIndex.refresh(
                     assetIDs: targetIDs,
                     fetchedAssetsByID: fetchedAssetsByID,
-                    hashMapByAsset: hashMap,
-                    fingerprintByAsset: fingerprintMap,
-                    remoteFingerprintSet: self.remoteIndex.assetFingerprintSet
+                    fingerprintsForIDs: self.fetchFingerprintsForIDs,
+                    remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
                 )
-                let result = self.reconcileLocked(changedMonths)
+
                 let elapsed = CFAbsoluteTimeGetCurrent() - start
-                dataLog.info("[HomeData] refreshLocalIndex: assets=\(targetIDs.count), inserted=\(fetchedAssetsByID.count), months=\(result.count), \(String(format: "%.3f", elapsed))s")
-                continuation.resume(returning: result)
+                dataLog.info("[HomeData] refreshLocalIndex: assets=\(targetIDs.count), inserted=\(fetchedAssetsByID.count), months=\(changedMonths.count), \(String(format: "%.3f", elapsed))s")
+                continuation.resume(returning: changedMonths)
             }
         }
     }
@@ -895,14 +689,11 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
                 let remoteDelta = self.remoteIndex.apply(state: state, hasActiveConnection: hasActiveConnection)
                 var changedMonths = remoteDelta.changedMonths
 
-                if !remoteDelta.changedFingerprints.isEmpty {
-                    changedMonths.formUnion(
-                        self.localIndex.refreshBackedUpState(
-                            changedFingerprints: remoteDelta.changedFingerprints,
-                            remoteFingerprintSet: self.remoteIndex.assetFingerprintSet
-                        )
-                    )
-                }
+                let touched = self.refreshBackedUpState(
+                    connectionFlipped: connectionFlipped,
+                    remoteChangedMonths: remoteDelta.changedMonths
+                )
+                changedMonths.formUnion(touched)
 
                 if connectionFlipped {
                     changedMonths.formUnion(localAllMonths)
@@ -913,10 +704,9 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
                     self.needsRemoteBootstrap = false
                 }
 
-                let result = self.reconcileLocked(changedMonths)
                 let elapsed = CFAbsoluteTimeGetCurrent() - start
-                dataLog.info("[HomeData] processingQueue: months=\(result.count), fingerprints=\(remoteDelta.changedFingerprints.count), \(String(format: "%.3f", elapsed))s")
-                continuation.resume(returning: result)
+                dataLog.info("[HomeData] processingQueue: months=\(changedMonths.count), remoteChanged=\(remoteDelta.changedMonths.count), \(String(format: "%.3f", elapsed))s")
+                continuation.resume(returning: changedMonths)
             }
         }
     }
@@ -926,64 +716,39 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
             processingQueue.async {
                 let changedMonths = self.localIndex.applyPhotoLibraryChange(
                     changeInstance,
-                    fetchHashMapByAsset: { [contentHashIndexRepository = self.contentHashIndexRepository] assetIDs in
-                        guard !assetIDs.isEmpty else { return [:] }
-                        return (try? contentHashIndexRepository.fetchHashMapByAsset(assetIDs: assetIDs)) ?? [:]
-                    },
-                    fetchFingerprintByAsset: { [contentHashIndexRepository = self.contentHashIndexRepository] assetIDs in
-                        guard !assetIDs.isEmpty else { return [:] }
-                        return (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset(assetIDs: assetIDs)) ?? [:]
-                    },
-                    fetchAllHashMapByAsset: { [contentHashIndexRepository = self.contentHashIndexRepository] in
-                        (try? contentHashIndexRepository.fetchHashMapByAsset()) ?? [:]
-                    },
-                    fetchAllFingerprintByAsset: { [contentHashIndexRepository = self.contentHashIndexRepository] in
-                        (try? contentHashIndexRepository.fetchAssetFingerprintsByAsset()) ?? [:]
-                    },
-                    remoteFingerprintSet: self.remoteIndex.assetFingerprintSet
+                    fingerprintsForIDs: self.fetchFingerprintsForIDs,
+                    fullFingerprintSnapshot: self.fetchAllFingerprints,
+                    remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
                 )
-                let result = self.reconcileLocked(changedMonths)
-                continuation.resume(returning: result)
-            }
-        }
-    }
-
-    func localMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, backedUpCount: Int?, totalSizeBytes: Int64?)] {
-        processingQueue.sync {
-            let monthCounts = localIndex.localMonthAssetCounts()
-            let mediaCounts = localIndex.localMonthMediaCounts()
-            let backedUpCounts: [LibraryMonthKey: Int]? = hasActiveConnection ? localIndex.localMonthBackedUpCounts() : nil
-            let fileSizes = localIndex.monthFileSizes
-            return monthCounts.map { entry in
-                let media = mediaCounts[entry.month]
-                return (
-                    month: entry.month,
-                    assetCount: entry.count,
-                    photoCount: media?.photoCount ?? 0,
-                    videoCount: media?.videoCount ?? 0,
-                    backedUpCount: backedUpCounts?[entry.month],
-                    totalSizeBytes: fileSizes[entry.month]
-                )
+                continuation.resume(returning: changedMonths)
             }
         }
     }
 
     func monthRow(for month: LibraryMonthKey) -> HomeMonthRow {
-        processingQueue.sync {
-            HomeMonthRow(month: month, local: cachedLocalSummaries[month], remote: cachedRemoteSummaries[month])
-        }
+        processingQueue.sync { monthRowLocked(for: month) }
     }
 
     func allMonthRows() -> [LibraryMonthKey: HomeMonthRow] {
         processingQueue.sync {
-            let allMonths = Set(cachedLocalSummaries.keys).union(cachedRemoteSummaries.keys)
+            let allMonths = localIndex.allMonths.union(remoteIndex.allMonths)
             var result: [LibraryMonthKey: HomeMonthRow] = [:]
             result.reserveCapacity(allMonths.count)
             for month in allMonths {
-                result[month] = HomeMonthRow(month: month, local: cachedLocalSummaries[month], remote: cachedRemoteSummaries[month])
+                result[month] = monthRowLocked(for: month)
             }
             return result
         }
+    }
+
+    // No hasActiveConnection guard: the remote engine drops its state on disconnect,
+    // so remoteIndex.summary(for:) returns nil whenever we're not connected.
+    private func monthRowLocked(for month: LibraryMonthKey) -> HomeMonthRow {
+        HomeMonthRow(
+            month: month,
+            local: localIndex.localMonthSummary(for: month),
+            remote: remoteIndex.summary(for: month)
+        )
     }
 
     func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
@@ -992,15 +757,52 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
-    func remoteOnlyItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
-        processingQueue.sync {
-            reconcileIndex.remoteOnlyItems(for: month)
+    func remoteOnlyItems(for month: LibraryMonthKey) async -> [RemoteAlbumItem] {
+        // Everything needed — raw remote delta and the local fingerprint set — is captured in
+        // a single processingQueue hop so `buildRemoteItems` and the fingerprint diff below
+        // see a consistent snapshot. Doing the PHAsset fetch outside the queue (as an earlier
+        // version did) opened a window where a concurrent PHChange could delete a local asset
+        // between snapshot and fetch, silently promoting its remote twin to remoteOnly and
+        // triggering a redundant restore.
+        let query: RemoteOnlyQueryResult? = await withCheckedContinuation { cont in
+            processingQueue.async {
+                guard self.hasActiveConnection,
+                      let delta = self.remoteMonthSnapshot(month) else {
+                    cont.resume(returning: nil)
+                    return
+                }
+                let remoteItems = HomeAlbumMatching.buildRemoteItems(
+                    assets: delta.assets,
+                    resources: delta.resources,
+                    links: delta.assetResourceLinks
+                )
+                let localIDs = self.localIndex.localAssetIDs(for: month)
+                cont.resume(returning: RemoteOnlyQueryResult(
+                    remoteItems: remoteItems,
+                    localFingerprintSet: Set(self.localIndex.fingerprints(for: localIDs).values)
+                ))
+            }
         }
+        guard let query, !query.remoteItems.isEmpty, !Task.isCancelled else { return [] }
+
+        // Oldest-first so failed downloads retry in a deterministic order across runs.
+        return query.remoteItems
+            .filter { !query.localFingerprintSet.contains($0.assetFingerprint) }
+            .sorted {
+                if $0.creationDate != $1.creationDate {
+                    return $0.creationDate < $1.creationDate
+                }
+                return $0.id < $1.id
+            }
     }
 
     func matchedCount(for month: LibraryMonthKey) -> Int {
+        // Only fingerprint-matched assets count here. Assets with matching content hashes but
+        // no fingerprint (hash preflight without a subsequent upload) show as unbacked until
+        // AssetProcessor or writeHashIndex stamps a fingerprint onto them.
         processingQueue.sync {
-            reconcileIndex.matchedCount(for: month)
+            guard hasActiveConnection else { return 0 }
+            return localIndex.localMonthSummary(for: month)?.backedUpCount ?? 0
         }
     }
 
@@ -1012,37 +814,58 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
 
     func updateFileSize(
         for month: LibraryMonthKey,
-        sizes: [String: AssetSizeSnapshot]
+        sizeCache: [String: AssetSizeSnapshot]
     ) async -> [AssetSizeUpdate] {
-        await withCheckedContinuation { continuation in
+        let ids = await withCheckedContinuation { (cont: CheckedContinuation<Set<String>, Never>) in
             processingQueue.async {
-                let (size, updates) = self.localIndex.computeFileSize(for: month, sizes: sizes)
-                self.localIndex.setMonthFileSize(size, for: month)
-                self.cachedLocalSummaries[month] = self.localIndex.localMonthSummary(for: month)
-                continuation.resume(returning: updates)
+                cont.resume(returning: self.localIndex.localAssetIDs(for: month))
             }
         }
+        guard !ids.isEmpty else { return [] }
+
+        let phAssets = photoLibraryService.fetchAssets(localIdentifiers: ids)
+        var assetByID: [String: PHAsset] = [:]
+        assetByID.reserveCapacity(phAssets.count)
+        for asset in phAssets {
+            assetByID[asset.localIdentifier] = asset
+        }
+
+        var total: Int64 = 0
+        var updates: [AssetSizeUpdate] = []
+        for id in ids {
+            guard let asset = assetByID[id] else { continue }
+            let mtime = asset.modificationDate?.millisecondsSinceEpoch
+
+            if let mtime, let snapshot = sizeCache[id], snapshot.modificationDateMs == mtime {
+                total += snapshot.totalFileSizeBytes
+                continue
+            }
+
+            let resources = PHAssetResource.assetResources(for: asset)
+            let computedSize = resources.reduce(Int64(0)) { partial, resource in
+                partial + max(PhotoLibraryService.resourceFileSize(resource), 0)
+            }
+            let safeSize = max(computedSize, 0)
+            total += safeSize
+
+            if let mtime {
+                updates.append(AssetSizeUpdate(
+                    assetLocalIdentifier: id,
+                    totalFileSizeBytes: safeSize,
+                    modificationDateMs: mtime
+                ))
+            }
+        }
+
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            processingQueue.async {
+                self.localIndex.setMonthFileSize(total, for: month)
+                cont.resume()
+            }
+        }
+        return updates
     }
 
-    private func reconcileLocked(_ changedMonths: Set<LibraryMonthKey>) -> Set<LibraryMonthKey> {
-        let result = reconcileIndex.reconcile(
-            changedMonths: changedMonths,
-            localIndex: localIndex,
-            remoteIndex: remoteIndex,
-            hasActiveConnection: hasActiveConnection
-        )
-        if !result.isEmpty {
-            updateCachedSummaries(for: result)
-        }
-        return result
-    }
-
-    private func updateCachedSummaries(for months: Set<LibraryMonthKey>) {
-        for month in months {
-            cachedLocalSummaries[month] = localIndex.localMonthSummary(for: month)
-            cachedRemoteSummaries[month] = hasActiveConnection ? remoteIndex.remoteMonthSummary(for: month) : nil
-        }
-    }
 }
 
 @MainActor
@@ -1071,16 +894,30 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
 
     var onMonthsChanged: ((Set<LibraryMonthKey>) -> Void)?
     var onFileSizesUpdated: ((Set<LibraryMonthKey>) -> Void)?
+    // Startup scan (full library, by-year notifications). At most one runs at a time; a new
+    // startup cancels its predecessor. Separate from the PHChange-driven rescan below so the
+    // two cannot clobber each other.
     private var fileSizeScanTask: Task<Void, Never>?
+    // PHChange rescan (partial, coalesced notifications). Single in-flight:
+    // pendingRescanMonths accumulates while a rescan runs; the running task drains
+    // it and auto-restarts if more arrived.
+    private var fileSizeRescanTask: Task<Void, Never>?
+    private var pendingRescanMonths = Set<LibraryMonthKey>()
+    // Refcount so invalidateAssetSizeSnapshot() at the end of a scan fires only once all
+    // in-flight scans have finished. Otherwise a fast rescan completing while startup is
+    // still walking months would wipe the cache out from under startup.
+    private var activeFileSizeScanCount = 0
 
     init(
         photoLibraryService: PhotoLibraryService,
-        contentHashIndexRepository: ContentHashIndexRepository
+        contentHashIndexRepository: ContentHashIndexRepository,
+        remoteMonthSnapshot: @escaping @Sendable (LibraryMonthKey) -> RemoteLibraryMonthDelta?
     ) {
         self.contentHashIndexRepository = contentHashIndexRepository
         self.processingWorker = HomeDataProcessingWorker(
             photoLibraryService: photoLibraryService,
-            contentHashIndexRepository: contentHashIndexRepository
+            contentHashIndexRepository: contentHashIndexRepository,
+            remoteMonthSnapshot: remoteMonthSnapshot
         )
     }
 
@@ -1121,10 +958,6 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         return reconciledMonths
     }
 
-    func localMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, backedUpCount: Int?, totalSizeBytes: Int64?)] {
-        processingWorker.localMonthSummaries()
-    }
-
     func monthRow(for month: LibraryMonthKey) -> HomeMonthRow {
         processingWorker.monthRow(for: month)
     }
@@ -1137,8 +970,8 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         processingWorker.localAssetIDs(for: month)
     }
 
-    func remoteOnlyItems(for month: LibraryMonthKey) -> [RemoteAlbumItem] {
-        processingWorker.remoteOnlyItems(for: month)
+    func remoteOnlyItems(for month: LibraryMonthKey) async -> [RemoteAlbumItem] {
+        await processingWorker.remoteOnlyItems(for: month)
     }
 
     func matchedCount(for month: LibraryMonthKey) -> Int {
@@ -1182,6 +1015,9 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
             unregisterPhotoLibraryObserverIfNeeded()
             fileSizeScanTask?.cancel()
             fileSizeScanTask = nil
+            fileSizeRescanTask?.cancel()
+            fileSizeRescanTask = nil
+            pendingRescanMonths.removeAll()
             resetPendingFileSizeUpdates()
         }
         return !result.changedMonths.isEmpty
@@ -1198,18 +1034,53 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     private func rescanFileSizes(for months: Set<LibraryMonthKey>) {
-        scanFileSizes(months: Array(months), tracked: false, notificationMode: .coalesced)
+        guard !months.isEmpty else { return }
+        pendingRescanMonths.formUnion(months)
+        guard fileSizeRescanTask == nil else { return }
+        startPendingRescan()
+    }
+
+    private func startPendingRescan() {
+        guard fileSizeRescanTask == nil, !pendingRescanMonths.isEmpty else { return }
+        let months = Array(pendingRescanMonths)
+        pendingRescanMonths.removeAll()
+        // `priority:` is a no-op here: runFileSizeScan is @MainActor, and MainActor ignores
+        // task priority on its queue. The work inside the scan yields cooperatively via
+        // Task.yield() between months, which is what actually lets UI interleave.
+        fileSizeRescanTask = Task { [weak self] in
+            await self?.runFileSizeScan(months: months, notificationMode: .coalesced)
+            // If we were cancelled externally (startup supersede or auth loss), the caller
+            // has already cleared the slot and the pending set; whatever lives in the slot
+            // now belongs to a successor rescan, so leave it alone.
+            guard let self, !Task.isCancelled else { return }
+            self.fileSizeRescanTask = nil
+            if !self.pendingRescanMonths.isEmpty {
+                self.startPendingRescan()
+            }
+        }
     }
 
     private func startFileSizeScan() {
         fileSizeScanTask?.cancel()
+        // A full startup scan supersedes any in-flight PHChange rescan: startup's months
+        // come from localMonthsForFileSizeScan() — the complete library — so rescan's
+        // partial progress is a subset that startup will revisit anyway. Leaving rescan
+        // running would make it continue against the invalidated snapshot below, falling
+        // back to cold PHAssetResource recomputation for its remaining months. Cancel it
+        // and drop pending so the refcount-guarded cache-release logic isn't fighting
+        // against the startup's explicit invalidate.
+        fileSizeRescanTask?.cancel()
+        fileSizeRescanTask = nil
+        pendingRescanMonths.removeAll()
         resetPendingFileSizeUpdates()
         // Drop the in-memory snapshot: hash-builder paths (AssetProcessor) write
         // mtime into local_assets during execution without notifying us, so after
         // a forceReload the DB is more up-to-date than our cached dict.
         invalidateAssetSizeSnapshot()
         let months = processingWorker.localMonthsForFileSizeScan()
-        scanFileSizes(months: months, tracked: true, notificationMode: .byYear)
+        fileSizeScanTask = Task { [weak self] in
+            await self?.runFileSizeScan(months: months, notificationMode: .byYear)
+        }
     }
 
     private func invalidateAssetSizeSnapshot() {
@@ -1220,65 +1091,74 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         assetSizeSnapshotGeneration &+= 1
     }
 
-    private func scanFileSizes(
+    private func releaseAssetSizeSnapshotIfIdle() {
+        // Free the ~5 MB working set only once every in-flight scan has finished.
+        // Releasing while another scan is mid-walk would make it recompute sizes from
+        // PHAssetResource for every remaining month.
+        guard activeFileSizeScanCount == 0 else { return }
+        invalidateAssetSizeSnapshot()
+    }
+
+    private func runFileSizeScan(
         months: [LibraryMonthKey],
-        tracked: Bool,
         notificationMode: FileSizeScanNotificationMode
-    ) {
-        let repository = contentHashIndexRepository
-        let task = Task(priority: .utility) { [weak self] in
-            guard let self else { return }
-            await self.ensureAssetSizeSnapshotLoaded(repository: repository)
-
-            let orderedMonths = notificationMode == .byYear ? months.sorted(by: >) : months
-            var pendingYearMonths = Set<LibraryMonthKey>()
-            var writeBackBuffer: [AssetSizeUpdate] = []
-
-            for (index, month) in orderedMonths.enumerated() {
-                guard !Task.isCancelled else {
-                    Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
-                    return
-                }
-                let updates = await self.processingWorker.updateFileSize(
-                    for: month,
-                    sizes: self.assetSizeSnapshot
-                )
-                guard !Task.isCancelled else {
-                    self.mergeIntoAssetSizeSnapshot(updates)
-                    writeBackBuffer.append(contentsOf: updates)
-                    Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
-                    return
-                }
-
-                self.mergeIntoAssetSizeSnapshot(updates)
-                writeBackBuffer.append(contentsOf: updates)
-                if writeBackBuffer.count >= Self.assetSizeWriteBackBatchSize {
-                    Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
-                }
-
-                switch notificationMode {
-                case .coalesced:
-                    self.enqueueFileSizeUpdate(for: month)
-                case .byYear:
-                    pendingYearMonths.insert(month)
-                    let nextYear = index + 1 < orderedMonths.count ? orderedMonths[index + 1].year : nil
-                    if nextYear != month.year {
-                        self.onFileSizesUpdated?(pendingYearMonths)
-                        pendingYearMonths.removeAll(keepingCapacity: true)
-                    }
-                }
-
-                await Task.yield()
-            }
-
-            Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
-
-            guard !Task.isCancelled else { return }
-            if notificationMode == .coalesced {
-                self.flushPendingFileSizeUpdates()
-            }
+    ) async {
+        activeFileSizeScanCount += 1
+        defer {
+            activeFileSizeScanCount -= 1
+            releaseAssetSizeSnapshotIfIdle()
         }
-        if tracked { fileSizeScanTask = task }
+
+        let repository = contentHashIndexRepository
+        await ensureAssetSizeSnapshotLoaded(repository: repository)
+
+        let orderedMonths = notificationMode == .byYear ? months.sorted(by: >) : months
+        var pendingYearMonths = Set<LibraryMonthKey>()
+        var writeBackBuffer: [AssetSizeUpdate] = []
+
+        for (index, month) in orderedMonths.enumerated() {
+            if Task.isCancelled {
+                Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
+                return
+            }
+            let updates = await processingWorker.updateFileSize(
+                for: month,
+                sizeCache: assetSizeSnapshot
+            )
+            if Task.isCancelled {
+                mergeIntoAssetSizeSnapshot(updates)
+                writeBackBuffer.append(contentsOf: updates)
+                Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
+                return
+            }
+
+            mergeIntoAssetSizeSnapshot(updates)
+            writeBackBuffer.append(contentsOf: updates)
+            if writeBackBuffer.count >= Self.assetSizeWriteBackBatchSize {
+                Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
+            }
+
+            switch notificationMode {
+            case .coalesced:
+                enqueueFileSizeUpdate(for: month)
+            case .byYear:
+                pendingYearMonths.insert(month)
+                let nextYear = index + 1 < orderedMonths.count ? orderedMonths[index + 1].year : nil
+                if nextYear != month.year {
+                    onFileSizesUpdated?(pendingYearMonths)
+                    pendingYearMonths.removeAll(keepingCapacity: true)
+                }
+            }
+
+            await Task.yield()
+        }
+
+        Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
+
+        if Task.isCancelled { return }
+        if notificationMode == .coalesced {
+            flushPendingFileSizeUpdates()
+        }
     }
 
     private func ensureAssetSizeSnapshotLoaded(repository: ContentHashIndexRepository) async {

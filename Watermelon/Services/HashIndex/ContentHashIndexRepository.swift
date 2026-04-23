@@ -41,10 +41,37 @@ struct LocalHashIndexStats: Sendable {
 }
 
 final class ContentHashIndexRepository: @unchecked Sendable {
+    // Conservative bound well under SQLITE_MAX_VARIABLE_NUMBER (default 32766 on iOS); large
+    // IN lists also balloon SQL parse + prepared-statement bind cost, so staying around 400
+    // gives predictable per-chunk latency.
+    private static let idChunkSize = 400
+
     private let databaseManager: DatabaseManager
 
     init(databaseManager: DatabaseManager) {
         self.databaseManager = databaseManager
+    }
+
+    /// Iterate `ids` in chunks of `idChunkSize`, invoking `body` with the chunk array and
+    /// the matching "?, ?, ?" placeholder string. No sort — callers key results by asset ID.
+    private static func forEachIDChunk<C: Collection>(
+        _ ids: C,
+        body: (_ chunk: [String], _ placeholders: String) throws -> Void
+    ) rethrows where C.Element == String {
+        var buffer: [String] = []
+        buffer.reserveCapacity(idChunkSize)
+        for id in ids {
+            buffer.append(id)
+            if buffer.count == idChunkSize {
+                let placeholders = Array(repeating: "?", count: buffer.count).joined(separator: ", ")
+                try body(buffer, placeholders)
+                buffer.removeAll(keepingCapacity: true)
+            }
+        }
+        if !buffer.isEmpty {
+            let placeholders = Array(repeating: "?", count: buffer.count).joined(separator: ", ")
+            try body(buffer, placeholders)
+        }
     }
 
     func upsertAssetHashSnapshot(
@@ -150,53 +177,6 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         )
     }
 
-    func fetchHashMapByAsset() throws -> [String: [Data]] {
-        try databaseManager.read { db in
-            let rows = try Row.fetchAll(
-                db,
-                sql: """
-                SELECT assetLocalIdentifier, contentHash
-                FROM local_asset_resources
-                """
-            )
-            var result: [String: [Data]] = [:]
-            result.reserveCapacity(rows.count)
-            for row in rows {
-                let assetID: String = row["assetLocalIdentifier"]
-                let hash: Data = row["contentHash"]
-                result[assetID, default: []].append(hash)
-            }
-            return result
-        }
-    }
-
-    func fetchHashMapByAsset(assetIDs: Set<String>) throws -> [String: [Data]] {
-        guard !assetIDs.isEmpty else { return [:] }
-
-        return try databaseManager.read { db in
-            let sortedIDs = assetIDs.sorted()
-            let placeholders = Array(repeating: "?", count: sortedIDs.count).joined(separator: ", ")
-            let rows = try Row.fetchAll(
-                db,
-                sql: """
-                SELECT assetLocalIdentifier, contentHash
-                FROM local_asset_resources
-                WHERE assetLocalIdentifier IN (\(placeholders))
-                """,
-                arguments: StatementArguments(sortedIDs)
-            )
-
-            var result: [String: [Data]] = [:]
-            result.reserveCapacity(rows.count)
-            for row in rows {
-                let assetID: String = row["assetLocalIdentifier"]
-                let hash: Data = row["contentHash"]
-                result[assetID, default: []].append(hash)
-            }
-            return result
-        }
-    }
-
     func fetchAssetFingerprintsByAsset() throws -> [String: Data] {
         try databaseManager.read { db in
             let rows = try Row.fetchAll(
@@ -222,25 +202,24 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         guard !assetIDs.isEmpty else { return [:] }
 
         return try databaseManager.read { db in
-            let sortedIDs = assetIDs.sorted()
-            let placeholders = Array(repeating: "?", count: sortedIDs.count).joined(separator: ", ")
-            let rows = try Row.fetchAll(
-                db,
-                sql: """
-                SELECT assetLocalIdentifier, assetFingerprint
-                FROM local_assets
-                WHERE assetLocalIdentifier IN (\(placeholders))
-                  AND assetFingerprint IS NOT NULL
-                """,
-                arguments: StatementArguments(sortedIDs)
-            )
-
             var result: [String: Data] = [:]
-            result.reserveCapacity(rows.count)
-            for row in rows {
-                let assetID: String = row["assetLocalIdentifier"]
-                let fingerprint: Data = row["assetFingerprint"]
-                result[assetID] = fingerprint
+            result.reserveCapacity(assetIDs.count)
+            try Self.forEachIDChunk(assetIDs) { chunk, placeholders in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT assetLocalIdentifier, assetFingerprint
+                    FROM local_assets
+                    WHERE assetLocalIdentifier IN (\(placeholders))
+                      AND assetFingerprint IS NOT NULL
+                    """,
+                    arguments: StatementArguments(chunk)
+                )
+                for row in rows {
+                    let assetID: String = row["assetLocalIdentifier"]
+                    let fingerprint: Data = row["assetFingerprint"]
+                    result[assetID] = fingerprint
+                }
             }
             return result
         }
@@ -250,14 +229,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         guard !assetIDs.isEmpty else { return [:] }
 
         return try databaseManager.read { db in
-            let sortedIDs = assetIDs.sorted()
-            let chunkSize = 400
             var result: [String: LocalAssetHashCache] = [:]
-
-            for chunkStart in stride(from: 0, to: sortedIDs.count, by: chunkSize) {
-                let chunk = Array(sortedIDs[chunkStart ..< min(chunkStart + chunkSize, sortedIDs.count)])
-                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
-
+            try Self.forEachIDChunk(assetIDs) { chunk, placeholders in
                 let assetRows = try Row.fetchAll(
                     db,
                     sql: """
@@ -300,7 +273,6 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                     result[assetID] = cache
                 }
             }
-
             return result
         }
     }
@@ -372,13 +344,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         guard !assetIDs.isEmpty else { return 0 }
 
         return try databaseManager.read { db in
-            let sortedIDs = assetIDs.sorted()
-            let chunkSize = 400
             var totalBytes: Int64 = 0
-
-            for chunkStart in stride(from: 0, to: sortedIDs.count, by: chunkSize) {
-                let chunk = Array(sortedIDs[chunkStart ..< min(chunkStart + chunkSize, sortedIDs.count)])
-                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+            try Self.forEachIDChunk(assetIDs) { chunk, placeholders in
                 let chunkBytes = try Int64.fetchOne(
                     db,
                     sql: """
@@ -390,7 +357,6 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 ) ?? 0
                 totalBytes += max(chunkBytes, 0)
             }
-
             return totalBytes
         }
     }
@@ -470,11 +436,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
 
     func deleteIndexEntries(assetIDs: [String]) throws {
         guard !assetIDs.isEmpty else { return }
-        let chunkSize = 400
         try databaseManager.write { db in
-            for chunkStart in stride(from: 0, to: assetIDs.count, by: chunkSize) {
-                let chunk = Array(assetIDs[chunkStart ..< min(chunkStart + chunkSize, assetIDs.count)])
-                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            try Self.forEachIDChunk(assetIDs) { chunk, placeholders in
                 try db.execute(
                     sql: "DELETE FROM local_asset_resources WHERE assetLocalIdentifier IN (\(placeholders))",
                     arguments: StatementArguments(chunk)
