@@ -101,47 +101,47 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         fingerprintByAsset: [String: Data],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
-        var newIDsByMonth: [LibraryMonthKey: Set<String>] = [:]
-        newIDsByMonth.reserveCapacity(24)
-        var newAssetIDToMonth: [String: LibraryMonthKey] = [:]
-        newAssetIDToMonth.reserveCapacity(fetchResult.count)
-        var newMediaKindByAssetID: [String: AlbumMediaKind] = [:]
-        newMediaKindByAssetID.reserveCapacity(fetchResult.count)
-        // Filtered copy of the DB snapshot that keeps only IDs present in the new fetchResult,
-        // so orphaned rows (asset deleted from PhotoKit but still in local_assets) don't linger.
-        var newFingerprintByAssetID: [String: Data] = [:]
-        newFingerprintByAssetID.reserveCapacity(fingerprintByAsset.count)
+        // Clear old per-asset dicts eagerly instead of holding them alongside freshly
+        // built replacements. Engine state is only read via processingQueue (serial), so
+        // the brief mid-reload empty window is not observable. Halves transient memory
+        // at startup for 100K+ libraries (~24 MB saved).
+        let oldMonths = allMonths
+        localAssetIDsByMonth.removeAll()
+        assetIDToMonth.removeAll()
+        mediaKindByAssetID.removeAll()
+        fingerprintByAssetID.removeAll()
+        monthAggregates.removeAll(keepingCapacity: true)
+
+        assetIDToMonth.reserveCapacity(fetchResult.count)
+        mediaKindByAssetID.reserveCapacity(fetchResult.count)
+        fingerprintByAssetID.reserveCapacity(min(fingerprintByAsset.count, fetchResult.count))
 
         for index in 0 ..< fetchResult.count {
             let asset = fetchResult.object(at: index)
             let assetID = asset.localIdentifier
             let month = LibraryMonthKey.from(date: asset.creationDate)
-            newIDsByMonth[month, default: []].insert(assetID)
-            newAssetIDToMonth[assetID] = month
-            newMediaKindByAssetID[assetID] = homeMediaKind(for: asset)
+            localAssetIDsByMonth[month, default: []].insert(assetID)
+            assetIDToMonth[assetID] = month
+            mediaKindByAssetID[assetID] = homeMediaKind(for: asset)
+            // Orphans (DB entry whose PHAsset no longer exists) are dropped implicitly by
+            // only copying fingerprints for IDs present in fetchResult.
             if let fp = fingerprintByAsset[assetID] {
-                newFingerprintByAssetID[assetID] = fp
+                fingerprintByAssetID[assetID] = fp
             }
         }
 
-        let changedMonths = allMonths.union(newIDsByMonth.keys)
-
+        let newMonths = Set(localAssetIDsByMonth.keys)
         localFetchResult = fetchResult
-        localAssetIDsByMonth = newIDsByMonth
-        assetIDToMonth = newAssetIDToMonth
-        mediaKindByAssetID = newMediaKindByAssetID
-        fingerprintByAssetID = newFingerprintByAssetID
-        monthAggregates.removeAll(keepingCapacity: true)
-        for month in monthFileSizes.keys where newIDsByMonth[month] == nil {
+        for month in monthFileSizes.keys where !newMonths.contains(month) {
             monthFileSizes[month] = nil
         }
 
         recomputeAggregates(
-            for: Set(newIDsByMonth.keys),
+            for: newMonths,
             remoteFingerprintsForMonth: remoteFingerprintsForMonth
         )
 
-        return changedMonths
+        return oldMonths.union(newMonths)
     }
 
     func clearIfNeeded() -> Set<LibraryMonthKey> {
