@@ -326,6 +326,19 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
+    func counts() -> RemoteIndexSyncDigest {
+        lock.withLock {
+            let resources = resourcesByMonth.values.reduce(0) { $0 + $1.count }
+            let assets = assetsByMonth.values.reduce(0) { $0 + $1.count }
+            let links = linksByMonth.values.reduce(0) { $0 + $1.count }
+            return RemoteIndexSyncDigest(
+                resourceCount: resources,
+                assetCount: assets,
+                linkCount: links
+            )
+        }
+    }
+
     func monthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
         lock.withLock {
             let monthAssets = assetsByMonth[month] ?? [:]
@@ -345,28 +358,21 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         var resources: [RemoteManifestResource] = []
         var assets: [RemoteManifestAsset] = []
         var links: [RemoteAssetResourceLink] = []
-        var assetFingerprintSet = Set<Data>()
 
         resources.reserveCapacity(resourcesByMonth.values.reduce(0) { $0 + $1.count })
         assets.reserveCapacity(assetsByMonth.values.reduce(0) { $0 + $1.count })
         links.reserveCapacity(linksByMonth.values.reduce(0) { $0 + $1.count })
-        assetFingerprintSet.reserveCapacity(assetsByMonth.values.reduce(0) { $0 + $1.count })
 
         for month in sortedMonths {
             resources.append(contentsOf: sortedResourcesLocked(for: month))
-            let monthAssets = sortedAssetsLocked(for: month)
-            assets.append(contentsOf: monthAssets)
-            for asset in monthAssets {
-                assetFingerprintSet.insert(asset.assetFingerprint)
-            }
+            assets.append(contentsOf: sortedAssetsLocked(for: month))
             links.append(contentsOf: sortedLinksLocked(for: month))
         }
 
         return RemoteLibrarySnapshot(
             resources: resources,
             assets: assets,
-            assetResourceLinks: links,
-            assetFingerprintSet: assetFingerprintSet
+            assetResourceLinks: links
         )
     }
 
@@ -411,43 +417,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
-    private static func buildMonthMaps(
-        from snapshot: RemoteLibrarySnapshot
-    ) -> (
-        resourcesByMonth: [LibraryMonthKey: ResourceMap],
-        assetsByMonth: [LibraryMonthKey: AssetMap],
-        linksByMonth: [LibraryMonthKey: LinkMap],
-        linkKeysByAssetID: [String: Set<LinkKey>]
-    ) {
-        var resourcesByMonth: [LibraryMonthKey: ResourceMap] = [:]
-        var assetsByMonth: [LibraryMonthKey: AssetMap] = [:]
-        var linksByMonth: [LibraryMonthKey: LinkMap] = [:]
-        var linkKeysByAssetID: [String: Set<LinkKey>] = [:]
-
-        for resource in snapshot.resources {
-            let month = LibraryMonthKey(year: resource.year, month: resource.month)
-            resourcesByMonth[month, default: [:]][resource.id] = resource
-        }
-
-        for asset in snapshot.assets {
-            let month = LibraryMonthKey(year: asset.year, month: asset.month)
-            assetsByMonth[month, default: [:]][asset.id] = asset
-        }
-
-        for link in snapshot.assetResourceLinks {
-            let month = LibraryMonthKey(year: link.year, month: link.month)
-            let key = LinkKey(
-                month: month,
-                assetFingerprint: link.assetFingerprint,
-                role: link.role,
-                slot: link.slot
-            )
-            linksByMonth[month, default: [:]][key] = link
-            linkKeysByAssetID[link.assetID, default: []].insert(key)
-        }
-
-        return (resourcesByMonth, assetsByMonth, linksByMonth, linkKeysByAssetID)
-    }
 
     private func detachLinkKeysLocked(_ links: LinkMap) {
         for (key, link) in links {

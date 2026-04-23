@@ -56,17 +56,17 @@ struct BackupRunPreparationService: Sendable {
             var snapshotSeedLookup: MonthSeedLookup?
 
             do {
-                let snapshot = try await remoteIndexService.syncIndex(
+                let digest = try await remoteIndexService.syncIndex(
                     client: client,
                     profile: profile,
                     eventStream: eventStream
                 )
-                snapshotSeedLookup = makeMonthSeedLookup(from: snapshot, eventStream: eventStream)
+                snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
                 eventStream.emitLog(
                     String.localizedStringWithFormat(
                         String(localized: "backup.log.remoteIndexSynced"),
-                        snapshot.totalResourceCount,
-                        snapshot.totalCount
+                        digest.resourceCount,
+                        digest.assetCount
                     ),
                     level: .info
                 )
@@ -161,12 +161,12 @@ struct BackupRunPreparationService: Sendable {
         password: String,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
-    ) async throws -> RemoteLibrarySnapshot {
+    ) async throws -> RemoteIndexSyncDigest {
         let client = try makeStorageClient(profile: profile, password: password)
         try await client.connect()
         do {
             try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-            let snapshot = try await remoteIndexService.syncIndex(
+            let digest = try await remoteIndexService.syncIndex(
                 client: client,
                 profile: profile,
                 eventStream: eventStream,
@@ -175,13 +175,13 @@ struct BackupRunPreparationService: Sendable {
             eventStream?.emitLog(
                 String.localizedStringWithFormat(
                     String(localized: "backup.log.remoteIndexReloaded"),
-                    snapshot.totalResourceCount,
-                    snapshot.totalCount
+                    digest.resourceCount,
+                    digest.assetCount
                 ),
                 level: .info
             )
             await client.disconnectSafely()
-            return snapshot
+            return digest
         } catch {
             await client.disconnectSafely()
             throw error
@@ -252,19 +252,20 @@ struct BackupRunPreparationService: Sendable {
     }
 
     private func makeMonthSeedLookup(
-        from snapshot: RemoteLibrarySnapshot,
+        from digest: RemoteIndexSyncDigest,
         eventStream: BackupEventStream
     ) -> MonthSeedLookup? {
-        let totalEntries = snapshot.totalResourceCount + snapshot.totalCount + snapshot.assetResourceLinks.count
-        if totalEntries > Self.monthSeedLookupEntryThreshold {
+        // Gate BEFORE materializing the flat-array snapshot — at 100K+ libraries the snapshot
+        // itself is ~60-70 MB transient, and we're about to throw it away anyway.
+        if digest.totalEntryCount > Self.monthSeedLookupEntryThreshold {
             eventStream.emitLog(
-                String.localizedStringWithFormat(String(localized: "backup.log.remoteSnapshotLarge"), totalEntries),
+                String.localizedStringWithFormat(String(localized: "backup.log.remoteSnapshotLarge"), digest.totalEntryCount),
                 level: .warning
             )
             return nil
         }
 
-        let lookup = MonthSeedLookup(snapshot: snapshot)
+        let lookup = MonthSeedLookup(snapshot: remoteIndexService.fullSnapshot())
         return lookup.isEmpty ? nil : lookup
     }
 }

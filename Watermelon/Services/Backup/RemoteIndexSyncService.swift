@@ -75,7 +75,7 @@ final class RemoteIndexSyncService: Sendable {
         profile: ServerProfileRecord,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
-    ) async throws -> RemoteLibrarySnapshot {
+    ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
                 client: client,
@@ -86,12 +86,19 @@ final class RemoteIndexSyncService: Sendable {
         }
     }
 
+    /// Materialize a flat-array `RemoteLibrarySnapshot` from the current cache. O(N) in
+    /// cached entries; call only when a caller actually needs the flat arrays (the
+    /// `MonthSeedLookup` in `BackupRunPreparation` is the only current use).
+    func fullSnapshot() -> RemoteLibrarySnapshot {
+        snapshotCache.current()
+    }
+
     private func syncIndexUnlocked(
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream?,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
-    ) async throws -> RemoteLibrarySnapshot {
+    ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
         let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: Self.remoteProfileKey(profile))
@@ -128,14 +135,14 @@ final class RemoteIndexSyncService: Sendable {
         onSyncProgress?(RemoteSyncProgress(current: 0, total: totalMonthsToProcess))
 
         if changedMonths.isEmpty, removedMonths.isEmpty {
-            let snapshot = snapshotCache.current()
+            let digest = snapshotCache.counts()
             let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
             syncLog.info("[SyncTiming] No changes. Total: \(Self.ms(totalElapsed))s")
             eventStream?.emitLog(
                 String.localizedStringWithFormat(String(localized: "backup.remoteIndex.unchanged"), remoteMonths.count),
                 level: .debug
             )
-            return snapshot
+            return digest
         }
 
         syncLog.info("[SyncTiming] changedMonths: \(changedMonths.count), removedMonths: \(removedMonths.count)")
@@ -197,11 +204,11 @@ final class RemoteIndexSyncService: Sendable {
         // with concurrent remote writers and silently drop their updates.
         await state.updateRemoteManifestDigests(remoteDigests)
 
-        let snapshot = snapshotCache.current()
+        let digest = snapshotCache.counts()
         let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
         syncLog.info("[SyncTiming] Sync complete. Total: \(Self.ms(totalElapsed))s, changed: \(appliedChangedMonths), removed: \(appliedRemovedMonths)")
 
-        return snapshot
+        return digest
     }
 
     func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {

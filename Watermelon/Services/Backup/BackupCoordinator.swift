@@ -52,7 +52,7 @@ final class BackupCoordinator: Sendable {
         password: String,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
-    ) async throws -> RemoteLibrarySnapshot {
+    ) async throws -> RemoteIndexSyncDigest {
         try await preparationService.reloadRemoteIndex(
             profile: profile,
             password: password,

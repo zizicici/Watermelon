@@ -97,22 +97,31 @@ struct RemoteAssetResourceInstance: Hashable, Identifiable, Sendable {
     }
 }
 
+/// Cheap summary of a remote manifest sync. Does not materialize the per-asset
+/// resource/link arrays, so it's safe to hand to callers that only need totals (log lines,
+/// gating decisions). When a caller actually needs the flat arrays, ask the service for a
+/// full `RemoteLibrarySnapshot` explicitly.
+struct RemoteIndexSyncDigest: Sendable {
+    let resourceCount: Int
+    let assetCount: Int
+    let linkCount: Int
+
+    var totalEntryCount: Int { resourceCount + assetCount + linkCount }
+}
+
 struct RemoteLibrarySnapshot {
     let resources: [RemoteManifestResource]
     let assets: [RemoteManifestAsset]
     let assetResourceLinks: [RemoteAssetResourceLink]
-    private let cachedAssetFingerprintSet: Set<Data>?
 
     init(
         resources: [RemoteManifestResource],
         assets: [RemoteManifestAsset],
-        assetResourceLinks: [RemoteAssetResourceLink] = [],
-        assetFingerprintSet: Set<Data>? = nil
+        assetResourceLinks: [RemoteAssetResourceLink] = []
     ) {
         self.resources = resources
         self.assets = assets
         self.assetResourceLinks = assetResourceLinks
-        cachedAssetFingerprintSet = assetFingerprintSet
     }
 
     var totalCount: Int {
@@ -121,13 +130,6 @@ struct RemoteLibrarySnapshot {
 
     var totalResourceCount: Int {
         resources.count
-    }
-
-    var assetFingerprintSet: Set<Data> {
-        if let cachedAssetFingerprintSet {
-            return cachedAssetFingerprintSet
-        }
-        return Set(assets.map(\.assetFingerprint))
     }
 }
 

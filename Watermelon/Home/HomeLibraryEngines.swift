@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import Photos
+import UIKit
 import os.log
 
 private let dataLog = Logger(subsystem: "com.zizicici.watermelon", category: "HomeData")
@@ -823,38 +824,44 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
         }
         guard !ids.isEmpty else { return [] }
 
-        let phAssets = photoLibraryService.fetchAssets(localIdentifiers: ids)
-        var assetByID: [String: PHAsset] = [:]
-        assetByID.reserveCapacity(phAssets.count)
-        for asset in phAssets {
-            assetByID[asset.localIdentifier] = asset
-        }
-
-        var total: Int64 = 0
-        var updates: [AssetSizeUpdate] = []
-        for id in ids {
-            guard let asset = assetByID[id] else { continue }
-            let mtime = asset.modificationDate?.millisecondsSinceEpoch
-
-            if let mtime, let snapshot = sizeCache[id], snapshot.modificationDateMs == mtime {
-                total += snapshot.totalFileSizeBytes
-                continue
+        // `PHAssetResource.assetResources(for:)` returns an autoreleased NSArray per call.
+        // Without an explicit pool the objects pile up across every month in the scan —
+        // at 100K libraries that's easily tens of MB of ObjC overhead. Drain per month.
+        let (total, updates): (Int64, [AssetSizeUpdate]) = autoreleasepool {
+            let phAssets = photoLibraryService.fetchAssets(localIdentifiers: ids)
+            var assetByID: [String: PHAsset] = [:]
+            assetByID.reserveCapacity(phAssets.count)
+            for asset in phAssets {
+                assetByID[asset.localIdentifier] = asset
             }
 
-            let resources = PHAssetResource.assetResources(for: asset)
-            let computedSize = resources.reduce(Int64(0)) { partial, resource in
-                partial + max(PhotoLibraryService.resourceFileSize(resource), 0)
-            }
-            let safeSize = max(computedSize, 0)
-            total += safeSize
+            var total: Int64 = 0
+            var updates: [AssetSizeUpdate] = []
+            for id in ids {
+                guard let asset = assetByID[id] else { continue }
+                let mtime = asset.modificationDate?.millisecondsSinceEpoch
 
-            if let mtime {
-                updates.append(AssetSizeUpdate(
-                    assetLocalIdentifier: id,
-                    totalFileSizeBytes: safeSize,
-                    modificationDateMs: mtime
-                ))
+                if let mtime, let snapshot = sizeCache[id], snapshot.modificationDateMs == mtime {
+                    total += snapshot.totalFileSizeBytes
+                    continue
+                }
+
+                let resources = PHAssetResource.assetResources(for: asset)
+                let computedSize = resources.reduce(Int64(0)) { partial, resource in
+                    partial + max(PhotoLibraryService.resourceFileSize(resource), 0)
+                }
+                let safeSize = max(computedSize, 0)
+                total += safeSize
+
+                if let mtime {
+                    updates.append(AssetSizeUpdate(
+                        assetLocalIdentifier: id,
+                        totalFileSizeBytes: safeSize,
+                        modificationDateMs: mtime
+                    ))
+                }
             }
+            return (total, updates)
         }
 
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
@@ -907,6 +914,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     // in-flight scans have finished. Otherwise a fast rescan completing while startup is
     // still walking months would wipe the cache out from under startup.
     private var activeFileSizeScanCount = 0
+    private var memoryWarningObserver: NSObjectProtocol?
 
     init(
         photoLibraryService: PhotoLibraryService,
@@ -919,6 +927,40 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
             contentHashIndexRepository: contentHashIndexRepository,
             remoteMonthSnapshot: remoteMonthSnapshot
         )
+        super.init()
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleMemoryWarning()
+            }
+        }
+    }
+
+    deinit {
+        if let memoryWarningObserver {
+            NotificationCenter.default.removeObserver(memoryWarningObserver)
+        }
+    }
+
+    // Cheap, UX-preserving trim on system memory pressure:
+    // - cancel the PHChange rescan (it's cache-rebuild work; next PHChange re-triggers).
+    // - drop pending size-coalesce + rescan month buffers.
+    // - try to release the asset-size snapshot via the refcount-guarded path so we don't
+    //   yank it out from under an in-flight startup scan (that would force every remaining
+    //   month to cold PHAssetResource recomputation, *worsening* pressure).
+    // Intentionally untouched: backup session (not ours to tamper with), worker count,
+    // RemoteLibrarySnapshotCache (drives UI + rebuild needs network), and the engines'
+    // fingerprint cache (source of truth for backed-up counts).
+    private func handleMemoryWarning() {
+        dataLog.warning("[HomeData] memory warning: cancelling rescan, releasing size snapshot if idle")
+        fileSizeRescanTask?.cancel()
+        fileSizeRescanTask = nil
+        pendingRescanMonths.removeAll()
+        resetPendingFileSizeUpdates()
+        releaseAssetSizeSnapshotIfIdle()
     }
 
     func remoteSnapshotRevisionForQuery(hasActiveConnection: Bool) -> UInt64? {
