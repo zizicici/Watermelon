@@ -6,6 +6,7 @@
 import Foundation
 import Network
 import Photos
+import Security
 import MoreKit
 
 final class BackgroundBackupRunner {
@@ -13,6 +14,8 @@ final class BackgroundBackupRunner {
 
     private static let flushInterval = 10
     private static let recentMonthCount = 2
+    private static let profileCooldownHours = 18
+    private static let profileCooldownInterval: TimeInterval = TimeInterval(profileCooldownHours) * 60 * 60
 
     private let databaseManager: DatabaseManager
     private let keychainService: KeychainService
@@ -67,7 +70,13 @@ final class BackgroundBackupRunner {
 
         for profile in profiles.shuffled() {
             if Task.isCancelled { break }
-            await backupProfile(profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
+            if await shouldSkipProfileForCooldown(profile, writer: writer) {
+                continue
+            }
+            let result = await backupProfile(profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
+            if result == .completed {
+                markProfileCompleted(profile)
+            }
         }
 
         await writer.appendLog(String(localized: "backup.auto.log.sessionEnd"), level: .info)
@@ -76,27 +85,48 @@ final class BackgroundBackupRunner {
 
     // MARK: - Per-Profile Backup
 
+    private enum ProfileRunResult: Equatable {
+        case completed
+        case failed
+        case skipped
+        case cancelled
+    }
+
     private func backupProfile(
         _ profile: ServerProfileRecord,
         monthAssetIDs: [LibraryMonthKey: [String]],
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter
-    ) async {
+    ) async -> ProfileRunResult {
         await writer.appendLog(
             String(format: String(localized: "backup.auto.log.profileStart"), profile.name),
             level: .info
         )
         let password: String
         if profile.storageProfile.requiresPassword {
-            guard let pw = try? keychainService.readPassword(account: profile.credentialRef),
-                  !pw.isEmpty else {
+            do {
+                let pw = try keychainService.readPassword(account: profile.credentialRef)
+                guard !pw.isEmpty else {
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.profileMissingPassword"), profile.name),
+                        level: .warning
+                    )
+                    return .skipped
+                }
+                password = pw
+            } catch KeychainError.unhandled(let status) where status == errSecItemNotFound {
                 await writer.appendLog(
                     String(format: String(localized: "backup.auto.log.profileMissingPassword"), profile.name),
                     level: .warning
                 )
-                return
+                return .skipped
+            } catch {
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.profilePasswordReadFailed"), profile.name, error.localizedDescription),
+                    level: .warning
+                )
+                return .skipped
             }
-            password = pw
         } else {
             password = ""
         }
@@ -110,22 +140,50 @@ final class BackgroundBackupRunner {
                 String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
                 level: .error
             )
-            return
+            return .failed
         }
 
         let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
         await client.disconnectSafely()
+        if Task.isCancelled {
+            return .cancelled
+        }
         if anyMonthFailed {
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.profileFailed"), profile.name),
                 level: .error
             )
+            return .failed
         } else {
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.profileEnd"), profile.name),
                 level: .info
             )
+            return .completed
         }
+    }
+
+    private func shouldSkipProfileForCooldown(
+        _ profile: ServerProfileRecord,
+        writer: ExecutionLogSessionWriter
+    ) async -> Bool {
+        guard let profileID = profile.id,
+              let lastCompletedAt = try? databaseManager.backgroundBackupLastCompletedAt(profileID: profileID) else {
+            return false
+        }
+        guard Date().timeIntervalSince(lastCompletedAt) < Self.profileCooldownInterval else {
+            return false
+        }
+        await writer.appendLog(
+            String(format: String(localized: "backup.auto.log.profileCooldownSkip"), profile.name, Self.profileCooldownHours),
+            level: .info
+        )
+        return true
+    }
+
+    private func markProfileCompleted(_ profile: ServerProfileRecord) {
+        guard let profileID = profile.id else { return }
+        try? databaseManager.setBackgroundBackupLastCompletedAt(Date(), profileID: profileID)
     }
 
     // MARK: - Backup Loop

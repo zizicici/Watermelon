@@ -6,8 +6,24 @@ enum KeychainError: Error {
     case unhandled(status: OSStatus)
 }
 
+extension KeychainError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .unexpectedData:
+            return String(localized: "keychain.error.unexpectedPasswordData")
+        case .unhandled(let status):
+            let message = SecCopyErrorMessageString(status, nil) as String?
+            return message ?? String(
+                format: String(localized: "keychain.error.unhandledStatus"),
+                Int(status)
+            )
+        }
+    }
+}
+
 final class KeychainService {
     static let service = "com.zizicici.watermelon.credentials"
+    private static let accessibility = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
 
     func save(password: String, account: String) throws {
         let data = Data(password.utf8)
@@ -15,12 +31,16 @@ final class KeychainService {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: account,
+            kSecAttrAccessible as String: Self.accessibility,
             kSecValueData as String: data
         ]
 
         let status = SecItemAdd(query as CFDictionary, nil)
         if status == errSecDuplicateItem {
-            let attributes = [kSecValueData as String: data]
+            let attributes: [String: Any] = [
+                kSecValueData as String: data,
+                kSecAttrAccessible as String: Self.accessibility
+            ]
             let updateQuery: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: Self.service,

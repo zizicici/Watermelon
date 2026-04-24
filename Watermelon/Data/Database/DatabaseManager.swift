@@ -198,6 +198,21 @@ final class DatabaseManager {
         }
     }
 
+    func backgroundBackupLastCompletedAt(profileID: Int64) throws -> Date? {
+        guard let value = try syncStateValue(for: backgroundBackupLastCompletedKey(profileID: profileID)),
+              let timestamp = TimeInterval(value) else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: timestamp)
+    }
+
+    func setBackgroundBackupLastCompletedAt(_ date: Date, profileID: Int64) throws {
+        try setSyncState(
+            key: backgroundBackupLastCompletedKey(profileID: profileID),
+            value: String(date.timeIntervalSince1970)
+        )
+    }
+
     func setActiveServerProfileID(_ id: Int64?) throws {
         if let id {
             try setSyncState(key: "active_server_profile_id", value: String(id))
@@ -214,6 +229,10 @@ final class DatabaseManager {
             return nil
         }
         return id
+    }
+
+    private func backgroundBackupLastCompletedKey(profileID: Int64) -> String {
+        "background_backup_last_completed_at_profile_\(profileID)"
     }
 
     static func defaultDatabaseURL() -> URL {
