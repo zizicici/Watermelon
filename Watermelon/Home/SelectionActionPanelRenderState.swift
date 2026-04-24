@@ -32,13 +32,13 @@ struct SelectionActionPanelButtonState: Equatable {
 struct SelectionActionPanelSelectionState: Equatable {
     let backupCount: Int
     let downloadCount: Int
-    let syncCount: Int
+    let complementCount: Int
 }
 
 struct SelectionActionPanelExecutionState: Equatable {
-    let uploadCount: Int
+    let backupCount: Int
     let downloadCount: Int
-    let syncCount: Int
+    let complementCount: Int
     let statusText: String
     let hasLogAlert: Bool
     let primaryAction: SelectionActionPanelPrimaryAction
@@ -66,22 +66,22 @@ struct SelectionActionPanelMenus {
     // SelectionActionPanel always reapplies them before diffing state because UIMenu is not Equatable.
     let backup: UIMenu?
     let download: UIMenu?
-    let sync: UIMenu?
+    let complement: UIMenu?
 
     static let empty = SelectionActionPanelMenus(
         backup: nil,
         download: nil,
-        sync: nil
+        complement: nil
     )
 }
 
 enum SelectionActionPanelViewStateBuilder {
-    static func selection(backupCount: Int, downloadCount: Int, syncCount: Int) -> SelectionActionPanelViewState {
+    static func selection(backupCount: Int, downloadCount: Int, complementCount: Int) -> SelectionActionPanelViewState {
         .selection(
             SelectionActionPanelSelectionState(
                 backupCount: backupCount,
                 downloadCount: downloadCount,
-                syncCount: syncCount
+                complementCount: complementCount
             )
         )
     }
@@ -202,9 +202,9 @@ enum SelectionActionPanelViewStateBuilder {
 
         return .execution(
             SelectionActionPanelExecutionState(
-                uploadCount: executionState.uploadMonths.count,
+                backupCount: executionState.backupMonths.count,
                 downloadCount: executionState.downloadMonths.count,
-                syncCount: executionState.syncMonths.count,
+                complementCount: executionState.complementMonths.count,
                 statusText: executionState.statusText,
                 hasLogAlert: hasLogAlert,
                 primaryAction: primaryAction,

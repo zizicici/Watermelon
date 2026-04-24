@@ -212,30 +212,17 @@ final class DirectionArrowView: UICollectionReusableView {
         isHidden = true
     }
 
-    func configure(direction: HomeArrowDirection?, percent: Double? = nil) {
-        guard let direction else {
+    func configure(intent: MonthIntent?, percent: Double? = nil) {
+        guard let intent else {
             imageView.image = nil
             percentLabel.attributedText = nil
             isHidden = true
             return
         }
 
-        let symbolName: String
-        let iconColor: UIColor
-        switch direction {
-        case .toRemote:
-            symbolName = "arrow.right"
-            iconColor = .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
-        case .toLocal:
-            symbolName = "arrow.left"
-            iconColor = .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
-        case .sync:
-            symbolName = "arrow.left.arrow.right"
-            iconColor = .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
-        }
-
+        let iconColor = intent.tintColor
         let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
-        imageView.image = UIImage(systemName: symbolName, withConfiguration: config)
+        imageView.image = UIImage(systemName: intent.iconSymbolName, withConfiguration: config)
         imageView.tintColor = iconColor
 
         if let percent {

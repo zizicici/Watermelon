@@ -115,7 +115,7 @@ final class HomeExecutionCoordinator {
 
     // MARK: - Enter / Exit
 
-    func enter(upload: [LibraryMonthKey], download: [LibraryMonthKey], sync: [LibraryMonthKey]) {
+    func enter(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) {
         executionTask = nil
         transientControlState = nil
         executionSettingsSnapshot = ExecutionSettingsSnapshot.fromCurrentSettings()
@@ -123,9 +123,9 @@ final class HomeExecutionCoordinator {
         dataRefresher.reset()
         logEntries.removeAll(keepingCapacity: true)
         startSessionLogWriter(kind: .manual)
-        session.enter(upload: upload, download: download, sync: sync, localAssetIDs: dataAccess.localAssetIDs)
+        session.enter(backup: backup, download: download, complement: complement, localAssetIDs: dataAccess.localAssetIDs)
         setStatusText(String(localized: "home.execution.log.preparingExecution"), notifyState: false)
-        appendInfoLog(String(format: String(localized: "home.execution.log.startExecution"), upload.count, download.count, sync.count))
+        appendInfoLog(String(format: String(localized: "home.execution.log.startExecution"), backup.count, download.count, complement.count))
         let controller = BackupSessionController(dependencies: dependencies)
         backupSessionController = controller
         backupEventObserverID = controller.addEventObserver { [weak self] event in
@@ -172,7 +172,7 @@ final class HomeExecutionCoordinator {
         case .upload:
             appendInfoLog(String(localized: "home.execution.log.requestPause"))
             setStatusText(String(localized: "home.execution.log.pausing"))
-            backupBridge?.markAssetIDsPendingForResume(assetIDsAwaitingInlineSyncResume())
+            backupBridge?.markAssetIDsPendingForResume(assetIDsAwaitingInlineComplementResume())
             dataRefresher.cancel()
             downloadHelper?.cancel()
             if shouldPauseBeforeUploadStart {
@@ -422,10 +422,10 @@ final class HomeExecutionCoordinator {
     ) async {
         session.beginDownloadMonth(month)
         appendInfoLog(String(format: String(localized: "home.execution.log.startDownloadMonth"), phaseLabel, month.displayText))
-        let syncLabelOverride: String? = session.syncMonths.contains(month)
-            ? String(localized: "home.execution.syncing")
+        let complementLabelOverride: String? = session.complementMonths.contains(month)
+            ? String(localized: "home.execution.complementing")
             : nil
-        let monthStatus = phaseStatusText(phaseLabelOverride: syncLabelOverride)
+        let monthStatus = phaseStatusText(phaseLabelOverride: complementLabelOverride)
             ?? fallbackPhaseLabel()
         setStatusText(monthStatus, notifyState: false)
         notifyStateChanged()
@@ -602,7 +602,7 @@ final class HomeExecutionCoordinator {
     }
 
     private func makeUploadMonthFinalizer() -> BackupMonthFinalizer? {
-        guard session.hasSyncMonths else { return nil }
+        guard session.hasComplementMonths else { return nil }
         let context = makeDownloadContext()
         return { [weak self] month in
             guard let self else { return .cancelled }
@@ -630,11 +630,11 @@ final class HomeExecutionCoordinator {
         guard !Task.isCancelled else { return .cancelled }
 
         let phaseLabel = session.phaseLabel(for: month)
-        session.completeSyncMonthUpload(month)
+        session.completeComplementMonthUpload(month)
         session.beginDownloadMonth(month)
         appendInfoLog(String(format: String(localized: "home.execution.log.uploadDoneStartPhase"), phaseLabel, month.displayText))
-        let syncLabel = String(localized: "home.execution.syncing")
-        let monthStatus = phaseStatusText(phaseLabelOverride: syncLabel) ?? syncLabel
+        let complementLabel = String(localized: "home.execution.complementing")
+        let monthStatus = phaseStatusText(phaseLabelOverride: complementLabel) ?? complementLabel
         setStatusText(monthStatus, notifyState: false)
         notifyStateChanged()
 
@@ -699,7 +699,7 @@ final class HomeExecutionCoordinator {
         }
     }
 
-    private func assetIDsAwaitingInlineSyncResume() -> Set<String> {
+    private func assetIDsAwaitingInlineComplementResume() -> Set<String> {
         var assetIDs = Set<String>()
         for (month, plan) in session.monthPlans {
             guard plan.needsUpload && plan.needsDownload else { continue }

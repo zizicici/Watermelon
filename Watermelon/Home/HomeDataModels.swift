@@ -96,16 +96,40 @@ struct HomeMergedYearSection {
     }
 }
 
-// MARK: - Selection & Direction
+// MARK: - Selection & Intent
 
 enum HomeSelectionState {
     case none, partial, all
 }
 
-enum HomeArrowDirection {
-    case toRemote      // arrow.right
-    case toLocal       // arrow.left
-    case sync          // arrow.left.arrow.right
+enum MonthIntent {
+    case backup        // local → remote, arrow.right
+    case download      // remote → local, arrow.left
+    case complement    // bidirectional fill, arrow.left.arrow.right
+
+    var iconSymbolName: String {
+        switch self {
+        case .backup:     return "arrow.right"
+        case .download:   return "arrow.left"
+        case .complement: return "arrow.left.arrow.right"
+        }
+    }
+
+    var tintColor: UIColor {
+        switch self {
+        case .backup:     return .materialPrimary(light: .Material.Cyan._600, dark: .Material.Cyan._200)
+        case .download:   return .materialPrimary(light: .Material.Orange._600, dark: .Material.Orange._200)
+        case .complement: return .materialPrimary(light: .Material.Purple._600, dark: .Material.Purple._200)
+        }
+    }
+
+    var panelSubtitle: String {
+        switch self {
+        case .backup:     return String(localized: "panel.backup")
+        case .download:   return String(localized: "panel.download")
+        case .complement: return String(localized: "panel.complement")
+        }
+    }
 }
 
 // MARK: - Season Styling

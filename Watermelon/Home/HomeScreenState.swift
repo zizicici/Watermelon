@@ -66,11 +66,11 @@ struct SelectionState {
         remoteMonths.removeAll()
     }
 
-    func arrowDirection(for month: LibraryMonthKey) -> HomeArrowDirection? {
+    func intent(for month: LibraryMonthKey) -> MonthIntent? {
         switch (localMonths.contains(month), remoteMonths.contains(month)) {
-        case (true, false):  return .toRemote
-        case (false, true):  return .toLocal
-        case (true, true):   return .sync
+        case (true, false):  return .backup
+        case (false, true):  return .download
+        case (true, true):   return .complement
         case (false, false): return nil
         }
     }
@@ -83,23 +83,23 @@ struct SelectionState {
         return .none
     }
 
-    func counts() -> (backup: Int, download: Int, sync: Int) {
+    func counts() -> (backup: Int, download: Int, complement: Int) {
         let allSelected = localMonths.union(remoteMonths)
-        var backup = 0, download = 0, sync = 0
+        var backup = 0, download = 0, complement = 0
         for month in allSelected {
-            switch arrowDirection(for: month) {
-            case .toRemote: backup += 1
-            case .toLocal:  download += 1
-            case .sync:     sync += 1
-            case nil:       break
+            switch intent(for: month) {
+            case .backup:     backup += 1
+            case .download:   download += 1
+            case .complement: complement += 1
+            case nil:         break
             }
         }
-        return (backup, download, sync)
+        return (backup, download, complement)
     }
 
-    func months(for direction: HomeArrowDirection) -> [LibraryMonthKey] {
+    func months(for targetIntent: MonthIntent) -> [LibraryMonthKey] {
         localMonths.union(remoteMonths)
-            .filter { arrowDirection(for: $0) == direction }
+            .filter { intent(for: $0) == targetIntent }
             .sorted()
     }
 }
@@ -146,11 +146,11 @@ struct MonthPlan {
     var isDone: Bool { phase == .completed || phase == .partiallyFailed }
     var isFailed: Bool { phase == .failed }
     var isActive: Bool { phase == .uploading || phase == .downloading }
-    var direction: HomeArrowDirection? {
+    var intent: MonthIntent? {
         switch (needsUpload, needsDownload) {
-        case (true, false): return .toRemote
-        case (false, true): return .toLocal
-        case (true, true): return .sync
+        case (true, false): return .backup
+        case (false, true): return .download
+        case (true, true): return .complement
         case (false, false): return nil
         }
     }
@@ -225,9 +225,9 @@ struct HomeExecutionState {
     let statusText: String
     let processedCountByMonth: [LibraryMonthKey: Int]
     let assetCountByMonth: [LibraryMonthKey: Int]
-    let uploadMonths: [LibraryMonthKey]
+    let backupMonths: [LibraryMonthKey]
     let downloadMonths: [LibraryMonthKey]
-    let syncMonths: [LibraryMonthKey]
+    let complementMonths: [LibraryMonthKey]
 
     var executionMonths: Set<LibraryMonthKey> { Set(monthPlans.keys) }
 
@@ -244,14 +244,14 @@ struct HomeExecutionState {
         }.sorted { $0.month < $1.month }
     }
 
-    func direction(for month: LibraryMonthKey) -> HomeArrowDirection? {
-        monthPlans[month]?.direction
+    func intent(for month: LibraryMonthKey) -> MonthIntent? {
+        monthPlans[month]?.intent
     }
 
-    func progressPercent(for month: LibraryMonthKey, row: HomeMonthRow?, direction fallbackDirection: HomeArrowDirection?, matchedCount: Int) -> Double? {
+    func progressPercent(for month: LibraryMonthKey, row: HomeMonthRow?, intent fallbackIntent: MonthIntent?, matchedCount: Int) -> Double? {
         let basePercent = HomeProgressCalculator.basePercent(
             row: row,
-            direction: direction(for: month) ?? fallbackDirection,
+            intent: intent(for: month) ?? fallbackIntent,
             matchedCount: matchedCount
         )
 
@@ -285,20 +285,20 @@ enum HomeChangeKind {
 enum HomeProgressCalculator {
     static func basePercent(
         row: HomeMonthRow?,
-        direction: HomeArrowDirection?,
+        intent: MonthIntent?,
         matchedCount: Int
     ) -> Double? {
-        guard let row, let direction else { return nil }
+        guard let row, let intent else { return nil }
 
         let localCount = row.local?.assetCount ?? 0
         let remoteCount = row.remote?.assetCount ?? 0
 
-        switch direction {
-        case .toRemote:
+        switch intent {
+        case .backup:
             return localCount > 0 ? Double(matchedCount) / Double(localCount) * 100 : nil
-        case .toLocal:
+        case .download:
             return remoteCount > 0 ? Double(matchedCount) / Double(remoteCount) * 100 : nil
-        case .sync:
+        case .complement:
             let remoteOnly = max(0, remoteCount - matchedCount)
             let total = localCount + remoteOnly
             return total > 0 ? Double(matchedCount) / Double(total) * 100 : nil

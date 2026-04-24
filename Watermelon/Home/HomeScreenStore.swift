@@ -201,8 +201,8 @@ final class HomeScreenStore {
 
     // MARK: - Execution Actions
 
-    func startExecution(upload: [LibraryMonthKey], download: [LibraryMonthKey], sync: [LibraryMonthKey]) {
-        executionCoordinator.enter(upload: upload, download: download, sync: sync)
+    func startExecution(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) {
+        executionCoordinator.enter(backup: backup, download: download, complement: complement)
     }
 
     func pauseExecution() { executionCoordinator.pause() }
@@ -251,22 +251,22 @@ final class HomeScreenStore {
 
     // MARK: - Derived State
 
-    func arrowDirection(for month: LibraryMonthKey) -> HomeArrowDirection? {
-        executionState?.direction(for: month) ?? selection.arrowDirection(for: month)
+    func intent(for month: LibraryMonthKey) -> MonthIntent? {
+        executionState?.intent(for: month) ?? selection.intent(for: month)
     }
 
     func progressPercent(for month: LibraryMonthKey) -> Double? {
         let row = rowLookup[month]
-        let direction = arrowDirection(for: month)
+        let monthIntent = intent(for: month)
         let matched = dataManager.matchedCount(for: month)
 
         if let exec = executionState {
-            return exec.progressPercent(for: month, row: row, direction: direction, matchedCount: matched)
+            return exec.progressPercent(for: month, row: row, intent: monthIntent, matchedCount: matched)
         }
 
         return HomeProgressCalculator.basePercent(
             row: row,
-            direction: direction,
+            intent: monthIntent,
             matchedCount: matched
         )
     }

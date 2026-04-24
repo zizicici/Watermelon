@@ -487,7 +487,7 @@ final class HomeViewController: UIViewController {
             let itemIndexPath = IndexPath(item: indexPath.item * 2, section: indexPath.section)
             guard let item = self.dataSource.itemIdentifier(for: itemIndexPath) else { return }
             arrowView.configure(
-                direction: self.store.arrowDirection(for: item.month),
+                intent: self.store.intent(for: item.month),
                 percent: self.store.progressPercent(for: item.month)
             )
         }
@@ -635,7 +635,7 @@ final class HomeViewController: UIViewController {
                     forElementKind: directionArrowElementKind, at: badgeIndexPath
                 ) as? DirectionArrowView {
                     arrowView.configure(
-                        direction: store.arrowDirection(for: row.month),
+                        intent: store.intent(for: row.month),
                         percent: store.progressPercent(for: row.month)
                     )
                 }
@@ -680,7 +680,7 @@ final class HomeViewController: UIViewController {
                     forElementKind: directionArrowElementKind, at: badgeIndexPath
                 ) as? DirectionArrowView {
                     arrowView.configure(
-                        direction: store.arrowDirection(for: row.month),
+                        intent: store.intent(for: row.month),
                         percent: store.progressPercent(for: row.month)
                     )
                 }
@@ -973,12 +973,12 @@ final class HomeViewController: UIViewController {
             state: SelectionActionPanelViewStateBuilder.selection(
                 backupCount: counts.backup,
                 downloadCount: counts.download,
-                syncCount: counts.sync
+                complementCount: counts.complement
             ),
             menus: SelectionActionPanelMenus(
-                backup: buildCategoryMenu(for: .toRemote),
-                download: buildCategoryMenu(for: .toLocal),
-                sync: buildCategoryMenu(for: .sync)
+                backup: buildCategoryMenu(for: .backup),
+                download: buildCategoryMenu(for: .download),
+                complement: buildCategoryMenu(for: .complement)
             )
         )
 
@@ -1000,7 +1000,7 @@ final class HomeViewController: UIViewController {
             menus: SelectionActionPanelMenus(
                 backup: nil,
                 download: nil,
-                sync: nil
+                complement: nil
             )
         )
     }
@@ -1375,21 +1375,21 @@ final class HomeViewController: UIViewController {
 
     private func executeTapped() {
         let counts = store.selection.counts()
-        guard counts.backup > 0 || counts.download > 0 || counts.sync > 0 else { return }
+        guard counts.backup > 0 || counts.download > 0 || counts.complement > 0 else { return }
 
         var lines: [String] = []
         if counts.backup > 0 { lines.append(String(format: String(localized: "home.confirm.backupMonths"), counts.backup)) }
         if counts.download > 0 { lines.append(String(format: String(localized: "home.confirm.downloadMonths"), counts.download)) }
-        if counts.sync > 0 { lines.append(String(format: String(localized: "home.confirm.syncMonths"), counts.sync)) }
+        if counts.complement > 0 { lines.append(String(format: String(localized: "home.confirm.complementMonths"), counts.complement)) }
 
-        let upload = store.selection.months(for: .toRemote)
-        let download = store.selection.months(for: .toLocal)
-        let sync = store.selection.months(for: .sync)
+        let backup = store.selection.months(for: .backup)
+        let download = store.selection.months(for: .download)
+        let complement = store.selection.months(for: .complement)
 
         let alert = UIAlertController(title: String(localized: "home.alert.confirmExecute"), message: lines.joined(separator: "\n"), preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
         alert.addAction(UIAlertAction(title: String(localized: "common.start"), style: .default) { [weak self] _ in
-            self?.store.startExecution(upload: upload, download: download, sync: sync)
+            self?.store.startExecution(backup: backup, download: download, complement: complement)
         })
         present(alert, animated: true)
     }
@@ -1426,8 +1426,8 @@ final class HomeViewController: UIViewController {
         }
     }
 
-    private func buildCategoryMenu(for category: HomeArrowDirection) -> UIMenu {
-        let months = store.selection.months(for: category)
+    private func buildCategoryMenu(for intent: MonthIntent) -> UIMenu {
+        let months = store.selection.months(for: intent)
         var byYear: [Int: [LibraryMonthKey]] = [:]
         for month in months { byYear[month.year, default: []].append(month) }
 

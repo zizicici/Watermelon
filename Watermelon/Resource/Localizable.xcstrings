@@ -16157,6 +16157,172 @@
         }
       }
     },
+    "home.confirm.complementMonths" : {
+      "localizations" : {
+        "de" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Monate ergänzen"
+                }
+              }
+            }
+          }
+        },
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Complement %lld month"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Complement %lld months"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Complementar %lld meses"
+                }
+              }
+            }
+          }
+        },
+        "es-419" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Complementar %lld meses"
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Compléter %lld mois"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld か月分を補完"
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld개월 보완"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Complementar %lld meses"
+                }
+              }
+            }
+          }
+        },
+        "pt-PT" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Complementar %lld meses"
+                }
+              }
+            }
+          }
+        },
+        "uk" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Доповнити %lld місяців"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "互补 %lld 个月份"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hant" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "互補 %lld 個月份"
+                }
+              }
+            }
+          }
+        },
+        "zh-HK" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "互補 %lld 個月份"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "home.confirm.downloadMonths" : {
       "localizations" : {
         "de" : {
@@ -16316,172 +16482,6 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "下載 %lld 個月份"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "home.confirm.syncMonths" : {
-      "localizations" : {
-        "de" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld Monate synchronisieren"
-                }
-              }
-            }
-          }
-        },
-        "en" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Sync %lld month"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Sync %lld months"
-                }
-              }
-            }
-          }
-        },
-        "es" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Sincronizar %lld meses"
-                }
-              }
-            }
-          }
-        },
-        "es-419" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Sincronizar %lld meses"
-                }
-              }
-            }
-          }
-        },
-        "fr" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Synchroniser %lld mois"
-                }
-              }
-            }
-          }
-        },
-        "ja" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld か月分を同期"
-                }
-              }
-            }
-          }
-        },
-        "ko" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld개월 동기화"
-                }
-              }
-            }
-          }
-        },
-        "pt-BR" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Sincronizar %lld meses"
-                }
-              }
-            }
-          }
-        },
-        "pt-PT" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Sincronizar %lld meses"
-                }
-              }
-            }
-          }
-        },
-        "uk" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Синхронізувати %lld місяців"
-                }
-              }
-            }
-          }
-        },
-        "zh-Hans" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "同步 %lld 个月份"
-                }
-              }
-            }
-          }
-        },
-        "zh-Hant" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "同步 %lld 個月份"
-                }
-              }
-            }
-          }
-        },
-        "zh-HK" : {
-          "variations" : {
-            "plural" : {
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "同步 %lld 個月份"
                 }
               }
             }
@@ -16649,6 +16649,88 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "遠端 %lld 張"
+          }
+        }
+      }
+    },
+    "home.execution.complementing" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wird ergänzt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complementing"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complementando"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complementando"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complément en cours"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "補完中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보완 중"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complementando"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A complementar"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Триває доповнення"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "互补中"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "互補中"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "互補中"
           }
         }
       }
@@ -18220,79 +18302,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lokaler Index unvollständig: %@. Um doppelte Fotos beim Herunterladen oder Synchronisieren zu vermeiden, wurde dieser Vorgang gestoppt."
+            "value" : "Lokaler Index unvollständig: %@. Um doppelte Fotos beim Herunterladen oder Ergänzen zu vermeiden, wurde dieser Vorgang gestoppt."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Local index incomplete: %@. To avoid duplicate photos during download or sync, this operation has been stopped."
+            "value" : "Local index incomplete: %@. To avoid duplicate photos during download or complement, this operation has been stopped."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o sincronización, esta operación se ha detenido."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o complemento, esta operación se ha detenido."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o sincronización, esta operación se ha detenido."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o complemento, esta operación se ha detenido."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Index local incomplet : %@. Pour éviter les photos en double lors du téléchargement ou de la synchronisation, cette opération a été arrêtée."
+            "value" : "Index local incomplet : %@. Pour éviter les photos en double lors du téléchargement ou du complément, cette opération a été arrêtée."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ローカルインデックスが不完全です：%@。ダウンロードまたは同期で写真が重複するのを避けるため、この操作は停止されました。"
+            "value" : "ローカルインデックスが不完全です：%@。ダウンロードまたは補完で写真が重複するのを避けるため、この操作は停止されました。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "로컬 인덱스가 불완전합니다: %@. 다운로드 또는 동기화 중 사진 중복을 방지하기 위해 이 작업이 중지되었습니다."
+            "value" : "로컬 인덱스가 불완전합니다: %@. 다운로드 또는 보완 중 사진 중복을 방지하기 위해 이 작업이 중지되었습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante o download ou sincronização, esta operação foi interrompida."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante o download ou complemento, esta operação foi interrompida."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante a transferência ou sincronização, esta operação foi interrompida."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante a transferência ou complemento, esta operação foi interrompida."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Локальний індекс неповний: %@. Щоб уникнути дублювання фотографій під час завантаження або синхронізації, цю операцію зупинено."
+            "value" : "Локальний індекс неповний: %@. Щоб уникнути дублювання фотографій під час завантаження або доповнення, цю операцію зупинено."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本地索引不完整：%@。为避免下载或同步产生重复图片，本次操作已停止。"
+            "value" : "本地索引不完整：%@。为避免下载或互补产生重复图片，本次操作已停止。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機索引不完整：%@。為避免下載或同步產生重複圖片，本次操作已停止。"
+            "value" : "本機索引不完整：%@。為避免下載或互補產生重複圖片，本次操作已停止。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機索引不完整：%@。為避免下載或同步產生重複圖片，本次操作已停止。"
+            "value" : "本機索引不完整：%@。為避免下載或互補產生重複圖片，本次操作已停止。"
           }
         }
       }
@@ -18302,79 +18384,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lokaler Index unvollständig: %@. Um doppelte Fotos beim Herunterladen oder Synchronisieren zu vermeiden, wurde dieser Vorgang gestoppt. Bitte aktivieren Sie in den Einstellungen „iCloud-Fotozugriff erlauben“ oder laden Sie die Originale zuerst auf Ihr Gerät herunter."
+            "value" : "Lokaler Index unvollständig: %@. Um doppelte Fotos beim Herunterladen oder Ergänzen zu vermeiden, wurde dieser Vorgang gestoppt. Bitte aktivieren Sie in den Einstellungen „iCloud-Fotozugriff erlauben“ oder laden Sie die Originale zuerst auf Ihr Gerät herunter."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Local index incomplete: %@. To avoid duplicate photos during download or sync, this operation has been stopped. Please enable \"Allow iCloud Photo Access\" in settings, or download these originals to your device first."
+            "value" : "Local index incomplete: %@. To avoid duplicate photos during download or complement, this operation has been stopped. Please enable \"Allow iCloud Photo Access\" in settings, or download these originals to your device first."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o sincronización, esta operación se ha detenido. Active \"Permitir acceso a fotos de iCloud\" en los ajustes o descargue primero estos originales a su dispositivo."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o complemento, esta operación se ha detenido. Active \"Permitir acceso a fotos de iCloud\" en los ajustes o descargue primero estos originales a su dispositivo."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o sincronización, esta operación se ha detenido. Activa \"Permitir acceso a fotos de iCloud\" en los ajustes o descarga primero estos originales a tu dispositivo."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante la descarga o complemento, esta operación se ha detenido. Activa \"Permitir acceso a fotos de iCloud\" en los ajustes o descarga primero estos originales a tu dispositivo."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Index local incomplet : %@. Pour éviter les photos en double lors du téléchargement ou de la synchronisation, cette opération a été arrêtée. Veuillez activer « Autoriser l’accès aux photos iCloud » dans les réglages, ou télécharger d’abord ces originaux sur votre appareil."
+            "value" : "Index local incomplet : %@. Pour éviter les photos en double lors du téléchargement ou du complément, cette opération a été arrêtée. Veuillez activer « Autoriser l’accès aux photos iCloud » dans les réglages, ou télécharger d’abord ces originaux sur votre appareil."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ローカルインデックスが不完全です：%@。ダウンロードまたは同期で写真が重複するのを避けるため、この操作は停止されました。設定で「iCloud 写真アクセスを許可」を有効にするか、先にオリジナルをデバイスにダウンロードしてください。"
+            "value" : "ローカルインデックスが不完全です：%@。ダウンロードまたは補完で写真が重複するのを避けるため、この操作は停止されました。設定で「iCloud 写真アクセスを許可」を有効にするか、先にオリジナルをデバイスにダウンロードしてください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "로컬 인덱스가 불완전합니다: %@. 다운로드 또는 동기화 중 사진 중복을 방지하기 위해 이 작업이 중지되었습니다. 설정에서 \"iCloud 사진 접근 허용\"을 활성화하거나 먼저 원본을 기기에 다운로드하십시오."
+            "value" : "로컬 인덱스가 불완전합니다: %@. 다운로드 또는 보완 중 사진 중복을 방지하기 위해 이 작업이 중지되었습니다. 설정에서 \"iCloud 사진 접근 허용\"을 활성화하거나 먼저 원본을 기기에 다운로드하십시오."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante o download ou sincronização, esta operação foi interrompida. Ative \"Permitir acesso a fotos do iCloud\" nas configurações ou baixe esses originais para o dispositivo primeiro."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante o download ou complemento, esta operação foi interrompida. Ative \"Permitir acesso a fotos do iCloud\" nas configurações ou baixe esses originais para o dispositivo primeiro."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante a transferência ou sincronização, esta operação foi interrompida. Ative «Permitir acesso a fotos do iCloud» nas definições ou transfira estes originais para o dispositivo primeiro."
+            "value" : "Índice local incompleto: %@. Para evitar fotos duplicadas durante a transferência ou complemento, esta operação foi interrompida. Ative «Permitir acesso a fotos do iCloud» nas definições ou transfira estes originais para o dispositivo primeiro."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Локальний індекс неповний: %@. Щоб уникнути дублювання фотографій під час завантаження або синхронізації, цю операцію зупинено. Увімкніть «Дозволити доступ до фото iCloud» у налаштуваннях або спочатку завантажте ці оригінали на пристрій."
+            "value" : "Локальний індекс неповний: %@. Щоб уникнути дублювання фотографій під час завантаження або доповнення, цю операцію зупинено. Увімкніть «Дозволити доступ до фото iCloud» у налаштуваннях або спочатку завантажте ці оригінали на пристрій."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本地索引不完整：%@。为避免下载或同步产生重复图片，本次操作已停止。请先在设置中启用「允许访问 iCloud 原件」，或先将这些原件下载到本机。"
+            "value" : "本地索引不完整：%@。为避免下载或互补产生重复图片，本次操作已停止。请先在设置中启用「允许访问 iCloud 原件」，或先将这些原件下载到本机。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機索引不完整：%@。為避免下載或同步產生重複圖片，本次操作已停止。請先在設定中啟用「允許存取 iCloud 原件」，或先將這些原件下載到本機。"
+            "value" : "本機索引不完整：%@。為避免下載或互補產生重複圖片，本次操作已停止。請先在設定中啟用「允許存取 iCloud 原件」，或先將這些原件下載到本機。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本機索引不完整：%@。為避免下載或同步產生重複圖片，本次操作已停止。請先在設定中啟用「允許存取 iCloud 原件」，或先將這些原件下載到本機。"
+            "value" : "本機索引不完整：%@。為避免下載或互補產生重複圖片，本次操作已停止。請先在設定中啟用「允許存取 iCloud 原件」，或先將這些原件下載到本機。"
           }
         }
       }
@@ -19614,79 +19696,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ausführung gestartet: %1$lld Uploads, %2$lld Downloads, %3$lld Synchronisierungen."
+            "value" : "Ausführung gestartet: %1$lld Sicherungen, %2$lld Downloads, %3$lld Ergänzungen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Starting execution: %1$lld uploads, %2$lld downloads, %3$lld syncs."
+            "value" : "Starting execution: %1$lld backups, %2$lld downloads, %3$lld complements."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Iniciando ejecución: %1$lld subidas, %2$lld descargas, %3$lld sincronizaciones."
+            "value" : "Iniciando ejecución: %1$lld respaldos, %2$lld descargas, %3$lld complementos."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Iniciando ejecución: %1$lld subidas, %2$lld descargas, %3$lld sincronizaciones."
+            "value" : "Iniciando ejecución: %1$lld respaldos, %2$lld descargas, %3$lld complementos."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Début de l'exécution : %1$lld envois, %2$lld téléchargements, %3$lld synchronisations."
+            "value" : "Début de l'exécution : %1$lld sauvegardes, %2$lld téléchargements, %3$lld compléments."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "実行開始: アップロード %1$lld 件、ダウンロード %2$lld 件、同期 %3$lld 件。"
+            "value" : "実行開始: バックアップ %1$lld 件、ダウンロード %2$lld 件、補完 %3$lld 件。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "실행 시작: 업로드 %1$lld개, 다운로드 %2$lld개, 동기화 %3$lld개."
+            "value" : "실행 시작: 백업 %1$lld개, 다운로드 %2$lld개, 보완 %3$lld개."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Iniciando execução: %1$lld envios, %2$lld downloads, %3$lld sincronizações."
+            "value" : "Iniciando execução: %1$lld backups, %2$lld downloads, %3$lld complementos."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A iniciar execução: %1$lld envios, %2$lld transferências, %3$lld sincronizações."
+            "value" : "A iniciar execução: %1$lld cópias, %2$lld transferências, %3$lld complementos."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Початок виконання: %1$lld завантажень, %2$lld завантажень, %3$lld синхронізацій."
+            "value" : "Початок виконання: %1$lld резервних копіювань, %2$lld завантажень, %3$lld доповнень."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "开始执行：上传 %1$lld 个，下载 %2$lld 个，同步 %3$lld 个。"
+            "value" : "开始执行：备份 %1$lld 个，下载 %2$lld 个，互补 %3$lld 个。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "開始執行：上傳 %1$lld 個，下載 %2$lld 個，同步 %3$lld 個。"
+            "value" : "開始執行：備份 %1$lld 個，下載 %2$lld 個，互補 %3$lld 個。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "開始執行：上傳 %1$lld 個，下載 %2$lld 個，同步 %3$lld 個。"
+            "value" : "開始執行：備份 %1$lld 個，下載 %2$lld 個，互補 %3$lld 個。"
           }
         }
       }
@@ -21087,6 +21169,88 @@
         }
       }
     },
+    "home.execution.phaseComplement" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ergänzen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complement"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complemento"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complemento"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complément"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "補完"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보완"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complemento"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complemento"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доповнення"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "互补"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "互補"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "互補"
+          }
+        }
+      }
+    },
     "home.execution.phaseDownload" : {
       "localizations" : {
         "de" : {
@@ -21165,88 +21329,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "下載"
-          }
-        }
-      }
-    },
-    "home.execution.phaseSync" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Synchronisieren"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sync"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sincronización"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sincronización"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Synchronisation"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同期"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "동기화"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sincronização"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sincronização"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Синхронізація"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步"
           }
         }
       }
@@ -21493,88 +21575,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "備份啟動失敗"
-          }
-        }
-      }
-    },
-    "home.execution.syncing" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wird synchronisiert"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Syncing"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sincronizando"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sincronizando"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Synchronisation en cours"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同期中"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "동기화 중"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sincronizando"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A sincronizar"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Синхронізація"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步中"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步中"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步中"
           }
         }
       }
@@ -25515,6 +25515,88 @@
         }
       }
     },
+    "panel.complement" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ergänzen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complement"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complemento"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complemento"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complément"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "補完"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보완"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complemento"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Complemento"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доповнення"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "互补"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "互補"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "互補"
+          }
+        }
+      }
+    },
     "panel.download" : {
       "localizations" : {
         "de" : {
@@ -25675,88 +25757,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "日誌"
-          }
-        }
-      }
-    },
-    "panel.sync" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Synchronisieren"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sync"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sincronización"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sincronización"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Synchronisation"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同期"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "동기화"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sincronização"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sincronização"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Синхронізація"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步"
           }
         }
       }

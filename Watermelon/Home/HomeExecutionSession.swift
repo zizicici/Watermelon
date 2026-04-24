@@ -25,9 +25,9 @@ struct HomeExecutionSession {
     private(set) var assetCountByMonth: [LibraryMonthKey: Int] = [:]
     private(set) var processedCountByMonth: [LibraryMonthKey: Int] = [:]
     private(set) var uploadAssetIDsByMonth: [LibraryMonthKey: Set<String>] = [:]
-    private(set) var uploadMonths: [LibraryMonthKey] = []
+    private(set) var backupMonths: [LibraryMonthKey] = []
     private(set) var downloadMonths: [LibraryMonthKey] = []
-    private(set) var syncMonths: [LibraryMonthKey] = []
+    private(set) var complementMonths: [LibraryMonthKey] = []
     private(set) var uploadPhaseCompleted = false
     private(set) var localIndexPreflightCompleted = false
 
@@ -35,7 +35,7 @@ struct HomeExecutionSession {
     private var lastSyncTime: CFAbsoluteTime = 0
 
     var isActive: Bool { phase != nil }
-    var hasSyncMonths: Bool { !syncMonths.isEmpty }
+    var hasComplementMonths: Bool { !complementMonths.isEmpty }
     var needsLocalIndexPreflight: Bool { !localIndexPreflightCompleted }
     var requiresCompleteLocalIndexBeforeExecution: Bool {
         monthPlans.values.contains(where: \.needsDownload)
@@ -44,7 +44,7 @@ struct HomeExecutionSession {
     var phaseProgressCounter: (current: Int, total: Int)? {
         switch phase {
         case .uploading, .uploadPaused:
-            let targets = uploadMonths + syncMonths
+            let targets = backupMonths + complementMonths
             guard !targets.isEmpty else { return nil }
             let current = targets.reduce(into: 0) { acc, month in
                 if let plan = monthPlans[month], plan.phase != .pending {
@@ -53,7 +53,7 @@ struct HomeExecutionSession {
             }
             return (current, targets.count)
         case .downloading, .downloadPaused:
-            let targets = downloadMonths + syncMonths
+            let targets = downloadMonths + complementMonths
             guard !targets.isEmpty else { return nil }
             let downloadPhases: Set<MonthPlan.Phase> = [
                 .downloading, .downloadPaused,
@@ -79,9 +79,9 @@ struct HomeExecutionSession {
             statusText: statusText,
             processedCountByMonth: processedCountByMonth,
             assetCountByMonth: assetCountByMonth,
-            uploadMonths: uploadMonths,
+            backupMonths: backupMonths,
             downloadMonths: downloadMonths,
-            syncMonths: syncMonths
+            complementMonths: complementMonths
         )
     }
 
@@ -92,23 +92,23 @@ struct HomeExecutionSession {
     }
 
     mutating func enter(
-        upload: [LibraryMonthKey],
+        backup: [LibraryMonthKey],
         download: [LibraryMonthKey],
-        sync: [LibraryMonthKey],
+        complement: [LibraryMonthKey],
         localAssetIDs: (LibraryMonthKey) -> Set<String>
     ) {
-        uploadMonths = upload
+        backupMonths = backup
         downloadMonths = download
-        syncMonths = sync
+        complementMonths = complement
 
         monthPlans.removeAll()
-        for month in upload {
+        for month in backup {
             monthPlans[month] = MonthPlan(needsUpload: true, needsDownload: false)
         }
         for month in download {
             monthPlans[month] = MonthPlan(needsUpload: false, needsDownload: true)
         }
-        for month in sync {
+        for month in complement {
             monthPlans[month] = MonthPlan(needsUpload: true, needsDownload: true)
         }
 
@@ -116,7 +116,7 @@ struct HomeExecutionSession {
         processedCountByMonth.removeAll()
         lastSyncTime = 0
 
-        uploadPhaseCompleted = (upload + sync).isEmpty
+        uploadPhaseCompleted = (backup + complement).isEmpty
         localIndexPreflightCompleted = false
         pendingUploadScope = uploadPhaseCompleted ? nil : buildUploadScope(localAssetIDs: localAssetIDs)
         phase = uploadPhaseCompleted ? .downloading : .uploading
@@ -128,9 +128,9 @@ struct HomeExecutionSession {
         assetCountByMonth.removeAll()
         processedCountByMonth.removeAll()
         uploadAssetIDsByMonth.removeAll()
-        uploadMonths.removeAll()
+        backupMonths.removeAll()
         downloadMonths.removeAll()
-        syncMonths.removeAll()
+        complementMonths.removeAll()
         uploadPhaseCompleted = false
         localIndexPreflightCompleted = false
         pendingUploadScope = nil
@@ -242,7 +242,7 @@ struct HomeExecutionSession {
     }
 
     func remainingDownloadMonths() -> [LibraryMonthKey] {
-        (downloadMonths + syncMonths).filter { monthPlans[$0]?.isTerminal != true }
+        (downloadMonths + complementMonths).filter { monthPlans[$0]?.isTerminal != true }
     }
 
     mutating func beginDownloadPhase() {
@@ -266,7 +266,7 @@ struct HomeExecutionSession {
         processedCountByMonth.removeValue(forKey: month)
     }
 
-    mutating func completeSyncMonthUpload(_ month: LibraryMonthKey) {
+    mutating func completeComplementMonthUpload(_ month: LibraryMonthKey) {
         monthPlans[month]?.apply(.uploadCompleted)
     }
 
@@ -279,7 +279,7 @@ struct HomeExecutionSession {
     }
 
     func phaseLabel(for month: LibraryMonthKey) -> String {
-        monthPlans[month]?.needsUpload == true ? String(localized: "home.execution.phaseSync") : String(localized: "home.execution.phaseDownload")
+        monthPlans[month]?.needsUpload == true ? String(localized: "home.execution.phaseComplement") : String(localized: "home.execution.phaseDownload")
     }
 
     mutating func finishExecution() {
@@ -302,15 +302,15 @@ struct HomeExecutionSession {
     private mutating func buildUploadScope(
         localAssetIDs: (LibraryMonthKey) -> Set<String>
     ) -> BackupScopeSelection {
-        let syncMonthSet = Set(syncMonths)
+        let complementMonthSet = Set(complementMonths)
         var allAssetIDs = Set<String>()
         uploadAssetIDsByMonth.removeAll(keepingCapacity: true)
 
-        for month in uploadMonths + syncMonths {
+        for month in backupMonths + complementMonths {
             let ids = localAssetIDs(month)
             uploadAssetIDsByMonth[month] = ids
             allAssetIDs.formUnion(ids)
-            if !syncMonthSet.contains(month) {
+            if !complementMonthSet.contains(month) {
                 assetCountByMonth[month] = ids.count
             }
         }
@@ -326,7 +326,7 @@ struct HomeExecutionSession {
     }
 
     private mutating func applyUploadTargetsFailed(reason: String) {
-        let uploadTargets = Set(uploadMonths).union(syncMonths)
+        let uploadTargets = Set(backupMonths).union(complementMonths)
         for month in uploadTargets {
             let phase = monthPlans[month]?.phase
             guard phase != .uploadDone && phase != .completed && phase != .partiallyFailed else { continue }
