@@ -29540,79 +29540,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Vielen Dank für Ihre Unterstützung!"
+            "value" : "Wir geben weiterhin unser Bestes."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Thank you for your support!"
+            "value" : "We'll keep doing our best."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "¡Gracias por tu apoyo!"
+            "value" : "Seguiremos esforzándonos."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "¡Gracias por tu apoyo!"
+            "value" : "Seguiremos esforzándonos."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Merci pour votre soutien !"
+            "value" : "Nous continuerons à faire de notre mieux."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ご支援いただきありがとうございます！"
+            "value" : "これからも頑張ります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "지원해 주셔서 감사합니다!"
+            "value" : "앞으로도 계속 노력하겠습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Obrigado pelo seu apoio!"
+            "value" : "Continuaremos fazendo o nosso melhor."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Obrigado pelo seu apoio!"
+            "value" : "Continuaremos a dar o nosso melhor."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Дякуємо за вашу підтримку!"
+            "value" : "Ми й надалі старатимемося."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "感谢你的支持！"
+            "value" : "我们会继续努力。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "感謝你的支持！"
+            "value" : "我們會繼續努力。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "感謝你的支持！"
+            "value" : "我們會繼續努力。"
           }
         }
       }
