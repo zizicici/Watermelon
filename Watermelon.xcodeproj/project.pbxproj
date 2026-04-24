@@ -15,6 +15,8 @@
 		14B0C0A42F4F000100111111 /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		14C5C5692F84CEF200939535 /* MarqueeLabel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C5C5682F84CEF200939535 /* MarqueeLabel */; };
 		14D1E0012FA50EF800B21C69 /* MoreKit in Frameworks */ = {isa = PBXBuildFile; productRef = 14D1E0032FA50EF800B21C69 /* MoreKit */; };
+		14FB00032FEA000100000001 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00022FEA000100000001 /* FirebaseCrashlytics */; };
+		14FB00062FEA000100000001 /* FirebaseAnalyticsWithoutAdId in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdId */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -68,6 +70,8 @@
 				144234A12F4EAFB600293274 /* JXPhotoBrowser in Frameworks */,
 				14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */,
 				14D1E0012FA50EF800B21C69 /* MoreKit in Frameworks */,
+				14FB00032FEA000100000001 /* FirebaseCrashlytics in Frameworks */,
+				14FB00062FEA000100000001 /* FirebaseAnalyticsWithoutAdId in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -101,6 +105,7 @@
 				148EF94F2F4EABFE0025F409 /* Frameworks */,
 				14B0C0A52F4F000100111111 /* Embed Frameworks */,
 				148EF9502F4EABFE0025F409 /* Resources */,
+				14FB00042FEA000100000001 /* Run Script: Crashlytics Upload Symbols */,
 			);
 			buildRules = (
 			);
@@ -118,6 +123,8 @@
 				14B0C0A32F4F000100111111 /* AMSMB2 */,
 				14C5C5682F84CEF200939535 /* MarqueeLabel */,
 				14D1E0032FA50EF800B21C69 /* MoreKit */,
+				14FB00022FEA000100000001 /* FirebaseCrashlytics */,
+				14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdId */,
 			);
 			productName = PhotoBackup;
 			productReference = 148EF9522F4EABFE0025F409 /* Watermelon.app */;
@@ -167,6 +174,7 @@
 				14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */,
 				14C5C5672F84CEF200939535 /* XCRemoteSwiftPackageReference "MarqueeLabel" */,
 				14D1E0022FA50EF800B21C69 /* XCRemoteSwiftPackageReference "MoreKit" */,
+				14FB00012FEA000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 148EF9532F4EABFE0025F409 /* Products */;
@@ -187,6 +195,31 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		14FB00042FEA000100000001 /* Run Script: Crashlytics Upload Symbols */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}",
+				"${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}",
+				"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/GoogleService-Info.plist",
+			);
+			name = "Run Script: Crashlytics Upload Symbols";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		148EF94E2F4EABFE0025F409 /* Sources */ = {
@@ -488,6 +521,14 @@
 				minimumVersion = 1.9.0;
 			};
 		};
+		14FB00012FEA000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 11.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -525,6 +566,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 14D1E0022FA50EF800B21C69 /* XCRemoteSwiftPackageReference "MoreKit" */;
 			productName = MoreKit;
+		};
+		14FB00022FEA000100000001 /* FirebaseCrashlytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 14FB00012FEA000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseCrashlytics;
+		};
+		14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdId */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 14FB00012FEA000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalyticsWithoutAdId;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

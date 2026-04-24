@@ -8,12 +8,15 @@
 import UIKit
 import MoreKit
 import BackgroundTasks
+import FirebaseCore
 import os
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        FirebaseApp.configure()
+
         ProStatus.setupStoreObserver()
 
         MoreKit.configure(
