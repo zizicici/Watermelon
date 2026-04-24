@@ -16,6 +16,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let language = "language"
         static let diagnosticLogs = "diagnosticLogs"
         static let pipProgress = "pipProgress"
+        static let testCrash = "testCrash"
     }
 
     private static let proBadge = MoreBadgeStyle(
@@ -85,15 +86,21 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
 
         sections.append(contentsOf: [.contact, .appjun, .about])
 
+        var diagnosticsItems: [MoreCustomItem] = [
+            MoreCustomItem(
+                id: ItemID.diagnosticLogs,
+                title: String(localized: "more.item.diagnosticLogs")
+            )
+        ]
+        #if DEBUG
+        diagnosticsItems.append(
+            MoreCustomItem(id: ItemID.testCrash, title: "Test Crash (Debug)")
+        )
+        #endif
         sections.append(.custom(MoreCustomSection(
             id: "diagnostics",
             header: String(localized: "more.section.diagnostics"),
-            items: [
-                MoreCustomItem(
-                    id: ItemID.diagnosticLogs,
-                    title: String(localized: "more.item.diagnosticLogs")
-                )
-            ]
+            items: diagnosticsItems
         )))
 
         return sections
@@ -120,6 +127,10 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.jumpToSettings()
             case ItemID.diagnosticLogs:
                 controller.pushViewController(ExecutionLogHistoryViewController())
+            #if DEBUG
+            case ItemID.testCrash:
+                fatalError("Test crash for Crashlytics activation")
+            #endif
             default:
                 break
             }

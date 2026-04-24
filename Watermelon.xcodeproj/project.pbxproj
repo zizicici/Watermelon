@@ -16,7 +16,7 @@
 		14C5C5692F84CEF200939535 /* MarqueeLabel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C5C5682F84CEF200939535 /* MarqueeLabel */; };
 		14D1E0012FA50EF800B21C69 /* MoreKit in Frameworks */ = {isa = PBXBuildFile; productRef = 14D1E0032FA50EF800B21C69 /* MoreKit */; };
 		14FB00032FEA000100000001 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00022FEA000100000001 /* FirebaseCrashlytics */; };
-		14FB00062FEA000100000001 /* FirebaseAnalyticsWithoutAdId in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdId */; };
+		14FB00062FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -71,7 +71,7 @@
 				14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */,
 				14D1E0012FA50EF800B21C69 /* MoreKit in Frameworks */,
 				14FB00032FEA000100000001 /* FirebaseCrashlytics in Frameworks */,
-				14FB00062FEA000100000001 /* FirebaseAnalyticsWithoutAdId in Frameworks */,
+				14FB00062FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -124,7 +124,7 @@
 				14C5C5682F84CEF200939535 /* MarqueeLabel */,
 				14D1E0032FA50EF800B21C69 /* MoreKit */,
 				14FB00022FEA000100000001 /* FirebaseCrashlytics */,
-				14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdId */,
+				14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport */,
 			);
 			productName = PhotoBackup;
 			productReference = 148EF9522F4EABFE0025F409 /* Watermelon.app */;
@@ -572,10 +572,10 @@
 			package = 14FB00012FEA000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseCrashlytics;
 		};
-		14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdId */ = {
+		14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 14FB00012FEA000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAnalyticsWithoutAdId;
+			productName = FirebaseAnalyticsWithoutAdIdSupport;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
