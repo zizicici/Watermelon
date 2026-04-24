@@ -46,6 +46,8 @@ extension AssetProcessor {
                 monthStore: monthStore,
                 profile: profile,
                 client: client,
+                displayName: displayName,
+                eventStream: eventStream,
                 cancellationController: cancellationController
             )
         } catch {
@@ -109,6 +111,8 @@ extension AssetProcessor {
         monthStore: MonthManifestStore,
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
+        displayName: String,
+        eventStream: BackupEventStream,
         cancellationController: BackupCancellationController?
     ) async throws -> UploadPreparation {
         let local = prepared.local
@@ -131,14 +135,16 @@ extension AssetProcessor {
                 } else {
                     try cancellationController?.throwIfCancelled()
                     try Task.checkCancellation()
-                    let remoteHash = try await downloadAndHashRemoteFile(
+                    let remoteHash = try await downloadAndHashRemoteFileForConflictCheck(
                         profile: profile,
                         client: client,
                         monthStore: monthStore,
                         fileName: targetFileName,
+                        displayName: displayName,
+                        eventStream: eventStream,
                         cancellationController: cancellationController
                     )
-                    if remoteHash == localHash {
+                    if let remoteHash, remoteHash == localHash {
                         skipReason = "name_same_hash"
                     }
                 }
@@ -302,6 +308,8 @@ extension AssetProcessor {
                     throw error
                 }
                 lastError = error
+                let shouldLimitUploadRetries = client.shouldLimitUploadRetries(for: error)
+                let retryLimit = shouldLimitUploadRetries ? min(maxRetry, 2) : maxRetry
 
                 if SMBErrorClassifier.isNameCollision(error) {
                     var occupiedNames = monthStore.existingFileNames()
@@ -322,14 +330,29 @@ extension AssetProcessor {
                     continue
                 }
 
-                if attempt < maxRetry - 1 {
-                    let sleepNanos = UInt64(pow(2.0, Double(attempt))) * 500_000_000
-                    do {
-                        try await Task.sleep(nanoseconds: sleepNanos)
-                    } catch {
-                        throw CancellationError()
-                    }
-                    continue
+                guard attempt < retryLimit - 1 else {
+                    break
+                }
+                if shouldLimitUploadRetries {
+                    let reason = profile.userFacingStorageErrorMessage(error)
+                    print("[BackupUpload] upload watchdog RETRY: asset=\(displayName), resource=\(local.originalFilename), nextAttempt=\(attempt + 2)/\(retryLimit), finalAttempt=true, reason=\(reason)")
+                    eventStream.emitLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.log.uploadStalledRetry"),
+                            displayName,
+                            local.originalFilename,
+                            attempt + 2,
+                            retryLimit,
+                            reason
+                        ),
+                        level: .warning
+                    )
+                }
+                let sleepNanos = UInt64(pow(2.0, Double(attempt))) * 500_000_000
+                do {
+                    try await Task.sleep(nanoseconds: sleepNanos)
+                } catch {
+                    throw CancellationError()
                 }
             }
         }
@@ -415,6 +438,49 @@ extension AssetProcessor {
         )
         try await client.download(remotePath: remotePath, localURL: tempURL)
         return try Self.contentHash(of: tempURL, cancellationController: cancellationController)
+    }
+
+    func downloadAndHashRemoteFileForConflictCheck(
+        profile: ServerProfileRecord,
+        client: RemoteStorageClientProtocol,
+        monthStore: MonthManifestStore,
+        fileName: String,
+        displayName: String,
+        eventStream: BackupEventStream,
+        cancellationController: BackupCancellationController?
+    ) async throws -> Data? {
+        do {
+            return try await downloadAndHashRemoteFile(
+                profile: profile,
+                client: client,
+                monthStore: monthStore,
+                fileName: fileName,
+                cancellationController: cancellationController
+            )
+        } catch {
+            if error is CancellationError {
+                throw error
+            }
+            if cancellationController?.isCancelled == true {
+                throw CancellationError()
+            }
+            if profile.isConnectionUnavailableError(error) {
+                throw error
+            }
+
+            let reason = profile.userFacingStorageErrorMessage(error)
+            print("[BackupUpload] remote hash download FALLBACK_RENAME: asset=\(displayName), file=\(fileName), reason=\(reason)")
+            eventStream.emitLog(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.log.remoteHashDownloadFallbackRename"),
+                    displayName,
+                    fileName,
+                    reason
+                ),
+                level: .warning
+            )
+            return nil
+        }
     }
 
     static func makeTransferState(

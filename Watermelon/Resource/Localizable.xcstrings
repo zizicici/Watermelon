@@ -8611,6 +8611,88 @@
         }
       }
     },
+    "backup.log.remoteHashDownloadFallbackRename" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote-Konfliktprüfung für %@ (%@) fehlgeschlagen. Die Datei wird umbenannt hochgeladen, statt die Ressource fehlschlagen zu lassen. Grund: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote conflict check failed for %@ (%@). Uploading with a renamed file instead of failing the resource. Reason: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La comprobación de conflictos remotos falló para %@ (%@). Se subirá con un nombre de archivo cambiado en lugar de marcar el recurso como fallido. Motivo: %@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La comprobación de conflictos remotos falló para %@ (%@). Se cargará con un nombre de archivo cambiado en lugar de marcar el recurso como fallido. Motivo: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La vérification de conflit distant a échoué pour %@ (%@). Le fichier sera téléversé avec un nom modifié au lieu d’échouer la ressource. Raison : %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@（%@）のリモート競合チェックに失敗しました。リソースを失敗にせず、ファイル名を変更してアップロードします。理由: %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@(%@)의 원격 충돌 검사가 실패했습니다. 리소스를 실패 처리하지 않고 파일 이름을 바꿔 업로드합니다. 이유: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A verificação de conflito remoto falhou para %@ (%@). O arquivo será enviado com um nome alterado em vez de falhar o recurso. Motivo: %@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A verificação de conflito remoto falhou para %@ (%@). O ficheiro será carregado com outro nome em vez de fazer falhar o recurso. Motivo: %@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося перевірити віддалений конфлікт для %@ (%@). Файл буде передано з новою назвою замість помилки ресурсу. Причина: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端冲突检查 %@（%@）失败，将改名上传而不是让资源失败。原因：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端衝突檢查 %@（%@）失敗，將改名上傳而不是讓資源失敗。原因：%@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端衝突檢查 %@（%@）失敗，將改名上傳而不是讓資源失敗。原因：%@"
+          }
+        }
+      }
+    },
     "backup.log.remoteIndexReloaded" : {
       "localizations" : {
         "de" : {
@@ -9181,6 +9263,88 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "開始按資源備份，按最早月份優先。"
+          }
+        }
+      }
+    },
+    "backup.log.uploadStalledRetry" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Upload von %@ (%@) macht keinen Fortschritt. Letzter Upload-Versuch wird wiederholt (%lld/%lld). Grund: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Upload of %@ (%@) did not make progress. Retrying the final upload attempt (%lld/%lld). Reason: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La subida de %@ (%@) no avanzó. Reintentando el último intento de subida (%lld/%lld). Motivo: %@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La carga de %@ (%@) no avanzó. Reintentando el último intento de carga (%lld/%lld). Motivo: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le téléversement de %@ (%@) ne progresse pas. Nouvelle tentative finale de téléversement (%lld/%lld). Raison : %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@（%@）のアップロードが進行していません。最後のアップロード試行を再試行しています（%lld/%lld）。理由: %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@(%@) 업로드가 진행되지 않았습니다. 마지막 업로드 시도를 다시 시도합니다(%lld/%lld). 이유: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O upload de %@ (%@) não teve progresso. Repetindo a tentativa final de upload (%lld/%lld). Motivo: %@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O carregamento de %@ (%@) não teve progresso. A repetir a última tentativa de carregamento (%lld/%lld). Motivo: %@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Передавання %@ (%@) не просувається. Повторюється остання спроба передавання (%lld/%lld). Причина: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上传 %@（%@）没有进展，正在进行最后一次上传重试（%lld/%lld）。原因：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳 %@（%@）沒有進展，正在進行最後一次上傳重試（%lld/%lld）。原因：%@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳 %@（%@）沒有進展，正在進行最後一次上傳重試（%lld/%lld）。原因：%@"
           }
         }
       }
@@ -30355,6 +30519,88 @@
         }
       }
     },
+    "webdav.error.downloadStalled" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV-Download hat seit %lld Sekunden keinen Fortschritt gemacht."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV download made no progress for %lld seconds."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La descarga WebDAV no avanzó durante %lld segundos."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La descarga WebDAV no avanzó durante %lld segundos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le téléchargement WebDAV n’a pas progressé pendant %lld secondes."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV ダウンロードが %lld 秒間進行していません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 다운로드가 %lld초 동안 진행되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O download WebDAV não teve progresso por %lld segundos."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A transferência WebDAV não teve progresso durante %lld segundos."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Завантаження WebDAV не просувалося протягом %lld секунд."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 下载已连续 %lld 秒没有进展。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 下載已連續 %lld 秒沒有進展。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 下載已連續 %lld 秒沒有進展。"
+          }
+        }
+      }
+    },
     "webdav.error.notAService" : {
       "localizations" : {
         "de" : {
@@ -31335,6 +31581,170 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "WebDAV 上傳回應類型異常。"
+          }
+        }
+      }
+    },
+    "webdav.error.uploadResponseTimeout" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der WebDAV-Upload hat die Daten vollständig gesendet, aber der Server hat nicht innerhalb von %lld Sekunden geantwortet."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV upload finished sending data, but the server did not respond within %lld seconds."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La subida WebDAV terminó de enviar los datos, pero el servidor no respondió en %lld segundos."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La carga WebDAV terminó de enviar los datos, pero el servidor no respondió en %lld segundos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le téléversement WebDAV a fini d’envoyer les données, mais le serveur n’a pas répondu dans les %lld secondes."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV アップロードはデータの送信を完了しましたが、サーバーが %lld 秒以内に応答しませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 업로드가 데이터 전송을 완료했지만 서버가 %lld초 이내에 응답하지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O upload WebDAV terminou de enviar os dados, mas o servidor não respondeu em %lld segundos."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O carregamento WebDAV terminou de enviar os dados, mas o servidor não respondeu em %lld segundos."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Передавання WebDAV завершило надсилання даних, але сервер не відповів протягом %lld секунд."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 上传已完成发送，但服务器在 %lld 秒内没有响应。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 上傳已完成傳送，但伺服器在 %lld 秒內沒有回應。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 上傳已完成傳送，但伺服器在 %lld 秒內沒有回應。"
+          }
+        }
+      }
+    },
+    "webdav.error.uploadStalled" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV-Upload hat seit %lld Sekunden keinen Fortschritt gemacht."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV upload made no progress for %lld seconds."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La subida WebDAV no avanzó durante %lld segundos."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La carga WebDAV no avanzó durante %lld segundos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le téléversement WebDAV n’a pas progressé pendant %lld secondes."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV アップロードが %lld 秒間進行していません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 업로드가 %lld초 동안 진행되지 않았습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O upload WebDAV não teve progresso por %lld segundos."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O carregamento WebDAV não teve progresso durante %lld segundos."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Передавання WebDAV не просувалося протягом %lld секунд."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 上传已连续 %lld 秒没有进展。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 上傳已連續 %lld 秒沒有進展。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV 上傳已連續 %lld 秒沒有進展。"
           }
         }
       }

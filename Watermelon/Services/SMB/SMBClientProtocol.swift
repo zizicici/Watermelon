@@ -66,6 +66,7 @@ enum RemoteStorageClientError: LocalizedError {
 
 protocol RemoteStorageClientProtocol: Sendable {
     func shouldSetModificationDate() -> Bool
+    func shouldLimitUploadRetries(for error: Error) -> Bool
     func connect() async throws
     func disconnect() async
     func storageCapacity() async throws -> RemoteStorageCapacity?
@@ -88,6 +89,10 @@ protocol RemoteStorageClientProtocol: Sendable {
 extension RemoteStorageClientProtocol {
     func shouldSetModificationDate() -> Bool {
         true
+    }
+
+    func shouldLimitUploadRetries(for _: Error) -> Bool {
+        false
     }
 
     func disconnectSafely() async {

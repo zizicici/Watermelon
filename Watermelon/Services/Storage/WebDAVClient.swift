@@ -31,6 +31,10 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         true
     }
 
+    nonisolated func shouldLimitUploadRetries(for error: Error) -> Bool {
+        Self.isUploadWatchdogTimeout(error)
+    }
+
     private final class PropfindXMLParser: NSObject, XMLParserDelegate {
         private static let textElements: Set<String> = [
             "href",
@@ -159,6 +163,23 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
 
     private static let formatterLock = NSLock()
     private static let percentEscapeRegex = try! NSRegularExpression(pattern: "%[0-9A-Fa-f]{2}")
+    private static let metadataRequestTimeout: TimeInterval = 45
+    private static let metadataResourceTimeout: TimeInterval = 120
+    private static let transferTimeout: TimeInterval = 7 * 24 * 60 * 60
+    private static let uploadStallTimeout: TimeInterval = 3 * 60
+    // Server-side post-processing can be slow on NAS/WebDAV gateways; this only starts after the body is sent.
+    private static let uploadResponseTimeout: TimeInterval = 5 * 60
+    private static let downloadInitialResponseTimeout: TimeInterval = 5 * 60
+    private static let downloadStallTimeout: TimeInterval = 3 * 60
+    // DispatchTime uptime pauses during device sleep, matching foreground URLSession transfer behavior.
+    private static let uploadWatchdogInterval: TimeInterval = 5
+    private static let uploadStalledErrorCode = -1301
+    private static let uploadResponseTimeoutErrorCode = -1302
+    private static let downloadStalledErrorCode = -1303
+    private static let uploadBytesSentKey = "WebDAVUploadBytesSent"
+    private static let uploadExpectedBytesKey = "WebDAVUploadExpectedBytes"
+    private static let downloadBytesWrittenKey = "WebDAVDownloadBytesWritten"
+    private static let downloadExpectedBytesKey = "WebDAVDownloadExpectedBytes"
     private static let rfc1123Formatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -171,9 +192,243 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
 
     private let config: Config
     private let session: URLSession
+    private let transferSession: URLSession
+    private let transferDelegate = TransferDelegate()
     private let endpointPathPrefix: String
     private var isConnected = false
     private var pendingCancelledUploadCleanupPaths: [String] = []
+
+    private final class TransferDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        private let lock = NSLock()
+        private var uploadStates: [Int: UploadProgressState] = [:]
+
+        func register(_ state: UploadProgressState, for task: URLSessionTask) {
+            lock.withLock {
+                uploadStates[task.taskIdentifier] = state
+            }
+        }
+
+        func unregister(_ task: URLSessionTask) {
+            lock.withLock {
+                uploadStates[task.taskIdentifier] = nil
+            }
+        }
+
+        func urlSession(
+            _: URLSession,
+            task: URLSessionTask,
+            didSendBodyData _: Int64,
+            totalBytesSent: Int64,
+            totalBytesExpectedToSend: Int64
+        ) {
+            let state = lock.withLock {
+                uploadStates[task.taskIdentifier]
+            }
+            state?.recordProgress(
+                bytesSent: totalBytesSent,
+                totalBytesExpectedToSend: totalBytesExpectedToSend
+            )
+        }
+    }
+
+    private final class UploadProgressState: @unchecked Sendable {
+        enum Phase {
+            case sendingBody
+            case awaitingResponse
+        }
+
+        struct Snapshot {
+            let phase: Phase
+            let bytesSent: Int64
+            let expectedBytes: Int64?
+            let lastProgressAtNanos: UInt64
+            let isFinished: Bool
+        }
+
+        private let lock = NSLock()
+        private let onProgress: ((Double) -> Void)?
+        private var phase: Phase = .sendingBody
+        private var bytesSent: Int64 = 0
+        private var expectedBytes: Int64?
+        private var lastProgressAtNanos = DispatchTime.now().uptimeNanoseconds
+        private var timeoutError: Error?
+        private var isFinished = false
+
+        init(onProgress: ((Double) -> Void)?) {
+            self.onProgress = onProgress
+        }
+
+        func resetProgressClock() {
+            lock.withLock {
+                guard !isFinished else { return }
+                lastProgressAtNanos = DispatchTime.now().uptimeNanoseconds
+            }
+        }
+
+        func recordProgress(bytesSent incomingBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+            let progressToEmit: Double? = lock.withLock {
+                guard !isFinished else { return nil }
+
+                let now = DispatchTime.now().uptimeNanoseconds
+                if incomingBytesSent > bytesSent {
+                    bytesSent = incomingBytesSent
+                    lastProgressAtNanos = now
+                }
+                if totalBytesExpectedToSend > 0 {
+                    expectedBytes = totalBytesExpectedToSend
+                }
+
+                if let expectedBytes,
+                   expectedBytes > 0,
+                   incomingBytesSent >= expectedBytes,
+                   phase == .sendingBody {
+                    phase = .awaitingResponse
+                    lastProgressAtNanos = now
+                }
+
+                guard let expectedBytes, expectedBytes > 0 else {
+                    return nil
+                }
+                return min(max(Double(incomingBytesSent) / Double(expectedBytes), 0), 1)
+            }
+
+            if let progressToEmit {
+                onProgress?(progressToEmit)
+            }
+        }
+
+        func snapshot() -> Snapshot {
+            lock.withLock {
+                Snapshot(
+                    phase: phase,
+                    bytesSent: bytesSent,
+                    expectedBytes: expectedBytes,
+                    lastProgressAtNanos: lastProgressAtNanos,
+                    isFinished: isFinished
+                )
+            }
+        }
+
+        func markTimedOut(_ error: Error) -> Bool {
+            lock.withLock {
+                guard !isFinished, timeoutError == nil else { return false }
+                timeoutError = error
+                return true
+            }
+        }
+
+        func finish() {
+            lock.withLock {
+                isFinished = true
+            }
+        }
+
+        func resolvedTimeoutError() -> Error? {
+            lock.withLock {
+                timeoutError
+            }
+        }
+    }
+
+    private final class DownloadProgressState: @unchecked Sendable {
+        enum Phase {
+            case awaitingFirstByte
+            case receivingBody
+        }
+
+        struct Snapshot {
+            let phase: Phase
+            let bytesWritten: Int64
+            let expectedBytes: Int64?
+            let lastProgressAtNanos: UInt64
+            let isFinished: Bool
+        }
+
+        private let lock = NSLock()
+        private var phase: Phase = .awaitingFirstByte
+        private var bytesWritten: Int64 = 0
+        private var expectedBytes: Int64?
+        private var lastProgressAtNanos = DispatchTime.now().uptimeNanoseconds
+        private var timeoutError: Error?
+        private var isFinished = false
+
+        func resetProgressClock() {
+            lock.withLock {
+                guard !isFinished else { return }
+                lastProgressAtNanos = DispatchTime.now().uptimeNanoseconds
+            }
+        }
+
+        func recordProgress(bytesWritten incomingBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+            lock.withLock {
+                guard !isFinished else { return }
+                if totalBytesExpectedToWrite > 0 {
+                    expectedBytes = totalBytesExpectedToWrite
+                }
+                if incomingBytesWritten > bytesWritten {
+                    bytesWritten = incomingBytesWritten
+                    phase = .receivingBody
+                    lastProgressAtNanos = DispatchTime.now().uptimeNanoseconds
+                }
+            }
+        }
+
+        func snapshot() -> Snapshot {
+            lock.withLock {
+                Snapshot(
+                    phase: phase,
+                    bytesWritten: bytesWritten,
+                    expectedBytes: expectedBytes,
+                    lastProgressAtNanos: lastProgressAtNanos,
+                    isFinished: isFinished
+                )
+            }
+        }
+
+        func markTimedOut(_ error: Error) -> Bool {
+            lock.withLock {
+                guard !isFinished, timeoutError == nil else { return false }
+                timeoutError = error
+                return true
+            }
+        }
+
+        func finish() {
+            lock.withLock {
+                isFinished = true
+            }
+        }
+
+        func resolvedTimeoutError() -> Error? {
+            lock.withLock {
+                timeoutError
+            }
+        }
+    }
+
+    private final class URLSessionTaskBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var task: URLSessionTask?
+
+        func set(_ task: URLSessionTask) {
+            lock.withLock {
+                self.task = task
+            }
+        }
+
+        func cancel() {
+            let task = lock.withLock {
+                self.task
+            }
+            task?.cancel()
+        }
+
+        func value() -> URLSessionTask? {
+            lock.withLock {
+                task
+            }
+        }
+    }
 
     init(config: Config) {
         self.config = config
@@ -183,9 +438,23 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         endpointPathPrefix = trimmed.isEmpty ? "/" : "/" + trimmed
 
         let sessionConfig = URLSessionConfiguration.ephemeral
-        sessionConfig.timeoutIntervalForRequest = 45
-        sessionConfig.timeoutIntervalForResource = 120
+        sessionConfig.timeoutIntervalForRequest = Self.metadataRequestTimeout
+        sessionConfig.timeoutIntervalForResource = Self.metadataResourceTimeout
         session = URLSession(configuration: sessionConfig)
+
+        let transferSessionConfig = URLSessionConfiguration.ephemeral
+        transferSessionConfig.timeoutIntervalForRequest = Self.transferTimeout
+        transferSessionConfig.timeoutIntervalForResource = Self.transferTimeout
+        transferSession = URLSession(
+            configuration: transferSessionConfig,
+            delegate: transferDelegate,
+            delegateQueue: nil
+        )
+    }
+
+    deinit {
+        session.invalidateAndCancel()
+        transferSession.invalidateAndCancel()
     }
 
     func connect() async throws {
@@ -405,7 +674,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         var request = makeRequest(url: targetURL, method: "PUT")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         do {
-            let (_, response) = try await sendUpload(request, fromFile: localURL)
+            let (_, response) = try await sendUpload(request, fromFile: localURL, onProgress: onProgress)
             guard (200 ... 299).contains(response.statusCode) else {
                 throw Self.statusError(response.statusCode, method: "PUT", url: request.url)
             }
@@ -414,8 +683,10 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             }
             onProgress?(1)
         } catch {
-            if Self.isCancellationError(error) {
+            if Self.shouldCleanupPartialUpload(error) {
                 enqueueCancelledUploadCleanup(for: remotePath)
+            }
+            if Self.isCancellationError(error) {
                 throw CancellationError()
             }
             throw error
@@ -484,6 +755,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         let targetURL = try remoteURL(forRemotePath: remotePath)
         let request = makeRequest(url: targetURL, method: "GET")
         let (temporaryURL, response) = try await sendDownload(request)
+        // moveItem leaves no file behind at temporaryURL on success; on any earlier throw the leftover gets cleaned up here.
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
         guard (200 ... 299).contains(response.statusCode) else {
             throw Self.statusError(response.statusCode, method: "GET", url: request.url)
         }
@@ -692,17 +965,61 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
     }
 
-    private func sendUpload(_ request: URLRequest, fromFile fileURL: URL) async throws -> (Data, HTTPURLResponse) {
-        do {
-            let (data, response) = try await session.upload(for: request, fromFile: fileURL)
-            guard let http = response as? HTTPURLResponse else {
-                throw NSError(
-                    domain: WebDAVClient.errorDomain,
-                    code: -1101,
-                    userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.unexpectedUploadResponseType")]
-                )
+    private func sendUpload(
+        _ request: URLRequest,
+        fromFile fileURL: URL,
+        onProgress: ((Double) -> Void)?
+    ) async throws -> (Data, HTTPURLResponse) {
+        let transferSession = self.transferSession
+        let transferDelegate = self.transferDelegate
+        let progressState = UploadProgressState(onProgress: onProgress)
+        let taskBox = URLSessionTaskBox()
+        let watchdogTask = Task {
+            await Self.watchUploadProgress(progressState: progressState, taskBox: taskBox)
+        }
+        defer {
+            watchdogTask.cancel()
+            if let task = taskBox.value() {
+                transferDelegate.unregister(task)
             }
-            return (data, http)
+        }
+
+        do {
+            return try await withTaskCancellationHandler(operation: {
+                try await withCheckedThrowingContinuation { continuation in
+                    let task = transferSession.uploadTask(with: request, fromFile: fileURL) { data, response, error in
+                        progressState.finish()
+                        if let task = taskBox.value() {
+                            transferDelegate.unregister(task)
+                        }
+
+                        if let error {
+                            continuation.resume(throwing: progressState.resolvedTimeoutError() ?? error)
+                            return
+                        }
+
+                        guard let http = response as? HTTPURLResponse else {
+                            continuation.resume(throwing: NSError(
+                                domain: WebDAVClient.errorDomain,
+                                code: -1101,
+                                userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.unexpectedUploadResponseType")]
+                            ))
+                            return
+                        }
+
+                        continuation.resume(returning: (data ?? Data(), http))
+                    }
+                    taskBox.set(task)
+                    transferDelegate.register(progressState, for: task)
+                    task.resume()
+                    progressState.resetProgressClock()
+                    if Task.isCancelled {
+                        task.cancel()
+                    }
+                }
+            }, onCancel: {
+                taskBox.cancel()
+            })
         } catch {
             if Self.isCancellationError(error) {
                 throw CancellationError()
@@ -711,17 +1028,199 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
     }
 
-    private func sendDownload(_ request: URLRequest) async throws -> (URL, HTTPURLResponse) {
-        do {
-            let (fileURL, response) = try await session.download(for: request)
-            guard let http = response as? HTTPURLResponse else {
-                throw NSError(
-                    domain: WebDAVClient.errorDomain,
-                    code: -1102,
-                    userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.unexpectedDownloadResponseType")]
+    private static func watchUploadProgress(
+        progressState: UploadProgressState,
+        taskBox: URLSessionTaskBox
+    ) async {
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds(for: uploadWatchdogInterval))
+            } catch {
+                return
+            }
+
+            let snapshot = progressState.snapshot()
+            if snapshot.isFinished {
+                return
+            }
+
+            let timeout: TimeInterval
+            switch snapshot.phase {
+            case .sendingBody:
+                timeout = uploadStallTimeout
+            case .awaitingResponse:
+                timeout = uploadResponseTimeout
+            }
+
+            guard elapsedSeconds(since: snapshot.lastProgressAtNanos) >= timeout else {
+                continue
+            }
+
+            let error = uploadTimeoutError(
+                phase: snapshot.phase,
+                timeout: timeout,
+                snapshot: snapshot
+            )
+            if progressState.markTimedOut(error) {
+                taskBox.cancel()
+            }
+            return
+        }
+    }
+
+    private static func watchDownloadProgress(
+        progressState: DownloadProgressState,
+        taskBox: URLSessionTaskBox
+    ) async {
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds(for: uploadWatchdogInterval))
+            } catch {
+                return
+            }
+
+            // Completion-handler downloadTasks suppress URLSessionDownloadDelegate callbacks,
+            // so we feed the watchdog from URLSession's internal byte counters instead.
+            if let task = taskBox.value() {
+                progressState.recordProgress(
+                    bytesWritten: task.countOfBytesReceived,
+                    totalBytesExpectedToWrite: task.countOfBytesExpectedToReceive
                 )
             }
-            return (fileURL, http)
+
+            let snapshot = progressState.snapshot()
+            if snapshot.isFinished {
+                return
+            }
+
+            let timeout: TimeInterval
+            switch snapshot.phase {
+            case .awaitingFirstByte:
+                timeout = downloadInitialResponseTimeout
+            case .receivingBody:
+                timeout = downloadStallTimeout
+            }
+
+            guard elapsedSeconds(since: snapshot.lastProgressAtNanos) >= timeout else {
+                continue
+            }
+
+            let error = downloadTimeoutError(timeout: timeout, snapshot: snapshot)
+            if progressState.markTimedOut(error) {
+                taskBox.cancel()
+            }
+            return
+        }
+    }
+
+    private static func uploadTimeoutError(
+        phase: UploadProgressState.Phase,
+        timeout: TimeInterval,
+        snapshot: UploadProgressState.Snapshot
+    ) -> NSError {
+        let formatKey: String.LocalizationValue
+        let code: Int
+        switch phase {
+        case .sendingBody:
+            formatKey = "webdav.error.uploadStalled"
+            code = uploadStalledErrorCode
+        case .awaitingResponse:
+            formatKey = "webdav.error.uploadResponseTimeout"
+            code = uploadResponseTimeoutErrorCode
+        }
+
+        var userInfo: [String: Any] = [
+            NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                String(localized: formatKey),
+                Int64(timeout.rounded())
+            ),
+            uploadBytesSentKey: snapshot.bytesSent
+        ]
+        if let expectedBytes = snapshot.expectedBytes {
+            userInfo[uploadExpectedBytesKey] = expectedBytes
+        }
+
+        return NSError(domain: errorDomain, code: code, userInfo: userInfo)
+    }
+
+    private static func downloadTimeoutError(
+        timeout: TimeInterval,
+        snapshot: DownloadProgressState.Snapshot
+    ) -> NSError {
+        var userInfo: [String: Any] = [
+            NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                String(localized: "webdav.error.downloadStalled"),
+                Int64(timeout.rounded())
+            ),
+            downloadBytesWrittenKey: snapshot.bytesWritten
+        ]
+        if let expectedBytes = snapshot.expectedBytes {
+            userInfo[downloadExpectedBytesKey] = expectedBytes
+        }
+
+        return NSError(domain: errorDomain, code: downloadStalledErrorCode, userInfo: userInfo)
+    }
+
+    private static func nanoseconds(for interval: TimeInterval) -> UInt64 {
+        UInt64(max(interval, 0) * 1_000_000_000)
+    }
+
+    private static func elapsedSeconds(since startNanos: UInt64) -> TimeInterval {
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now >= startNanos else { return 0 }
+        return TimeInterval(now - startNanos) / 1_000_000_000
+    }
+
+    private func sendDownload(_ request: URLRequest) async throws -> (URL, HTTPURLResponse) {
+        let transferSession = self.transferSession
+        let progressState = DownloadProgressState()
+        let taskBox = URLSessionTaskBox()
+        let watchdogTask = Task {
+            await Self.watchDownloadProgress(progressState: progressState, taskBox: taskBox)
+        }
+        defer {
+            watchdogTask.cancel()
+        }
+
+        do {
+            return try await withTaskCancellationHandler(operation: {
+                try await withCheckedThrowingContinuation { continuation in
+                    let task = transferSession.downloadTask(with: request) { temporaryURL, response, error in
+                        progressState.finish()
+
+                        if let error {
+                            continuation.resume(throwing: progressState.resolvedTimeoutError() ?? error)
+                            return
+                        }
+
+                        guard let temporaryURL, let http = response as? HTTPURLResponse else {
+                            continuation.resume(throwing: NSError(
+                                domain: WebDAVClient.errorDomain,
+                                code: -1102,
+                                userInfo: [NSLocalizedDescriptionKey: String(localized: "webdav.error.unexpectedDownloadResponseType")]
+                            ))
+                            return
+                        }
+
+                        do {
+                            let stableTemporaryURL = FileManager.default.temporaryDirectory
+                                .appendingPathComponent("Watermelon-WebDAV-\(UUID().uuidString)", isDirectory: false)
+                            try FileManager.default.moveItem(at: temporaryURL, to: stableTemporaryURL)
+                            continuation.resume(returning: (stableTemporaryURL, http))
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                    taskBox.set(task)
+                    task.resume()
+                    progressState.resetProgressClock()
+                    if Task.isCancelled {
+                        task.cancel()
+                    }
+                }
+            }, onCancel: {
+                taskBox.cancel()
+            })
         } catch {
             if Self.isCancellationError(error) {
                 throw CancellationError()
@@ -1019,6 +1518,37 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
         if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
             return isCancellationError(underlying)
+        }
+        return false
+    }
+
+    static func isUploadWatchdogTimeout(_ error: Error) -> Bool {
+        containsWebDAVErrorCode(
+            in: error,
+            codes: [uploadStalledErrorCode, uploadResponseTimeoutErrorCode]
+        )
+    }
+
+    private static func shouldCleanupPartialUpload(_ error: Error) -> Bool {
+        isCancellationError(error) || isUploadWatchdogTimeout(error)
+    }
+
+    private static func containsWebDAVErrorCode(in error: Error, codes: Set<Int>) -> Bool {
+        if let storageError = error as? RemoteStorageClientError {
+            switch storageError {
+            case .underlying(let underlying):
+                return containsWebDAVErrorCode(in: underlying, codes: codes)
+            default:
+                return false
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == errorDomain, codes.contains(nsError.code) {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return containsWebDAVErrorCode(in: underlying, codes: codes)
         }
         return false
     }
