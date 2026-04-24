@@ -23,6 +23,14 @@ final class SelectionActionPanel: UIView {
     private struct SelectionCategoryItem: Hashable {
         let kind: SelectionCategoryKind
         let count: Int
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(kind)
+        }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.kind == rhs.kind
+        }
     }
 
     private enum Layout {
@@ -30,6 +38,9 @@ final class SelectionActionPanel: UIView {
         static let executionControlButtonHeight: CGFloat = 36
         static let selectionCategoryRowHeight: CGFloat = 52
         static let selectionCategoryEstimatedWidth: CGFloat = 96
+        static let selectionCategorySpacing: CGFloat = 10
+        static let executionCategorySpacing: CGFloat = 10
+        static let panelControlSpacing: CGFloat = 10
         static let selectionCategoryButtonInsets = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0)
         static let executionCategoryButtonInsets = NSDirectionalEdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 2)
         static let panelLeadingInset: CGFloat = 18
@@ -113,8 +124,8 @@ final class SelectionActionPanel: UIView {
     private static func makeSelectionCategoryLayout() -> UICollectionViewLayout {
         let layout = UICollectionViewFlowLayout()
         layout.scrollDirection = .horizontal
-        layout.minimumInteritemSpacing = 4
-        layout.minimumLineSpacing = 4
+        layout.minimumInteritemSpacing = Layout.selectionCategorySpacing
+        layout.minimumLineSpacing = Layout.selectionCategorySpacing
         layout.sectionInset = .zero
         layout.estimatedItemSize = CGSize(
             width: Layout.selectionCategoryEstimatedWidth,
@@ -199,7 +210,7 @@ final class SelectionActionPanel: UIView {
         }
 
         executionCategoryRow.axis = .horizontal
-        executionCategoryRow.spacing = 6
+        executionCategoryRow.spacing = Layout.executionCategorySpacing
         executionCategoryRow.alignment = .fill
         executionCategoryRow.setContentHuggingPriority(.required, for: .vertical)
         let executionCategorySpacer = UIView()
@@ -230,7 +241,7 @@ final class SelectionActionPanel: UIView {
 
         let contentStack = UIStackView(arrangedSubviews: [leftContentStack, stopButton, executeButton])
         contentStack.axis = .horizontal
-        contentStack.spacing = 4
+        contentStack.spacing = Layout.panelControlSpacing
         contentStack.setCustomSpacing(12, after: stopButton)
         contentStack.alignment = .center
 
@@ -360,6 +371,7 @@ final class SelectionActionPanel: UIView {
     }
 
     private func applySelectionCategories(_ state: SelectionActionPanelSelectionState) {
+        let existingItems = Set(categoryDataSource?.snapshot().itemIdentifiers ?? [])
         var items: [SelectionCategoryItem] = []
         items.reserveCapacity(3)
         if state.backupCount > 0 {
@@ -375,9 +387,11 @@ final class SelectionActionPanel: UIView {
         var snapshot = NSDiffableDataSourceSnapshot<SelectionCategorySection, SelectionCategoryItem>()
         snapshot.appendSections([.main])
         snapshot.appendItems(items, toSection: .main)
+        let reconfigurableItems = items.filter { existingItems.contains($0) }
+        if !reconfigurableItems.isEmpty {
+            snapshot.reconfigureItems(reconfigurableItems)
+        }
         categoryDataSource?.apply(snapshot, animatingDifferences: false)
-        categoryCollectionView.collectionViewLayout.invalidateLayout()
-        categoryCollectionView.setContentOffset(.zero, animated: false)
     }
 
     private func reconfigureSelectionCategoryMenus() {
@@ -577,6 +591,7 @@ final class SelectionActionPanel: UIView {
 
         override func prepareForReuse() {
             super.prepareForReuse()
+            button.configuration = nil
             button.menu = nil
             button.showsMenuAsPrimaryAction = false
         }
@@ -588,7 +603,6 @@ final class SelectionActionPanel: UIView {
             )
             button.menu = menu
             button.showsMenuAsPrimaryAction = menu != nil
-            button.isUserInteractionEnabled = menu != nil
         }
 
         override func preferredLayoutAttributesFitting(
