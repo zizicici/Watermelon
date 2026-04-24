@@ -55,6 +55,12 @@ final class PiPProgressManager: NSObject {
             name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(settingsDidUpdate),
+            name: .SettingsUpdate,
+            object: nil
+        )
     }
 
     // MARK: - Public API
@@ -125,6 +131,17 @@ final class PiPProgressManager: NSObject {
             preparePiPController()
         } else {
             resetDisplayState()
+        }
+    }
+
+    @objc private func settingsDidUpdate() {
+        guard PiPProgressSoundSetting.getValue().playsKeyboardSound else {
+            stopAmbientLoop()
+            return
+        }
+
+        if isPiPShowing, !isFinished {
+            startAmbientLoop()
         }
     }
 
@@ -236,6 +253,7 @@ final class PiPProgressManager: NSObject {
 
     private func startAmbientLoop() {
         guard ambientPlayer == nil, !isFinished,
+              PiPProgressSoundSetting.getValue().playsKeyboardSound,
               let url = Bundle.main.url(forResource: "keyboard-typing", withExtension: "mp3") else {
             return
         }

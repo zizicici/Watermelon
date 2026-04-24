@@ -248,6 +248,52 @@ enum PiPProgressSettingError: LocalizedError {
     }
 }
 
+// MARK: - PiP Progress Sound
+
+enum PiPProgressSoundSetting: Int, CaseIterable, Codable {
+    case keyboardSound = 0
+    case off
+
+    var playsKeyboardSound: Bool {
+        self == .keyboardSound
+    }
+}
+
+extension PiPProgressSoundSetting: UserDefaultSettable {
+    static func getKey() -> String {
+        "com.zizicici.common.settings.PiPProgressSoundSetting"
+    }
+
+    static var defaultOption: PiPProgressSoundSetting {
+        .keyboardSound
+    }
+
+    static func getHeader() -> String? {
+        String(localized: "settings.pipSound.header")
+    }
+
+    static func getFooter() -> String? {
+        String(localized: "settings.pipSound.footer")
+    }
+
+    func getName() -> String {
+        switch self {
+        case .keyboardSound:
+            return String(localized: "settings.pipSound.keyboardSound")
+        case .off:
+            return String(localized: "settings.pipSound.off")
+        }
+    }
+
+    static func getTitle() -> String {
+        String(localized: "settings.pipSound.header")
+    }
+
+    static func getOptions() -> [PiPProgressSoundSetting] {
+        [.keyboardSound, .off]
+    }
+}
+
 // MARK: - Execution Log Filter
 
 struct ExecutionLogFilterPreference: RawRepresentable, Hashable, Sendable {

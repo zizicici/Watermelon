@@ -16,6 +16,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let language = "language"
         static let diagnosticLogs = "diagnosticLogs"
         static let pipProgress = "pipProgress"
+        static let pipSound = "pipSound"
         static let testCrash = "testCrash"
     }
 
@@ -73,14 +74,30 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                         title: String(localized: "more.item.backgroundBackup"),
                         value: BackgroundBackupSetting.getValue().getName(),
                         badge: Self.proBadge
-                    ),
-                    MoreCustomItem(
-                        id: ItemID.pipProgress,
-                        title: String(localized: "more.item.pipProgress"),
-                        value: PiPProgressSetting.getValue().getName(),
-                        badge: Self.proBadge
                     )
                 ]
+            )))
+            let isPiPProgressActive = PiPProgressSetting.getValue() == .enable
+                && MainActor.assumeIsolated { ProStatus.isPro }
+            var pipItems = [
+                MoreCustomItem(
+                    id: ItemID.pipProgress,
+                    title: String(localized: "more.item.pipProgress"),
+                    value: PiPProgressSetting.getValue().getName(),
+                    badge: Self.proBadge
+                )
+            ]
+            if isPiPProgressActive {
+                pipItems.append(MoreCustomItem(
+                    id: ItemID.pipSound,
+                    title: String(localized: "settings.pipSound.header"),
+                    value: PiPProgressSoundSetting.getValue().getName()
+                ))
+            }
+            sections.append(.custom(MoreCustomSection(
+                id: "pip",
+                header: String(localized: "more.section.pip"),
+                items: pipItems
             )))
         }
 
@@ -123,6 +140,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.enterSettings(BackgroundBackupSetting.self)
             case ItemID.pipProgress:
                 controller.enterSettings(PiPProgressSetting.self)
+            case ItemID.pipSound:
+                controller.enterSettings(PiPProgressSoundSetting.self)
             case ItemID.language:
                 controller.jumpToSettings()
             case ItemID.diagnosticLogs:
