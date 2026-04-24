@@ -2,10 +2,34 @@ import SnapKit
 import UIKit
 
 final class SelectionActionPanel: UIView {
+    private enum SelectionCategorySection: Hashable {
+        case main
+    }
+
+    private enum SelectionCategoryKind: Int, Hashable {
+        case backup
+        case download
+        case complement
+
+        var intent: MonthIntent {
+            switch self {
+            case .backup: return .backup
+            case .download: return .download
+            case .complement: return .complement
+            }
+        }
+    }
+
+    private struct SelectionCategoryItem: Hashable {
+        let kind: SelectionCategoryKind
+        let count: Int
+    }
+
     private enum Layout {
         static let executionControlButtonWidth: CGFloat = 72
         static let executionControlButtonHeight: CGFloat = 36
         static let selectionCategoryRowHeight: CGFloat = 52
+        static let selectionCategoryEstimatedWidth: CGFloat = 96
         static let selectionCategoryButtonInsets = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0)
         static let executionCategoryButtonInsets = NSDirectionalEdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 2)
         static let panelLeadingInset: CGFloat = 18
@@ -24,11 +48,12 @@ final class SelectionActionPanel: UIView {
 
     private let separator = UIView()
     private let leftContentStack = UIStackView()
-    private let categoryScrollView = UIScrollView()
-    private let categoryRowStack = UIStackView()
-    private(set) var backupCategoryButton = SelectionActionPanel.makeSelectionCategoryButton(for: .backup)
-    private(set) var downloadCategoryButton = SelectionActionPanel.makeSelectionCategoryButton(for: .download)
-    private(set) var complementCategoryButton = SelectionActionPanel.makeSelectionCategoryButton(for: .complement)
+    private lazy var categoryCollectionView = UICollectionView(
+        frame: .zero,
+        collectionViewLayout: Self.makeSelectionCategoryLayout()
+    )
+    private var categoryDataSource: UICollectionViewDiffableDataSource<SelectionCategorySection, SelectionCategoryItem>?
+    private var selectionCategoryMenus = SelectionActionPanelMenus.empty
     private let executionInfoStack = UIStackView()
     private let executionCategoryRow = UIStackView()
     private let executionBackupCategoryButton = SelectionActionPanel.makeExecutionCategoryButton(for: .backup)
@@ -85,12 +110,29 @@ final class SelectionActionPanel: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    private static func makeSelectionCategoryButton(for intent: MonthIntent) -> UIButton {
+    private static func makeSelectionCategoryLayout() -> UICollectionViewLayout {
+        let layout = UICollectionViewFlowLayout()
+        layout.scrollDirection = .horizontal
+        layout.minimumInteritemSpacing = 4
+        layout.minimumLineSpacing = 4
+        layout.sectionInset = .zero
+        layout.estimatedItemSize = CGSize(
+            width: Layout.selectionCategoryEstimatedWidth,
+            height: Layout.selectionCategoryRowHeight
+        )
+        return layout
+    }
+
+    private static func makeSelectionCategoryButtonConfiguration(
+        intent: MonthIntent,
+        count: Int
+    ) -> UIButton.Configuration {
         let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
         var cfg = UIButton.Configuration.plain()
         cfg.image = UIImage(systemName: intent.iconSymbolName, withConfiguration: iconConfig)
         cfg.imagePadding = 6
         cfg.titleAlignment = .leading
+        cfg.title = "\(count)"
         cfg.subtitle = intent.panelSubtitle
         cfg.contentInsets = Layout.selectionCategoryButtonInsets
         cfg.subtitleTextAttributesTransformer = .init {
@@ -99,12 +141,7 @@ final class SelectionActionPanel: UIView {
             return attributes
         }
         cfg.baseForegroundColor = intent.tintColor
-        let button = UIButton(configuration: cfg)
-        button.contentHorizontalAlignment = .leading
-        button.titleLabel?.adjustsFontForContentSizeCategory = true
-        button.titleLabel?.lineBreakMode = .byTruncatingTail
-        button.setContentCompressionResistancePriority(.required, for: .vertical)
-        return button
+        return cfg
     }
 
     private static func makeExecutionCategoryButton(for intent: MonthIntent) -> UIButton {
@@ -156,23 +193,8 @@ final class SelectionActionPanel: UIView {
             make.height.equalTo(Layout.executionControlButtonHeight)
         }
 
-        categoryScrollView.showsHorizontalScrollIndicator = false
-        categoryScrollView.showsVerticalScrollIndicator = false
-        categoryScrollView.alwaysBounceHorizontal = true
-
-        categoryRowStack.axis = .horizontal
-        categoryRowStack.spacing = 4
-        categoryRowStack.alignment = .fill
-        categoryRowStack.addArrangedSubview(backupCategoryButton)
-        categoryRowStack.addArrangedSubview(downloadCategoryButton)
-        categoryRowStack.addArrangedSubview(complementCategoryButton)
-
-        categoryScrollView.addSubview(categoryRowStack)
-        categoryRowStack.snp.makeConstraints { make in
-            make.edges.equalTo(categoryScrollView.contentLayoutGuide)
-            make.height.equalTo(categoryScrollView.frameLayoutGuide)
-        }
-        categoryScrollView.snp.makeConstraints { make in
+        configureCategoryCollectionView()
+        categoryCollectionView.snp.makeConstraints { make in
             make.height.equalTo(Layout.selectionCategoryRowHeight)
         }
 
@@ -203,7 +225,7 @@ final class SelectionActionPanel: UIView {
         leftContentStack.spacing = 0
         leftContentStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         leftContentStack.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        leftContentStack.addArrangedSubview(categoryScrollView)
+        leftContentStack.addArrangedSubview(categoryCollectionView)
         leftContentStack.addArrangedSubview(executionInfoStack)
 
         let contentStack = UIStackView(arrangedSubviews: [leftContentStack, stopButton, executeButton])
@@ -218,6 +240,31 @@ final class SelectionActionPanel: UIView {
             make.leading.equalToSuperview().inset(Layout.panelLeadingInset)
             make.trailing.equalToSuperview().inset(Layout.panelTrailingInset)
             make.bottom.equalTo(safeAreaLayoutGuide).inset(Layout.panelVerticalInset)
+        }
+    }
+
+    private func configureCategoryCollectionView() {
+        categoryCollectionView.backgroundColor = .clear
+        categoryCollectionView.showsHorizontalScrollIndicator = false
+        categoryCollectionView.showsVerticalScrollIndicator = false
+        categoryCollectionView.alwaysBounceHorizontal = true
+        categoryCollectionView.delaysContentTouches = false
+
+        let registration = UICollectionView.CellRegistration<SelectionCategoryCell, SelectionCategoryItem> { [weak self] cell, _, item in
+            cell.configure(
+                item: item,
+                menu: self?.menu(for: item.kind)
+            )
+        }
+
+        categoryDataSource = UICollectionViewDiffableDataSource<SelectionCategorySection, SelectionCategoryItem>(
+            collectionView: categoryCollectionView
+        ) { collectionView, indexPath, item in
+            collectionView.dequeueConfiguredReusableCell(
+                using: registration,
+                for: indexPath,
+                item: item
+            )
         }
     }
 
@@ -275,29 +322,19 @@ final class SelectionActionPanel: UIView {
     ) {
         switch state {
         case .selection:
-            backupCategoryButton.showsMenuAsPrimaryAction = menus.backup != nil
-            backupCategoryButton.menu = menus.backup
-            downloadCategoryButton.showsMenuAsPrimaryAction = menus.download != nil
-            downloadCategoryButton.menu = menus.download
-            complementCategoryButton.showsMenuAsPrimaryAction = menus.complement != nil
-            complementCategoryButton.menu = menus.complement
+            selectionCategoryMenus = menus
+            reconfigureSelectionCategoryMenus()
         case .execution:
-            backupCategoryButton.showsMenuAsPrimaryAction = false
-            backupCategoryButton.menu = nil
-            downloadCategoryButton.showsMenuAsPrimaryAction = false
-            downloadCategoryButton.menu = nil
-            complementCategoryButton.showsMenuAsPrimaryAction = false
-            complementCategoryButton.menu = nil
+            selectionCategoryMenus = .empty
+            reconfigureSelectionCategoryMenus()
         }
     }
 
     private func renderSelection(_ state: SelectionActionPanelSelectionState) {
-        categoryScrollView.isHidden = false
+        categoryCollectionView.isHidden = false
         executionInfoStack.isHidden = true
 
-        applySelectionCategory(button: backupCategoryButton, count: state.backupCount, intent: .backup)
-        applySelectionCategory(button: downloadCategoryButton, count: state.downloadCount, intent: .download)
-        applySelectionCategory(button: complementCategoryButton, count: state.complementCount, intent: .complement)
+        applySelectionCategories(state)
 
         applyPrimaryButton(
             SelectionActionPanelButtonState(
@@ -311,7 +348,7 @@ final class SelectionActionPanel: UIView {
     }
 
     private func renderExecution(_ state: SelectionActionPanelExecutionState) {
-        categoryScrollView.isHidden = true
+        categoryCollectionView.isHidden = true
         executionInfoStack.isHidden = false
 
         applyExecutionCategory(button: executionBackupCategoryButton, count: state.backupCount, intent: .backup)
@@ -322,18 +359,41 @@ final class SelectionActionPanel: UIView {
         applyStopButton(state.stopButton)
     }
 
-    private func applySelectionCategory(button: UIButton, count: Int, intent: MonthIntent) {
-        button.isHidden = count == 0
-        guard count > 0, var cfg = button.configuration else { return }
+    private func applySelectionCategories(_ state: SelectionActionPanelSelectionState) {
+        var items: [SelectionCategoryItem] = []
+        items.reserveCapacity(3)
+        if state.backupCount > 0 {
+            items.append(SelectionCategoryItem(kind: .backup, count: state.backupCount))
+        }
+        if state.downloadCount > 0 {
+            items.append(SelectionCategoryItem(kind: .download, count: state.downloadCount))
+        }
+        if state.complementCount > 0 {
+            items.append(SelectionCategoryItem(kind: .complement, count: state.complementCount))
+        }
 
-        let iconConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
-        button.isUserInteractionEnabled = true
-        cfg.showsActivityIndicator = false
-        cfg.image = UIImage(systemName: intent.iconSymbolName, withConfiguration: iconConfig)
-        cfg.title = "\(count)"
-        cfg.subtitle = intent.panelSubtitle
-        cfg.baseForegroundColor = intent.tintColor
-        button.configuration = cfg
+        var snapshot = NSDiffableDataSourceSnapshot<SelectionCategorySection, SelectionCategoryItem>()
+        snapshot.appendSections([.main])
+        snapshot.appendItems(items, toSection: .main)
+        categoryDataSource?.apply(snapshot, animatingDifferences: false)
+        categoryCollectionView.collectionViewLayout.invalidateLayout()
+        categoryCollectionView.setContentOffset(.zero, animated: false)
+    }
+
+    private func reconfigureSelectionCategoryMenus() {
+        guard var snapshot = categoryDataSource?.snapshot() else { return }
+        let items = snapshot.itemIdentifiers
+        guard !items.isEmpty else { return }
+        snapshot.reconfigureItems(items)
+        categoryDataSource?.apply(snapshot, animatingDifferences: false)
+    }
+
+    private func menu(for kind: SelectionCategoryKind) -> UIMenu? {
+        switch kind {
+        case .backup: return selectionCategoryMenus.backup
+        case .download: return selectionCategoryMenus.download
+        case .complement: return selectionCategoryMenus.complement
+        }
     }
 
     private func applyExecutionCategory(button: UIButton, count: Int, intent: MonthIntent) {
@@ -492,5 +552,62 @@ final class SelectionActionPanel: UIView {
         cfg.baseForegroundColor = .materialOnPrimary(dark: onDark)
         cfg.contentInsets = .init(top: 8, leading: 14, bottom: 8, trailing: 14)
         executeButton.configuration = cfg
+    }
+
+    private final class SelectionCategoryCell: UICollectionViewCell {
+        private let button = UIButton(type: .system)
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+
+            contentView.backgroundColor = .clear
+            button.contentHorizontalAlignment = .leading
+            button.titleLabel?.adjustsFontForContentSizeCategory = true
+            button.titleLabel?.lineBreakMode = .byTruncatingTail
+            button.setContentCompressionResistancePriority(.required, for: .vertical)
+
+            contentView.addSubview(button)
+            button.snp.makeConstraints { make in
+                make.edges.equalToSuperview()
+            }
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError() }
+
+        override func prepareForReuse() {
+            super.prepareForReuse()
+            button.menu = nil
+            button.showsMenuAsPrimaryAction = false
+        }
+
+        func configure(item: SelectionCategoryItem, menu: UIMenu?) {
+            button.configuration = SelectionActionPanel.makeSelectionCategoryButtonConfiguration(
+                intent: item.kind.intent,
+                count: item.count
+            )
+            button.menu = menu
+            button.showsMenuAsPrimaryAction = menu != nil
+            button.isUserInteractionEnabled = menu != nil
+        }
+
+        override func preferredLayoutAttributesFitting(
+            _ layoutAttributes: UICollectionViewLayoutAttributes
+        ) -> UICollectionViewLayoutAttributes {
+            let attributes = super.preferredLayoutAttributesFitting(layoutAttributes)
+            let fittingSize = contentView.systemLayoutSizeFitting(
+                CGSize(
+                    width: UIView.layoutFittingCompressedSize.width,
+                    height: Layout.selectionCategoryRowHeight
+                ),
+                withHorizontalFittingPriority: .fittingSizeLevel,
+                verticalFittingPriority: .required
+            )
+            attributes.frame.size = CGSize(
+                width: ceil(fittingSize.width),
+                height: Layout.selectionCategoryRowHeight
+            )
+            return attributes
+        }
     }
 }
