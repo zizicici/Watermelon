@@ -473,9 +473,11 @@ final class HomeViewController: UIViewController {
                                         leftState: leftState, rightState: rightState,
                                         selectedColor: accentColor, deselectedColor: UIColor.tertiaryLabel)
             supplementaryView.onLeftTap = { [weak self] in
+                guard self?.confirmSelectionReadiness() == true else { return }
                 self?.store.toggleYear(sectionIndex: indexPath.section, side: .local)
             }
             supplementaryView.onRightTap = { [weak self] in
+                guard self?.confirmSelectionReadiness() == true else { return }
                 self?.store.toggleYear(sectionIndex: indexPath.section, side: .remote)
             }
         }
@@ -1034,10 +1036,10 @@ final class HomeViewController: UIViewController {
     }
 
     private func updateSelectionInteraction() {
-        let selectable = store.isSelectable
-        collectionView.allowsSelection = selectable
-        leftToggle.isEnabled = selectable
-        rightToggle.isEnabled = selectable
+        let canAttemptSelection = store.executionState == nil
+        collectionView.allowsSelection = canAttemptSelection
+        leftToggle.isEnabled = canAttemptSelection && store.localPhotoAccessState.isAuthorized
+        rightToggle.isEnabled = canAttemptSelection && store.connectionState.isConnected
         rightHeaderMenuOverlay.isEnabled = store.executionState == nil
         rightHeaderButton.isEnabled = store.executionState == nil
     }
@@ -1353,10 +1355,12 @@ final class HomeViewController: UIViewController {
     }
 
     @objc private func leftToggleTapped() {
+        guard confirmSelectionReadiness() else { return }
         store.toggleAll(side: .local)
     }
 
     @objc private func rightToggleTapped() {
+        guard confirmSelectionReadiness() else { return }
         store.toggleAll(side: .remote)
     }
 
@@ -1392,6 +1396,46 @@ final class HomeViewController: UIViewController {
             self?.store.startExecution(backup: backup, download: download, complement: complement)
         })
         present(alert, animated: true)
+    }
+
+    private func confirmSelectionReadiness() -> Bool {
+        guard store.executionState == nil else { return false }
+
+        var messages: [String] = []
+        switch store.localPhotoAccessState {
+        case .authorized:
+            break
+        case .notDetermined:
+            messages.append(String(localized: "home.overlay.authRequired"))
+        case .denied:
+            messages.append(String(localized: "home.overlay.noAuth"))
+        }
+
+        switch store.connectionState {
+        case .connected:
+            break
+        case .connecting:
+            if let progress = store.remoteSyncProgress {
+                messages.append(
+                    String.localizedStringWithFormat(
+                        String(localized: "home.overlay.processingMonths"),
+                        progress.current,
+                        progress.total
+                    )
+                )
+            } else {
+                messages.append(String(localized: "home.overlay.scanningIndex"))
+            }
+        case .disconnected:
+            messages.append(String(localized: "home.overlay.notConnected"))
+        }
+
+        guard !messages.isEmpty else { return true }
+        showAlert(
+            title: String(localized: "home.alert.selectionUnavailable"),
+            message: messages.joined(separator: "\n")
+        )
+        return false
     }
 
     private func confirmStop() {
@@ -1458,6 +1502,7 @@ extension HomeViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
         guard let item = dataSource.itemIdentifier(for: indexPath) else { return }
+        guard confirmSelectionReadiness() else { return }
         switch item.side {
         case .local:  store.toggleMonth(item.month, side: .local)
         case .remote: store.toggleMonth(item.month, side: .remote)
