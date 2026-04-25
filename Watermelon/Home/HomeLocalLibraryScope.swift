@@ -1,23 +1,8 @@
 import Foundation
 
-/// Equality is identity-only (album IDs); descriptor metadata is treated as
-/// display-only so a rename in Photos.app isn't classified as a scope change that
-/// would trigger a full reload. The trade-off is that renamed titles can stay stale
-/// in the header until the next picker re-pick (handled in `HomeScreenStore`).
-enum HomeLocalLibraryScope: Equatable, Sendable {
+enum HomeLocalLibraryScope: Hashable, Sendable {
     case allPhotos
-    case albums([LocalAlbumDescriptor])
-
-    static func == (lhs: HomeLocalLibraryScope, rhs: HomeLocalLibraryScope) -> Bool {
-        switch (lhs, rhs) {
-        case (.allPhotos, .allPhotos):
-            return true
-        case (.albums, .albums):
-            return lhs.selectedAlbumIdentifiers == rhs.selectedAlbumIdentifiers
-        case (.allPhotos, .albums), (.albums, .allPhotos):
-            return false
-        }
-    }
+    case albums(Set<String>)
 
     var isSpecificAlbums: Bool {
         if case .albums = self { return true }
@@ -28,8 +13,8 @@ enum HomeLocalLibraryScope: Equatable, Sendable {
         switch self {
         case .allPhotos:
             return []
-        case .albums(let albums):
-            return Set(albums.map(\.localIdentifier))
+        case .albums(let ids):
+            return ids
         }
     }
 
@@ -37,8 +22,8 @@ enum HomeLocalLibraryScope: Equatable, Sendable {
         switch self {
         case .allPhotos:
             return .allAssets
-        case .albums(let albums):
-            return .albums(Set(albums.map(\.localIdentifier)))
+        case .albums(let ids):
+            return .albums(ids)
         }
     }
 }

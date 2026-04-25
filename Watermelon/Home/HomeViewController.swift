@@ -982,7 +982,10 @@ final class HomeViewController: UIViewController {
             photoLibraryService: dependencies.photoLibraryService,
             selectedAlbumIDs: store.localLibraryScope.selectedAlbumIdentifiers
         ) { [weak self] albums in
-            self?.store.setLocalLibraryScope(.albums(albums))
+            self?.store.setLocalLibraryScope(
+                .albums(Set(albums.map(\.localIdentifier))),
+                descriptors: albums
+            )
             self?.refreshLocalLibraryMenu()
         }
 
@@ -1206,7 +1209,7 @@ final class HomeViewController: UIViewController {
 
     private func configureLeftHeaderButton() {
         let headerTextColor = UIColor.materialOnContainer(light: .Material.Green._900, dark: .Material.Green._100)
-        leftHeaderLabel.text = Self.headerTitle(for: store.localLibraryScope)
+        leftHeaderLabel.text = headerTitle(for: store.localLibraryScope)
 
         var config = UIButton.Configuration.plain()
         config.image = UIImage(systemName: "chevron.down", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11))
@@ -1220,23 +1223,23 @@ final class HomeViewController: UIViewController {
     }
 
     private func refreshLocalLibraryMenu() {
-        leftHeaderLabel.text = Self.headerTitle(for: store.localLibraryScope)
+        leftHeaderLabel.text = headerTitle(for: store.localLibraryScope)
         let menu = buildLocalLibraryMenu()
         leftHeaderButton.menu = menu
         leftHeaderMenuOverlay.menu = menu
     }
 
-    private static func headerTitle(for scope: HomeLocalLibraryScope) -> String {
+    private func headerTitle(for scope: HomeLocalLibraryScope) -> String {
         switch scope {
         case .allPhotos:
             return String(localized: "home.localSource.allPhotos")
-        case .albums(let albums):
-            if albums.count == 1, let title = albums.first?.title {
-                return title
+        case .albums(let ids):
+            if ids.count == 1, let id = ids.first, let descriptor = store.albumDisplayCache[id] {
+                return descriptor.title
             }
             return String.localizedStringWithFormat(
                 String(localized: "home.localSource.albumCount"),
-                albums.count
+                ids.count
             )
         }
     }

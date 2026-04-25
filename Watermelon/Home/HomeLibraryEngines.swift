@@ -180,52 +180,61 @@ private final class HomeLocalIndexEngine: @unchecked Sendable {
         return changedMonths
     }
 
-    /// Existing IDs are refreshed in place. New IDs (`fetchedAssetsByID`) — typically
-    /// just-downloaded assets whose PHChange is in flight or deferred — are inserted
-    /// into the month index but **not** into `assetMembershipCount`; the eventual
-    /// PHChange's `insertedIndexes` ratifies membership 0→1 via `applyMembershipDelta`,
-    /// so we don't double-count.
-    func refresh(
+    /// Recompute fingerprint / aggregate for IDs already represented in the index.
+    /// Unknown IDs are silently skipped. Returns the months whose aggregates changed.
+    func refreshExisting(
         assetIDs: Set<String>,
-        fetchedAssetsByID: [String: PHAsset],
         fingerprintsForIDs: (Set<String>) -> [String: Data],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty, hasLoadedIndex else { return [] }
 
-        let existingIDs = knownAssetIDs(in: assetIDs)
-        let insertedIDs = Set(fetchedAssetsByID.keys).subtracting(existingIDs)
-        guard !existingIDs.isEmpty || !insertedIDs.isEmpty else { return [] }
+        var changedMonths = Set<LibraryMonthKey>()
+        var refreshIDs = Set<String>()
+        refreshIDs.reserveCapacity(assetIDs.count)
+        for id in assetIDs {
+            guard let month = monthForAsset(id) else { continue }
+            changedMonths.insert(month)
+            refreshIDs.insert(id)
+        }
+        guard !refreshIDs.isEmpty else { return [] }
+
+        refreshFingerprintCache(for: refreshIDs, using: fingerprintsForIDs)
+        recomputeAggregates(
+            for: changedMonths,
+            remoteFingerprintsForMonth: remoteFingerprintsForMonth
+        )
+        return changedMonths
+    }
+
+    /// Insert assets the engine doesn't yet track. Membership count is left at zero
+    /// so the next PHChange's `insertedIndexes` ratifies them via
+    /// `applyMembershipDelta` (0→1). Caller is responsible for ensuring such a
+    /// PHChange will arrive — typical use is just-downloaded assets whose creation
+    /// PHChange is in flight or deferred. Already-tracked IDs in `assetsByID` are
+    /// skipped so a double call is idempotent.
+    func eagerlyInsert(
+        _ assetsByID: [String: PHAsset],
+        fingerprintsForIDs: (Set<String>) -> [String: Data],
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
+    ) -> Set<LibraryMonthKey> {
+        guard !assetsByID.isEmpty, hasLoadedIndex else { return [] }
+
+        let candidateIDs = Set(assetsByID.keys)
+        let trackedIDs = knownAssetIDs(in: candidateIDs)
+        let insertedIDs = candidateIDs.subtracting(trackedIDs)
+        guard !insertedIDs.isEmpty else { return [] }
 
         var changedMonths = Set<LibraryMonthKey>()
-
-        for id in existingIDs {
-            if let asset = fetchedAssetsByID[id] {
-                let newMonth = LibraryMonthKey.from(date: asset.creationDate)
-                let mediaKind = homeMediaKind(for: asset)
-                if let oldMonth = monthForAsset(id), oldMonth != newMonth {
-                    removeFromIDSets(id, month: oldMonth)
-                    changedMonths.insert(oldMonth)
-                }
-                insertAssetID(id, month: newMonth, mediaKind: mediaKind)
-                changedMonths.insert(newMonth)
-            } else if let month = monthForAsset(id) {
-                changedMonths.insert(month)
-            }
-        }
-
         for id in insertedIDs {
-            guard let asset = fetchedAssetsByID[id] else { continue }
+            guard let asset = assetsByID[id] else { continue }
             let month = LibraryMonthKey.from(date: asset.creationDate)
             let mediaKind = homeMediaKind(for: asset)
             insertAssetID(id, month: month, mediaKind: mediaKind)
             changedMonths.insert(month)
         }
 
-        refreshFingerprintCache(
-            for: existingIDs.union(insertedIDs),
-            using: fingerprintsForIDs
-        )
+        refreshFingerprintCache(for: insertedIDs, using: fingerprintsForIDs)
         recomputeAggregates(
             for: changedMonths,
             remoteFingerprintsForMonth: remoteFingerprintsForMonth
@@ -760,28 +769,33 @@ private final class HomeDataProcessingWorker: @unchecked Sendable {
                 }
 
                 let existingIDs = self.localIndex.knownAssetIDs(in: assetIDs)
-                let missingIDs = shouldFetchMissing ? assetIDs.subtracting(existingIDs) : []
-                let fetchedMissingAssets = missingIDs.isEmpty
-                    ? []
-                    : self.photoLibraryService.fetchAssets(localIdentifiers: missingIDs)
-                let fetchedAssetsByID = Dictionary(
-                    uniqueKeysWithValues: fetchedMissingAssets.map { ($0.localIdentifier, $0) }
-                )
-                let targetIDs = existingIDs.union(fetchedAssetsByID.keys)
-                guard !targetIDs.isEmpty else {
-                    continuation.resume(returning: [])
-                    return
-                }
-
-                let changedMonths = self.localIndex.refresh(
-                    assetIDs: targetIDs,
-                    fetchedAssetsByID: fetchedAssetsByID,
+                var changedMonths = self.localIndex.refreshExisting(
+                    assetIDs: existingIDs,
                     fingerprintsForIDs: self.fetchFingerprintsForIDs,
                     remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
                 )
 
+                var insertedCount = 0
+                if shouldFetchMissing {
+                    let missingIDs = assetIDs.subtracting(existingIDs)
+                    if !missingIDs.isEmpty {
+                        let fetched = self.photoLibraryService.fetchAssets(localIdentifiers: missingIDs)
+                        if !fetched.isEmpty {
+                            let assetsByID = Dictionary(
+                                uniqueKeysWithValues: fetched.map { ($0.localIdentifier, $0) }
+                            )
+                            changedMonths.formUnion(self.localIndex.eagerlyInsert(
+                                assetsByID,
+                                fingerprintsForIDs: self.fetchFingerprintsForIDs,
+                                remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
+                            ))
+                            insertedCount = assetsByID.count
+                        }
+                    }
+                }
+
                 let elapsed = CFAbsoluteTimeGetCurrent() - start
-                dataLog.info("[HomeData] refreshLocalIndex: assets=\(targetIDs.count), inserted=\(fetchedAssetsByID.count), months=\(changedMonths.count), \(String(format: "%.3f", elapsed))s")
+                dataLog.info("[HomeData] refreshLocalIndex: assets=\(existingIDs.count + insertedCount), inserted=\(insertedCount), months=\(changedMonths.count), \(String(format: "%.3f", elapsed))s")
                 continuation.resume(returning: changedMonths)
             }
         }
@@ -1016,7 +1030,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
 
     private let contentHashIndexRepository: ContentHashIndexRepository
     private let processingWorker: HomeDataProcessingWorker
-    private var localLibraryScope: HomeLocalLibraryScope = .allPhotos
+    private let currentScope: @MainActor () -> HomeLocalLibraryScope
 
     private var isObservingPhotoLibrary = false
     private var processingMutationCount = 0
@@ -1049,7 +1063,8 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     init(
         photoLibraryService: PhotoLibraryService,
         contentHashIndexRepository: ContentHashIndexRepository,
-        remoteMonthSnapshot: @escaping @Sendable (LibraryMonthKey) -> RemoteLibraryMonthDelta?
+        remoteMonthSnapshot: @escaping @Sendable (LibraryMonthKey) -> RemoteLibraryMonthDelta?,
+        currentScope: @escaping @MainActor () -> HomeLocalLibraryScope
     ) {
         self.contentHashIndexRepository = contentHashIndexRepository
         self.processingWorker = HomeDataProcessingWorker(
@@ -1057,6 +1072,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
             contentHashIndexRepository: contentHashIndexRepository,
             remoteMonthSnapshot: remoteMonthSnapshot
         )
+        self.currentScope = currentScope
         super.init()
         memoryWarningObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
@@ -1097,10 +1113,6 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         processingWorker.remoteSnapshotRevisionForQuery(hasActiveConnection: hasActiveConnection)
     }
 
-    func setLocalLibraryScope(_ scope: HomeLocalLibraryScope) {
-        localLibraryScope = scope
-    }
-
     @discardableResult
     func ensureLocalIndexLoaded() async -> Bool {
         await loadLocalIndex(forceReload: false)
@@ -1114,10 +1126,11 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     @discardableResult
     func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) async -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty else { return [] }
+        let scope = currentScope()
         beginProcessingMutation()
         let reconciledMonths = await processingWorker.refreshLocalIndex(
             forAssetIDs: assetIDs,
-            expectedScope: localLibraryScope
+            expectedScope: scope
         )
         finishProcessingMutation()
         return reconciledMonths
@@ -1146,11 +1159,11 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
-        processingWorker.localAssetIDs(for: month, expectedScope: localLibraryScope)
+        processingWorker.localAssetIDs(for: month, expectedScope: currentScope())
     }
 
     func remoteOnlyItems(for month: LibraryMonthKey) async -> [RemoteAlbumItem] {
-        await processingWorker.remoteOnlyItems(for: month, expectedScope: localLibraryScope)
+        await processingWorker.remoteOnlyItems(for: month, expectedScope: currentScope())
     }
 
     func matchedCount(for month: LibraryMonthKey) -> Int {
@@ -1186,7 +1199,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     private func loadLocalIndex(forceReload: Bool) async -> Bool {
         let result = await processingWorker.loadLocalIndex(
             forceReload: forceReload,
-            scope: localLibraryScope
+            scope: currentScope()
         )
         if result.isAuthorized {
             registerPhotoLibraryObserverIfNeeded()
@@ -1206,10 +1219,11 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     private func applyPhotoLibraryChangeNow(_ changeInstance: PHChange) async {
+        let scope = currentScope()
         beginProcessingMutation()
         let reconciledMonths = await processingWorker.applyPhotoLibraryChange(
             changeInstance,
-            scope: localLibraryScope
+            scope: scope
         )
         finishProcessingMutation()
         if !reconciledMonths.isEmpty {
