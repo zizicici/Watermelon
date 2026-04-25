@@ -1,12 +1,6 @@
 import Foundation
 import Photos
 
-enum AlbumMediaKind {
-    case photo
-    case video
-    case livePhoto
-}
-
 struct RemoteAlbumItem {
     let id: String
     let assetFingerprint: Data

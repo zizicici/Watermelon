@@ -38,17 +38,13 @@ final class WorkerTests: XCTestCase {
             collections: [TestAssetCollection([TestFixtures.snapshot(id: "a", year: 2024, month: 5)])]
         )
 
-        // With matching scope, the IDs surface.
         XCTAssertEqual(worker.localAssetIDs(for: key, expectedScope: .allPhotos), ["a"])
-
-        // With a mismatched scope, the worker must return [] regardless of engine state.
         XCTAssertTrue(worker.localAssetIDs(for: key, expectedScope: .albums(["x"])).isEmpty)
     }
 
     func testRefreshLocalIndex_returnsEmpty_onScopeMismatch() async {
-        // Scope-mismatch guard on `refreshLocalIndex` is the cleanest scope-only gate
-        // on the worker (`remoteOnlyItems` ANDs scope with hasActiveConnection + remote
-        // data presence, so it cannot distinguish "scope mismatch" from "other reasons").
+        // Worker's `remoteOnlyItems` ANDs scope with hasActiveConnection + remote data
+        // presence so it can't isolate scope-mismatch alone — `refreshLocalIndex` can.
         let worker = makeWorker()
         worker._testSeed(
             scope: .allPhotos,
@@ -81,10 +77,39 @@ final class WorkerTests: XCTestCase {
         XCTAssertEqual(worker._testMonthFileSize(for: key), 12345)
     }
 
+    // MARK: - syncRemoteSnapshot connection flip
+
+    func testSyncRemoteSnapshot_disconnect_clearsRemoteSummary() async {
+        // Critical Invariant: hasActiveConnection=false must wipe remote summaries
+        // so `monthRow.remote` doesn't leak stale data to UI after disconnect.
+        let worker = makeWorker()
+        let key = LibraryMonthKey(year: 2024, month: 1)
+        let fp = Data([0xAA])
+        let hash = Data([0xBB])
+        let delta = TestFixtures.remoteMonthDelta(
+            key,
+            assets: [TestFixtures.remoteAsset(year: 2024, month: 1, fingerprint: fp)],
+            resources: [TestFixtures.remoteResource(year: 2024, month: 1, contentHash: hash)],
+            links: [TestFixtures.remoteLink(year: 2024, month: 1, assetFingerprint: fp, resourceHash: hash)]
+        )
+
+        _ = await worker.syncRemoteSnapshot(
+            state: TestFixtures.remoteSnapshotState(revision: 1, isFullSnapshot: true, deltas: [delta]),
+            hasActiveConnection: true
+        )
+        XCTAssertNotNil(worker.monthRow(for: key).remote, "connected sync should populate remote summary")
+
+        _ = await worker.syncRemoteSnapshot(
+            state: TestFixtures.remoteSnapshotState(revision: 2, isFullSnapshot: false, deltas: []),
+            hasActiveConnection: false
+        )
+        XCTAssertNil(worker.monthRow(for: key).remote, "disconnect must drop remote summary")
+    }
+
     func testWriteFileSizeIfScopeStable_skipsWhenScopeChangedMidScan() async {
-        // Critical Invariant #2: a reload that lands between the scan's sample and its
-        // write-back must invalidate the write-back. Otherwise pre-reload totals would
-        // be re-applied to a freshly-wiped `monthFileSizes` map (and flash stale UI).
+        // Critical Invariant #2: a reload landing between sample and write-back must
+        // invalidate the write-back; otherwise pre-reload totals would land on a
+        // freshly-wiped `monthFileSizes` and flash stale UI.
         let worker = makeWorker()
         let key = LibraryMonthKey(year: 2024, month: 5)
         worker._testSeed(
@@ -92,8 +117,6 @@ final class WorkerTests: XCTestCase {
             collections: [TestAssetCollection([TestFixtures.snapshot(id: "a", year: 2024, month: 5)])]
         )
 
-        // Sample took place under .allPhotos; meanwhile a reload landed and the worker
-        // is now under .albums(["x"]).
         let sample = await worker.sampleFileSizeScan(for: key)
         XCTAssertEqual(sample.scope, .allPhotos)
         XCTAssertEqual(sample.ids, ["a"])

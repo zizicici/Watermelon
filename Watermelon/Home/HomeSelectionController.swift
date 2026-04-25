@@ -2,22 +2,22 @@ import Foundation
 
 @MainActor
 final class HomeSelectionController {
-    struct Dependencies {
+    struct Hooks {
         var isSelectable: () -> Bool
         var isRemoteSelectionAllowed: () -> Bool
         var sections: () -> [HomeMergedYearSection]
     }
 
     private(set) var state = SelectionState()
-    private let dependencies: Dependencies
+    private let hooks: Hooks
 
-    init(dependencies: Dependencies) {
-        self.dependencies = dependencies
+    init(hooks: Hooks) {
+        self.hooks = hooks
     }
 
     @discardableResult
     func toggleMonth(_ month: LibraryMonthKey, side: SelectionSide) -> Bool {
-        guard dependencies.isSelectable() else { return false }
+        guard hooks.isSelectable() else { return false }
         switch side {
         case .local:
             if state.localMonths.contains(month) {
@@ -26,7 +26,7 @@ final class HomeSelectionController {
                 state.localMonths.insert(month)
             }
         case .remote:
-            guard dependencies.isRemoteSelectionAllowed() else { return false }
+            guard hooks.isRemoteSelectionAllowed() else { return false }
             if state.remoteMonths.contains(month) {
                 state.remoteMonths.remove(month)
             } else {
@@ -38,8 +38,8 @@ final class HomeSelectionController {
 
     @discardableResult
     func toggleYear(sectionIndex: Int, side: SelectionSide) -> Bool {
-        guard dependencies.isSelectable() else { return false }
-        let sections = dependencies.sections()
+        guard hooks.isSelectable() else { return false }
+        let sections = hooks.sections()
         guard sectionIndex < sections.count else { return false }
         let allMonths = Set(sections[sectionIndex].rows.map(\.month))
         switch side {
@@ -50,7 +50,7 @@ final class HomeSelectionController {
                 state.localMonths.formUnion(allMonths)
             }
         case .remote:
-            guard dependencies.isRemoteSelectionAllowed() else { return false }
+            guard hooks.isRemoteSelectionAllowed() else { return false }
             if allMonths.isSubset(of: state.remoteMonths) {
                 state.remoteMonths.subtract(allMonths)
             } else {
@@ -62,8 +62,8 @@ final class HomeSelectionController {
 
     @discardableResult
     func toggleAll(side: SelectionSide) -> Bool {
-        guard dependencies.isSelectable() else { return false }
-        let allMonths = Set(dependencies.sections().flatMap { $0.rows.map(\.month) })
+        guard hooks.isSelectable() else { return false }
+        let allMonths = Set(hooks.sections().flatMap { $0.rows.map(\.month) })
         switch side {
         case .local:
             if allMonths.isSubset(of: state.localMonths) {
@@ -72,7 +72,7 @@ final class HomeSelectionController {
                 state.localMonths = allMonths
             }
         case .remote:
-            guard dependencies.isRemoteSelectionAllowed() else { return false }
+            guard hooks.isRemoteSelectionAllowed() else { return false }
             if allMonths.isSubset(of: state.remoteMonths) {
                 state.remoteMonths.removeAll()
             } else {

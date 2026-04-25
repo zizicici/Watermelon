@@ -41,7 +41,7 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(feb?.photoCount, 1)
     }
 
-    func testReload_multipleFetchResults_assetsInBothCount2() {
+    func testReload_assetSharedAcrossAlbums_survivesRemovalFromOne() {
         let engine = makeEngine()
         let s = TestFixtures.snapshot(id: "shared", year: 2024, month: 3)
         let other = TestFixtures.snapshot(id: "lonely", year: 2024, month: 3)
@@ -51,8 +51,6 @@ final class EngineTests: XCTestCase {
         _ = reload(engine, [albumA, albumB])
 
         XCTAssertEqual(engine.localAssetIDs(for: LibraryMonthKey(year: 2024, month: 3)), ["shared", "lonely"])
-        // PHChange that "removes" `shared` from albumA only must NOT evict the asset.
-        // Indirect verification: after applying such a change, asset stays in the index.
         let provider = TestChangeProvider()
         let nextA = TestAssetCollection([other])
         provider.setChange(for: albumA, LibraryCollectionChange(
@@ -142,11 +140,11 @@ final class EngineTests: XCTestCase {
     }
 
     func testApplyChange_incrementalChange_updatesMonth() {
+        // Asset "a" reclassifies from month 8 to month 9 — e.g., user edits creation date.
         let engine = makeEngine()
         let initial = TestAssetCollection([TestFixtures.snapshot(id: "a", year: 2024, month: 8)])
         _ = reload(engine, [initial])
 
-        // Asset "a" is now classified into a different month (e.g., user edited creation date).
         let updated = TestFixtures.snapshot(id: "a", year: 2024, month: 9)
         let next = TestAssetCollection([updated])
         let provider = TestChangeProvider()
@@ -208,7 +206,6 @@ final class EngineTests: XCTestCase {
         let albumB = TestAssetCollection([s])
         _ = reload(engine, [albumA, albumB])
 
-        // Remove from albumA only — asset must stay because albumB still includes it.
         let provider = TestChangeProvider()
         provider.setChange(for: albumA, LibraryCollectionChange(
             nextCollection: TestAssetCollection([]),
@@ -229,13 +226,13 @@ final class EngineTests: XCTestCase {
     }
 
     func testApplyChange_multiAlbumMembership_lastRemoveEvicts() {
+        // Remove from both albums in the same change pass — refcount 2→0, evicted.
         let engine = makeEngine()
         let s = TestFixtures.snapshot(id: "shared", year: 2024, month: 4)
         let albumA = TestAssetCollection([s])
         let albumB = TestAssetCollection([s])
         _ = reload(engine, [albumA, albumB])
 
-        // Remove from albumA AND albumB in the same change pass — count goes 2→0 → evicted.
         let provider = TestChangeProvider()
         provider.setChange(for: albumA, LibraryCollectionChange(
             nextCollection: TestAssetCollection([]),
@@ -281,7 +278,6 @@ final class EngineTests: XCTestCase {
             remoteFingerprintsForMonth: TestFixtures.emptyRemoteFingerprints
         )
 
-        // Ratification: simulate the creation PHChange.
         let nextAfterInsert = TestAssetCollection([
             TestFixtures.snapshot(id: "tracked", year: 2024, month: 5),
             snap
@@ -301,7 +297,6 @@ final class EngineTests: XCTestCase {
             remoteFingerprintsForMonth: TestFixtures.emptyRemoteFingerprints
         )
 
-        // Now removal evicts cleanly.
         let removalProvider = TestChangeProvider()
         let nextAfterRemove = TestAssetCollection([TestFixtures.snapshot(id: "tracked", year: 2024, month: 5)])
         removalProvider.setChange(for: nextAfterInsert, LibraryCollectionChange(
@@ -322,9 +317,8 @@ final class EngineTests: XCTestCase {
     }
 
     func testEagerlyInsert_phantomClearedByNextReload() {
-        // Phantom entries (eagerly-inserted but never ratified) survive only until the
-        // next reload — `reload` wipes the engine and rebuilds from the new fetch
-        // result. If the new fetch result doesn't include the phantom id, it's gone.
+        // Phantom entries (never-ratified eager inserts) must not survive a reload that
+        // doesn't include them — otherwise they'd inflate UI counts indefinitely.
         let engine = makeEngine()
         let initial = TestAssetCollection([TestFixtures.snapshot(id: "tracked", year: 2024, month: 5)])
         _ = reload(engine, [initial])
@@ -345,8 +339,8 @@ final class EngineTests: XCTestCase {
         let initial = TestAssetCollection([TestFixtures.snapshot(id: "a", year: 2024, month: 1)])
         _ = reload(engine, [initial])
 
-        // Calling eagerlyInsert with an already-tracked id must be a no-op.
-        let snap = TestFixtures.snapshot(id: "a", year: 2099, month: 12)  // misleading month
+        // Misleading month on the snapshot — must be ignored since "a" is already tracked.
+        let snap = TestFixtures.snapshot(id: "a", year: 2099, month: 12)
         let changedMonths = engine.eagerlyInsert(
             ["a": snap],
             fingerprintsForIDs: TestFixtures.emptyFingerprint,
@@ -411,16 +405,14 @@ final class EngineTests: XCTestCase {
         engine.setMonthFileSize(9999, for: key)
         XCTAssertEqual(engine.monthFileSizes[key], 9999)
 
-        // Subsequent reload (even with the same content) wipes file sizes.
         _ = reload(engine, [TestAssetCollection([TestFixtures.snapshot(id: "a", year: 2024, month: 3)])])
-        XCTAssertNil(engine.monthFileSizes[key])
+        XCTAssertNil(engine.monthFileSizes[key], "reload wipes monthFileSizes even when content is unchanged")
     }
 
     // MARK: - recomputeAggregates dedup
 
     func testReload_dedupsBackedUpFingerprintsByValue() {
-        // Two assets in the same month share a fingerprint → backed-up count is 1, not 2,
-        // because they map to a single remote asset.
+        // Two locals share a fingerprint → backedUpCount = 1 (one remote asset).
         let engine = makeEngine()
         let fp = Data([0xDE, 0xAD, 0xBE, 0xEF])
         let collection = TestAssetCollection([
@@ -453,7 +445,6 @@ final class EngineTests: XCTestCase {
         )
         XCTAssertEqual(engine.localMonthSummary(for: key)?.backedUpCount, 0)
 
-        // Remote fingerprint set now matches; refreshBackedUpState should pick it up.
         remoteFps[key] = [fp]
         let touched = engine.refreshBackedUpState(
             affectedMonths: [key],

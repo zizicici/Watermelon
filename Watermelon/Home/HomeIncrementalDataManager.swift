@@ -3,47 +3,43 @@ import Foundation
 
 @MainActor
 final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
+    struct Hooks {
+        let remoteMonthSnapshot: @Sendable (LibraryMonthKey) -> RemoteLibraryMonthDelta?
+        let currentScope: @MainActor () -> HomeLocalLibraryScope
+    }
+
     private let processingWorker: HomeDataProcessingWorker
-    private let fileSizeCoordinator: HomeFileSizeScanCoordinator
-    private let currentScope: @MainActor () -> HomeLocalLibraryScope
+    let fileSizeCoordinator: HomeFileSizeScanCoordinator
+    private let hooks: Hooks
 
     private var isObservingPhotoLibrary = false
+    // Reentrancy guard for `photoLibraryDidChange`. While the manager has an in-flight
+    // worker mutation (a refresh/sync/apply), incoming PHChanges queue into
+    // `deferredPhotoChanges` instead of racing into the worker. Not a mutex — actor
+    // reentrancy across `await` is what makes this necessary.
     private var processingMutationCount = 0
     private var deferredPhotoChanges: [PHChange] = []
     private var isDrainingDeferredPhotoChanges = false
 
     var onMonthsChanged: ((Set<LibraryMonthKey>) -> Void)?
-    var onFileSizesUpdated: ((Set<LibraryMonthKey>) -> Void)?
 
     init(
         photoLibraryService: PhotoLibraryService,
         contentHashIndexRepository: ContentHashIndexRepository,
-        remoteMonthSnapshot: @escaping @Sendable (LibraryMonthKey) -> RemoteLibraryMonthDelta?,
-        currentScope: @escaping @MainActor () -> HomeLocalLibraryScope
+        hooks: Hooks
     ) {
         let worker = HomeDataProcessingWorker(
             photoLibraryService: photoLibraryService,
             contentHashIndexRepository: contentHashIndexRepository,
-            remoteMonthSnapshot: remoteMonthSnapshot
+            remoteMonthSnapshot: hooks.remoteMonthSnapshot
         )
         self.processingWorker = worker
         self.fileSizeCoordinator = HomeFileSizeScanCoordinator(
-            hooks: HomeFileSizeScanCoordinator.Hooks(
-                localMonthsForScan: { worker.localMonthsForFileSizeScan() },
-                updateFileSize: { month, cache in
-                    await worker.updateFileSize(for: month, sizeCache: cache)
-                }
-            ),
+            worker: worker,
             contentHashIndexRepository: contentHashIndexRepository
         )
-        self.currentScope = currentScope
+        self.hooks = hooks
         super.init()
-        // Closure-fan-out: keep `onFileSizesUpdated` as a manager property so
-        // HomeScreenStore's `bind()` does not need to know about the coordinator.
-        // Setting after super.init lets the closure capture `self` weakly.
-        fileSizeCoordinator.onFileSizesUpdated = { [weak self] months in
-            self?.onFileSizesUpdated?(months)
-        }
     }
 
     func remoteSnapshotRevisionForQuery(hasActiveConnection: Bool) -> UInt64? {
@@ -63,7 +59,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     @discardableResult
     func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) async -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty else { return [] }
-        let scope = currentScope()
+        let scope = hooks.currentScope()
         beginProcessingMutation()
         let reconciledMonths = await processingWorker.refreshLocalIndex(
             forAssetIDs: assetIDs,
@@ -96,11 +92,11 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
-        processingWorker.localAssetIDs(for: month, expectedScope: currentScope())
+        processingWorker.localAssetIDs(for: month, expectedScope: hooks.currentScope())
     }
 
     func remoteOnlyItems(for month: LibraryMonthKey) async -> [RemoteAlbumItem] {
-        await processingWorker.remoteOnlyItems(for: month, expectedScope: currentScope())
+        await processingWorker.remoteOnlyItems(for: month, expectedScope: hooks.currentScope())
     }
 
     func matchedCount(for month: LibraryMonthKey) -> Int {
@@ -136,7 +132,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     private func loadLocalIndex(forceReload: Bool) async -> Bool {
         let result = await processingWorker.loadLocalIndex(
             forceReload: forceReload,
-            scope: currentScope()
+            scope: hooks.currentScope()
         )
         if result.isAuthorized {
             registerPhotoLibraryObserverIfNeeded()
@@ -151,7 +147,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     private func applyPhotoLibraryChangeNow(_ changeInstance: PHChange) async {
-        let scope = currentScope()
+        let scope = hooks.currentScope()
         beginProcessingMutation()
         let reconciledMonths = await processingWorker.applyPhotoLibraryChange(
             changeInstance,

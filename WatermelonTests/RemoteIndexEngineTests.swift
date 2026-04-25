@@ -7,8 +7,7 @@ final class RemoteIndexEngineTests: XCTestCase {
 
     private func makeEngine() -> HomeRemoteIndexEngine { HomeRemoteIndexEngine() }
 
-    /// Build a single-asset, single-resource, single-link delta whose role/type defaults
-    /// classify the asset as a plain photo. Reuse for "happy-path resolvable" scenarios.
+    /// Single-asset, single-resource, single-link delta classified as a plain photo.
     private func resolvablePhotoDelta(
         _ key: LibraryMonthKey,
         fingerprint: Data,
@@ -46,7 +45,6 @@ final class RemoteIndexEngineTests: XCTestCase {
         )
         XCTAssertEqual(engine.fingerprints(for: key202401), [fpA])
 
-        // A second full snapshot for a different month wipes the first month's state.
         let fpB = Data([0x02])
         let delta = engine.apply(
             state: TestFixtures.remoteSnapshotState(
@@ -62,8 +60,6 @@ final class RemoteIndexEngineTests: XCTestCase {
     }
 
     func testApply_partialSnapshot_replacesOnlyDeltaMonths() {
-        // After a full snapshot, a partial only touches its delta months and leaves the
-        // others alone. This is the steady-state path during incremental remote sync.
         let engine = makeEngine()
         let fpA = Data([0x10])
         let fpB = Data([0x20])
@@ -92,9 +88,7 @@ final class RemoteIndexEngineTests: XCTestCase {
     }
 
     func testApply_revisionUnchanged_partialNoOp() {
-        // A partial sync that lands with the same revision (e.g., re-emitted notification)
-        // returns immediately with no changes. The same-revision check is gated on
-        // !isFullSnapshot to allow forced full reapply.
+        // Same-revision partials early-return; same-revision FULL snapshots still apply.
         let engine = makeEngine()
         let fpA = Data([0x40])
         _ = engine.apply(
@@ -144,10 +138,9 @@ final class RemoteIndexEngineTests: XCTestCase {
     // MARK: - resolveMonth dropping rules
 
     func testApply_dropsAssetsWithoutResolvableLinks() {
-        // Critical Invariant: in a partial-flush window, assets + links may have been
-        // pulled from the remote manifest before the resource rows are visible. Such
-        // assets must not appear in the engine, otherwise "matched count" would over-
-        // report against locals whose hashes we can't actually serve.
+        // Critical Invariant: partial-flush windows can land assets+links before
+        // resource rows. Those orphans must not contribute to the engine, otherwise
+        // matchedCount would over-report against locals whose hashes we can't serve.
         let engine = makeEngine()
         let fp = Data([0x60])
         let absentHash = Data([0xFF])
@@ -171,9 +164,35 @@ final class RemoteIndexEngineTests: XCTestCase {
         XCTAssertNil(engine.summary(for: key202401))
     }
 
+    func testApply_videoOnly_classifiedAsVideo() {
+        let engine = makeEngine()
+        let fp = Data([0x80])
+        let videoHash = Data([0x81])
+        let delta = TestFixtures.remoteMonthDelta(
+            key202401,
+            assets: [TestFixtures.remoteAsset(year: 2024, month: 1, fingerprint: fp, totalFileSizeBytes: 500)],
+            resources: [TestFixtures.remoteResource(
+                year: 2024, month: 1,
+                contentHash: videoHash, fileSize: 500,
+                resourceType: ResourceTypeCode.video
+            )],
+            links: [TestFixtures.remoteLink(
+                year: 2024, month: 1,
+                assetFingerprint: fp, resourceHash: videoHash,
+                role: ResourceTypeCode.video
+            )]
+        )
+        _ = engine.apply(
+            state: TestFixtures.remoteSnapshotState(revision: 1, isFullSnapshot: true, deltas: [delta]),
+            hasActiveConnection: true
+        )
+        let summary = engine.summary(for: key202401)
+        XCTAssertEqual(summary?.videoCount, 1)
+        XCTAssertEqual(summary?.photoCount, 0)
+    }
+
     func testApply_pairedVideoPlusPhotoLike_classifiedAsPhoto() {
-        // livePhoto folds into photoCount: the engine's two-bucket taxonomy mirrors
-        // HomeLocalIndexEngine, which has no livePhoto bucket of its own.
+        // livePhoto folds into photoCount — HomeRemoteIndexEngine has no livePhoto bucket.
         let engine = makeEngine()
         let fp = Data([0x70])
         let photoHash = Data([0x71])
@@ -219,7 +238,6 @@ final class RemoteIndexEngineTests: XCTestCase {
         XCTAssertEqual(summary?.assetCount, 1)
         XCTAssertEqual(summary?.photoCount, 1, "livePhoto folds into photoCount")
         XCTAssertEqual(summary?.videoCount, 0)
-        // Bytes are summed over deduped resolvable hashes (photo + pairedVideo).
-        XCTAssertEqual(summary?.totalSizeBytes, 200)
+        XCTAssertEqual(summary?.totalSizeBytes, 200, "bytes summed across deduped resolvable hashes")
     }
 }

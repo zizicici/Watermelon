@@ -8,15 +8,19 @@ final class HomeScreenStore {
     // MARK: - Sub-controllers
 
     let dataManager: HomeIncrementalDataManager
-    private(set) var executionCoordinator: HomeExecutionCoordinator
-    private(set) var connectionController: HomeConnectionController
+    let executionCoordinator: HomeExecutionCoordinator
+    let connectionController: HomeConnectionController
     private let pipBridge: PiPExecutionBridge
     private let scopeController = HomeScopeController()
-    private var refreshScheduler: HomeRefreshScheduler!
-    private var selectionController: HomeSelectionController!
-    private var sectionBuilder: HomeSectionBuilder!
+    private let sectionBuilder: HomeSectionBuilder
     private let photoAccessGate: HomePhotoAccessGate
     private let scopeNormalizer: HomeScopeNormalizer
+    // `lazy var` rather than `let`: the hooks closures need `[weak self]`, which
+    // Swift definite-initialization rejects inside `init` until self is fully
+    // constructed. First access happens after init returns (via `scheduleRefresh`
+    // / `selectionController.clear()` etc.), so lazy init is safe.
+    private lazy var refreshScheduler = makeRefreshScheduler()
+    private lazy var selectionController = makeSelectionController()
 
     private let dependencies: DependencyContainer
 
@@ -64,16 +68,20 @@ final class HomeScreenStore {
     init(dependencies: DependencyContainer) {
         self.dependencies = dependencies
         self.photoAccessGate = HomePhotoAccessGate(photoLibraryService: dependencies.photoLibraryService)
-        self.scopeNormalizer = HomeScopeNormalizer(photoLibraryService: dependencies.photoLibraryService)
+        let photoLib = dependencies.photoLibraryService
+        self.scopeNormalizer = HomeScopeNormalizer(hooks: HomeScopeNormalizer.Hooks(
+            authorizationStatus: { photoLib.authorizationStatus() },
+            existingUserAlbumIdentifiers: { ids in photoLib.existingUserAlbumIdentifiers(in: ids) }
+        ))
         let backupCoordinator = dependencies.backupCoordinator
         let scopeController = self.scopeController
         self.dataManager = HomeIncrementalDataManager(
             photoLibraryService: dependencies.photoLibraryService,
             contentHashIndexRepository: ContentHashIndexRepository(databaseManager: dependencies.databaseManager),
-            remoteMonthSnapshot: { month in
-                backupCoordinator.remoteMonthRawData(for: month)
-            },
-            currentScope: { scopeController.activeScope }
+            hooks: HomeIncrementalDataManager.Hooks(
+                remoteMonthSnapshot: { backupCoordinator.remoteMonthRawData(for: $0) },
+                currentScope: { scopeController.activeScope }
+            )
         )
         self.connectionController = HomeConnectionController(dependencies: dependencies)
         let connectionCtrl = self.connectionController
@@ -98,16 +106,16 @@ final class HomeScreenStore {
         )
         self.pipBridge = PiPExecutionBridge(coordinator: self.executionCoordinator)
         let dataManagerRef = self.dataManager
-        self.sectionBuilder = HomeSectionBuilder(
+        self.sectionBuilder = HomeSectionBuilder(hooks: HomeSectionBuilder.Hooks(
             allMonthRows: { dataManagerRef.allMonthRows() },
             monthRow: { dataManagerRef.monthRow(for: $0) }
-        )
-        self.selectionController = HomeSelectionController(dependencies: HomeSelectionController.Dependencies(
-            isSelectable: { [weak self] in self?.isSelectable ?? false },
-            isRemoteSelectionAllowed: { [weak self] in self?.isRemoteSelectionAllowed ?? false },
-            sections: { [weak self] in self?.sections ?? [] }
         ))
-        self.refreshScheduler = HomeRefreshScheduler(hooks: HomeRefreshScheduler.Hooks(
+        bind()
+        pipBridge.attach()
+    }
+
+    private func makeRefreshScheduler() -> HomeRefreshScheduler {
+        HomeRefreshScheduler(hooks: HomeRefreshScheduler.Hooks(
             normalizeBeforeReload: { [weak self] in
                 self?.normalizeLocalLibraryScopeIfNeeded(shouldAlert: true) ?? false
             },
@@ -140,8 +148,14 @@ final class HomeScreenStore {
                 }
             }
         ))
-        bind()
-        pipBridge.attach()
+    }
+
+    private func makeSelectionController() -> HomeSelectionController {
+        HomeSelectionController(hooks: HomeSelectionController.Hooks(
+            isSelectable: { [weak self] in self?.isSelectable ?? false },
+            isRemoteSelectionAllowed: { [weak self] in self?.isRemoteSelectionAllowed ?? false },
+            sections: { [weak self] in self?.sections ?? [] }
+        ))
     }
 
     deinit {
@@ -160,7 +174,7 @@ final class HomeScreenStore {
         dataManager.onMonthsChanged = { [weak self] months in
             self?.handleDataChange(months)
         }
-        dataManager.onFileSizesUpdated = { [weak self] months in
+        dataManager.fileSizeCoordinator.onFileSizesUpdated = { [weak self] months in
             self?.handleFileSizeChange(months)
         }
         executionCoordinator.onStateChanged = { [weak self] in

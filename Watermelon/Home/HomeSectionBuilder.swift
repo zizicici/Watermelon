@@ -2,24 +2,24 @@ import Foundation
 
 @MainActor
 final class HomeSectionBuilder {
+    struct Hooks {
+        var allMonthRows: () -> [LibraryMonthKey: HomeMonthRow]
+        var monthRow: (LibraryMonthKey) -> HomeMonthRow
+    }
+
     private(set) var sections: [HomeMergedYearSection] = []
     private(set) var rowLookup: [LibraryMonthKey: HomeMonthRow] = [:]
 
-    private let allMonthRows: () -> [LibraryMonthKey: HomeMonthRow]
-    private let monthRow: (LibraryMonthKey) -> HomeMonthRow
+    private let hooks: Hooks
 
-    init(
-        allMonthRows: @escaping () -> [LibraryMonthKey: HomeMonthRow],
-        monthRow: @escaping (LibraryMonthKey) -> HomeMonthRow
-    ) {
-        self.allMonthRows = allMonthRows
-        self.monthRow = monthRow
+    init(hooks: Hooks) {
+        self.hooks = hooks
     }
 
     /// Refresh both the row lookup and the sections from the data source. Used for
     /// full structural rebuilds (initial load, scope change, post-execution refresh).
     func rebuildAll() {
-        rowLookup = allMonthRows()
+        rowLookup = hooks.allMonthRows()
         rebuildSections()
     }
 
@@ -30,7 +30,7 @@ final class HomeSectionBuilder {
     func refreshFileSizeRows(for months: Set<LibraryMonthKey>) -> Set<LibraryMonthKey> {
         var changed = Set<LibraryMonthKey>()
         for month in months where rowLookup[month] != nil {
-            let row = monthRow(month)
+            let row = hooks.monthRow(month)
             guard row.local != nil || row.remote != nil else { continue }
             rowLookup[month] = row
             changed.insert(month)
@@ -51,7 +51,7 @@ final class HomeSectionBuilder {
     /// phase (and we want a single section rebuild instead of per-month patches).
     func updateRowsAndRebuild(for months: Set<LibraryMonthKey>) {
         for month in months {
-            rowLookup[month] = monthRow(month)
+            rowLookup[month] = hooks.monthRow(month)
         }
         rebuildSections()
     }

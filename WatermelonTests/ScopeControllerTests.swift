@@ -14,9 +14,8 @@ final class ScopeControllerTests: XCTestCase {
     }
 
     func testSetActive_reloadingToReloading_coalesces() {
-        // A second user-driven setActive arriving before the first reload completes
-        // must flip activeScope and keep the reload gate up — so the surrounding
-        // refresh loop will run a fresh reload after the first one drains.
+        // A second user-driven setActive while reloading must flip activeScope and
+        // keep the gate up so the refresh loop runs a fresh reload against the new scope.
         let controller = HomeScopeController()
         _ = controller.setActive(.albums(["a"]), isExecuting: false)
         XCTAssertTrue(controller.isReloading)
@@ -26,8 +25,6 @@ final class ScopeControllerTests: XCTestCase {
         XCTAssertEqual(controller.activeScope, .albums(["b"]))
         XCTAssertTrue(controller.isReloading, "gate stays up across overlapping setActive calls")
 
-        // After the first reload lands `hasMoreReloadPending=true` keeps the gate;
-        // the surrounding loop reloads against the new active and clears at the end.
         controller.completeReload(loaded: .albums(["a"]), hasMoreReloadPending: true)
         XCTAssertTrue(controller.isReloading)
         controller.completeReload(loaded: .albums(["b"]), hasMoreReloadPending: false)
@@ -85,8 +82,8 @@ final class ScopeControllerTests: XCTestCase {
     }
 
     func testResumeFromDeferred_pendingMatchesActive_doesNotMarkReloading() {
-        // requestPostExecutionRenormalization stashes the current active scope as pending.
-        // Resuming such a stash should NOT trigger a fresh reload (active didn't change).
+        // requestPostExecutionRenormalization stashes the *current* active scope as
+        // pending; resuming it must not flip the reload gate (no real scope change).
         let controller = HomeScopeController()
         _ = controller.setActive(.albums(["x"]), isExecuting: false)
         controller.completeReload(loaded: .albums(["x"]), hasMoreReloadPending: false)
@@ -120,7 +117,6 @@ final class ScopeControllerTests: XCTestCase {
     }
 
     func testDeferActiveScopeForReevaluation_onlyForAlbumScope() {
-        // .allPhotos doesn't need normalization downgrade; deferral is a no-op.
         let controller = HomeScopeController()
         controller.requestPostExecutionRenormalization()
         XCTAssertNil(controller.pendingScope)
@@ -142,16 +138,27 @@ final class ScopeControllerTests: XCTestCase {
         XCTAssertEqual(controller.pendingScope, first, "second call shouldn't overwrite a different pending value")
     }
 
-    func testOnChange_firesOnEveryTransition() {
+    func testOnChange_firesForSetActive_completeReload_resumeFromDeferred_andRenormalize() {
         let controller = HomeScopeController()
         var fireCount = 0
         controller.onChange = { fireCount += 1 }
 
-        _ = controller.setActive(.albums(["a"]), isExecuting: false)
-        controller.completeReload(loaded: .albums(["a"]), hasMoreReloadPending: false)
-        _ = controller.setActive(.allPhotos, isExecuting: false)
-        controller.completeReload(loaded: .allPhotos, hasMoreReloadPending: false)
+        _ = controller.setActive(.albums(["a"]), isExecuting: false)            // +1
+        controller.completeReload(loaded: .albums(["a"]), hasMoreReloadPending: false)  // +1
+        _ = controller.setActive(.albums(["b"]), isExecuting: true)             // +1 (deferred)
+        _ = controller.resumeFromDeferred()                                     // +1
+        controller.completeReload(loaded: .albums(["b"]), hasMoreReloadPending: false)  // +1
+        _ = controller.setActiveFromNormalize(.albums(["b"]))                    // +0 identity-same
+        _ = controller.setActiveFromNormalize(.allPhotos)                        // +1
+        controller.requestPostExecutionRenormalization()                         // +0 (allPhotos)
 
-        XCTAssertEqual(fireCount, 4)
+        XCTAssertEqual(fireCount, 6, "fires on each non-no-op state transition")
+    }
+
+    func testResumeFromDeferred_noPending_returnsNil() {
+        let controller = HomeScopeController()
+        XCTAssertNil(controller.resumeFromDeferred())
+        XCTAssertNil(controller.pendingScope)
+        XCTAssertFalse(controller.isReloading)
     }
 }

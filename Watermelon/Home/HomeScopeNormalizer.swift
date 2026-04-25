@@ -1,4 +1,5 @@
 import Foundation
+import Photos
 
 @MainActor
 final class HomeScopeNormalizer {
@@ -7,16 +8,20 @@ final class HomeScopeNormalizer {
         case albumsUpdated
     }
 
+    struct Hooks {
+        var authorizationStatus: () -> PHAuthorizationStatus
+        var existingUserAlbumIdentifiers: (Set<String>) -> Set<String>
+    }
+
     private static let alertDebounceInterval: CFAbsoluteTime = 2.0
 
-    private let photoLibraryService: PhotoLibraryService
+    private let hooks: Hooks
     private var lastAlertTime: CFAbsoluteTime = 0
 
-    /// Surface a user-visible alert. Set by the store; the alert text is localized.
     var onAlert: ((String, String) -> Void)?
 
-    init(photoLibraryService: PhotoLibraryService) {
-        self.photoLibraryService = photoLibraryService
+    init(hooks: Hooks) {
+        self.hooks = hooks
     }
 
     /// Pure normalize: returns the scope adjusted to current PhotoKit reality and the
@@ -25,11 +30,11 @@ final class HomeScopeNormalizer {
     /// branch separately.
     func normalize(_ scope: HomeLocalLibraryScope) -> (scope: HomeLocalLibraryScope, alert: Alert?) {
         guard case .albums(let ids) = scope else { return (scope, nil) }
-        let access = LocalPhotoAccessState(authorizationStatus: photoLibraryService.authorizationStatus())
+        let access = LocalPhotoAccessState(authorizationStatus: hooks.authorizationStatus())
         guard access.isAuthorized else { return (scope, nil) }
         guard !ids.isEmpty else { return (.allPhotos, nil) }
 
-        let existing = photoLibraryService.existingUserAlbumIdentifiers(in: ids)
+        let existing = hooks.existingUserAlbumIdentifiers(ids)
         guard existing != ids else { return (scope, nil) }
 
         if existing.isEmpty {

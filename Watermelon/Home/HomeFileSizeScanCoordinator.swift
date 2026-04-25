@@ -26,12 +26,7 @@ final class HomeFileSizeScanCoordinator {
         case byYear
     }
 
-    struct Hooks {
-        let localMonthsForScan: () -> [LibraryMonthKey]
-        let updateFileSize: (LibraryMonthKey, [String: AssetSizeSnapshot]) async -> [AssetSizeUpdate]
-    }
-
-    private let hooks: Hooks
+    private let worker: HomeDataProcessingWorker
     private let contentHashIndexRepository: ContentHashIndexRepository
 
     private var pendingFileSizeMonths = Set<LibraryMonthKey>()
@@ -40,25 +35,16 @@ final class HomeFileSizeScanCoordinator {
     private var assetSizeSnapshotLoaded = false
     private var assetSizeSnapshotLoadTask: Task<[String: AssetSizeSnapshot], Never>?
     private var assetSizeSnapshotGeneration = 0
-    // Startup scan (full library, by-year notifications). At most one runs at a time; a new
-    // startup cancels its predecessor. Separate from the PHChange-driven rescan below so the
-    // two cannot clobber each other.
     private var fileSizeScanTask: Task<Void, Never>?
-    // PHChange rescan (partial, coalesced notifications). Single in-flight:
-    // pendingRescanMonths accumulates while a rescan runs; the running task drains
-    // it and auto-restarts if more arrived.
     private var fileSizeRescanTask: Task<Void, Never>?
     private var pendingRescanMonths = Set<LibraryMonthKey>()
-    // Refcount so invalidateAssetSizeSnapshot() at the end of a scan fires only once all
-    // in-flight scans have finished. Otherwise a fast rescan completing while startup is
-    // still walking months would wipe the cache out from under startup.
     private var activeFileSizeScanCount = 0
     private var memoryWarningObserver: NSObjectProtocol?
 
     var onFileSizesUpdated: ((Set<LibraryMonthKey>) -> Void)?
 
-    init(hooks: Hooks, contentHashIndexRepository: ContentHashIndexRepository) {
-        self.hooks = hooks
+    init(worker: HomeDataProcessingWorker, contentHashIndexRepository: ContentHashIndexRepository) {
+        self.worker = worker
         self.contentHashIndexRepository = contentHashIndexRepository
         memoryWarningObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
@@ -99,7 +85,7 @@ final class HomeFileSizeScanCoordinator {
         // mtime into local_assets during execution without notifying us, so after
         // a forceReload the DB is more up-to-date than our cached dict.
         invalidateAssetSizeSnapshot()
-        let months = hooks.localMonthsForScan()
+        let months = worker.localMonthsForFileSizeScan()
         fileSizeScanTask = Task { [weak self] in
             await self?.runFileSizeScan(months: months, notificationMode: .byYear)
         }
@@ -204,7 +190,7 @@ final class HomeFileSizeScanCoordinator {
                 Self.flushAssetSizeWriteBack(&writeBackBuffer, repository: repository)
                 return
             }
-            let updates = await hooks.updateFileSize(month, assetSizeSnapshot)
+            let updates = await worker.updateFileSize(for: month, sizeCache: assetSizeSnapshot)
             if Task.isCancelled {
                 mergeIntoAssetSizeSnapshot(updates)
                 writeBackBuffer.append(contentsOf: updates)

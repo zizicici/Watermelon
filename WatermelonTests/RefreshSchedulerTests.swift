@@ -21,7 +21,6 @@ final class RefreshSchedulerTests: XCTestCase {
         var syncRemoteCount = 0
         var postProcessCount = 0
         var iterations: [Iteration] = []
-        // Hook to inject extra work mid-iteration for testing coalescing.
         var midReloadHook: () -> Void = {}
     }
 
@@ -124,10 +123,10 @@ final class RefreshSchedulerTests: XCTestCase {
     // MARK: - Coalescing
 
     func testCoalescing_enqueueDuringReload_signalsHasMorePending() async {
+        // Simulate a reload arriving while one is already in flight. The first
+        // iteration must see hasMoreReloadPending=true; the second false.
         let recorder = HookRecorder()
         let scheduler = makeScheduler(recorder: recorder)
-        // One-shot: enqueue another reload from inside the first one's hook. This
-        // simulates "another reload landed while the current one was running".
         var didReenqueue = false
         recorder.midReloadHook = { [weak scheduler] in
             guard !didReenqueue else { return }
@@ -138,8 +137,6 @@ final class RefreshSchedulerTests: XCTestCase {
         scheduler.enqueue(.reloadLocal)
         await scheduler._testWaitUntilIdle()
 
-        // First iteration sees hasMoreReloadPending=true (because the hook re-enqueued);
-        // second iteration sees false (no more pending).
         XCTAssertEqual(recorder.afterReloads.count, 2)
         XCTAssertEqual(recorder.afterReloads[0].hasMoreReloadPending, true)
         XCTAssertEqual(recorder.afterReloads[1].hasMoreReloadPending, false)
@@ -180,18 +177,31 @@ final class RefreshSchedulerTests: XCTestCase {
         XCTAssertEqual(recorder.iterations.count, 2)
     }
 
-    func testCancel_clearsPendingAndStopsRunningTask() async {
+    func testCancel_clearsPendingAndAllowsReenqueue() async {
         let recorder = HookRecorder()
         let scheduler = makeScheduler(recorder: recorder)
 
         scheduler.enqueue(.reloadLocal)
         scheduler.cancel()
-        // After cancel, the task is torn down; pending is cleared.
         await scheduler._testWaitUntilIdle()
 
-        // A subsequent enqueue should still work — cancel resets the scheduler.
         scheduler.enqueue(.notifyConnection)
         await scheduler._testWaitUntilIdle()
         XCTAssertEqual(recorder.iterations.last?.work, .notifyConnection)
+    }
+
+    func testCancel_inFlightReload_dropsPendingSyncRemote() async {
+        // The task may or may not have started before cancel observed it; what's
+        // guaranteed is that pending was reset, so no second iteration follows.
+        let recorder = HookRecorder()
+        let scheduler = makeScheduler(recorder: recorder)
+
+        scheduler.enqueue([.reloadLocal, .syncRemote])
+        scheduler.cancel()
+        await scheduler._testWaitUntilIdle()
+
+        XCTAssertLessThanOrEqual(recorder.reloadCount, 1)
+        XCTAssertLessThanOrEqual(recorder.syncRemoteCount, 1)
+        XCTAssertLessThanOrEqual(recorder.iterations.count, 1)
     }
 }

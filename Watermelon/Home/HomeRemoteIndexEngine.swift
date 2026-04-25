@@ -4,6 +4,11 @@ struct HomeRemoteDelta {
     let changedMonths: Set<LibraryMonthKey>
 }
 
+/// In-memory mirror of remote month manifests, keyed by `RemoteLibrarySnapshotState.revision`.
+///
+/// **Concurrency contract**: same as `HomeLocalIndexEngine` — callers must
+/// serialize access. `@unchecked Sendable` is granted because
+/// `HomeDataProcessingWorker` runs all engine calls on its `processingQueue`.
 final class HomeRemoteIndexEngine: @unchecked Sendable {
     private var remoteFingerprintsByMonth: [LibraryMonthKey: Set<Data>] = [:]
     private var summaryByMonth: [LibraryMonthKey: HomeMonthSummary] = [:]

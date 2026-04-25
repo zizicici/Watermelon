@@ -17,15 +17,18 @@ final class HomeViewController: UIViewController {
         return privacyPolicyEnglishURL
     }
 
-    private enum NewStorageDestination {
-        case smb
-        case smbDiscovery
-        case webdav
-        case externalVolume
-    }
-
     private let dependencies: DependencyContainer
     private let store: HomeScreenStore
+    private lazy var menuFactory = HomeMenuFactory(
+        store: store,
+        hooks: HomeMenuFactory.Hooks(
+            refreshLocalLibraryMenu: { [weak self] in self?.refreshLocalLibraryMenu() },
+            openLocalAlbumPicker: { [weak self] in self?.openLocalAlbumPicker() },
+            openNewStorageFlow: { [weak self] dest in self?.openNewStorageFlow(dest) },
+            openManageProfiles: { [weak self] in self?.openManageProfiles() },
+            scrollToMonth: { [weak self] month in self?.scrollToMonth(month) }
+        )
+    )
 
     private enum Section: Hashable {
         case year(Int)
@@ -94,24 +97,6 @@ final class HomeViewController: UIViewController {
     private var didRequestReviewForCurrentExecution = false
 
     private static let headerAreaHeight: CGFloat = 96
-
-    private static let monthFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.setLocalizedDateFormatFromTemplate("MMM")
-        return f
-    }()
-
-    private static let yearFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.setLocalizedDateFormatFromTemplate("yyyy")
-        return f
-    }()
-
-    private struct HeaderSummary {
-        let photoCount: Int
-        let videoCount: Int
-        let totalSizeBytes: Int64?
-    }
 
     init(dependencies: DependencyContainer) {
         self.dependencies = dependencies
@@ -250,7 +235,7 @@ final class HomeViewController: UIViewController {
         }
 
         leftHeaderMenuOverlay.showsMenuAsPrimaryAction = true
-        leftHeaderMenuOverlay.menu = buildLocalLibraryMenu()
+        leftHeaderMenuOverlay.menu = menuFactory.buildLocalLibrary(isPad: traitCollection.userInterfaceIdiom == .pad)
         leftHeaderBg.addSubview(leftHeaderMenuOverlay)
         leftHeaderMenuOverlay.snp.makeConstraints { make in
             make.leading.equalTo(leftHeaderTitleStack)
@@ -307,7 +292,7 @@ final class HomeViewController: UIViewController {
         }
 
         rightHeaderMenuOverlay.showsMenuAsPrimaryAction = true
-        rightHeaderMenuOverlay.menu = buildDestinationMenu()
+        rightHeaderMenuOverlay.menu = menuFactory.buildDestination()
         rightHeaderBg.addSubview(rightHeaderMenuOverlay)
         rightHeaderMenuOverlay.snp.makeConstraints { make in
             make.leading.equalTo(rightHeaderTitleStack)
@@ -315,8 +300,8 @@ final class HomeViewController: UIViewController {
             make.top.bottom.equalTo(rightHeaderTitleStack)
         }
 
-        applyHeaderPlaceholder(to: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
-        applyHeaderPlaceholder(to: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel)
+        HomeHeaderSummaryFormatter.applyPlaceholder(countLabel: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
+        HomeHeaderSummaryFormatter.applyPlaceholder(countLabel: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel)
 
         actionPanel.onExecuteTapped = { [weak self] in self?.executeTapped() }
         actionPanel.onPauseTapped = { [weak self] in self?.store.pauseExecution() }
@@ -379,7 +364,7 @@ final class HomeViewController: UIViewController {
         btnCfg.title = String(localized: "home.overlay.selectStorage")
         remoteOverlayButton.configuration = btnCfg
         remoteOverlayButton.showsMenuAsPrimaryAction = true
-        remoteOverlayButton.menu = buildDestinationMenu()
+        remoteOverlayButton.menu = menuFactory.buildDestination()
 
         let overlayStack = makeOverlayStack(
             spinner: remoteOverlaySpinner,
@@ -750,76 +735,25 @@ final class HomeViewController: UIViewController {
 
     private func updateTopHeaderSummaries() {
         guard hasLoadedHeaderSummary else {
-            applyHeaderPlaceholder(to: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
-            applyHeaderPlaceholder(to: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel)
+            HomeHeaderSummaryFormatter.applyPlaceholder(countLabel: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
+            HomeHeaderSummaryFormatter.applyPlaceholder(countLabel: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel)
             return
         }
 
         let headerColor = leftHeaderLabel.textColor ?? .secondaryLabel
         if store.localPhotoAccessState.isAuthorized,
-           let summary = aggregatedHeaderSummary(for: .local, treatsEmptyAsZero: true) {
-            applyHeaderSummary(summary, to: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel, color: headerColor)
+           let summary = HomeHeaderSummaryFormatter.aggregate(rowLookup: store.rowLookup, side: .local, treatsEmptyAsZero: true) {
+            HomeHeaderSummaryFormatter.apply(summary, countLabel: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel, color: headerColor)
         } else {
-            applyHeaderPlaceholder(to: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
+            HomeHeaderSummaryFormatter.applyPlaceholder(countLabel: leftHeaderCountLabel, sizeLabel: leftHeaderSizeLabel)
         }
 
         if store.connectionState.isConnected,
-           let summary = aggregatedHeaderSummary(for: .remote, treatsEmptyAsZero: true) {
-            applyHeaderSummary(summary, to: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel, color: headerColor)
+           let summary = HomeHeaderSummaryFormatter.aggregate(rowLookup: store.rowLookup, side: .remote, treatsEmptyAsZero: true) {
+            HomeHeaderSummaryFormatter.apply(summary, countLabel: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel, color: headerColor)
         } else {
-            applyHeaderPlaceholder(to: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel)
+            HomeHeaderSummaryFormatter.applyPlaceholder(countLabel: rightHeaderCountLabel, sizeLabel: rightHeaderSizeLabel)
         }
-    }
-
-    private func aggregatedHeaderSummary(for side: Item.Side, treatsEmptyAsZero: Bool) -> HeaderSummary? {
-        let summaries = store.rowLookup.values.compactMap { row in
-            switch side {
-            case .local:
-                return row.local
-            case .remote:
-                return row.remote
-            }
-        }
-
-        guard !summaries.isEmpty else {
-            guard treatsEmptyAsZero else { return nil }
-            return HeaderSummary(photoCount: 0, videoCount: 0, totalSizeBytes: 0)
-        }
-
-        let totalPhotoCount = summaries.reduce(0) { $0 + $1.photoCount }
-        let totalVideoCount = summaries.reduce(0) { $0 + $1.videoCount }
-        let sizeValues = summaries.compactMap(\.totalSizeBytes)
-        let totalSizeBytes = sizeValues.count == summaries.count ? sizeValues.reduce(0, +) : nil
-
-        return HeaderSummary(
-            photoCount: totalPhotoCount,
-            videoCount: totalVideoCount,
-            totalSizeBytes: totalSizeBytes
-        )
-    }
-
-    private func applyHeaderSummary(
-        _ summary: HeaderSummary,
-        to countLabel: UILabel,
-        sizeLabel: UILabel,
-        color: UIColor
-    ) {
-        countLabel.text = nil
-        countLabel.attributedText = makeHeaderCountText(photoCount: summary.photoCount, videoCount: summary.videoCount, color: color)
-        if let totalSizeBytes = summary.totalSizeBytes {
-            sizeLabel.attributedText = nil
-            sizeLabel.text = ByteCountFormatter.string(fromByteCount: totalSizeBytes, countStyle: .file)
-        } else {
-            sizeLabel.attributedText = nil
-            sizeLabel.text = "-"
-        }
-    }
-
-    private func applyHeaderPlaceholder(to countLabel: UILabel, sizeLabel: UILabel) {
-        countLabel.attributedText = nil
-        countLabel.text = "-"
-        sizeLabel.attributedText = nil
-        sizeLabel.text = "-"
     }
 
     private func configureHeaderDetailLabel(_ label: UILabel, color: UIColor) {
@@ -828,32 +762,6 @@ final class HomeViewController: UIViewController {
         label.textColor = color
         label.numberOfLines = 1
         label.lineBreakMode = .byTruncatingTail
-    }
-
-    private func makeHeaderCountText(photoCount: Int, videoCount: Int, color: UIColor) -> NSAttributedString {
-        let font = UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 9, weight: .bold)
-        let result = NSMutableAttributedString()
-
-        if let image = UIImage(systemName: "photo", withConfiguration: symbolConfig)?
-            .withTintColor(color, renderingMode: .alwaysOriginal) {
-            result.append(NSAttributedString(attachment: NSTextAttachment(image: image)))
-        }
-        result.append(NSAttributedString(
-            string: " \(photoCount)  ",
-            attributes: [.font: font, .foregroundColor: color]
-        ))
-
-        if let image = UIImage(systemName: "video", withConfiguration: symbolConfig)?
-            .withTintColor(color, renderingMode: .alwaysOriginal) {
-            result.append(NSAttributedString(attachment: NSTextAttachment(image: image)))
-        }
-        result.append(NSAttributedString(
-            string: " \(videoCount)",
-            attributes: [.font: font, .foregroundColor: color]
-        ))
-
-        return result
     }
 
     private func configureSettingsFAB() {
@@ -1031,9 +939,9 @@ final class HomeViewController: UIViewController {
                 complementCount: counts.complement
             ),
             menus: SelectionActionPanelMenus(
-                backup: buildCategoryMenu(for: .backup),
-                download: buildCategoryMenu(for: .download),
-                complement: buildCategoryMenu(for: .complement)
+                backup: menuFactory.buildCategory(for: .backup),
+                download: menuFactory.buildCategory(for: .download),
+                complement: menuFactory.buildCategory(for: .complement)
             )
         )
 
@@ -1224,7 +1132,7 @@ final class HomeViewController: UIViewController {
 
     private func refreshLocalLibraryMenu() {
         leftHeaderLabel.text = headerTitle(for: store.localLibraryScope)
-        let menu = buildLocalLibraryMenu()
+        let menu = menuFactory.buildLocalLibrary(isPad: traitCollection.userInterfaceIdiom == .pad)
         leftHeaderButton.menu = menu
         leftHeaderMenuOverlay.menu = menu
     }
@@ -1263,95 +1171,10 @@ final class HomeViewController: UIViewController {
     }
 
     private func refreshDestinationMenus() {
-        let menu = buildDestinationMenu()
+        let menu = menuFactory.buildDestination()
         rightHeaderButton.menu = menu
         rightHeaderMenuOverlay.menu = menu
         remoteOverlayButton.menu = menu
-    }
-
-    // MARK: - Local Library Menu
-
-    private func buildLocalLibraryMenu() -> UIMenu {
-        let isSpecificAlbums = store.localLibraryScope.isSpecificAlbums
-        let allPhotosSymbol = traitCollection.userInterfaceIdiom == .pad ? "ipad" : "iphone"
-        let allPhotosAction = UIAction(
-            title: String(localized: "home.localSource.allPhotos"),
-            image: UIImage(systemName: allPhotosSymbol),
-            state: isSpecificAlbums ? .off : .on
-        ) { [weak self] _ in
-            self?.store.setLocalLibraryScope(.allPhotos)
-            self?.refreshLocalLibraryMenu()
-        }
-
-        let specificAlbumsAction = UIAction(
-            title: String(localized: "home.localSource.specificAlbums"),
-            image: UIImage(systemName: "photo.stack"),
-            state: isSpecificAlbums ? .on : .off
-        ) { [weak self] _ in
-            self?.openLocalAlbumPicker()
-        }
-
-        return UIMenu(children: [allPhotosAction, specificAlbumsAction])
-    }
-
-    // MARK: - Destination Menu
-
-    private func buildDestinationMenu() -> UIMenu {
-        let disconnected = !store.connectionState.isConnected
-
-        let disconnectAction = UIAction(
-            title: String(localized: "home.menu.notConnected"),
-            state: disconnected ? .on : .off
-        ) { [weak self] _ in
-            self?.store.disconnect()
-        }
-
-        var profileActions: [UIAction] = []
-        for profile in store.savedProfiles {
-            let isActive = store.connectionState.activeProfile?.id == profile.id
-            let action = UIAction(
-                title: profile.name,
-                subtitle: profile.storageProfile.displaySubtitle,
-                state: isActive ? .on : .off
-            ) { [weak self] _ in
-                self?.store.connectProfile(profile)
-            }
-            profileActions.append(action)
-        }
-
-        let profileSection = UIMenu(title: "", options: .displayInline, children: profileActions)
-        let addStorageMenu = UIMenu(
-            title: String(localized: "home.menu.addStorage"),
-            image: UIImage(systemName: "plus.circle"),
-            children: [
-                UIMenu(
-                    title: "SMB",
-                    image: UIImage(systemName: "server.rack"),
-                    children: [
-                        UIAction(title: String(localized: "home.menu.smbManual")) { [weak self] _ in
-                            self?.openNewStorageFlow(.smb)
-                        },
-                        UIAction(title: String(localized: "home.menu.smbDiscovery"), image: UIImage(systemName: "bonjour")) { [weak self] _ in
-                            self?.openNewStorageFlow(.smbDiscovery)
-                        }
-                    ]
-                ),
-                UIAction(title: "WebDAV", image: UIImage(systemName: "network")) { [weak self] _ in
-                    self?.openNewStorageFlow(.webdav)
-                },
-                UIAction(title: String(localized: "home.menu.externalStorage"), image: UIImage(systemName: "externaldrive")) { [weak self] _ in
-                    self?.openNewStorageFlow(.externalVolume)
-                }
-            ]
-        )
-        let manageAction = UIAction(
-            title: String(localized: "more.item.manageStorage"),
-            image: UIImage(systemName: "list.bullet")
-        ) { [weak self] _ in
-            self?.openManageProfiles()
-        }
-        let disconnectSection = UIMenu(title: "", options: .displayInline, children: [disconnectAction])
-        return UIMenu(children: [addStorageMenu, manageAction, profileSection, disconnectSection])
     }
 
     // MARK: - User Actions
@@ -1598,30 +1421,6 @@ final class HomeViewController: UIViewController {
         }
     }
 
-    private func buildCategoryMenu(for intent: MonthIntent) -> UIMenu {
-        let months = store.selection.months(for: intent)
-        var byYear: [Int: [LibraryMonthKey]] = [:]
-        for month in months { byYear[month.year, default: []].append(month) }
-
-        let yearMenus = byYear.keys.sorted().map { year -> UIMenu in
-            let actions = (byYear[year] ?? []).map { month -> UIAction in
-                let row = store.rowLookup[month]
-                let monthDate = Calendar.current.date(from: DateComponents(year: 2000, month: month.month))
-                let title = monthDate.map(Self.monthFormatter.string(from:)) ?? String(format: "%02d", month.month)
-                var parts: [String] = []
-                if let lc = row?.local?.assetCount { parts.append(String(format: String(localized: "home.data.localCount"), lc)) }
-                if let rc = row?.remote?.assetCount { parts.append(String(format: String(localized: "home.data.remoteCount"), rc)) }
-                let subtitle = parts.isEmpty ? nil : parts.joined(separator: " · ")
-                return UIAction(title: title, subtitle: subtitle) { [weak self] _ in
-                    self?.scrollToMonth(month)
-                }
-            }
-            let yearDate = Calendar.current.date(from: DateComponents(year: year))
-            let yearTitle = yearDate.map(Self.yearFormatter.string(from:)) ?? String(year)
-            return UIMenu(title: yearTitle, options: .displayInline, children: actions)
-        }
-        return UIMenu(children: yearMenus)
-    }
 }
 
 // MARK: - UICollectionViewDelegate

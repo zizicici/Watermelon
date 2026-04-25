@@ -1,5 +1,11 @@
 import Foundation
 
+enum AlbumMediaKind: Sendable {
+    case photo
+    case video
+    case livePhoto
+}
+
 /// Test-friendly value snapshot of a `PHAsset`. Engines work against this so
 /// production paths and test paths share one code path.
 struct LibraryAssetSnapshot: Hashable, Sendable {

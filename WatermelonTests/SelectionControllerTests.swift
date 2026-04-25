@@ -12,7 +12,7 @@ final class SelectionControllerTests: XCTestCase {
     }
 
     private func makeController(state: GateState) -> HomeSelectionController {
-        HomeSelectionController(dependencies: HomeSelectionController.Dependencies(
+        HomeSelectionController(hooks: HomeSelectionController.Hooks(
             isSelectable: { state.selectable },
             isRemoteSelectionAllowed: { state.remoteAllowed },
             sections: { state.sections }
@@ -62,8 +62,7 @@ final class SelectionControllerTests: XCTestCase {
         XCTAssertTrue(controller.state.localMonths.isEmpty)
     }
 
-    func testToggleMonth_remote_blockedWhenRemoteSelectionDisallowed() {
-        // Remote selection disallowed (typical: specific-album scope).
+    func testToggleMonth_remote_blockedWhenRemoteSelectionDisallowed_localStillWorks() {
         let state = GateState()
         state.remoteAllowed = false
         let controller = makeController(state: state)
@@ -72,7 +71,6 @@ final class SelectionControllerTests: XCTestCase {
         XCTAssertFalse(controller.toggleMonth(key, side: .remote))
         XCTAssertTrue(controller.state.remoteMonths.isEmpty)
 
-        // Local side still works.
         XCTAssertTrue(controller.toggleMonth(key, side: .local))
         XCTAssertEqual(controller.state.localMonths, [key])
     }
@@ -85,13 +83,11 @@ final class SelectionControllerTests: XCTestCase {
         let controller = makeController(state: state)
         let allMonths: Set<LibraryMonthKey> = Set((1...3).map { LibraryMonthKey(year: 2024, month: $0) })
 
-        // First call: not a subset → form union (select all).
         XCTAssertTrue(controller.toggleYear(sectionIndex: 0, side: .local))
-        XCTAssertEqual(controller.state.localMonths, allMonths)
+        XCTAssertEqual(controller.state.localMonths, allMonths, "first toggle: not a subset → union")
 
-        // Second call: now a subset → subtract (deselect all).
         XCTAssertTrue(controller.toggleYear(sectionIndex: 0, side: .local))
-        XCTAssertTrue(controller.state.localMonths.isEmpty)
+        XCTAssertTrue(controller.state.localMonths.isEmpty, "second toggle: subset → subtract")
     }
 
     func testToggleYear_outOfBounds_isNoOp() {
@@ -171,13 +167,27 @@ final class SelectionControllerTests: XCTestCase {
 
     // MARK: - intent
 
-    func testIntent_forwardsToState() {
+    func testIntent_returnsBackupForLocal_complementForBoth() {
         let state = GateState()
         let controller = makeController(state: state)
         let key = LibraryMonthKey(year: 2024, month: 1)
 
         XCTAssertNil(controller.intent(for: key))
+
         _ = controller.toggleMonth(key, side: .local)
-        XCTAssertNotNil(controller.intent(for: key))
+        XCTAssertEqual(controller.intent(for: key), .backup)
+
+        _ = controller.toggleMonth(key, side: .remote)
+        XCTAssertEqual(controller.intent(for: key), .complement)
+    }
+
+    func testToggleAll_remote_blockedWhenRemoteSelectionDisallowed() {
+        let state = GateState()
+        state.sections = [section(year: 2024, months: [1, 2])]
+        state.remoteAllowed = false
+        let controller = makeController(state: state)
+
+        XCTAssertFalse(controller.toggleAll(side: .remote))
+        XCTAssertTrue(controller.state.remoteMonths.isEmpty)
     }
 }

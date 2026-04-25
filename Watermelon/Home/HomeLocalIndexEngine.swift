@@ -1,5 +1,13 @@
 import Foundation
 
+/// In-memory mirror of the local PhotoKit library, indexed by month with a
+/// fingerprint cache for backed-up counts.
+///
+/// **Concurrency contract**: callers must serialize access externally. The
+/// `@unchecked Sendable` conformance exists only because `HomeDataProcessingWorker`
+/// crosses its `processingQueue` boundary with engine instances; the queue is
+/// what actually serializes mutations. Direct concurrent access from multiple
+/// threads is unsafe.
 final class HomeLocalIndexEngine: @unchecked Sendable {
     struct MonthAggregate {
         let assetCount: Int
