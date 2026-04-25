@@ -174,6 +174,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func setModificationDate(_ date: Date, forPath path: String) async throws {
         #if canImport(AMSMB2)
+        guard Self.isSafeSMBFileDate(date) else { return }
         try await manager.setAttributes(
             attributes: [.contentModificationDateKey: date],
             ofItemAtPath: RemotePathBuilder.normalizePath(path)
@@ -213,6 +214,18 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             return nil
         }
         return Int64(fileSize)
+    }
+
+    private static func isSafeSMBFileDate(_ date: Date) -> Bool {
+        let seconds = date.timeIntervalSince1970
+        // AMSMB2 converts Date to timespec synchronously and traps on non-finite values.
+        guard seconds.isFinite else { return false }
+
+        // SMB file times are Windows FILETIME based. Stay inside that usable range so
+        // libsmb2 does not underflow or receive dates many servers cannot represent.
+        let windowsFileTimeMinimumSeconds: TimeInterval = -11_644_473_600 // 1601-01-01 UTC
+        let conservativeMaximumSeconds: TimeInterval = 253_402_300_799 // 9999-12-31 23:59:59 UTC
+        return seconds >= windowsFileTimeMinimumSeconds && seconds <= conservativeMaximumSeconds
     }
 
     private func cleanupCancelledUploadIfNeeded(remotePath: String) async {
