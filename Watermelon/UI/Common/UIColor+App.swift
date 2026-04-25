@@ -3,6 +3,7 @@ import UIKit
 extension UIColor {
     static let appPaper = UIColor(named: "PaperColor")!
     static let appBackground = UIColor(named: "BackgroundColor")!
+    static let appTint = UIColor.materialPrimary(light: .Material.Green._600, dark: .Material.Green._200)
 }
 
 // MARK: - Material Adaptive Colors

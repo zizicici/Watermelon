@@ -23,7 +23,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             productID: ProStatus.productID,
             membershipKey: "com.zizicici.watermelon.membership.lifetime"
         )
-        MoreKitAppearance.shared.tintColor = .systemGreen
+        MoreKitAppearance.shared.tintColor = .appTint
         MoreKitAppearance.shared.backgroundColor = .appBackground
 
         Task { await ProStatus.verifyEntitlement() }
