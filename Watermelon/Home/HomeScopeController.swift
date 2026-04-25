@@ -63,13 +63,14 @@ final class HomeScopeController {
         return true
     }
 
-    /// Used by the deferred-normalize path: stash the current active scope as pending so
-    /// the post-execution flow re-runs normalization. No-op if a pending scope is already
-    /// queued (it implicitly covers any later normalization too).
-    func deferActiveScopeForReevaluation() {
+    /// Stash the *current* active album scope as pending so the post-execution
+    /// flow re-runs normalization against PhotoKit. Unlike `setActive(_:isExecuting: true)`
+    /// (which stashes a *different* user-requested scope), this is a no-op when a
+    /// pending scope already exists or when active is `.allPhotos`.
+    func requestPostExecutionRenormalization() {
         guard pendingScope == nil, case .albums = activeScope else { return }
         pendingScope = activeScope
-        scopeLog.info("[HomeScope] deferActiveScopeForReevaluation")
+        scopeLog.info("[HomeScope] requestPostExecutionRenormalization")
         onChange?()
     }
 }

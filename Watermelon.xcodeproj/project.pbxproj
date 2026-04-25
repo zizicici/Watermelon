@@ -17,7 +17,18 @@
 		14D1E0012FA50EF800B21C69 /* MoreKit in Frameworks */ = {isa = PBXBuildFile; productRef = 14D1E0032FA50EF800B21C69 /* MoreKit */; };
 		14FB00032FEA000100000001 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00022FEA000100000001 /* FirebaseCrashlytics */; };
 		14FB00062FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport */; };
+		1FA88BC501DC6CDE49D62941 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 55784EA3B978EE3197A59404 /* Foundation.framework */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C1DE449A4182F8F131E106A5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 148EF94A2F4EABFE0025F409 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 148EF9512F4EABFE0025F409;
+			remoteInfo = Watermelon;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
 		14B0C0A52F4F000100111111 /* Embed Frameworks */ = {
@@ -35,6 +46,8 @@
 
 /* Begin PBXFileReference section */
 		148EF9522F4EABFE0025F409 /* Watermelon.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Watermelon.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		48AF7F5640AC24EDC2D9AEBB /* WatermelonTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatermelonTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		55784EA3B978EE3197A59404 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -56,6 +69,11 @@
 			path = Watermelon;
 			sourceTree = "<group>";
 		};
+		380376F0D988D50E5271B4D2 /* WatermelonTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WatermelonTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -75,6 +93,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CF9AAE5A822FF2D95E384050 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1FA88BC501DC6CDE49D62941 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -83,6 +109,8 @@
 			children = (
 				148EF9542F4EABFE0025F409 /* Watermelon */,
 				148EF9532F4EABFE0025F409 /* Products */,
+				33F2ABBE08821C14B2AE7156 /* Frameworks */,
+				380376F0D988D50E5271B4D2 /* WatermelonTests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -90,8 +118,25 @@
 			isa = PBXGroup;
 			children = (
 				148EF9522F4EABFE0025F409 /* Watermelon.app */,
+				48AF7F5640AC24EDC2D9AEBB /* WatermelonTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		33F2ABBE08821C14B2AE7156 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				F2BA59A0C28D0F17284F9FB0 /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		F2BA59A0C28D0F17284F9FB0 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				55784EA3B978EE3197A59404 /* Foundation.framework */,
+			);
+			name = iOS;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -129,6 +174,27 @@
 			productName = PhotoBackup;
 			productReference = 148EF9522F4EABFE0025F409 /* Watermelon.app */;
 			productType = "com.apple.product-type.application";
+		};
+		69A7F09A10C2D14C88257489 /* WatermelonTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 103756A1C7509A94B218503B /* Build configuration list for PBXNativeTarget "WatermelonTests" */;
+			buildPhases = (
+				F42D48794A0F761FDAB352E5 /* Sources */,
+				CF9AAE5A822FF2D95E384050 /* Frameworks */,
+				7CF30C3A5E132714391E5CC3 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BB28E6233E7CA26E6A9B76FE /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				380376F0D988D50E5271B4D2 /* WatermelonTests */,
+			);
+			name = WatermelonTests;
+			productName = WatermelonTests;
+			productReference = 48AF7F5640AC24EDC2D9AEBB /* WatermelonTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -182,12 +248,20 @@
 			projectRoot = "";
 			targets = (
 				148EF9512F4EABFE0025F409 /* Watermelon */,
+				69A7F09A10C2D14C88257489 /* WatermelonTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		148EF9502F4EABFE0025F409 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7CF30C3A5E132714391E5CC3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -232,7 +306,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F42D48794A0F761FDAB352E5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		BB28E6233E7CA26E6A9B76FE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = Watermelon;
+			target = 148EF9512F4EABFE0025F409 /* Watermelon */;
+			targetProxy = C1DE449A4182F8F131E106A5 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		148EF9662F4EABFF0025F409 /* Debug */ = {
@@ -444,9 +534,55 @@
 			};
 			name = Release;
 		};
+		D17AD1F4FCFB39764A3C3C3E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zizicici.watermelon.WatermelonTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Watermelon.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Watermelon";
+			};
+			name = Debug;
+		};
+		E9415D9AAE0B6A2F2E25BC84 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zizicici.watermelon.WatermelonTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Watermelon.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Watermelon";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		103756A1C7509A94B218503B /* Build configuration list for PBXNativeTarget "WatermelonTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E9415D9AAE0B6A2F2E25BC84 /* Release */,
+				D17AD1F4FCFB39764A3C3C3E /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		148EF94D2F4EABFE0025F409 /* Build configuration list for PBXProject "Watermelon" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

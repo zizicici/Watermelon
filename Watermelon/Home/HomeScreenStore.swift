@@ -14,17 +14,20 @@ final class HomeScreenStore {
     private let scopeController = HomeScopeController()
     private var refreshScheduler: HomeRefreshScheduler!
     private var selectionController: HomeSelectionController!
+    private var sectionBuilder: HomeSectionBuilder!
+    private let photoAccessGate: HomePhotoAccessGate
+    private let scopeNormalizer: HomeScopeNormalizer
 
     private let dependencies: DependencyContainer
 
     // MARK: - State
 
-    private(set) var sections: [HomeMergedYearSection] = []
-    private(set) var rowLookup: [LibraryMonthKey: HomeMonthRow] = [:]
-    private(set) var localPhotoAccessState: LocalPhotoAccessState
     private(set) var albumDisplayCache: [String: LocalAlbumDescriptor] = [:]
 
+    var sections: [HomeMergedYearSection] { sectionBuilder.sections }
+    var rowLookup: [LibraryMonthKey: HomeMonthRow] { sectionBuilder.rowLookup }
     var selection: SelectionState { selectionController.state }
+    var localPhotoAccessState: LocalPhotoAccessState { photoAccessGate.state }
 
     var localLibraryScope: HomeLocalLibraryScope { scopeController.activeScope }
     var isReloadingScope: Bool { scopeController.isReloading }
@@ -55,22 +58,13 @@ final class HomeScreenStore {
     private var wasExecutionActive = false
     private var lastMonthPhases: [LibraryMonthKey: MonthPlan.Phase] = [:]
     private var bootstrapTask: Task<Void, Never>?
-    private var lastScopeAlertTime: CFAbsoluteTime = 0
-
-    private static let scopeAlertDebounceInterval: CFAbsoluteTime = 2.0
-
-    private enum ScopeNormalizationAlert {
-        case albumsUnavailable
-        case albumsUpdated
-    }
 
     // MARK: - Init
 
     init(dependencies: DependencyContainer) {
         self.dependencies = dependencies
-        self.localPhotoAccessState = LocalPhotoAccessState(
-            authorizationStatus: dependencies.photoLibraryService.authorizationStatus()
-        )
+        self.photoAccessGate = HomePhotoAccessGate(photoLibraryService: dependencies.photoLibraryService)
+        self.scopeNormalizer = HomeScopeNormalizer(photoLibraryService: dependencies.photoLibraryService)
         let backupCoordinator = dependencies.backupCoordinator
         let scopeController = self.scopeController
         self.dataManager = HomeIncrementalDataManager(
@@ -103,6 +97,11 @@ final class HomeScreenStore {
             )
         )
         self.pipBridge = PiPExecutionBridge(coordinator: self.executionCoordinator)
+        let dataManagerRef = self.dataManager
+        self.sectionBuilder = HomeSectionBuilder(
+            allMonthRows: { dataManagerRef.allMonthRows() },
+            monthRow: { dataManagerRef.monthRow(for: $0) }
+        )
         self.selectionController = HomeSelectionController(dependencies: HomeSelectionController.Dependencies(
             isSelectable: { [weak self] in self?.isSelectable ?? false },
             isRemoteSelectionAllowed: { [weak self] in self?.isRemoteSelectionAllowed ?? false },
@@ -130,9 +129,7 @@ final class HomeScreenStore {
                 await self?.syncRemoteDataIfNeeded()
             },
             postProcess: { [weak self] in
-                guard let self else { return }
-                self.refreshRowLookup()
-                self.rebuildSections()
+                self?.sectionBuilder.rebuildAll()
             },
             onIterationComplete: { [weak self] work, scopeChanged, accessChanged in
                 guard let self else { return }
@@ -156,6 +153,9 @@ final class HomeScreenStore {
     private func bind() {
         scopeController.onChange = { [weak self] in
             self?.onChange?(.selection)
+        }
+        scopeNormalizer.onAlert = { [weak self] title, message in
+            self?.onAlert?(title, message)
         }
         dataManager.onMonthsChanged = { [weak self] months in
             self?.handleDataChange(months)
@@ -214,13 +214,13 @@ final class HomeScreenStore {
             albumDisplayCache[descriptor.localIdentifier] = descriptor
         }
         let isExecuting = executionState != nil
-        let normalized = isExecuting
-            ? (scope: scope, alert: ScopeNormalizationAlert?.none)
-            : normalizedLocalLibraryScope(scope)
+        let normalized: (scope: HomeLocalLibraryScope, alert: HomeScopeNormalizer.Alert?) = isExecuting
+            ? (scope, nil)
+            : scopeNormalizer.normalize(scope)
         switch scopeController.setActive(normalized.scope, isExecuting: isExecuting) {
         case .applied:
             selectionController.clear()
-            if let alert = normalized.alert { emitScopeAlertIfNotDebounced(alert) }
+            if let alert = normalized.alert { scopeNormalizer.emitAlertIfNotDebounced(alert) }
             onChange?(.selection)
             scheduleRefresh([.reloadLocal, .notifyStructural])
         case .noChange:
@@ -279,15 +279,12 @@ final class HomeScreenStore {
         Task { [weak self] in
             guard let self else { return }
 
-            let accessState = LocalPhotoAccessState(
-                authorizationStatus: self.dependencies.photoLibraryService.authorizationStatus()
-            )
-
-            switch accessState {
+            let access = LocalPhotoAccessState(authorizationStatus: self.photoAccessGate.currentSystemAuthorizationStatus())
+            switch access {
             case .authorized:
                 self.scheduleRefresh([.reloadLocal, .notifyStructural])
             case .notDetermined:
-                _ = await self.dependencies.photoLibraryService.requestAuthorization()
+                _ = await self.photoAccessGate.requestAuthorization()
                 guard !Task.isCancelled else { return }
                 self.scheduleRefresh([.reloadLocal, .notifyStructural])
             case .denied:
@@ -297,11 +294,9 @@ final class HomeScreenStore {
     }
 
     func refreshLocalPhotoAccessIfNeeded() {
-        let accessState = LocalPhotoAccessState(
-            authorizationStatus: dependencies.photoLibraryService.authorizationStatus()
-        )
         let scopeChanged = normalizeLocalLibraryScopeIfNeeded(shouldAlert: true)
-        guard accessState != localPhotoAccessState || scopeChanged else { return }
+        let accessChanged = photoAccessGate.hasSystemStateDiverged()
+        guard scopeChanged || accessChanged else { return }
         scheduleRefresh([.reloadLocal, .notifyStructural])
     }
 
@@ -335,10 +330,9 @@ final class HomeScreenStore {
             return
         }
 
-        let previousMonths = Set(rowLookup.keys)
-        refreshRowLookup()
-        rebuildSections()
-        let currentMonths = Set(rowLookup.keys)
+        let previousMonths = Set(sectionBuilder.rowLookup.keys)
+        sectionBuilder.rebuildAll()
+        let currentMonths = Set(sectionBuilder.rowLookup.keys)
 
         selectionController.intersect(with: currentMonths)
 
@@ -350,19 +344,9 @@ final class HomeScreenStore {
     }
 
     private func handleFileSizeChange(_ months: Set<LibraryMonthKey>) {
-        guard !months.isEmpty else { return }
-
-        var changedMonths = Set<LibraryMonthKey>()
-        for month in months where rowLookup[month] != nil {
-            let updatedRow = dataManager.monthRow(for: month)
-            guard updatedRow.local != nil || updatedRow.remote != nil else { continue }
-            rowLookup[month] = updatedRow
-            changedMonths.insert(month)
-        }
-
-        guard !changedMonths.isEmpty else { return }
-        refreshSections(for: changedMonths)
-        onChange?(.fileSizes(changedMonths))
+        let changed = sectionBuilder.refreshFileSizeRows(for: months)
+        guard !changed.isEmpty else { return }
+        onChange?(.fileSizes(changed))
     }
 
     private func handleExecutionChange() {
@@ -379,9 +363,9 @@ final class HomeScreenStore {
             lastMonthPhases.removeAll()
 
             if let pendingScope = scopeController.resumeFromDeferred() {
-                let normalized = normalizedLocalLibraryScope(pendingScope)
+                let normalized = scopeNormalizer.normalize(pendingScope)
                 scopeController.setActiveFromNormalize(normalized.scope)
-                if let alert = normalized.alert { emitScopeAlertIfNotDebounced(alert) }
+                if let alert = normalized.alert { scopeNormalizer.emitAlertIfNotDebounced(alert) }
             }
 
             scheduleRefresh([.reloadLocal, .syncRemote, .notifyStructural])
@@ -410,11 +394,7 @@ final class HomeScreenStore {
             }
             lastMonthPhases = state.monthPlans.mapValues(\.phase)
 
-            // Refresh rowLookup only for changed months
-            for month in changedMonths {
-                rowLookup[month] = dataManager.monthRow(for: month)
-            }
-            rebuildSections()
+            sectionBuilder.updateRowsAndRebuild(for: changedMonths)
         }
 
         onChange?(.execution(changedMonths))
@@ -461,85 +441,14 @@ final class HomeScreenStore {
         homeLog.info("[HomeSync] syncRemoteDataIfNeeded: revision=\(revision.map { String($0) } ?? "nil"), connected=\(active), deltaMonths=\(snapshotState.monthDeltas.count), \(String(format: "%.3f", elapsed))s")
     }
 
-    private func refreshRowLookup() {
-        rowLookup = dataManager.allMonthRows()
-    }
-
-    private func rebuildSections() {
-        var rowsByYear: [Int: [HomeMonthRow]] = [:]
-        for (_, row) in rowLookup {
-            rowsByYear[row.month.year, default: []].append(row)
-        }
-        sections = rowsByYear
-            .map { HomeMergedYearSection(year: $0.key, rows: $0.value.sorted { $0.month > $1.month }) }
-            .sorted { $0.year > $1.year }
-    }
-
-    private func refreshSections(for months: Set<LibraryMonthKey>) {
-        guard !months.isEmpty else { return }
-
-        sections = sections.map { section in
-            let updatedRows = section.rows.map { row in
-                guard months.contains(row.month),
-                      let updatedRow = rowLookup[row.month] else { return row }
-                return updatedRow
-            }
-            return HomeMergedYearSection(year: section.year, rows: updatedRows)
-        }
-    }
-
     private func refreshAllAndNotify() {
-        refreshRowLookup()
-        rebuildSections()
+        sectionBuilder.rebuildAll()
         onChange?(.structural)
     }
 
     @discardableResult
     private func refreshLocalPhotoAccessState() -> Bool {
-        let newState = LocalPhotoAccessState(
-            authorizationStatus: dependencies.photoLibraryService.authorizationStatus()
-        )
-        guard newState != localPhotoAccessState else { return false }
-        localPhotoAccessState = newState
-        return true
-    }
-
-    private func normalizedLocalLibraryScope(
-        _ scope: HomeLocalLibraryScope
-    ) -> (scope: HomeLocalLibraryScope, alert: ScopeNormalizationAlert?) {
-        guard case .albums(let ids) = scope else { return (scope, nil) }
-        let accessState = LocalPhotoAccessState(
-            authorizationStatus: dependencies.photoLibraryService.authorizationStatus()
-        )
-        guard accessState.isAuthorized else { return (scope, nil) }
-
-        guard !ids.isEmpty else { return (.allPhotos, nil) }
-
-        let existingIDs = dependencies.photoLibraryService.existingUserAlbumIdentifiers(in: ids)
-        guard existingIDs != ids else { return (scope, nil) }
-
-        if existingIDs.isEmpty {
-            return (.allPhotos, .albumsUnavailable)
-        }
-        return (.albums(existingIDs), .albumsUpdated)
-    }
-
-    private func emitScopeAlertIfNotDebounced(_ alert: ScopeNormalizationAlert) {
-        let now = CFAbsoluteTimeGetCurrent()
-        guard now - lastScopeAlertTime >= Self.scopeAlertDebounceInterval else { return }
-        lastScopeAlertTime = now
-        switch alert {
-        case .albumsUnavailable:
-            onAlert?(
-                String(localized: "home.alert.localAlbumsUnavailable"),
-                String(localized: "home.alert.localAlbumsUnavailableMessage")
-            )
-        case .albumsUpdated:
-            onAlert?(
-                String(localized: "home.alert.localAlbumsUpdated"),
-                String(localized: "home.alert.localAlbumsUpdatedMessage")
-            )
-        }
+        photoAccessGate.refresh()
     }
 
     @discardableResult
@@ -548,16 +457,16 @@ final class HomeScreenStore {
             // Defer normalization until execution ends. Without this, a downgrade
             // detected mid-execution (album deleted while uploading) would not run
             // again until the next user-driven reload.
-            scopeController.deferActiveScopeForReevaluation()
+            scopeController.requestPostExecutionRenormalization()
             return false
         }
 
-        let result = normalizedLocalLibraryScope(scopeController.activeScope)
+        let result = scopeNormalizer.normalize(scopeController.activeScope)
         let changed = scopeController.setActiveFromNormalize(result.scope)
         if changed {
             selectionController.clear()
             if shouldAlert, let alert = result.alert {
-                emitScopeAlertIfNotDebounced(alert)
+                scopeNormalizer.emitAlertIfNotDebounced(alert)
             }
         }
         return changed

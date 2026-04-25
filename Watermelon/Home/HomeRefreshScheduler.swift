@@ -67,6 +67,14 @@ final class HomeRefreshScheduler {
         pending = []
     }
 
+    #if DEBUG
+    /// Await the in-flight task, if any. Used by tests to drain the scheduler before
+    /// asserting against hook recorders. Production code does not call this.
+    func _testWaitUntilIdle() async {
+        await task?.value
+    }
+    #endif
+
     private func runUntilDrained() async {
         while !Task.isCancelled {
             let work = self.pending
