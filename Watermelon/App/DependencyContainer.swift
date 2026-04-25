@@ -11,12 +11,16 @@ final class DependencyContainer {
     let backupCoordinator: BackupCoordinator
     let restoreService: RestoreService
 
-    init() {
+    convenience init() {
         do {
-            databaseManager = try DatabaseManager()
+            try self.init(databaseManager: DatabaseManager())
         } catch {
             fatalError("Failed to initialize database: \(error)")
         }
+    }
+
+    private init(databaseManager: DatabaseManager) {
+        self.databaseManager = databaseManager
 
         keychainService = KeychainService()
         appSession = AppSession()
@@ -38,6 +42,10 @@ final class DependencyContainer {
             databaseManager: databaseManager,
             storageClientFactory: storageClientFactory
         )
+    }
+
+    static func makeForBackgroundTask() throws -> DependencyContainer {
+        try DependencyContainer(databaseManager: DatabaseManager())
     }
 
     var appVersion: String {

@@ -40,6 +40,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
 
         Task.detached(priority: .utility) {
+            ExecutionLogFileStore.prepareForBackgroundUse()
             ExecutionLogFileStore.purgeExpired()
         }
 
@@ -54,7 +55,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             try? BGTaskScheduler.shared.submit(request)
         }
 
-        let container = DependencyContainer()
+        let container: DependencyContainer
+        do {
+            container = try DependencyContainer.makeForBackgroundTask()
+        } catch {
+            task.setTaskCompleted(success: false)
+            return
+        }
+
         let runner = BackgroundBackupRunner(dependencies: container)
         let completionGuard = OSAllocatedUnfairLock(initialState: false)
 

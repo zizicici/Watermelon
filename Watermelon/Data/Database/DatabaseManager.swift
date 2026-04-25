@@ -6,9 +6,10 @@ final class DatabaseManager {
 
     init(databaseURL: URL? = nil) throws {
         let url = databaseURL ?? Self.defaultDatabaseURL()
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Self.prepareDatabaseLocation(at: url)
         dbQueue = try DatabaseQueue(path: url.path)
         try migrator.migrate(dbQueue)
+        Self.enableBackgroundAccessForDatabaseFiles(at: url)
     }
 
     private var migrator: DatabaseMigrator {
@@ -238,5 +239,21 @@ final class DatabaseManager {
     static func defaultDatabaseURL() -> URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return support.appendingPathComponent("Watermelon/database.sqlite")
+    }
+
+    private static func prepareDatabaseLocation(at url: URL) throws {
+        let directoryURL = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        )
+        try? FileProtection.enableBackgroundAccess(at: directoryURL)
+    }
+
+    private static func enableBackgroundAccessForDatabaseFiles(at url: URL) {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            try? FileProtection.enableBackgroundAccess(at: URL(fileURLWithPath: url.path + suffix))
+        }
     }
 }

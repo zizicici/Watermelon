@@ -22,9 +22,20 @@ enum ExecutionLogFileStore {
     static func beginSession(kind: ExecutionLogKind, startedAt: Date = Date()) -> ExecutionLogSessionWriter {
         let dir = directory(for: kind)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? FileProtection.enableBackgroundAccess(at: dir)
         let name = Self.fileNameFormatter.string(from: startedAt) + ".log"
         let url = dir.appendingPathComponent(name)
         return ExecutionLogSessionWriter(fileURL: url, kind: kind, startedAt: startedAt)
+    }
+
+    static func prepareForBackgroundUse() {
+        try? FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+        try? FileProtection.enableBackgroundAccess(at: rootDirectory)
+        for kind in ExecutionLogKind.allCases {
+            let dir = directory(for: kind)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? FileProtection.enableBackgroundAccess(at: dir)
+        }
     }
 
     static func listSessions() -> [ExecutionLogSessionInfo] {
