@@ -472,18 +472,19 @@ final class HomeViewController: UIViewController {
             let rightState = self.store.selection.selectionState(for: allMonths, side: .remote)
             let accentColor = self.leftHeaderLabel.textColor ?? .secondaryLabel
             supplementaryView.configure(section: section,
+                                        sectionIndex: indexPath.section,
                                         leftState: leftState, rightState: rightState,
                                         leftSelectionEnabled: true,
                                         rightSelectionEnabled: self.store.isRemoteSelectionAllowed,
                                         selectedColor: accentColor, deselectedColor: UIColor.tertiaryLabel)
-            supplementaryView.onLeftTap = { [weak self] in
+            supplementaryView.onLeftTap = { [weak self] sectionIndex in
                 guard self?.confirmSelectionReadiness() == true else { return }
-                self?.store.toggleYear(sectionIndex: indexPath.section, side: .local)
+                self?.store.toggleYear(sectionIndex: sectionIndex, side: .local)
             }
-            supplementaryView.onRightTap = { [weak self] in
+            supplementaryView.onRightTap = { [weak self] sectionIndex in
                 guard self?.confirmSelectionReadiness() == true else { return }
                 guard self?.confirmRemoteSelectionAllowed() == true else { return }
-                self?.store.toggleYear(sectionIndex: indexPath.section, side: .remote)
+                self?.store.toggleYear(sectionIndex: sectionIndex, side: .remote)
             }
         }
 
@@ -566,6 +567,7 @@ final class HomeViewController: UIViewController {
             updateTopHeaderSummaries()
             updateActionPanelFromExecution(exec)
             maybeRequestRatingPrompt(for: exec)
+            refreshLocalLibraryMenu()
         } else {
             didRequestReviewForCurrentExecution = false
             renderStructuralChange()
@@ -635,7 +637,9 @@ final class HomeViewController: UIViewController {
                 let allMonths = Set(ms.rows.map(\.month))
                 let leftState = store.selection.selectionState(for: allMonths, side: .local)
                 let rightState = store.selection.selectionState(for: allMonths, side: .remote)
-                header.configure(section: ms, leftState: leftState, rightState: rightState,
+                header.configure(section: ms,
+                                 sectionIndex: sectionIndex,
+                                 leftState: leftState, rightState: rightState,
                                  leftSelectionEnabled: true,
                                  rightSelectionEnabled: store.isRemoteSelectionAllowed,
                                  selectedColor: accentColor, deselectedColor: .tertiaryLabel)
@@ -682,7 +686,9 @@ final class HomeViewController: UIViewController {
                 let allMonths = Set(ms.rows.map(\.month))
                 let leftState = store.selection.selectionState(for: allMonths, side: .local)
                 let rightState = store.selection.selectionState(for: allMonths, side: .remote)
-                header.configure(section: ms, leftState: leftState, rightState: rightState,
+                header.configure(section: ms,
+                                 sectionIndex: sectionIndex,
+                                 leftState: leftState, rightState: rightState,
                                  leftSelectionEnabled: true,
                                  rightSelectionEnabled: store.isRemoteSelectionAllowed,
                                  selectedColor: accentColor, deselectedColor: .tertiaryLabel)

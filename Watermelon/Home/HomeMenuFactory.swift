@@ -34,10 +34,12 @@ struct HomeMenuFactory {
 
     func buildLocalLibrary(isPad: Bool) -> UIMenu {
         let isSpecificAlbums = store.localLibraryScope.isSpecificAlbums
+        let attributes: UIMenuElement.Attributes = store.executionState != nil ? .disabled : []
         let allPhotosSymbol = isPad ? "ipad" : "iphone"
         let allPhotosAction = UIAction(
             title: String(localized: "home.localSource.allPhotos"),
             image: UIImage(systemName: allPhotosSymbol),
+            attributes: attributes,
             state: isSpecificAlbums ? .off : .on
         ) { [store, hooks] _ in
             store.setLocalLibraryScope(.allPhotos)
@@ -47,6 +49,7 @@ struct HomeMenuFactory {
         let specificAlbumsAction = UIAction(
             title: String(localized: "home.localSource.specificAlbums"),
             image: UIImage(systemName: "photo.stack"),
+            attributes: attributes,
             state: isSpecificAlbums ? .on : .off
         ) { [hooks] _ in
             hooks.openLocalAlbumPicker()

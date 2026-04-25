@@ -10,8 +10,10 @@ final class MergedSectionHeaderView: UICollectionReusableView {
     private let rightHalf = HalfHeaderView()
     private let divider = UIView()
 
-    var onLeftTap: (() -> Void)?
-    var onRightTap: (() -> Void)?
+    private var sectionIndex: Int = 0
+
+    var onLeftTap: ((Int) -> Void)?
+    var onRightTap: ((Int) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -42,15 +44,17 @@ final class MergedSectionHeaderView: UICollectionReusableView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func leftTapped() { onLeftTap?() }
-    @objc private func rightTapped() { onRightTap?() }
+    @objc private func leftTapped() { onLeftTap?(sectionIndex) }
+    @objc private func rightTapped() { onRightTap?(sectionIndex) }
 
     func configure(section: HomeMergedYearSection,
+                   sectionIndex: Int,
                    leftState: HomeSelectionState,
                    rightState: HomeSelectionState,
                    leftSelectionEnabled: Bool = true,
                    rightSelectionEnabled: Bool = true,
                    selectedColor: UIColor, deselectedColor: UIColor) {
+        self.sectionIndex = sectionIndex
         let headerFont = UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         let headerColor = UIColor.tertiaryLabel
         leftHalf.configure(
