@@ -150,7 +150,6 @@
 				148EF94F2F4EABFE0025F409 /* Frameworks */,
 				14B0C0A52F4F000100111111 /* Embed Frameworks */,
 				148EF9502F4EABFE0025F409 /* Resources */,
-				14FB00042FEA000100000001 /* Run Script: Crashlytics Upload Symbols */,
 			);
 			buildRules = (
 			);
@@ -269,34 +268,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		14FB00042FEA000100000001 /* Run Script: Crashlytics Upload Symbols */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"${PROJECT_DIR}/Watermelon/GoogleService-Info.plist",
-				"$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)",
-				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}",
-				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Info.plist",
-				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${PRODUCT_NAME}",
-				"${BUILT_PRODUCTS_DIR}/${INFOPLIST_PATH}",
-			);
-			name = "Run Script: Crashlytics Upload Symbols";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "\"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run\" -gsp \"${PROJECT_DIR}/Watermelon/GoogleService-Info.plist\"\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		148EF94E2F4EABFE0025F409 /* Sources */ = {
