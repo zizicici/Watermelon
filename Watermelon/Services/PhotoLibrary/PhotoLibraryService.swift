@@ -9,6 +9,11 @@ struct ExportedResourceFile: Sendable {
     let fileSize: Int64
 }
 
+enum PhotoLibraryQuery: Equatable, Sendable {
+    case allAssets
+    case albums(Set<String>)
+}
+
 final class PhotoLibraryService: @unchecked Sendable {
     private let imageManager = PHCachingImageManager()
     private let resourceManager = PHAssetResourceManager.default()
@@ -145,6 +150,129 @@ final class PhotoLibraryService: @unchecked Sendable {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: ascendingByCreationDate)]
         return PHAsset.fetchAssets(with: options)
+    }
+
+    /// Albums returns one fetch result per resolved album so PHChange can deliver
+    /// per-album incremental details. Unresolved album IDs are silently dropped;
+    /// store-level scope normalization surfaces the loss to the user.
+    func fetchResults(query: PhotoLibraryQuery) -> [PHFetchResult<PHAsset>] {
+        switch query {
+        case .allAssets:
+            return [fetchAssetsResult()]
+        case .albums(let identifiers):
+            return resolveUserAlbumCollections(identifiers).map {
+                PHAsset.fetchAssets(in: $0, options: nil)
+            }
+        }
+    }
+
+    func fetchUserAlbums(shouldCancel: () -> Bool = { false }) -> [LocalAlbumDescriptor] {
+        guard !shouldCancel() else { return [] }
+
+        let collections = PHAssetCollection.fetchAssetCollections(
+            with: .album,
+            subtype: .albumRegular,
+            options: nil
+        )
+        let assetOptions = PHFetchOptions()
+        assetOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+
+        var albums: [LocalAlbumDescriptor] = []
+        albums.reserveCapacity(collections.count)
+        for index in 0 ..< collections.count {
+            guard !shouldCancel() else { return [] }
+
+            let collection = collections.object(at: index)
+            let assets = PHAsset.fetchAssets(in: collection, options: assetOptions)
+            let thumbnailAssetIdentifier = assets.count > 0 ? assets.object(at: 0).localIdentifier : nil
+            albums.append(LocalAlbumDescriptor(
+                localIdentifier: collection.localIdentifier,
+                title: collection.localizedTitle ?? String(localized: "home.localAlbums.untitled"),
+                assetCount: assets.count,
+                thumbnailAssetIdentifier: thumbnailAssetIdentifier
+            ))
+        }
+
+        return albums.sorted {
+            let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
+            if titleOrder != .orderedSame {
+                return titleOrder == .orderedAscending
+            }
+            return $0.localIdentifier < $1.localIdentifier
+        }
+    }
+
+    private func resolveUserAlbumCollections(_ albumIdentifiers: Set<String>) -> [PHAssetCollection] {
+        guard !albumIdentifiers.isEmpty else { return [] }
+        let fetched = PHAssetCollection.fetchAssetCollections(
+            withLocalIdentifiers: Array(albumIdentifiers),
+            options: nil
+        )
+        var result: [PHAssetCollection] = []
+        result.reserveCapacity(fetched.count)
+        for index in 0 ..< fetched.count {
+            let collection = fetched.object(at: index)
+            guard collection.assetCollectionType == .album,
+                  collection.assetCollectionSubtype == .albumRegular
+            else { continue }
+            result.append(collection)
+        }
+        return result
+    }
+
+    func existingUserAlbumIdentifiers(in albumIdentifiers: Set<String>) -> Set<String> {
+        Set(resolveUserAlbumCollections(albumIdentifiers).map(\.localIdentifier))
+    }
+
+    func fetchAssets(
+        inAlbumIdentifiers albumIdentifiers: Set<String>,
+        ascendingByCreationDate: Bool = false,
+        shouldCancel: () -> Bool = { false }
+    ) -> [PHAsset] {
+        var assets: [PHAsset] = []
+        let completed = enumerateAssets(
+            inAlbumIdentifiers: albumIdentifiers,
+            shouldCancel: shouldCancel
+        ) { asset in
+            assets.append(asset)
+        }
+        guard completed else { return [] }
+
+        return assets.sorted { lhs, rhs in
+            let lhsDate = lhs.creationDate ?? .distantPast
+            let rhsDate = rhs.creationDate ?? .distantPast
+            if lhsDate != rhsDate {
+                return ascendingByCreationDate ? lhsDate < rhsDate : lhsDate > rhsDate
+            }
+            return lhs.localIdentifier < rhs.localIdentifier
+        }
+    }
+
+    @discardableResult
+    func enumerateAssets(
+        inAlbumIdentifiers albumIdentifiers: Set<String>,
+        shouldCancel: () -> Bool = { false },
+        visit: (PHAsset) -> Void
+    ) -> Bool {
+        guard !shouldCancel() else { return false }
+        let collections = resolveUserAlbumCollections(albumIdentifiers)
+
+        var visitedAssetIDs = Set<String>()
+        for collection in collections {
+            guard !shouldCancel() else { return false }
+            let assets = PHAsset.fetchAssets(in: collection, options: nil)
+            for assetIndex in 0 ..< assets.count {
+                guard !shouldCancel() else { return false }
+
+                let asset = assets.object(at: assetIndex)
+                guard visitedAssetIDs.insert(asset.localIdentifier).inserted else {
+                    continue
+                }
+                visit(asset)
+            }
+        }
+
+        return true
     }
 
     func fetchAssets(localIdentifiers: Set<String>) -> [PHAsset] {

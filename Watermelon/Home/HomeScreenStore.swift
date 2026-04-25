@@ -29,13 +29,19 @@ final class HomeScreenStore {
     private(set) var rowLookup: [LibraryMonthKey: HomeMonthRow] = [:]
     private(set) var selection = SelectionState()
     private(set) var localPhotoAccessState: LocalPhotoAccessState
+    private(set) var localLibraryScope: HomeLocalLibraryScope = .allPhotos
+    private(set) var isReloadingScope: Bool = false
 
     var connectionState: ConnectionState { connectionController.state }
     var remoteSyncProgress: RemoteSyncProgress? { connectionController.syncProgress }
     var executionState: HomeExecutionState? { executionCoordinator.currentState }
 
     var isSelectable: Bool {
-        connectionState.isConnected && localPhotoAccessState.isAuthorized && executionState == nil
+        connectionState.isConnected && localPhotoAccessState.isAuthorized && executionState == nil && !isReloadingScope
+    }
+
+    var isRemoteSelectionAllowed: Bool {
+        !localLibraryScope.isSpecificAlbums
     }
 
     var savedProfiles: [ServerProfileRecord] { connectionController.savedProfiles }
@@ -54,6 +60,15 @@ final class HomeScreenStore {
     private var bootstrapTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var pendingRefreshWork: RefreshWork = []
+    private var pendingLocalLibraryScopeAfterExecution: HomeLocalLibraryScope?
+    private var lastScopeAlertTime: CFAbsoluteTime = 0
+
+    private static let scopeAlertDebounceInterval: CFAbsoluteTime = 2.0
+
+    private enum ScopeNormalizationAlert {
+        case albumsUnavailable
+        case albumsUpdated
+    }
 
     // MARK: - Init
 
@@ -156,6 +171,28 @@ final class HomeScreenStore {
         onChange?(.connection)
     }
 
+    func setLocalLibraryScope(_ scope: HomeLocalLibraryScope) {
+        guard executionState == nil else {
+            pendingLocalLibraryScopeAfterExecution = scope
+            return
+        }
+        let normalized = normalizedLocalLibraryScope(scope)
+        if applyScopeChange(normalized, source: .userAction) { return }
+        // Same identity (album IDs) but descriptor metadata (e.g., title) may have
+        // changed since `localLibraryScope` was set; update in place without reloading.
+        refreshScopeDescriptorsIfNeeded(normalized.scope)
+    }
+
+    private func refreshScopeDescriptorsIfNeeded(_ candidate: HomeLocalLibraryScope) {
+        guard case .albums(let new) = candidate,
+              case .albums(let old) = localLibraryScope,
+              new != old
+        else { return }
+        localLibraryScope = candidate
+        dataManager.setLocalLibraryScope(candidate)
+        onChange?(.selection)
+    }
+
     // MARK: - Selection Actions
 
     func toggleMonth(_ month: LibraryMonthKey, side: SelectionSide) {
@@ -165,6 +202,7 @@ final class HomeScreenStore {
             if selection.localMonths.contains(month) { selection.localMonths.remove(month) }
             else { selection.localMonths.insert(month) }
         case .remote:
+            guard isRemoteSelectionAllowed else { return }
             if selection.remoteMonths.contains(month) { selection.remoteMonths.remove(month) }
             else { selection.remoteMonths.insert(month) }
         }
@@ -179,6 +217,7 @@ final class HomeScreenStore {
             if allMonths.isSubset(of: selection.localMonths) { selection.localMonths.subtract(allMonths) }
             else { selection.localMonths.formUnion(allMonths) }
         case .remote:
+            guard isRemoteSelectionAllowed else { return }
             if allMonths.isSubset(of: selection.remoteMonths) { selection.remoteMonths.subtract(allMonths) }
             else { selection.remoteMonths.formUnion(allMonths) }
         }
@@ -193,6 +232,7 @@ final class HomeScreenStore {
             if allMonths.isSubset(of: selection.localMonths) { selection.localMonths.removeAll() }
             else { selection.localMonths = allMonths }
         case .remote:
+            guard isRemoteSelectionAllowed else { return }
             if allMonths.isSubset(of: selection.remoteMonths) { selection.remoteMonths.removeAll() }
             else { selection.remoteMonths = allMonths }
         }
@@ -245,7 +285,8 @@ final class HomeScreenStore {
         let accessState = LocalPhotoAccessState(
             authorizationStatus: dependencies.photoLibraryService.authorizationStatus()
         )
-        guard accessState != localPhotoAccessState else { return }
+        let scopeChanged = normalizeLocalLibraryScopeIfNeeded(shouldAlert: true)
+        guard accessState != localPhotoAccessState || scopeChanged else { return }
         scheduleRefresh([.reloadLocal, .notifyStructural])
     }
 
@@ -274,6 +315,11 @@ final class HomeScreenStore {
     // MARK: - Change Handlers
 
     private func handleDataChange(_ months: Set<LibraryMonthKey>) {
+        if normalizeLocalLibraryScopeIfNeeded(shouldAlert: true) {
+            scheduleRefresh([.reloadLocal, .notifyStructural])
+            return
+        }
+
         let previousMonths = Set(rowLookup.keys)
         refreshRowLookup()
         rebuildSections()
@@ -317,6 +363,11 @@ final class HomeScreenStore {
             wasExecutionActive = false
             let allPrevious = Set(lastMonthPhases.keys)
             lastMonthPhases.removeAll()
+
+            if let pendingScope = pendingLocalLibraryScopeAfterExecution {
+                pendingLocalLibraryScopeAfterExecution = nil
+                applyScopeChange(normalizedLocalLibraryScope(pendingScope), source: .pendingResume)
+            }
 
             scheduleRefresh([.reloadLocal, .syncRemote, .notifyStructural])
 
@@ -438,6 +489,90 @@ final class HomeScreenStore {
         return true
     }
 
+    private func normalizedLocalLibraryScope(
+        _ scope: HomeLocalLibraryScope
+    ) -> (scope: HomeLocalLibraryScope, alert: ScopeNormalizationAlert?) {
+        guard case .albums(let albums) = scope else { return (scope, nil) }
+        let accessState = LocalPhotoAccessState(
+            authorizationStatus: dependencies.photoLibraryService.authorizationStatus()
+        )
+        guard accessState.isAuthorized else { return (scope, nil) }
+
+        let selectedIDs = Set(albums.map(\.localIdentifier))
+        guard !selectedIDs.isEmpty else { return (.allPhotos, nil) }
+
+        let existingIDs = dependencies.photoLibraryService.existingUserAlbumIdentifiers(in: selectedIDs)
+        guard existingIDs != selectedIDs else { return (scope, nil) }
+
+        if existingIDs.isEmpty {
+            return (.allPhotos, .albumsUnavailable)
+        }
+        return (.albums(albums.filter { existingIDs.contains($0.localIdentifier) }), .albumsUpdated)
+    }
+
+    private func emitScopeAlertIfNotDebounced(_ alert: ScopeNormalizationAlert) {
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastScopeAlertTime >= Self.scopeAlertDebounceInterval else { return }
+        lastScopeAlertTime = now
+        switch alert {
+        case .albumsUnavailable:
+            onAlert?(
+                String(localized: "home.alert.localAlbumsUnavailable"),
+                String(localized: "home.alert.localAlbumsUnavailableMessage")
+            )
+        case .albumsUpdated:
+            onAlert?(
+                String(localized: "home.alert.localAlbumsUpdated"),
+                String(localized: "home.alert.localAlbumsUpdatedMessage")
+            )
+        }
+    }
+
+    @discardableResult
+    private func normalizeLocalLibraryScopeIfNeeded(shouldAlert: Bool) -> Bool {
+        guard executionState == nil else {
+            if pendingLocalLibraryScopeAfterExecution == nil, case .albums = localLibraryScope {
+                pendingLocalLibraryScopeAfterExecution = localLibraryScope
+            }
+            return false
+        }
+
+        return applyScopeChange(
+            normalizedLocalLibraryScope(localLibraryScope),
+            source: .normalize,
+            shouldAlert: shouldAlert
+        )
+    }
+
+    private enum ScopeChangeSource {
+        case userAction          // user picked a different scope from the menu
+        case pendingResume       // scope change deferred while execution was active
+        case normalize           // scope drifted (album deleted, etc.) during a refresh
+    }
+
+    /// Returns `true` when the scope actually changed. `userAction` schedules its own
+    /// reload; the other sources expect the surrounding flow to drive the reload.
+    @discardableResult
+    private func applyScopeChange(
+        _ result: (scope: HomeLocalLibraryScope, alert: ScopeNormalizationAlert?),
+        source: ScopeChangeSource,
+        shouldAlert: Bool = true
+    ) -> Bool {
+        guard result.scope != localLibraryScope else { return false }
+        localLibraryScope = result.scope
+        dataManager.setLocalLibraryScope(result.scope)
+        selection.clear()
+        isReloadingScope = true
+        if shouldAlert, let alert = result.alert {
+            emitScopeAlertIfNotDebounced(alert)
+        }
+        if source == .userAction {
+            onChange?(.selection)
+            scheduleRefresh([.reloadLocal, .notifyStructural])
+        }
+        return true
+    }
+
     private func scheduleRefresh(_ work: RefreshWork) {
         pendingRefreshWork.formUnion(work)
         guard refreshTask == nil else { return }
@@ -453,17 +588,25 @@ final class HomeScreenStore {
 
                 guard !work.isEmpty else {
                     self.refreshTask = nil
+                    self.isReloadingScope = false
                     return
                 }
 
                 let start = CFAbsoluteTimeGetCurrent()
                 var localPhotoAccessChanged = false
+                var localScopeChanged = false
 
                 if work.contains(.reloadLocal) {
+                    localScopeChanged = self.normalizeLocalLibraryScopeIfNeeded(shouldAlert: true)
                     await self.dataManager.reloadLocalIndex()
                     localPhotoAccessChanged = self.refreshLocalPhotoAccessState()
-                    if localPhotoAccessChanged {
+                    if localPhotoAccessChanged || localScopeChanged {
                         self.selection.clear()
+                    }
+                    // Clear the gate before the structural notify so UI re-enables in the
+                    // same render pass; keep it up if more reloadLocal work is queued.
+                    if !self.pendingRefreshWork.contains(.reloadLocal) {
+                        self.isReloadingScope = false
                     }
                     guard !Task.isCancelled else { break }
                 }
@@ -482,12 +625,13 @@ final class HomeScreenStore {
 
                 if work.contains(.notifyConnection) {
                     self.onChange?(.connection)
-                } else if work.contains(.notifyStructural) || localPhotoAccessChanged {
+                } else if work.contains(.notifyStructural) || localPhotoAccessChanged || localScopeChanged {
                     self.onChange?(.structural)
                 }
             }
 
             self.refreshTask = nil
+            self.isReloadingScope = false
         }
     }
 

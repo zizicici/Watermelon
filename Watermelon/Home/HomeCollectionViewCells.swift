@@ -48,6 +48,8 @@ final class MergedSectionHeaderView: UICollectionReusableView {
     func configure(section: HomeMergedYearSection,
                    leftState: HomeSelectionState,
                    rightState: HomeSelectionState,
+                   leftSelectionEnabled: Bool = true,
+                   rightSelectionEnabled: Bool = true,
                    selectedColor: UIColor, deselectedColor: UIColor) {
         let headerFont = UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         let headerColor = UIColor.tertiaryLabel
@@ -56,6 +58,7 @@ final class MergedSectionHeaderView: UICollectionReusableView {
             countText: Self.mediaCountAttributedString(photoCount: section.localPhotoCount, videoCount: section.localVideoCount, font: headerFont, color: headerColor),
             sizeText: section.localSizeBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) },
             selectionState: leftState,
+            selectionEnabled: leftSelectionEnabled,
             selectedColor: selectedColor,
             deselectedColor: deselectedColor
         )
@@ -64,6 +67,7 @@ final class MergedSectionHeaderView: UICollectionReusableView {
             countText: Self.mediaCountAttributedString(photoCount: section.remotePhotoCount, videoCount: section.remoteVideoCount, font: headerFont, color: headerColor),
             sizeText: section.remoteSizeBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) },
             selectionState: rightState,
+            selectionEnabled: rightSelectionEnabled,
             selectedColor: selectedColor,
             deselectedColor: deselectedColor
         )
@@ -142,6 +146,7 @@ final class HalfHeaderView: UIView {
 
     func configure(title: String?, countText: NSAttributedString?, sizeText: String?,
                    selectionState: HomeSelectionState,
+                   selectionEnabled: Bool = true,
                    selectedColor: UIColor?, deselectedColor: UIColor?) {
         titleLabel.text = title
         countLabel.attributedText = countText
@@ -152,13 +157,13 @@ final class HalfHeaderView: UIView {
         switch selectionState {
         case .all:
             checkmark.image = UIImage(systemName: "checkmark.circle.fill")
-            checkmark.tintColor = selectedColor ?? .secondaryLabel
+            checkmark.tintColor = selectionEnabled ? (selectedColor ?? .secondaryLabel) : .quaternaryLabel
         case .partial:
             checkmark.image = UIImage(systemName: "minus.circle.fill")
-            checkmark.tintColor = selectedColor ?? .secondaryLabel
+            checkmark.tintColor = selectionEnabled ? (selectedColor ?? .secondaryLabel) : .quaternaryLabel
         case .none:
             checkmark.image = UIImage(systemName: "circle")
-            checkmark.tintColor = deselectedColor ?? .tertiaryLabel
+            checkmark.tintColor = selectionEnabled ? (deselectedColor ?? .tertiaryLabel) : .quaternaryLabel
         }
         titleLabel.snp.updateConstraints { make in
             make.leading.equalToSuperview().inset(50)
@@ -313,7 +318,8 @@ final class MonthCell: UICollectionViewCell {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(monthTitle: String, countText: NSAttributedString, sizeText: String?,
-                   bgColor: UIColor, titleColor: UIColor, detailColor: UIColor, isSelected: Bool?) {
+                   bgColor: UIColor, titleColor: UIColor, detailColor: UIColor,
+                   isSelected: Bool, selectionEnabled: Bool = true) {
         activityIndicator.stopAnimating()
         monthLabel.text = monthTitle
         monthLabel.isHidden = false
@@ -328,15 +334,10 @@ final class MonthCell: UICollectionViewCell {
         currentTitleColor = titleColor
         currentDetailColor = detailColor
 
-        if let selected = isSelected {
-            checkmark.isHidden = false
-            checkmark.image = UIImage(systemName: selected ? "checkmark.circle.fill" : "circle")
-            checkmark.tintColor = selected ? titleColor : detailColor
-            leftStackLeading?.update(inset: 50)
-        } else {
-            checkmark.isHidden = true
-            leftStackLeading?.update(inset: 50)
-        }
+        checkmark.isHidden = false
+        checkmark.image = UIImage(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+        checkmark.tintColor = selectionEnabled ? (isSelected ? titleColor : detailColor) : .quaternaryLabel
+        leftStackLeading?.update(inset: 50)
     }
 
     func configureEmpty(bgColor: UIColor) {
@@ -421,7 +422,7 @@ final class MonthCell: UICollectionViewCell {
 
         checkmark.isHidden = false
         checkmark.image = UIImage(systemName: "checkmark.circle.fill")
-        checkmark.tintColor = .systemGreen
+        checkmark.tintColor = .appTint
         activityIndicator.stopAnimating()
         leftStackLeading?.update(inset: 50)
     }

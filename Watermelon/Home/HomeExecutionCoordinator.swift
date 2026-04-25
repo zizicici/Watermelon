@@ -448,7 +448,7 @@ final class HomeExecutionCoordinator {
         forcedUploadWorkerCountOverride = nil
 
         let settings = activeExecutionSettingsSnapshot()
-        let assetIDs = selectedLocalAssetIDsForExecution()
+        let assetIDs = assetIDsForLocalHashIndexPreflight()
         guard !assetIDs.isEmpty else {
             session.markLocalIndexPreflightCompleted()
             return true
@@ -562,9 +562,13 @@ final class HomeExecutionCoordinator {
         return snapshot
     }
 
-    private func selectedLocalAssetIDsForExecution() -> Set<String> {
-        var assetIDs = Set<String>()
-        for month in session.monthPlans.keys {
+    /// Upload months read frozen IDs (the work plan is fixed at session.enter; PHChange
+    /// additions mid-run shouldn't expand it). Pure-download months read live IDs so
+    /// assets uploaded earlier in the same run are recognized and not re-downloaded.
+    private func assetIDsForLocalHashIndexPreflight() -> Set<String> {
+        var assetIDs = session.uploadScopeAssetIDs
+        let uploadMonths = Set(session.backupMonths).union(session.complementMonths)
+        for month in session.monthPlans.keys where !uploadMonths.contains(month) {
             assetIDs.formUnion(dataAccess.localAssetIDs(month))
         }
         return assetIDs

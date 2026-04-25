@@ -61,6 +61,8 @@ final class HomeViewController: UIViewController {
     private let leftHeaderCountLabel = UILabel()
     private let leftHeaderSizeLabel = UILabel()
     private let leftToggle = UIButton(type: .system)
+    private let leftHeaderMenuOverlay = UIButton(type: .system)
+    private let leftHeaderButton = UIButton(type: .system)
     private let rightHeaderLabel: MarqueeLabel = {
         let label = MarqueeLabel(frame: .zero, rate: 30, fadeLength: 8)
         label.animationDelay = 2
@@ -204,7 +206,7 @@ final class HomeViewController: UIViewController {
         leftToggle.setContentCompressionResistancePriority(.required, for: .horizontal)
         leftToggle.addTarget(self, action: #selector(leftToggleTapped), for: .touchUpInside)
 
-        leftHeaderLabel.text = String(localized: "home.header.localAlbum")
+        configureLeftHeaderButton()
         leftHeaderLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         leftHeaderLabel.textColor = headerTextColor
         leftHeaderLabel.textAlignment = .center
@@ -212,7 +214,11 @@ final class HomeViewController: UIViewController {
         configureHeaderDetailLabel(leftHeaderSizeLabel, color: headerTextColor)
 
         let leftHeaderContentView = UIView()
-        let leftHeaderTitleRow = UIStackView(arrangedSubviews: [leftToggle, leftHeaderLabel])
+        let leftHeaderTitleStack = UIStackView(arrangedSubviews: [leftHeaderLabel, leftHeaderButton])
+        leftHeaderTitleStack.axis = .horizontal
+        leftHeaderTitleStack.spacing = 4
+        leftHeaderTitleStack.alignment = .center
+        let leftHeaderTitleRow = UIStackView(arrangedSubviews: [leftToggle, leftHeaderTitleStack])
         leftHeaderTitleRow.axis = .horizontal
         leftHeaderTitleRow.spacing = 4
         leftHeaderTitleRow.alignment = .center
@@ -241,6 +247,15 @@ final class HomeViewController: UIViewController {
             make.top.equalTo(leftHeaderCountLabel.snp.bottom).offset(6)
             make.leading.trailing.equalToSuperview()
             make.bottom.equalToSuperview()
+        }
+
+        leftHeaderMenuOverlay.showsMenuAsPrimaryAction = true
+        leftHeaderMenuOverlay.menu = buildLocalLibraryMenu()
+        leftHeaderBg.addSubview(leftHeaderMenuOverlay)
+        leftHeaderMenuOverlay.snp.makeConstraints { make in
+            make.leading.equalTo(leftHeaderTitleStack)
+            make.trailing.equalTo(leftHeaderTitleStack)
+            make.top.bottom.equalTo(leftHeaderTitleStack)
         }
 
         rightToggle.setImage(UIImage(systemName: "circle", withConfiguration: symbolConfig), for: .normal)
@@ -441,13 +456,15 @@ final class HomeViewController: UIViewController {
         let isSelected = item.side == .local
             ? store.selection.localMonths.contains(item.month)
             : store.selection.remoteMonths.contains(item.month)
+        let selectionEnabled = item.side == .local || store.isRemoteSelectionAllowed
         cell.configure(
             monthTitle: summary.monthTitle, countText: summary.countAttributedText(color: HomeSeasonStyle.monthSecondaryTextColor(month: m)),
             sizeText: summary.sizeText,
             bgColor: HomeSeasonStyle.monthColor(month: m),
             titleColor: HomeSeasonStyle.monthTextColor(month: m),
             detailColor: HomeSeasonStyle.monthSecondaryTextColor(month: m),
-            isSelected: isSelected
+            isSelected: isSelected,
+            selectionEnabled: selectionEnabled
         )
     }
 
@@ -471,6 +488,8 @@ final class HomeViewController: UIViewController {
             let accentColor = self.leftHeaderLabel.textColor ?? .secondaryLabel
             supplementaryView.configure(section: section,
                                         leftState: leftState, rightState: rightState,
+                                        leftSelectionEnabled: true,
+                                        rightSelectionEnabled: self.store.isRemoteSelectionAllowed,
                                         selectedColor: accentColor, deselectedColor: UIColor.tertiaryLabel)
             supplementaryView.onLeftTap = { [weak self] in
                 guard self?.confirmSelectionReadiness() == true else { return }
@@ -478,6 +497,7 @@ final class HomeViewController: UIViewController {
             }
             supplementaryView.onRightTap = { [weak self] in
                 guard self?.confirmSelectionReadiness() == true else { return }
+                guard self?.confirmRemoteSelectionAllowed() == true else { return }
                 self?.store.toggleYear(sectionIndex: indexPath.section, side: .remote)
             }
         }
@@ -516,6 +536,7 @@ final class HomeViewController: UIViewController {
             case .connectionProgress:  self.updateRemoteOverlay()
             case .structural:          self.renderStructuralChange()
             }
+            self.updateSelectionInteraction()
         }
 
         store.onAlert = { [weak self] title, message in
@@ -550,6 +571,8 @@ final class HomeViewController: UIViewController {
         reconfigureMonths(allMonths)
         updateTopHeaderToggles()
         updateActionPanel()
+        // Picks up descriptor edits (e.g., album rename) when scope identity didn't change.
+        refreshLocalLibraryMenu()
     }
 
     private func renderExecutionChange(changedMonths: Set<LibraryMonthKey>) {
@@ -557,7 +580,6 @@ final class HomeViewController: UIViewController {
             reconfigureMonths(changedMonths.isEmpty ? exec.executionMonths : changedMonths)
             updateTopHeaderSummaries()
             updateActionPanelFromExecution(exec)
-            updateSelectionInteraction()
             maybeRequestRatingPrompt(for: exec)
         } else {
             didRequestReviewForCurrentExecution = false
@@ -582,11 +604,11 @@ final class HomeViewController: UIViewController {
     private func renderStructuralChange() {
         hasLoadedHeaderSummary = true
         applyFullSnapshot()
+        refreshLocalLibraryMenu()
         refreshDestinationMenus()
         updateTopHeaderToggles()
         updateTopHeaderSummaries()
         updateActionPanel()
-        updateSelectionInteraction()
         updateLocalOverlay()
         updateRemoteOverlay()
     }
@@ -629,6 +651,8 @@ final class HomeViewController: UIViewController {
                 let leftState = store.selection.selectionState(for: allMonths, side: .local)
                 let rightState = store.selection.selectionState(for: allMonths, side: .remote)
                 header.configure(section: ms, leftState: leftState, rightState: rightState,
+                                 leftSelectionEnabled: true,
+                                 rightSelectionEnabled: store.isRemoteSelectionAllowed,
                                  selectedColor: accentColor, deselectedColor: .tertiaryLabel)
             }
             for (rowIndex, row) in ms.rows.enumerated() {
@@ -674,6 +698,8 @@ final class HomeViewController: UIViewController {
                 let leftState = store.selection.selectionState(for: allMonths, side: .local)
                 let rightState = store.selection.selectionState(for: allMonths, side: .remote)
                 header.configure(section: ms, leftState: leftState, rightState: rightState,
+                                 leftSelectionEnabled: true,
+                                 rightSelectionEnabled: store.isRemoteSelectionAllowed,
                                  selectedColor: accentColor, deselectedColor: .tertiaryLabel)
             }
             for (rowIndex, row) in ms.rows.enumerated() where months.contains(row.month) {
@@ -717,7 +743,8 @@ final class HomeViewController: UIViewController {
         rightToggle.isHidden = !remoteReady
         if remoteReady {
             rightToggle.setImage(UIImage(systemName: iconName(for: store.selection.selectionState(for: allMonths, side: .remote)), withConfiguration: config), for: .normal)
-            rightToggle.tintColor = headerColor
+            rightToggle.tintColor = store.isRemoteSelectionAllowed ? headerColor : .tertiaryLabel
+            rightToggle.alpha = store.isRemoteSelectionAllowed ? 1.0 : 0.45
         }
     }
 
@@ -944,6 +971,29 @@ final class HomeViewController: UIViewController {
         present(container, animated: ConsideringUser.animated)
     }
 
+    private func openLocalAlbumPicker() {
+        guard store.executionState == nil else { return }
+        guard store.localPhotoAccessState.isAuthorized else {
+            localOverlayButtonTapped()
+            return
+        }
+
+        let viewController = LocalAlbumPickerViewController(
+            photoLibraryService: dependencies.photoLibraryService,
+            selectedAlbumIDs: store.localLibraryScope.selectedAlbumIdentifiers
+        ) { [weak self] albums in
+            self?.store.setLocalLibraryScope(.albums(albums))
+            self?.refreshLocalLibraryMenu()
+        }
+
+        let container = UINavigationController(rootViewController: viewController)
+        if let presentation = container.sheetPresentationController {
+            presentation.prefersGrabberVisible = true
+            presentation.detents = [.medium(), .large()]
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
     private func openExecutionLog() {
         guard store.executionState != nil else { return }
 
@@ -1036,10 +1086,12 @@ final class HomeViewController: UIViewController {
     }
 
     private func updateSelectionInteraction() {
-        let canAttemptSelection = store.executionState == nil
+        let canAttemptSelection = store.executionState == nil && !store.isReloadingScope
         collectionView.allowsSelection = canAttemptSelection
         leftToggle.isEnabled = canAttemptSelection && store.localPhotoAccessState.isAuthorized
         rightToggle.isEnabled = canAttemptSelection && store.connectionState.isConnected
+        leftHeaderMenuOverlay.isEnabled = store.executionState == nil
+        leftHeaderButton.isEnabled = store.executionState == nil
         rightHeaderMenuOverlay.isEnabled = store.executionState == nil
         rightHeaderButton.isEnabled = store.executionState == nil
     }
@@ -1152,6 +1204,43 @@ final class HomeViewController: UIViewController {
         }
     }
 
+    private func configureLeftHeaderButton() {
+        let headerTextColor = UIColor.materialOnContainer(light: .Material.Green._900, dark: .Material.Green._100)
+        leftHeaderLabel.text = Self.headerTitle(for: store.localLibraryScope)
+
+        var config = UIButton.Configuration.plain()
+        config.image = UIImage(systemName: "chevron.down", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11))
+        config.contentInsets = .init(top: 0, leading: 0, bottom: 0, trailing: 0)
+        config.baseForegroundColor = headerTextColor
+        leftHeaderButton.configuration = config
+        leftHeaderButton.showsMenuAsPrimaryAction = true
+        leftHeaderButton.setContentHuggingPriority(.required, for: .horizontal)
+        leftHeaderButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        refreshLocalLibraryMenu()
+    }
+
+    private func refreshLocalLibraryMenu() {
+        leftHeaderLabel.text = Self.headerTitle(for: store.localLibraryScope)
+        let menu = buildLocalLibraryMenu()
+        leftHeaderButton.menu = menu
+        leftHeaderMenuOverlay.menu = menu
+    }
+
+    private static func headerTitle(for scope: HomeLocalLibraryScope) -> String {
+        switch scope {
+        case .allPhotos:
+            return String(localized: "home.localSource.allPhotos")
+        case .albums(let albums):
+            if albums.count == 1, let title = albums.first?.title {
+                return title
+            }
+            return String.localizedStringWithFormat(
+                String(localized: "home.localSource.albumCount"),
+                albums.count
+            )
+        }
+    }
+
     private func configureRightHeaderButton() {
         let headerTextColor = UIColor.materialOnContainer(light: .Material.Green._900, dark: .Material.Green._100)
         rightHeaderLabel.text = String(localized: "home.header.remoteStorage")
@@ -1175,6 +1264,31 @@ final class HomeViewController: UIViewController {
         rightHeaderButton.menu = menu
         rightHeaderMenuOverlay.menu = menu
         remoteOverlayButton.menu = menu
+    }
+
+    // MARK: - Local Library Menu
+
+    private func buildLocalLibraryMenu() -> UIMenu {
+        let isSpecificAlbums = store.localLibraryScope.isSpecificAlbums
+        let allPhotosSymbol = traitCollection.userInterfaceIdiom == .pad ? "ipad" : "iphone"
+        let allPhotosAction = UIAction(
+            title: String(localized: "home.localSource.allPhotos"),
+            image: UIImage(systemName: allPhotosSymbol),
+            state: isSpecificAlbums ? .off : .on
+        ) { [weak self] _ in
+            self?.store.setLocalLibraryScope(.allPhotos)
+            self?.refreshLocalLibraryMenu()
+        }
+
+        let specificAlbumsAction = UIAction(
+            title: String(localized: "home.localSource.specificAlbums"),
+            image: UIImage(systemName: "photo.stack"),
+            state: isSpecificAlbums ? .on : .off
+        ) { [weak self] _ in
+            self?.openLocalAlbumPicker()
+        }
+
+        return UIMenu(children: [allPhotosAction, specificAlbumsAction])
     }
 
     // MARK: - Destination Menu
@@ -1361,6 +1475,7 @@ final class HomeViewController: UIViewController {
 
     @objc private func rightToggleTapped() {
         guard confirmSelectionReadiness() else { return }
+        guard confirmRemoteSelectionAllowed() else { return }
         store.toggleAll(side: .remote)
     }
 
@@ -1378,17 +1493,16 @@ final class HomeViewController: UIViewController {
     }
 
     private func executeTapped() {
-        let counts = store.selection.counts()
-        guard counts.backup > 0 || counts.download > 0 || counts.complement > 0 else { return }
-
-        var lines: [String] = []
-        if counts.backup > 0 { lines.append(String(format: String(localized: "home.confirm.backupMonths"), counts.backup)) }
-        if counts.download > 0 { lines.append(String(format: String(localized: "home.confirm.downloadMonths"), counts.download)) }
-        if counts.complement > 0 { lines.append(String(format: String(localized: "home.confirm.complementMonths"), counts.complement)) }
-
         let backup = store.selection.months(for: .backup)
         let download = store.selection.months(for: .download)
         let complement = store.selection.months(for: .complement)
+
+        guard !backup.isEmpty || !download.isEmpty || !complement.isEmpty else { return }
+
+        var lines: [String] = []
+        if !backup.isEmpty { lines.append(String(format: String(localized: "home.confirm.backupMonths"), backup.count)) }
+        if !download.isEmpty { lines.append(String(format: String(localized: "home.confirm.downloadMonths"), download.count)) }
+        if !complement.isEmpty { lines.append(String(format: String(localized: "home.confirm.complementMonths"), complement.count)) }
 
         let alert = UIAlertController(title: String(localized: "home.alert.confirmExecute"), message: lines.joined(separator: "\n"), preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
@@ -1436,6 +1550,17 @@ final class HomeViewController: UIViewController {
             message: messages.joined(separator: "\n")
         )
         return false
+    }
+
+    private func confirmRemoteSelectionAllowed() -> Bool {
+        guard store.isRemoteSelectionAllowed else {
+            showAlert(
+                title: String(localized: "home.alert.remoteSelectionUnavailable"),
+                message: String(localized: "home.alert.remoteSelectionUnavailableMessage")
+            )
+            return false
+        }
+        return true
     }
 
     private func confirmStop() {
@@ -1505,7 +1630,9 @@ extension HomeViewController: UICollectionViewDelegate {
         guard confirmSelectionReadiness() else { return }
         switch item.side {
         case .local:  store.toggleMonth(item.month, side: .local)
-        case .remote: store.toggleMonth(item.month, side: .remote)
+        case .remote:
+            guard confirmRemoteSelectionAllowed() else { return }
+            store.toggleMonth(item.month, side: .remote)
         }
     }
 }
