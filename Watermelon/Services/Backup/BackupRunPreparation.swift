@@ -18,6 +18,7 @@ struct BackupRunPreparationService: Sendable {
     private let storageClientFactory: StorageClientFactory
     private let hashIndexRepository: ContentHashIndexRepository
     private let remoteIndexService: RemoteIndexSyncService
+    private let formatCompatibilityService = RemoteFormatCompatibilityService()
 
     init(
         photoLibraryService: PhotoLibraryService,
@@ -54,6 +55,7 @@ struct BackupRunPreparationService: Sendable {
 
             do {
                 try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
+                try await formatCompatibilityService.verify(client: client, profile: profile)
                 var snapshotSeedLookup: MonthSeedLookup?
 
                 do {
@@ -177,6 +179,7 @@ struct BackupRunPreparationService: Sendable {
         try await client.connect()
         do {
             try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
+            try await formatCompatibilityService.verify(client: client, profile: profile)
             let digest = try await remoteIndexService.syncIndex(
                 client: client,
                 profile: profile,

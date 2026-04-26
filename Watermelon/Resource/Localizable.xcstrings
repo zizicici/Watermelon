@@ -15499,6 +15499,170 @@
         }
       }
     },
+    "compatibility.error.remoteFormatUnsupported" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Remote-Backup wurde mit einer neueren Version von %@ erstellt. Bitte aktualisiere im App Store, um fortzufahren."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This remote backup was created by a newer version of %@. Please update from the App Store to continue."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta copia de seguridad remota se creó con una versión más reciente de %@. Actualiza desde la App Store para continuar."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta copia de seguridad remota se creó con una versión más reciente de %@. Actualiza desde la App Store para continuar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette sauvegarde distante a été créée avec une version plus récente de %@. Veuillez mettre à jour depuis l’App Store pour continuer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このリモートバックアップは新しいバージョンの %@ で作成されました。続行するには App Store からアップデートしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 원격 백업은 더 새로운 버전의 %@(으)로 생성되었습니다. 계속하려면 App Store에서 업데이트하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este backup remoto foi criado com uma versão mais recente de %@. Atualize na App Store para continuar."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cópia de segurança remota foi criada com uma versão mais recente de %@. Atualize na App Store para continuar."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Цю віддалену резервну копію створено новішою версією %@. Оновіть в App Store, щоб продовжити."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此远端备份由更新版本的 %@ 创建。请前往 App Store 更新后再继续使用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此遠端備份由更新版本的 %@ 建立。請前往 App Store 更新後再繼續使用。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此遠端備份由更新版本的 %@ 建立。請前往 App Store 更新後再繼續使用。"
+          }
+        }
+      }
+    },
+    "compatibility.error.remoteFormatUnsupported.versioned" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Remote-Backup erfordert %1$@ %2$@ oder neuer. Bitte über den App Store aktualisieren."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This remote backup requires %1$@ %2$@ or later. Please update from the App Store."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta copia de seguridad remota requiere %1$@ %2$@ o posterior. Actualiza desde la App Store."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta copia de seguridad remota requiere %1$@ %2$@ o posterior. Actualiza desde la App Store."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette sauvegarde distante nécessite %1$@ %2$@ ou ultérieur. Veuillez mettre à jour depuis l’App Store."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このリモートバックアップには %1$@ %2$@ 以降が必要です。App Store からアップデートしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 원격 백업에는 %1$@ %2$@ 이상이 필요합니다. App Store에서 업데이트하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este backup remoto requer %1$@ %2$@ ou posterior. Atualize na App Store."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cópia de segurança remota requer %1$@ %2$@ ou posterior. Atualize na App Store."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ця віддалена резервна копія потребує %1$@ %2$@ або новішої. Оновіть в App Store."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此远端备份需要 %1$@ %2$@ 或更高版本。请前往 App Store 更新。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此遠端備份需要 %1$@ %2$@ 或更新版本。請前往 App Store 更新。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此遠端備份需要 %1$@ %2$@ 或更新版本。請前往 App Store 更新。"
+          }
+        }
+      }
+    },
     "controller.more.title" : {
       "localizations" : {
         "de" : {
