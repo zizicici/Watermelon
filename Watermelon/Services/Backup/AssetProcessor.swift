@@ -338,7 +338,9 @@ final class AssetProcessor: Sendable {
             return nil
         }
 
-        if context.monthStore.containsAssetFingerprint(cachedFingerprint) {
+        // Incomplete asset falls through to the full upload path so missing resources heal.
+        if context.monthStore.containsAssetFingerprint(cachedFingerprint),
+           !context.monthStore.isAssetIncomplete(cachedFingerprint) {
             let totalFileSizeBytes = Self.totalSizeBytes(of: context.selectedResources)
             let dbStart = CFAbsoluteTimeGetCurrent()
             try hashIndexRepository.upsertAssetFingerprint(

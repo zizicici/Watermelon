@@ -352,6 +352,12 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
+    func fileNames(for month: LibraryMonthKey) -> Set<String> {
+        lock.withLock {
+            Set((resourcesByMonth[month] ?? [:]).values.map(\.fileName))
+        }
+    }
+
     private func rebuildFullSnapshotLocked() -> RemoteLibrarySnapshot {
         let sortedMonths = allKnownMonthsLocked().sorted()
 

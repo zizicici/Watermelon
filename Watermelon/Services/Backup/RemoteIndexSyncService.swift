@@ -211,6 +211,46 @@ final class RemoteIndexSyncService: Sendable {
         return digest
     }
 
+    /// Backup workers don't need this — `MonthManifestStore.loadOrCreate` already reconciles inline.
+    func verifyMonth(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        month: LibraryMonthKey
+    ) async throws {
+        let expectedFileNames = snapshotCache.fileNames(for: month)
+        guard !expectedFileNames.isEmpty else { return }
+
+        let monthAbsolutePath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: String(format: "%04d/%02d", month.year, month.month)
+        )
+        let entries = try await client.list(path: monthAbsolutePath)
+        let remoteFileNames = Set(entries
+            .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
+            .map(\.name))
+
+        if expectedFileNames.subtracting(remoteFileNames).isEmpty { return }
+
+        guard let store = try await MonthManifestStore.loadManifestDirect(
+            client: client,
+            basePath: basePath,
+            year: month.year,
+            month: month.month
+        ) else { return }
+
+        let result = try await store.reconcileWithRemoteListing(remoteFileNames)
+        guard result.removedResourceCount > 0 || result.removedAssetCount > 0 else { return }
+
+        let snapshot = store.unsortedSnapshot()
+        _ = snapshotCache.replaceMonth(
+            month,
+            resources: snapshot.resources,
+            assets: snapshot.assets,
+            assetResourceLinks: snapshot.links
+        )
+        syncLog.info("[verify] \(month.text): removed \(result.removedResourceCount) resources, \(result.removedAssetCount) assets")
+    }
+
     func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
         snapshotCache.monthSummaries()
     }
@@ -229,6 +269,15 @@ final class RemoteIndexSyncService: Sendable {
 
     func upsertCachedAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]? = nil) {
         snapshotCache.upsertAsset(asset, links: links)
+    }
+
+    func replaceCachedMonth(
+        _ month: LibraryMonthKey,
+        resources: [RemoteManifestResource],
+        assets: [RemoteManifestAsset],
+        links: [RemoteAssetResourceLink]
+    ) {
+        _ = snapshotCache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links)
     }
 
     private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {

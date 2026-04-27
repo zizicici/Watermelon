@@ -670,6 +670,23 @@ final class HomeExecutionCoordinator {
             if Task.isCancelled { return .cancelled }
         }
 
+        do {
+            try await dependencies.backupCoordinator.verifyMonth(
+                profile: context.profile,
+                password: context.password,
+                month: month
+            )
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            appendWarningLog(String.localizedStringWithFormat(
+                String(localized: "manifest.log.reconcileFailed"),
+                month.displayText,
+                context.profile.userFacingStorageErrorMessage(error)
+            ))
+        }
+        if Task.isCancelled { return .cancelled }
+
         let remoteItems = await dataAccess.remoteOnlyItems(month)
         appendDebugLog(String(format: String(localized: "home.execution.log.pendingDownload"), month.displayText, remoteItems.count))
         guard let downloadHelper else { return .cancelled }
@@ -686,7 +703,20 @@ final class HomeExecutionCoordinator {
         phaseLabel: String
     ) -> BackupMonthFinalizationResult {
         switch result {
-        case .success:
+        case .success(_, let skippedIncompleteCount):
+            if skippedIncompleteCount > 0 {
+                // Mark month failed so finishExecution reports partial; skip the alert — informational, not a crash.
+                let reason = String.localizedStringWithFormat(
+                    String(localized: "restore.log.skippedIncomplete"),
+                    month.displayText,
+                    skippedIncompleteCount
+                )
+                session.failDownloadMonth(month, reason: reason)
+                appendWarningLog(reason)
+                refreshTerminalStatus(notifyState: false)
+                notifyStateChanged()
+                return .success
+            }
             session.completeDownloadMonth(month)
             appendInfoLog(String(format: String(localized: "home.execution.log.downloadDone"), phaseLabel, month.displayText))
             refreshTerminalStatus(notifyState: false)

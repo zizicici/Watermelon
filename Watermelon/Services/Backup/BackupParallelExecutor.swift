@@ -1,16 +1,22 @@
 import Foundation
 import Photos
+import os.log
+
+private let executorLog = Logger(subsystem: "com.zizicici.watermelon", category: "BackupParallel")
 
 struct BackupParallelExecutor: Sendable {
     private let hashIndexRepository: ContentHashIndexRepository
     private let assetProcessor: AssetProcessor
+    private let remoteIndexService: RemoteIndexSyncService
 
     init(
         hashIndexRepository: ContentHashIndexRepository,
-        assetProcessor: AssetProcessor
+        assetProcessor: AssetProcessor,
+        remoteIndexService: RemoteIndexSyncService
     ) {
         self.hashIndexRepository = hashIndexRepository
         self.assetProcessor = assetProcessor
+        self.remoteIndexService = remoteIndexService
     }
 
     func execute(
@@ -177,6 +183,15 @@ struct BackupParallelExecutor: Sendable {
                     )
                     throw error
                 }
+
+                // loadOrCreate may have cleaned manifest rows; sync to snapshotCache so consumers don't see stale state.
+                let loadedSnapshot = monthStore.unsortedSnapshot()
+                remoteIndexService.replaceCachedMonth(
+                    monthKey,
+                    resources: loadedSnapshot.resources,
+                    assets: loadedSnapshot.assets,
+                    links: loadedSnapshot.links
+                )
 
                 eventStream.emitLog(
                     String.localizedStringWithFormat(
@@ -531,6 +546,11 @@ struct BackupParallelExecutor: Sendable {
                 return false
             }
             if !monthStore.containsAssetFingerprint(cache.assetFingerprint) {
+                return false
+            }
+            // Force full processing so AssetProcessor heals incomplete assets.
+            if monthStore.isAssetIncomplete(cache.assetFingerprint) {
+                executorLog.info("[heal] month \(monthStore.year)-\(monthStore.month) has incomplete asset")
                 return false
             }
         }

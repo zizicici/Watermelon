@@ -104,9 +104,7 @@ extension MonthManifestStore {
         // here before flush can overwrite remote with a bad manifest.
         try store.reloadCache()
 
-        if prepared.requiresRemoteSync {
-            try await store.flushToRemote()
-        }
+        _ = try await store.reconcileWithRemoteListing(Set(remoteFilesByName.keys))
 
         return store
     }
@@ -148,6 +146,9 @@ extension MonthManifestStore {
         )
         try store.seedDatabase(seed)
         try store.reloadCache()
+
+        _ = try await store.reconcileWithRemoteListing(Set(remoteFilesByName.keys))
+
         return store
     }
 
@@ -200,6 +201,9 @@ extension MonthManifestStore {
             try await client.download(remotePath: absPath, localURL: localURL)
         } catch {
             try? FileManager.default.removeItem(at: localURL)
+            if error is CancellationError || Task.isCancelled {
+                throw CancellationError()
+            }
             return nil
         }
 

@@ -202,6 +202,26 @@ struct BackupRunPreparationService: Sendable {
         }
     }
 
+    func verifyMonth(
+        profile: ServerProfileRecord,
+        password: String,
+        month: LibraryMonthKey
+    ) async throws {
+        let client = try makeStorageClient(profile: profile, password: password)
+        try await client.connect()
+        do {
+            try await remoteIndexService.verifyMonth(
+                client: client,
+                basePath: profile.basePath,
+                month: month
+            )
+            await client.disconnectSafely()
+        } catch {
+            await client.disconnectSafely()
+            throw error
+        }
+    }
+
     private func ensurePhotoAuthorization() async throws {
         let status = photoLibraryService.authorizationStatus()
         if status != .authorized && status != .limited {

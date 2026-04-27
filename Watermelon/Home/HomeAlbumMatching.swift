@@ -10,6 +10,8 @@ struct RemoteAlbumItem {
     let representative: RemoteManifestResource
     let mediaKind: AlbumMediaKind
     let contentHashes: [Data]
+    let isIncomplete: Bool
+    let missingResourceCount: Int
 }
 
 enum HomeAlbumMatching {
@@ -62,10 +64,14 @@ enum HomeAlbumMatching {
             var contentHashes: [Data] = []
             contentHashes.reserveCapacity(sortedLinks.count)
             var seenHashes = Set<Data>()
+            var skippedCount = 0
 
             for link in sortedLinks {
                 let key = ResourceLookupKey(year: asset.year, month: asset.month, hash: link.resourceHash)
-                guard let resource = resourcesByMonthHash[key] else { continue }
+                guard let resource = resourcesByMonthHash[key] else {
+                    skippedCount += 1
+                    continue
+                }
 
                 if seenHashes.insert(link.resourceHash).inserted {
                     groupedResources.append(resource)
@@ -95,7 +101,9 @@ enum HomeAlbumMatching {
                     instances: instances,
                     representative: representative,
                     mediaKind: detectMediaKind(from: groupedResources),
-                    contentHashes: contentHashes
+                    contentHashes: contentHashes,
+                    isIncomplete: skippedCount > 0,
+                    missingResourceCount: skippedCount
                 )
             )
         }

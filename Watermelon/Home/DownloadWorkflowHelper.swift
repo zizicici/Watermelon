@@ -19,23 +19,29 @@ final class DownloadWorkflowHelper {
     }
 
     /// Downloads remote-only items via RestoreService and writes hash index per item.
-    /// Calls `onItemRestored` with the asset local identifier after each successful restore.
+    /// `isIncomplete` items are filtered out (would 404) and reported via `skippedIncompleteCount`.
     func downloadItems(
         _ remoteItems: [RemoteAlbumItem],
         context: Context,
         onItemRestored: @MainActor @escaping (String) async -> Void
     ) async -> DownloadMonthResult {
-        guard !remoteItems.isEmpty else { return .success }
+        let toRestore = remoteItems.filter { !$0.isIncomplete }
+        let skippedIncompleteCount = remoteItems.count - toRestore.count
+
+        guard !toRestore.isEmpty else {
+            return .success(restoredCount: 0, skippedIncompleteCount: skippedIncompleteCount)
+        }
+
         let hashIndexRepository = dependencies.hashIndexRepository
 
         do {
-            let descriptors = remoteItems.map { item in
+            let descriptors = toRestore.map { item in
                 RestoreService.RestoreItemDescriptor(
                     instances: item.instances,
                     identity: item.assetFingerprint
                 )
             }
-            _ = try await dependencies.restoreService.restoreItems(
+            let restored = try await dependencies.restoreService.restoreItems(
                 items: descriptors,
                 profile: context.profile,
                 password: context.password,
@@ -51,11 +57,15 @@ final class DownloadWorkflowHelper {
                     }
                 }
             )
-            return Task.isCancelled ? .cancelled : .success
+            if Task.isCancelled { return .cancelled }
+            return .success(
+                restoredCount: restored.count,
+                skippedIncompleteCount: skippedIncompleteCount
+            )
         } catch {
             if Task.isCancelled { return .cancelled }
             let message = context.profile.userFacingStorageErrorMessage(error)
-            print("[DownloadWorkflowHelper] download FAILED: itemCount=\(remoteItems.count), reason=\(message)")
+            print("[DownloadWorkflowHelper] download FAILED: itemCount=\(toRestore.count), reason=\(message)")
             return .failed(message)
         }
     }
@@ -79,7 +89,7 @@ final class DownloadWorkflowHelper {
 }
 
 enum DownloadMonthResult {
-    case success
+    case success(restoredCount: Int, skippedIncompleteCount: Int)
     case failed(String)
     case cancelled
 }

@@ -28,7 +28,8 @@ final class BackupCoordinator: Sendable {
         )
         parallelExecutor = BackupParallelExecutor(
             hashIndexRepository: hashIndexRepository,
-            assetProcessor: assetProcessor
+            assetProcessor: assetProcessor,
+            remoteIndexService: remoteIndexService
         )
     }
 
@@ -58,6 +59,18 @@ final class BackupCoordinator: Sendable {
             password: password,
             eventStream: eventStream,
             onSyncProgress: onSyncProgress
+        )
+    }
+
+    func verifyMonth(
+        profile: ServerProfileRecord,
+        password: String,
+        month: LibraryMonthKey
+    ) async throws {
+        try await preparationService.verifyMonth(
+            profile: profile,
+            password: password,
+            month: month
         )
     }
 
