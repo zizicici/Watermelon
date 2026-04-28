@@ -29,6 +29,14 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     }
     private var monthStatsCache: [LibraryMonthKey: MonthStats] = [:]
 
+    private struct ChangeKind {
+        let resources: Bool
+        let assets: Bool
+        let links: Bool
+        var any: Bool { resources || assets || links }
+        var anyAssetOrLink: Bool { assets || links }
+    }
+
     private func computeMonthStatsLocked(for month: LibraryMonthKey) -> MonthStats? {
         guard let monthAssets = assetsByMonth[month], !monthAssets.isEmpty else { return nil }
         let totalSize = monthAssets.values.reduce(Int64(0)) { $0 + $1.totalFileSizeBytes }
@@ -103,6 +111,114 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
+    /// `precondition` is intentional in Release: violating the ChangeKind/nextX nil-ness
+    /// contract would silently desync reverse index and derived caches from main maps.
+    @discardableResult
+    private func applyMonthFullReplaceLocked(
+        _ month: LibraryMonthKey,
+        nextResources: ResourceMap?,
+        nextAssets: AssetMap?,
+        nextLinks: LinkMap?,
+        changeKind: ChangeKind,
+        bumpRevision: Bool = true
+    ) -> Bool {
+        precondition(
+            (changeKind.resources == (nextResources != nil)) &&
+            (changeKind.assets == (nextAssets != nil)) &&
+            (changeKind.links == (nextLinks != nil)),
+            "ChangeKind must match nil-ness of next* params"
+        )
+        guard changeKind.any else { return false }
+
+        if changeKind.links, let nextLinks {
+            let prevLinks = linksByMonth[month] ?? [:]
+            let removedKeys = Set(prevLinks.keys).subtracting(nextLinks.keys)
+            let addedKeys = Set(nextLinks.keys).subtracting(prevLinks.keys)
+            for key in removedKeys {
+                guard let link = prevLinks[key] else { continue }
+                if var ks = linkKeysByAssetID[link.assetID] {
+                    ks.remove(key)
+                    linkKeysByAssetID[link.assetID] = ks.isEmpty ? nil : ks
+                }
+            }
+            for key in addedKeys {
+                guard let link = nextLinks[key] else { continue }
+                linkKeysByAssetID[link.assetID, default: []].insert(key)
+            }
+        }
+
+        if changeKind.resources, let nextResources {
+            resourcesByMonth[month] = nextResources.isEmpty ? nil : nextResources
+        }
+        if changeKind.assets, let nextAssets {
+            assetsByMonth[month] = nextAssets.isEmpty ? nil : nextAssets
+        }
+        if changeKind.links, let nextLinks {
+            linksByMonth[month] = nextLinks.isEmpty ? nil : nextLinks
+        }
+
+        recomputeDerivedForMonthLocked(month, changeKind: changeKind)
+
+        if bumpRevision {
+            bumpRevisionLocked([month])
+        }
+        return true
+    }
+
+    /// A key may appear in BOTH `removedLinkKeys` and `addedLinks` (in-place value update);
+    /// remove-then-add yields the correct net state because `link.assetID` derives from
+    /// month + fingerprint, so both ops target the same `linkKeysByAssetID` entry.
+    @discardableResult
+    private func applyMonthLinkDeltaLocked(
+        _ month: LibraryMonthKey,
+        removedLinkKeys: Set<LinkKey>,
+        addedLinks: LinkMap,
+        assetUpsert: RemoteManifestAsset?,
+        bumpRevision: Bool = true
+    ) -> Bool {
+        let assetsChanged = assetUpsert != nil
+        let linksChanged = !removedLinkKeys.isEmpty || !addedLinks.isEmpty
+        if !assetsChanged && !linksChanged { return false }
+
+        if linksChanged {
+            for key in removedLinkKeys {
+                if let link = linksByMonth[month]?[key] {
+                    if var ks = linkKeysByAssetID[link.assetID] {
+                        ks.remove(key)
+                        linkKeysByAssetID[link.assetID] = ks.isEmpty ? nil : ks
+                    }
+                }
+                linksByMonth[month]?.removeValue(forKey: key)
+            }
+            for (key, link) in addedLinks {
+                linksByMonth[month, default: [:]][key] = link
+                linkKeysByAssetID[link.assetID, default: []].insert(key)
+            }
+            if linksByMonth[month]?.isEmpty == true {
+                linksByMonth[month] = nil
+            }
+        }
+
+        if let assetUpsert {
+            assetsByMonth[month, default: [:]][assetUpsert.id] = assetUpsert
+        }
+
+        let kind = ChangeKind(resources: false, assets: assetsChanged, links: linksChanged)
+        recomputeDerivedForMonthLocked(month, changeKind: kind)
+        if bumpRevision {
+            bumpRevisionLocked([month])
+        }
+        return true
+    }
+
+    /// monthStatsCache derives totalSize from assets and photo/video classification from
+    /// link roles, so it depends on both. Resource-only changes don't affect it.
+    private func recomputeDerivedForMonthLocked(_ month: LibraryMonthKey, changeKind: ChangeKind) {
+        if changeKind.anyAssetOrLink {
+            monthStatsCache[month] = computeMonthStatsLocked(for: month)
+        }
+    }
+
     @discardableResult
     func replaceMonth(
         _ month: LibraryMonthKey,
@@ -128,45 +244,38 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             let previousResources = resourcesByMonth[month] ?? [:]
             let previousAssets = assetsByMonth[month] ?? [:]
             let previousLinks = linksByMonth[month] ?? [:]
-
-            if previousResources == nextResources,
-               previousAssets == nextAssets,
-               previousLinks == nextLinks {
-                return false
-            }
-
-            detachLinkKeysLocked(previousLinks)
-
-            resourcesByMonth[month] = nextResources.isEmpty ? nil : nextResources
-            assetsByMonth[month] = nextAssets.isEmpty ? nil : nextAssets
-            linksByMonth[month] = nextLinks.isEmpty ? nil : nextLinks
-
-            monthStatsCache[month] = computeMonthStatsLocked(for: month)
-
-            attachLinkKeysLocked(nextLinks)
-
-            bumpRevisionLocked([month])
-            return true
+            let resourcesChanged = previousResources != nextResources
+            let assetsChanged = previousAssets != nextAssets
+            let linksChanged = previousLinks != nextLinks
+            return applyMonthFullReplaceLocked(
+                month,
+                nextResources: resourcesChanged ? nextResources : nil,
+                nextAssets: assetsChanged ? nextAssets : nil,
+                nextLinks: linksChanged ? nextLinks : nil,
+                changeKind: ChangeKind(
+                    resources: resourcesChanged,
+                    assets: assetsChanged,
+                    links: linksChanged
+                )
+            )
         }
     }
 
     @discardableResult
     func removeMonth(_ month: LibraryMonthKey) -> Bool {
         lock.withLock {
-            let previousResources = resourcesByMonth.removeValue(forKey: month)
-            let previousAssets = assetsByMonth.removeValue(forKey: month)
-            let previousLinks = linksByMonth.removeValue(forKey: month)
-
-            guard previousResources != nil || previousAssets != nil || previousLinks != nil else {
-                return false
-            }
-
-            if let previousLinks {
-                detachLinkKeysLocked(previousLinks)
-            }
-            monthStatsCache[month] = nil
-            bumpRevisionLocked([month])
-            return true
+            guard resourcesByMonth[month] != nil
+                || assetsByMonth[month] != nil
+                || linksByMonth[month] != nil else { return false }
+            // Pass all three fields to guarantee full-state cleanup including derived caches,
+            // matching the original unconditional `monthStatsCache[month] = nil`.
+            return applyMonthFullReplaceLocked(
+                month,
+                nextResources: [:],
+                nextAssets: [:],
+                nextLinks: [:],
+                changeKind: ChangeKind(resources: true, assets: true, links: true)
+            )
         }
     }
 
@@ -175,25 +284,30 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             let month = LibraryMonthKey(year: item.year, month: item.month)
             var monthResources = resourcesByMonth[month] ?? [:]
             guard monthResources[item.id] != item else { return }
-
             monthResources[item.id] = item
-            resourcesByMonth[month] = monthResources
-            bumpRevisionLocked([month])
+            applyMonthFullReplaceLocked(
+                month,
+                nextResources: monthResources,
+                nextAssets: nil,
+                nextLinks: nil,
+                changeKind: ChangeKind(resources: true, assets: false, links: false)
+            )
         }
     }
 
     func upsertAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]? = nil) {
         lock.withLock {
-            let month = LibraryMonthKey(year: asset.year, month: asset.month)
-            var hasChanged = false
-            var changedMonths: Set<LibraryMonthKey> = [month]
+            let assetMonth = LibraryMonthKey(year: asset.year, month: asset.month)
+            var changedMonths: Set<LibraryMonthKey> = []
 
-            var monthAssets = assetsByMonth[month] ?? [:]
-            if monthAssets[asset.id] != asset {
-                monthAssets[asset.id] = asset
-                assetsByMonth[month] = monthAssets
-                hasChanged = true
+            let prevAsset = assetsByMonth[assetMonth]?[asset.id]
+            let assetChanged = (prevAsset != asset)
+            if assetChanged {
+                changedMonths.insert(assetMonth)
             }
+
+            var perMonthRemoved: [LibraryMonthKey: Set<LinkKey>] = [:]
+            var perMonthAdded: [LibraryMonthKey: LinkMap] = [:]
 
             if let links {
                 let assetID = asset.id
@@ -220,39 +334,42 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
                 }
 
                 if oldLinksByKey != newLinksByKey {
-                    changedMonths.formUnion(oldKeys.map(\.month))
-                    changedMonths.formUnion(newLinksByKey.keys.map(\.month))
-
-                    for oldKey in oldKeys {
-                        if var monthLinks = linksByMonth[oldKey.month] {
-                            monthLinks[oldKey] = nil
-                            if monthLinks.isEmpty {
-                                linksByMonth[oldKey.month] = nil
-                            } else {
-                                linksByMonth[oldKey.month] = monthLinks
-                            }
+                    for k in oldKeys {
+                        perMonthRemoved[k.month, default: []].insert(k)
+                    }
+                    for (k, v) in newLinksByKey {
+                        perMonthAdded[k.month, default: [:]][k] = v
+                    }
+                    let touchedMonths = Set(perMonthRemoved.keys).union(perMonthAdded.keys)
+                    for m in touchedMonths {
+                        var removed = perMonthRemoved[m] ?? []
+                        var added = perMonthAdded[m] ?? [:]
+                        let intersect = removed.intersection(added.keys)
+                        for k in intersect where added[k] == linksByMonth[m]?[k] {
+                            removed.remove(k)
+                            added.removeValue(forKey: k)
+                        }
+                        perMonthRemoved[m] = removed
+                        perMonthAdded[m] = added
+                        if !removed.isEmpty || !added.isEmpty {
+                            changedMonths.insert(m)
                         }
                     }
-
-                    if newLinksByKey.isEmpty {
-                        linkKeysByAssetID[assetID] = nil
-                    } else {
-                        linkKeysByAssetID[assetID] = Set(newLinksByKey.keys)
-                        for (newKey, value) in newLinksByKey {
-                            var monthLinks = linksByMonth[newKey.month] ?? [:]
-                            monthLinks[newKey] = value
-                            linksByMonth[newKey.month] = monthLinks
-                        }
-                    }
-
-                    hasChanged = true
                 }
             }
 
-            if hasChanged {
-                for changedMonth in changedMonths {
-                    monthStatsCache[changedMonth] = computeMonthStatsLocked(for: changedMonth)
-                }
+            for m in changedMonths {
+                let assetUpsertForMonth = (m == assetMonth && assetChanged) ? asset : nil
+                applyMonthLinkDeltaLocked(
+                    m,
+                    removedLinkKeys: perMonthRemoved[m] ?? [],
+                    addedLinks: perMonthAdded[m] ?? [:],
+                    assetUpsert: assetUpsertForMonth,
+                    bumpRevision: false
+                )
+            }
+
+            if !changedMonths.isEmpty {
                 bumpRevisionLocked(changedMonths)
             }
         }
@@ -424,21 +541,4 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     }
 
 
-    private func detachLinkKeysLocked(_ links: LinkMap) {
-        for (key, link) in links {
-            guard var keys = linkKeysByAssetID[link.assetID] else { continue }
-            keys.remove(key)
-            if keys.isEmpty {
-                linkKeysByAssetID[link.assetID] = nil
-            } else {
-                linkKeysByAssetID[link.assetID] = keys
-            }
-        }
-    }
-
-    private func attachLinkKeysLocked(_ links: LinkMap) {
-        for (key, link) in links {
-            linkKeysByAssetID[link.assetID, default: []].insert(key)
-        }
-    }
 }

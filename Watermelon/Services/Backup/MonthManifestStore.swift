@@ -239,8 +239,9 @@ final class MonthManifestStore {
     func isAssetIncomplete(_ fingerprint: Data) -> Bool {
         guard assetsByFingerprint[fingerprint] != nil else { return false }
         let links = assetLinksByFingerprint[fingerprint] ?? []
-        if links.isEmpty { return true }
-        return links.contains { itemsByHash[$0.resourceHash] == nil }
+        return Self.isAssetIncomplete(links: links) { hash in
+            itemsByHash[hash] != nil
+        }
     }
 
     struct CleanupMissingResourcesResult {
@@ -463,5 +464,17 @@ final class MonthManifestStore {
                 try? await client.delete(path: backupPath)
             }
         }
+    }
+}
+
+extension MonthManifestStore {
+    /// Phantom (no links) counts as incomplete. Closure-based availability check lets
+    /// callers reuse their own data structures without forcing a Set construction.
+    static func isAssetIncomplete(
+        links: [RemoteAssetResourceLink],
+        isResourceAvailable: (Data) -> Bool
+    ) -> Bool {
+        if links.isEmpty { return true }
+        return links.contains { !isResourceAvailable($0.resourceHash) }
     }
 }
