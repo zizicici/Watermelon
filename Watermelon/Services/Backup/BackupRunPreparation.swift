@@ -175,31 +175,39 @@ struct BackupRunPreparationService: Sendable {
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteIndexSyncDigest {
-        let client = try makeStorageClient(profile: profile, password: password)
-        try await client.connect()
-        do {
-            try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-            try await formatCompatibilityService.verify(client: client, profile: profile)
-            let digest = try await remoteIndexService.syncIndex(
+        try await withConnectedClient(profile: profile, password: password) { client in
+            try await self.reloadRemoteIndex(
                 client: client,
                 profile: profile,
                 eventStream: eventStream,
                 onSyncProgress: onSyncProgress
             )
-            eventStream?.emitLog(
-                String.localizedStringWithFormat(
-                    String(localized: "backup.log.remoteIndexReloaded"),
-                    digest.resourceCount,
-                    digest.assetCount
-                ),
-                level: .info
-            )
-            await client.disconnectSafely()
-            return digest
-        } catch {
-            await client.disconnectSafely()
-            throw error
         }
+    }
+
+    func reloadRemoteIndex(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        eventStream: BackupEventStream? = nil,
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
+    ) async throws -> RemoteIndexSyncDigest {
+        try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
+        try await formatCompatibilityService.verify(client: client, profile: profile)
+        let digest = try await remoteIndexService.syncIndex(
+            client: client,
+            profile: profile,
+            eventStream: eventStream,
+            onSyncProgress: onSyncProgress
+        )
+        eventStream?.emitLog(
+            String.localizedStringWithFormat(
+                String(localized: "backup.log.remoteIndexReloaded"),
+                digest.resourceCount,
+                digest.assetCount
+            ),
+            level: .info
+        )
+        return digest
     }
 
     func verifyMonth(
@@ -207,15 +215,34 @@ struct BackupRunPreparationService: Sendable {
         password: String,
         month: LibraryMonthKey
     ) async throws {
+        try await withConnectedClient(profile: profile, password: password) { client in
+            try await self.verifyMonth(client: client, basePath: profile.basePath, month: month)
+        }
+    }
+
+    func verifyMonth(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        month: LibraryMonthKey
+    ) async throws {
+        try await remoteIndexService.verifyMonth(
+            client: client,
+            basePath: basePath,
+            month: month
+        )
+    }
+
+    func withConnectedClient<T>(
+        profile: ServerProfileRecord,
+        password: String,
+        body: (any RemoteStorageClientProtocol) async throws -> T
+    ) async throws -> T {
         let client = try makeStorageClient(profile: profile, password: password)
         try await client.connect()
         do {
-            try await remoteIndexService.verifyMonth(
-                client: client,
-                basePath: profile.basePath,
-                month: month
-            )
+            let result = try await body(client)
             await client.disconnectSafely()
+            return result
         } catch {
             await client.disconnectSafely()
             throw error

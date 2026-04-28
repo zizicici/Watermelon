@@ -135,6 +135,7 @@ final class RemoteIndexSyncService: Sendable {
         onSyncProgress?(RemoteSyncProgress(current: 0, total: totalMonthsToProcess))
 
         if changedMonths.isEmpty, removedMonths.isEmpty {
+            snapshotCache.markSynced(Date())
             let digest = snapshotCache.counts()
             let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
             syncLog.info("[SyncTiming] No changes. Total: \(Self.ms(totalElapsed))s")
@@ -204,6 +205,7 @@ final class RemoteIndexSyncService: Sendable {
         // with concurrent remote writers and silently drop their updates.
         await state.updateRemoteManifestDigests(remoteDigests)
 
+        snapshotCache.markSynced(Date())
         let digest = snapshotCache.counts()
         let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
         syncLog.info("[SyncTiming] Sync complete. Total: \(Self.ms(totalElapsed))s, changed: \(appliedChangedMonths), removed: \(appliedRemovedMonths)")
@@ -211,36 +213,65 @@ final class RemoteIndexSyncService: Sendable {
         return digest
     }
 
-    /// Backup workers don't need this — `MonthManifestStore.loadOrCreate` already reconciles inline.
+    /// Backup workers reconcile inline via `MonthManifestStore.loadOrCreate`.
     func verifyMonth(
         client: RemoteStorageClientProtocol,
         basePath: String,
         month: LibraryMonthKey
     ) async throws {
-        let expectedFileNames = snapshotCache.fileNames(for: month)
-        guard !expectedFileNames.isEmpty else { return }
-
-        let monthAbsolutePath = RemotePathBuilder.absolutePath(
+        let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
+        let manifestPath = RemotePathBuilder.absolutePath(
             basePath: basePath,
-            remoteRelativePath: String(format: "%04d/%02d", month.year, month.month)
+            remoteRelativePath: monthRelativePath + "/" + MonthManifestStore.manifestFileName
         )
-        let entries = try await client.list(path: monthAbsolutePath)
-        let remoteFileNames = Set(entries
-            .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
-            .map(\.name))
-
-        if expectedFileNames.subtracting(remoteFileNames).isEmpty { return }
+        // Pre-check distinguishes "manifest gone" (drop stale cache entry) from "download failed" (error); `loadManifestDirect` collapses both into nil.
+        guard let metadata = try await client.metadata(path: manifestPath),
+              !metadata.isDirectory else {
+            _ = snapshotCache.removeMonth(month)
+            return
+        }
 
         guard let store = try await MonthManifestStore.loadManifestDirect(
             client: client,
             basePath: basePath,
             year: month.year,
-            month: month.month
-        ) else { return }
+            month: month.month,
+            manifestAbsolutePath: manifestPath
+        ) else {
+            throw NSError(
+                domain: "RemoteIndexSyncService",
+                code: -1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                        String(localized: "backup.manifest.error.downloadExistingManifest"),
+                        monthRelativePath
+                    )
+                ]
+            )
+        }
 
-        let result = try await store.reconcileWithRemoteListing(remoteFileNames)
-        guard result.removedResourceCount > 0 || result.removedAssetCount > 0 else { return }
+        let internalResult = try store.reconcileMonth()
 
+        let monthAbsolutePath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: monthRelativePath
+        )
+        let entries = try await client.list(path: monthAbsolutePath)
+        let remoteFileNames = Set(entries
+            .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
+            .map(\.name))
+        let listingMissing = store.existingFileNames().subtracting(remoteFileNames)
+        let listingResult = try store.reconcileMonth(missingFileNames: listingMissing)
+
+        let touched = internalResult.removedResourceCount + internalResult.removedAssetCount
+            + internalResult.removedOrphanLinkCount
+            + listingResult.removedResourceCount + listingResult.removedAssetCount
+            + listingResult.removedOrphanLinkCount
+        guard touched > 0 else { return }
+
+        if store.dirty {
+            try await store.flushToRemote()
+        }
         let snapshot = store.unsortedSnapshot()
         _ = snapshotCache.replaceMonth(
             month,
@@ -248,11 +279,19 @@ final class RemoteIndexSyncService: Sendable {
             assets: snapshot.assets,
             assetResourceLinks: snapshot.links
         )
-        syncLog.info("[verify] \(month.text): removed \(result.removedResourceCount) resources, \(result.removedAssetCount) assets")
+        syncLog.info("[verify] \(month.text): internal=\(internalResult.removedAssetCount)+\(internalResult.removedOrphanLinkCount)L, listing=\(listingResult.removedAssetCount)+\(listingResult.removedOrphanLinkCount)L")
     }
 
     func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
         snapshotCache.monthSummaries()
+    }
+
+    func healthDigest() -> RemoteHealthDigest {
+        snapshotCache.healthDigest()
+    }
+
+    func allKnownMonths() -> Set<LibraryMonthKey> {
+        snapshotCache.allKnownMonths()
     }
 
     func remoteMonthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {

@@ -4,13 +4,19 @@ import UIKit
 final class ManageStorageProfilesViewController: UIViewController {
     private let dependencies: DependencyContainer
     private let onProfilesChanged: () -> Void
+    private let onConnectRequested: ((ServerProfileRecord) -> Void)?
 
     private var profiles: [ServerProfileRecord] = []
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
 
-    init(dependencies: DependencyContainer, onProfilesChanged: @escaping () -> Void) {
+    init(
+        dependencies: DependencyContainer,
+        onProfilesChanged: @escaping () -> Void,
+        onConnectRequested: ((ServerProfileRecord) -> Void)? = nil
+    ) {
         self.dependencies = dependencies
         self.onProfilesChanged = onProfilesChanged
+        self.onConnectRequested = onConnectRequested
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -76,7 +82,8 @@ final class ManageStorageProfilesViewController: UIViewController {
         let detail = StorageProfileDetailViewController(
             dependencies: dependencies,
             profile: profile,
-            onProfilesChanged: onProfilesChanged
+            onProfilesChanged: onProfilesChanged,
+            onConnectRequested: onConnectRequested
         )
         navigationController?.pushViewController(detail, animated: true)
     }
@@ -85,6 +92,18 @@ final class ManageStorageProfilesViewController: UIViewController {
         guard index >= 0, index < profiles.count else { return }
         let profile = profiles[index]
         guard let id = profile.id else { return }
+
+        // Verify task captures profile/password by value; deleting mid-verify lets it write to a freed id.
+        let isActiveProfile = dependencies.appSession.activeProfile?.id == id
+        let isBusy = dependencies.remoteMaintenanceController.isVerifying(profileID: id)
+            || (isActiveProfile && dependencies.appRuntimeFlags.isExecuting)
+        if isBusy {
+            presentAlert(
+                title: String(localized: "common.error"),
+                message: String(localized: "home.alert.maintenanceInProgress")
+            )
+            return
+        }
 
         do {
             try dependencies.databaseManager.deleteServerProfile(id: id)

@@ -14,6 +14,7 @@ struct HomeMenuFactory {
         var openLocalAlbumPicker: () -> Void
         var openNewStorageFlow: (NewStorageDestination) -> Void
         var openManageProfiles: () -> Void
+        var openCurrentProfileSettings: () -> Void
         var scrollToMonth: (LibraryMonthKey) -> Void
     }
 
@@ -60,9 +61,12 @@ struct HomeMenuFactory {
 
     func buildDestination() -> UIMenu {
         let disconnected = !store.connectionState.isConnected
+        let busyAttributes: UIMenuElement.Attributes =
+            (store.executionState != nil || store.isRemoteMaintenanceActive) ? .disabled : []
 
         let disconnectAction = UIAction(
             title: String(localized: "home.menu.notConnected"),
+            attributes: busyAttributes,
             state: disconnected ? .on : .off
         ) { [store] _ in
             store.disconnect()
@@ -74,6 +78,7 @@ struct HomeMenuFactory {
             let action = UIAction(
                 title: profile.name,
                 subtitle: profile.storageProfile.displaySubtitle,
+                attributes: busyAttributes,
                 state: isActive ? .on : .off
             ) { [store] _ in
                 store.connectProfile(profile)
@@ -112,8 +117,23 @@ struct HomeMenuFactory {
         ) { [hooks] _ in
             hooks.openManageProfiles()
         }
+
+        var topItems: [UIMenuElement] = [addStorageMenu, manageAction]
+        // `activeProfile` is also non-nil mid-connect; the detail page reads
+        // `appSession.activeProfile`, which is only set after a successful reload.
+        if store.connectionState.isConnected, let active = store.connectionState.activeProfile {
+            let currentProfileAction = UIAction(
+                title: String(localized: "home.menu.currentProfileSettings"),
+                subtitle: active.name,
+                image: UIImage(systemName: "slider.horizontal.3"),
+                attributes: busyAttributes
+            ) { [hooks] _ in
+                hooks.openCurrentProfileSettings()
+            }
+            topItems.append(currentProfileAction)
+        }
         let disconnectSection = UIMenu(title: "", options: .displayInline, children: [disconnectAction])
-        return UIMenu(children: [addStorageMenu, manageAction, profileSection, disconnectSection])
+        return UIMenu(children: topItems + [profileSection, disconnectSection])
     }
 
     func buildCategory(for intent: MonthIntent) -> UIMenu {

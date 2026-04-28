@@ -74,8 +74,38 @@ final class BackupCoordinator: Sendable {
         )
     }
 
+    func verifyAllMonths(
+        profile: ServerProfileRecord,
+        password: String,
+        onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
+    ) async throws {
+        try await preparationService.withConnectedClient(profile: profile, password: password) { client in
+            _ = try await self.preparationService.reloadRemoteIndex(client: client, profile: profile)
+
+            // `monthSummaries()` is asset-keyed and would skip resource-only residue.
+            let uniqueMonths = Array(self.remoteIndexService.allKnownMonths()).sorted()
+            let total = uniqueMonths.count
+            await MainActor.run { onProgress(RemoteSyncProgress(current: 0, total: total)) }
+
+            for (index, month) in uniqueMonths.enumerated() {
+                try Task.checkCancellation()
+                try await self.preparationService.verifyMonth(
+                    client: client,
+                    basePath: profile.basePath,
+                    month: month
+                )
+                let current = index + 1
+                await MainActor.run { onProgress(RemoteSyncProgress(current: current, total: total)) }
+            }
+        }
+    }
+
     func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
         remoteIndexService.remoteMonthSummaries()
+    }
+
+    func healthDigest() -> RemoteHealthDigest {
+        remoteIndexService.healthDigest()
     }
 
     func remoteMonthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {

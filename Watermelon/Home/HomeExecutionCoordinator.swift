@@ -133,6 +133,7 @@ final class HomeExecutionCoordinator {
         }
         backupBridge = BackupSessionAsyncBridge(backupSessionController: controller)
         downloadHelper = DownloadWorkflowHelper(dependencies: dependencies)
+        dependencies.appRuntimeFlags.setExecuting(true)
         notifyStateChanged()
         startExecution()
     }
@@ -154,6 +155,8 @@ final class HomeExecutionCoordinator {
         setStatusText(String(localized: "home.execution.notStarted"), notifyState: false)
         logEntries.removeAll(keepingCapacity: true)
         finalizeSessionLogWriter()
+        // Must precede `notifyStateChanged` — guards reading `isExecuting` need the cleared value.
+        dependencies.appRuntimeFlags.setExecuting(false)
         notifyLogObservers()
         notifyStateChanged()
     }

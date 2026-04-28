@@ -237,16 +237,19 @@ final class MonthManifestStore {
 
     /// Phantom asset (assets row with no asset_resources rows) counts as incomplete.
     func isAssetIncomplete(_ fingerprint: Data) -> Bool {
-        guard assetsByFingerprint[fingerprint] != nil else { return false }
+        guard let asset = assetsByFingerprint[fingerprint] else { return false }
         let links = assetLinksByFingerprint[fingerprint] ?? []
-        return Self.isAssetIncomplete(links: links) { hash in
-            itemsByHash[hash] != nil
-        }
+        return Self.isAssetIncomplete(
+            links: links,
+            isResourceAvailable: { itemsByHash[$0] != nil },
+            assetFingerprint: asset.assetFingerprint
+        )
     }
 
     struct CleanupMissingResourcesResult {
         let removedResourceCount: Int
         let removedAssetCount: Int
+        let removedOrphanLinkCount: Int
     }
 
     /// Also integrally deletes any asset left fully-orphan or metadata-only (role 7) after the
@@ -275,17 +278,83 @@ final class MonthManifestStore {
             }
         }
 
-        guard !actualMissing.isEmpty || !assetsToRemove.isEmpty else {
-            return CleanupMissingResourcesResult(removedResourceCount: 0, removedAssetCount: 0)
+        return try applyDeletions(assetsToRemove: assetsToRemove, missingHashes: actualMissing)
+    }
+
+    func reconcileWithRemoteListing(_ remoteFileNames: Set<String>) async throws -> CleanupMissingResourcesResult {
+        let missing = itemsByFileName.values
+            .filter { !remoteFileNames.contains($0.fileName) }
+            .map(\.contentHash)
+        let result = try cleanupMissingResources(missingHashes: Set(missing))
+        if dirty {
+            try await flushToRemote()
+        }
+        return result
+    }
+
+    /// Strict counterpart to `cleanupMissingResources`: also deletes assets whose
+    /// fingerprint no longer matches their link set, with no metadata-only allowance.
+    /// Backup-time inline reconcile must keep using the lenient form.
+    func reconcileMonth(
+        missingFileNames: Set<String> = [],
+        missingHashes: Set<Data> = []
+    ) throws -> CleanupMissingResourcesResult {
+        var allMissingHashes = missingHashes
+        for name in missingFileNames {
+            if let res = itemsByFileName[name] {
+                allMissingHashes.insert(res.contentHash)
+            }
+        }
+        let actualMissing = allMissingHashes.intersection(itemsByHash.keys)
+        let availableHashes = Set(itemsByHash.keys).subtracting(actualMissing)
+
+        var assetsToRemove: Set<Data> = []
+        for (fingerprint, asset) in assetsByFingerprint {
+            let links = assetLinksByFingerprint[fingerprint] ?? []
+            if Self.isAssetIncomplete(
+                links: links,
+                isResourceAvailable: { availableHashes.contains($0) },
+                assetFingerprint: asset.assetFingerprint
+            ) {
+                assetsToRemove.insert(fingerprint)
+            }
+        }
+
+        let orphanLinkFingerprints = Set(assetLinksByFingerprint.keys)
+            .subtracting(assetsByFingerprint.keys)
+
+        return try applyDeletions(
+            assetsToRemove: assetsToRemove,
+            orphanLinkFingerprints: orphanLinkFingerprints,
+            missingHashes: actualMissing
+        )
+    }
+
+    private func applyDeletions(
+        assetsToRemove: Set<Data>,
+        orphanLinkFingerprints: Set<Data> = [],
+        missingHashes actualMissing: Set<Data>
+    ) throws -> CleanupMissingResourcesResult {
+        let linkFingerprintsToDelete = assetsToRemove.union(orphanLinkFingerprints)
+        guard !actualMissing.isEmpty || !linkFingerprintsToDelete.isEmpty else {
+            return CleanupMissingResourcesResult(
+                removedResourceCount: 0,
+                removedAssetCount: 0,
+                removedOrphanLinkCount: 0
+            )
         }
 
         try dbQueue.write { db in
-            if !assetsToRemove.isEmpty {
-                try Self.forEachDataChunk(assetsToRemove) { chunk, placeholders in
+            if !linkFingerprintsToDelete.isEmpty {
+                try Self.forEachDataChunk(linkFingerprintsToDelete) { chunk, placeholders in
                     try db.execute(
                         sql: "DELETE FROM asset_resources WHERE assetFingerprint IN (\(placeholders))",
                         arguments: StatementArguments(chunk)
                     )
+                }
+            }
+            if !assetsToRemove.isEmpty {
+                try Self.forEachDataChunk(assetsToRemove) { chunk, placeholders in
                     try db.execute(
                         sql: "DELETE FROM assets WHERE assetFingerprint IN (\(placeholders))",
                         arguments: StatementArguments(chunk)
@@ -306,6 +375,9 @@ final class MonthManifestStore {
             assetsByFingerprint.removeValue(forKey: fingerprint)
             assetLinksByFingerprint.removeValue(forKey: fingerprint)
         }
+        for fingerprint in orphanLinkFingerprints {
+            assetLinksByFingerprint.removeValue(forKey: fingerprint)
+        }
         for hash in actualMissing {
             guard let fileName = itemsByHash.removeValue(forKey: hash) else { continue }
             itemsByFileName.removeValue(forKey: fileName)
@@ -317,19 +389,9 @@ final class MonthManifestStore {
 
         return CleanupMissingResourcesResult(
             removedResourceCount: actualMissing.count,
-            removedAssetCount: assetsToRemove.count
+            removedAssetCount: assetsToRemove.count,
+            removedOrphanLinkCount: orphanLinkFingerprints.count
         )
-    }
-
-    func reconcileWithRemoteListing(_ remoteFileNames: Set<String>) async throws -> CleanupMissingResourcesResult {
-        let missing = itemsByFileName.values
-            .filter { !remoteFileNames.contains($0.fileName) }
-            .map(\.contentHash)
-        let result = try cleanupMissingResources(missingHashes: Set(missing))
-        if dirty {
-            try await flushToRemote()
-        }
-        return result
     }
 
     // SQLite default SQLITE_MAX_VARIABLE_NUMBER is 999; chunk to stay safely below.
@@ -468,13 +530,25 @@ final class MonthManifestStore {
 }
 
 extension MonthManifestStore {
-    /// Phantom (no links) counts as incomplete. Closure-based availability check lets
-    /// callers reuse their own data structures without forcing a Set construction.
+    /// Catches four failure modes: phantom (no links), broken link (resource gone),
+    /// fingerprint-vs-link-set divergence, and metadata-only (only `adjustmentData`
+    /// remaining). Latter two are invisible to a pure phantom/missing-resource check.
     static func isAssetIncomplete(
         links: [RemoteAssetResourceLink],
-        isResourceAvailable: (Data) -> Bool
+        isResourceAvailable: (Data) -> Bool,
+        assetFingerprint: Data
     ) -> Bool {
         if links.isEmpty { return true }
-        return links.contains { !isResourceAvailable($0.resourceHash) }
+        if links.contains(where: { !isResourceAvailable($0.resourceHash) }) {
+            return true
+        }
+        let recomputed = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: links.map {
+                (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
+            }
+        )
+        if recomputed != assetFingerprint { return true }
+        let metadataOnlyRoles: Set<Int> = [ResourceTypeCode.adjustmentData]
+        return !links.contains { !metadataOnlyRoles.contains($0.role) }
     }
 }

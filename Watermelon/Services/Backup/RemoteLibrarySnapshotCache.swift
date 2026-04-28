@@ -29,6 +29,10 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     }
     private var monthStatsCache: [LibraryMonthKey: MonthStats] = [:]
 
+    private var resourceHashesByMonth: [LibraryMonthKey: Set<Data>] = [:]
+    private var resourceBytesByMonth: [LibraryMonthKey: Int64] = [:]
+    private var lastSyncedAt: Date?
+
     private struct ChangeKind {
         let resources: Bool
         let assets: Bool
@@ -106,9 +110,63 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             linksByMonth.removeAll()
             linkKeysByAssetID.removeAll()
             monthStatsCache.removeAll()
+            resourceHashesByMonth.removeAll()
+            resourceBytesByMonth.removeAll()
+            lastSyncedAt = nil
             revision = 0
             monthLastChangedRevision.removeAll()
         }
+    }
+
+    func markSynced(_ at: Date) {
+        lock.withLock {
+            lastSyncedAt = at
+        }
+    }
+
+    func currentLastSyncedAt() -> Date? {
+        lock.withLock { lastSyncedAt }
+    }
+
+    /// Snapshots per-month dicts under the lock (cheap COW reference copy), then
+    /// runs the SHA-256 fingerprint recompute outside the lock so writers aren't
+    /// stalled by the (potentially large) incomplete-asset scan.
+    func healthDigest() -> RemoteHealthDigest {
+        let snapshot: HealthSnapshot = lock.withLock {
+            HealthSnapshot(
+                assetsByMonth: assetsByMonth,
+                linksByMonth: linksByMonth,
+                resourcesByMonth: resourcesByMonth,
+                resourceHashesByMonth: resourceHashesByMonth,
+                resourceBytesByMonth: resourceBytesByMonth,
+                lastSyncedAt: lastSyncedAt
+            )
+        }
+
+        let assetCount = snapshot.assetsByMonth.values.reduce(0) { $0 + $1.count }
+        let resourceCount = snapshot.resourcesByMonth.values.reduce(0) { $0 + $1.count }
+        let totalBytes = snapshot.resourceBytesByMonth.values.reduce(Int64(0), +)
+
+        var incompleteFlat: [IncompleteAssetEntry] = []
+        for month in snapshot.assetsByMonth.keys {
+            incompleteFlat.append(contentsOf: Self.computeIncompleteForMonth(month, snapshot: snapshot))
+        }
+        return RemoteHealthDigest(
+            totalAssets: assetCount,
+            totalResources: resourceCount,
+            totalSizeBytes: totalBytes,
+            incompleteAssets: incompleteFlat,
+            lastIndexSyncedAt: snapshot.lastSyncedAt
+        )
+    }
+
+    private struct HealthSnapshot {
+        let assetsByMonth: [LibraryMonthKey: AssetMap]
+        let linksByMonth: [LibraryMonthKey: LinkMap]
+        let resourcesByMonth: [LibraryMonthKey: ResourceMap]
+        let resourceHashesByMonth: [LibraryMonthKey: Set<Data>]
+        let resourceBytesByMonth: [LibraryMonthKey: Int64]
+        let lastSyncedAt: Date?
     }
 
     /// `precondition` is intentional in Release: violating the ChangeKind/nextX nil-ness
@@ -211,12 +269,84 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         return true
     }
 
-    /// monthStatsCache derives totalSize from assets and photo/video classification from
-    /// link roles, so it depends on both. Resource-only changes don't affect it.
+    /// Stats and resource-hash tables are cheap; incompleteness (SHA-256 recompute
+    /// per asset) is deferred to `healthDigest()` so writers aren't blocked.
     private func recomputeDerivedForMonthLocked(_ month: LibraryMonthKey, changeKind: ChangeKind) {
         if changeKind.anyAssetOrLink {
             monthStatsCache[month] = computeMonthStatsLocked(for: month)
         }
+        if changeKind.resources {
+            let monthResources = resourcesByMonth[month] ?? [:]
+            if monthResources.isEmpty {
+                resourceHashesByMonth[month] = nil
+                resourceBytesByMonth[month] = nil
+            } else {
+                resourceHashesByMonth[month] = Set(monthResources.values.map(\.contentHash))
+                resourceBytesByMonth[month] = monthResources.values.reduce(Int64(0)) { $0 + $1.fileSize }
+            }
+        }
+    }
+
+    /// Iterates `assetsByMonth`, not `linksByMonth`, so phantom assets are surfaced.
+    /// Runs against an immutable snapshot, no lock needed.
+    private static func computeIncompleteForMonth(
+        _ month: LibraryMonthKey,
+        snapshot: HealthSnapshot
+    ) -> [IncompleteAssetEntry] {
+        let monthAssets = snapshot.assetsByMonth[month] ?? [:]
+        guard !monthAssets.isEmpty else { return [] }
+        let monthLinks = snapshot.linksByMonth[month] ?? [:]
+        let resourceHashes = snapshot.resourceHashesByMonth[month] ?? []
+        let monthResources = snapshot.resourcesByMonth[month] ?? [:]
+
+        var fileNameByHash: [Data: String] = [:]
+        fileNameByHash.reserveCapacity(monthResources.count)
+        for resource in monthResources.values {
+            fileNameByHash[resource.contentHash] = resource.fileName
+        }
+
+        var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
+        for (_, link) in monthLinks {
+            linksByFingerprint[link.assetFingerprint, default: []].append(link)
+        }
+
+        var entries: [IncompleteAssetEntry] = []
+        for (_, asset) in monthAssets {
+            let fp = asset.assetFingerprint
+            let links = linksByFingerprint[fp] ?? []
+            guard MonthManifestStore.isAssetIncomplete(
+                links: links,
+                isResourceAvailable: { resourceHashes.contains($0) },
+                assetFingerprint: asset.assetFingerprint
+            ) else { continue }
+
+            if links.isEmpty {
+                entries.append(IncompleteAssetEntry(
+                    id: fp,
+                    month: month,
+                    creationDate: asset.creationDate,
+                    representativeFileName: nil,
+                    missingResourceCount: asset.resourceCount,
+                    totalResourceCount: asset.resourceCount,
+                    missingResourceHashes: [],
+                    reason: .manifestOrphan
+                ))
+            } else {
+                let missing = links.filter { !resourceHashes.contains($0.resourceHash) }.map(\.resourceHash)
+                let repFileName = links.lazy.compactMap { fileNameByHash[$0.resourceHash] }.first
+                entries.append(IncompleteAssetEntry(
+                    id: fp,
+                    month: month,
+                    creationDate: asset.creationDate,
+                    representativeFileName: repFileName,
+                    missingResourceCount: missing.count,
+                    totalResourceCount: links.count,
+                    missingResourceHashes: missing,
+                    reason: .manifestOrphan
+                ))
+            }
+        }
+        return entries
     }
 
     @discardableResult
@@ -441,6 +571,12 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
                 (month: month, assetCount: stats.assetCount, photoCount: stats.photoCount, videoCount: stats.videoCount, totalSizeBytes: stats.totalSizeBytes)
             }
         }
+    }
+
+    /// Includes resource-only and link-only residue months that `monthSummaries()`
+    /// (asset-keyed) skips — verify needs to reach those too.
+    func allKnownMonths() -> Set<LibraryMonthKey> {
+        lock.withLock { allKnownMonthsLocked() }
     }
 
     func counts() -> RemoteIndexSyncDigest {

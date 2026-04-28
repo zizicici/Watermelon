@@ -110,14 +110,14 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
         var assetCount = 0
         var photoCount = 0
         var videoCount = 0
-        var totalSize: Int64 = 0
+        var reachableHashes = Set<Data>()
         for asset in delta.assets {
             let roles = rolesByAssetID[asset.id] ?? []
             guard !roles.isEmpty else { continue }
             fingerprints.insert(asset.assetFingerprint)
             assetCount += 1
-            for hash in resolvableHashesByAssetID[asset.id] ?? [] {
-                totalSize += resourceSizeByHash[hash] ?? 0
+            if let hashes = resolvableHashesByAssetID[asset.id] {
+                reachableHashes.formUnion(hashes)
             }
             let hasPairedVideo = roles.contains { ResourceTypeCode.isPairedVideo($0) }
             let hasPhotoLike = roles.contains { ResourceTypeCode.isPhotoLike($0) }
@@ -130,6 +130,8 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
                 photoCount += 1
             }
         }
+        // Hash-deduped: same content shared by multiple assets contributes one resource on disk.
+        let totalSize = reachableHashes.reduce(Int64(0)) { $0 + (resourceSizeByHash[$1] ?? 0) }
         let summary: HomeMonthSummary? = assetCount > 0
             ? HomeMonthSummary(
                 month: month,

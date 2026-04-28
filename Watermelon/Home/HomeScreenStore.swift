@@ -40,8 +40,20 @@ final class HomeScreenStore {
     var remoteSyncProgress: RemoteSyncProgress? { connectionController.syncProgress }
     var executionState: HomeExecutionState? { executionCoordinator.currentState }
 
+    private(set) var isRemoteMaintenanceActive: Bool = false
+
     var isSelectable: Bool {
-        connectionState.isConnected && localPhotoAccessState.isAuthorized && executionState == nil && !isReloadingScope
+        connectionState.isConnected
+            && localPhotoAccessState.isAuthorized
+            && executionState == nil
+            && !isReloadingScope
+            && !isRemoteMaintenanceActive
+    }
+
+    /// Read live so a verify started after a confirm dialog opened still blocks
+    /// the action that dialog gates.
+    var isMaintenanceBlocked: Bool {
+        dependencies.remoteMaintenanceController.isVerifying
     }
 
     var isRemoteSelectionAllowed: Bool {
@@ -62,6 +74,7 @@ final class HomeScreenStore {
     private var wasExecutionActive = false
     private var lastMonthPhases: [LibraryMonthKey: MonthPlan.Phase] = [:]
     private var bootstrapTask: Task<Void, Never>?
+    private var maintenanceObserver: NSObjectProtocol?
 
     // MARK: - Init
 
@@ -112,6 +125,29 @@ final class HomeScreenStore {
         ))
         bind()
         pipBridge.attach()
+        observeMaintenance()
+    }
+
+    private func observeMaintenance() {
+        maintenanceObserver = NotificationCenter.default.addObserver(
+            forName: .RemoteMaintenanceDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let active = self.dependencies.remoteMaintenanceController.isVerifying
+                guard self.isRemoteMaintenanceActive != active else { return }
+                let wasActive = self.isRemoteMaintenanceActive
+                self.isRemoteMaintenanceActive = active
+                // Sync first: verify's `replaceMonth` won't reach the grid until HomeIncrementalDataManager pulls the new revision.
+                if wasActive && !active {
+                    self.scheduleRefresh([.syncRemote, .notifyStructural])
+                } else {
+                    self.onChange?(.structural)
+                }
+            }
+        }
     }
 
     private func makeRefreshScheduler() -> HomeRefreshScheduler {
@@ -160,6 +196,9 @@ final class HomeScreenStore {
 
     deinit {
         bootstrapTask?.cancel()
+        if let maintenanceObserver {
+            NotificationCenter.default.removeObserver(maintenanceObserver)
+        }
     }
 
     // MARK: - Bind Sub-controllers
@@ -271,6 +310,7 @@ final class HomeScreenStore {
     // MARK: - Execution Actions
 
     func startExecution(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) {
+        guard !rejectIfMaintaining() else { return }
         executionCoordinator.enter(backup: backup, download: download, complement: complement)
     }
 
@@ -282,11 +322,22 @@ final class HomeScreenStore {
     // MARK: - Connection Actions
 
     func connectProfile(_ profile: ServerProfileRecord) {
+        guard !rejectIfMaintaining() else { return }
         connectionController.promptAndConnect(profile: profile)
     }
 
     func disconnect() {
+        guard !rejectIfMaintaining() else { return }
         connectionController.disconnect()
+    }
+
+    private func rejectIfMaintaining() -> Bool {
+        guard isMaintenanceBlocked else { return false }
+        onAlert?(
+            String(localized: "common.error"),
+            String(localized: "home.alert.maintenanceInProgress")
+        )
+        return true
     }
 
     func requestLocalPhotoAccessIfNeeded() {

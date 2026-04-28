@@ -214,6 +214,31 @@ final class DatabaseManager {
         )
     }
 
+    func remoteVerifiedAt(profileID: Int64) throws -> Date? {
+        guard let value = try syncStateValue(for: remoteVerifiedAtKey(profileID: profileID)),
+              let timestamp = TimeInterval(value) else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: timestamp)
+    }
+
+    func setRemoteVerifiedAt(_ date: Date, profileID: Int64) throws {
+        try setSyncState(
+            key: remoteVerifiedAtKey(profileID: profileID),
+            value: String(date.timeIntervalSince1970)
+        )
+    }
+
+    func clearRemoteVerifiedAt(profileID: Int64) throws {
+        try write { db in
+            _ = try SyncStateRecord.deleteOne(db, key: remoteVerifiedAtKey(profileID: profileID))
+        }
+    }
+
+    private func remoteVerifiedAtKey(profileID: Int64) -> String {
+        "remote_verified_at_\(profileID)"
+    }
+
     func setActiveServerProfileID(_ id: Int64?) throws {
         if let id {
             try setSyncState(key: "active_server_profile_id", value: String(id))

@@ -10,6 +10,8 @@ final class DependencyContainer {
     let localHashIndexBuildService: LocalHashIndexBuildService
     let backupCoordinator: BackupCoordinator
     let restoreService: RestoreService
+    let appRuntimeFlags: AppRuntimeFlags
+    let remoteMaintenanceController: RemoteMaintenanceController
 
     convenience init() {
         do {
@@ -32,15 +34,24 @@ final class DependencyContainer {
             repository: hashIndexRepository
         )
 
-        backupCoordinator = BackupCoordinator(
+        let backupCoordinator = BackupCoordinator(
             photoLibraryService: photoLibraryService,
             storageClientFactory: storageClientFactory,
             hashIndexRepository: hashIndexRepository
         )
+        self.backupCoordinator = backupCoordinator
 
         restoreService = RestoreService(
             databaseManager: databaseManager,
             storageClientFactory: storageClientFactory
+        )
+
+        let appRuntimeFlags = AppRuntimeFlags()
+        self.appRuntimeFlags = appRuntimeFlags
+        self.remoteMaintenanceController = RemoteMaintenanceController(
+            backupCoordinator: backupCoordinator,
+            appRuntimeFlags: appRuntimeFlags,
+            databaseManager: databaseManager
         )
     }
 

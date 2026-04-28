@@ -26,6 +26,7 @@ final class HomeViewController: UIViewController {
             openLocalAlbumPicker: { [weak self] in self?.openLocalAlbumPicker() },
             openNewStorageFlow: { [weak self] dest in self?.openNewStorageFlow(dest) },
             openManageProfiles: { [weak self] in self?.openManageProfiles() },
+            openCurrentProfileSettings: { [weak self] in self?.openCurrentProfileSettings() },
             scrollToMonth: { [weak self] month in self?.scrollToMonth(month) }
         )
     )
@@ -868,10 +869,40 @@ final class HomeViewController: UIViewController {
         store.reloadProfiles()
     }
 
-    private func openManageProfiles() {
-        let viewController = ManageStorageProfilesViewController(dependencies: dependencies) { [weak self] in
-            self?.reloadProfiles()
+    private func openCurrentProfileSettings() {
+        guard let activeID = dependencies.appSession.activeProfile?.id,
+              let refreshed = (try? dependencies.databaseManager.fetchServerProfiles())?
+                  .first(where: { $0.id == activeID })
+        else { return }
+        let detail = StorageProfileDetailViewController(
+            dependencies: dependencies,
+            profile: refreshed,
+            onProfilesChanged: { [weak self] in self?.reloadProfiles() },
+            onConnectRequested: { [weak self] profile in
+                self?.connectRequestedFromManageOrDetail(profile)
+            }
+        )
+
+        if let navigationController {
+            navigationController.pushViewController(detail, animated: ConsideringUser.pushAnimated)
+            return
         }
+
+        let container = UINavigationController(rootViewController: detail)
+        if let presentation = container.sheetPresentationController {
+            presentation.prefersGrabberVisible = true
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
+    private func openManageProfiles() {
+        let viewController = ManageStorageProfilesViewController(
+            dependencies: dependencies,
+            onProfilesChanged: { [weak self] in self?.reloadProfiles() },
+            onConnectRequested: { [weak self] profile in
+                self?.connectRequestedFromManageOrDetail(profile)
+            }
+        )
 
         if let navigationController {
             navigationController.pushViewController(viewController, animated: ConsideringUser.pushAnimated)
@@ -883,6 +914,17 @@ final class HomeViewController: UIViewController {
             presentation.prefersGrabberVisible = true
         }
         present(container, animated: ConsideringUser.animated)
+    }
+
+    /// Dismiss before connecting — the password prompt is presented by `self` and
+    /// would land in the wrong context if manage/detail still occupies the presenter.
+    private func connectRequestedFromManageOrDetail(_ profile: ServerProfileRecord) {
+        let connect: () -> Void = { [weak self] in self?.store.connectProfile(profile) }
+        if presentedViewController != nil {
+            dismiss(animated: ConsideringUser.animated, completion: connect)
+        } else {
+            connect()
+        }
     }
 
     private func openLocalAlbumPicker() {
@@ -1003,14 +1045,15 @@ final class HomeViewController: UIViewController {
     }
 
     private func updateSelectionInteraction() {
-        let canAttemptSelection = store.executionState == nil && !store.isReloadingScope
+        let isMaintaining = store.isRemoteMaintenanceActive
+        let canAttemptSelection = store.executionState == nil && !store.isReloadingScope && !isMaintaining
         collectionView.allowsSelection = canAttemptSelection
         leftToggle.isEnabled = canAttemptSelection && store.localPhotoAccessState.isAuthorized
         rightToggle.isEnabled = canAttemptSelection && store.connectionState.isConnected
-        leftHeaderMenuOverlay.isEnabled = store.executionState == nil
-        leftHeaderButton.isEnabled = store.executionState == nil
-        rightHeaderMenuOverlay.isEnabled = store.executionState == nil
-        rightHeaderButton.isEnabled = store.executionState == nil
+        leftHeaderMenuOverlay.isEnabled = store.executionState == nil && !isMaintaining
+        leftHeaderButton.isEnabled = store.executionState == nil && !isMaintaining
+        rightHeaderMenuOverlay.isEnabled = store.executionState == nil && !isMaintaining
+        rightHeaderButton.isEnabled = store.executionState == nil && !isMaintaining
     }
 
     private func updateLocalOverlay() {
@@ -1346,6 +1389,14 @@ final class HomeViewController: UIViewController {
 
     private func confirmSelectionReadiness() -> Bool {
         guard store.executionState == nil else { return false }
+
+        if store.isRemoteMaintenanceActive {
+            showAlert(
+                title: String(localized: "common.error"),
+                message: String(localized: "home.alert.maintenanceInProgress")
+            )
+            return false
+        }
 
         var messages: [String] = []
         switch store.localPhotoAccessState {
