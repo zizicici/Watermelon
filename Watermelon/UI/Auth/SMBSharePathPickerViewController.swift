@@ -67,10 +67,11 @@ final class SMBSharePathPickerViewController: UIViewController {
         self.shouldPopToRootOnSave = shouldPopToRootOnSave
         self.onSaved = onSaved
 
-        self.shareOrder = initialShares.map(\.name)
+        let uniqueShares = Self.uniqueSharesByName(initialShares)
+        self.shareOrder = uniqueShares.map(\.name)
 
         var states: [String: ShareSectionState] = [:]
-        for share in initialShares {
+        for share in uniqueShares {
             states[share.name] = ShareSectionState(share: share)
         }
 
@@ -133,6 +134,18 @@ final class SMBSharePathPickerViewController: UIViewController {
             self?.configuredCell(in: tableView, at: indexPath, for: item) ?? UITableViewCell()
         }
         dataSource.defaultRowAnimation = .fade
+    }
+
+    private static func uniqueSharesByName(_ shares: [SMBShareInfo]) -> [SMBShareInfo] {
+        var seenNames = Set<String>()
+        var uniqueShares: [SMBShareInfo] = []
+        uniqueShares.reserveCapacity(shares.count)
+
+        for share in shares where seenNames.insert(share.name).inserted {
+            uniqueShares.append(share)
+        }
+
+        return uniqueShares
     }
 
     @objc
