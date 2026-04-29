@@ -1,4 +1,3 @@
-import AppKit
 import Combine
 import Foundation
 
@@ -13,67 +12,74 @@ final class LegacyMigrationViewModel: ObservableObject {
         case error(String)
     }
 
-    @Published var sourceFolderURL: URL?
+    @Published var legacyFolderPath: String?
     @Published var phase: Phase = .idle
     @Published var report: LegacyScanReport?
     @Published var totals: LegacyImportTotals = .init()
     @Published var currentMonth: LibraryMonthKey?
     @Published var logLines: [String] = []
+    @Published private(set) var isClientConnected = false
 
+    let profile: ServerProfileRecord
     private let storageClientFactory: StorageClientFactory
-    private let profileStore: ProfileStore?
-    private let profileID: Int64?
+    private let profileStore: ProfileStore
+    private(set) var client: (any RemoteStorageClientProtocol)?
+
     private let planner = LegacyMigrationPlanner()
     private var scanTask: Task<Void, Never>?
     private var commitTask: Task<Void, Never>?
     private var logWriter: ExecutionLogSessionWriter?
 
     init(
+        profile: ServerProfileRecord,
         storageClientFactory: StorageClientFactory,
-        profileStore: ProfileStore? = nil,
-        profileID: Int64? = nil
+        profileStore: ProfileStore
     ) {
+        self.profile = profile
         self.storageClientFactory = storageClientFactory
         self.profileStore = profileStore
-        self.profileID = profileID
-        if let profileStore, let profileID,
-           let restored = profileStore.resolveLegacySource(profileID: profileID) {
-            self.sourceFolderURL = restored
+        if let id = profile.id {
+            self.legacyFolderPath = profileStore.loadLegacyFolderPath(profileID: id)
         }
     }
 
-    func pickSourceFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.message = "Select a folder containing legacy data to import"
-        panel.prompt = String(localized: "common.choose")
-        if panel.runModal() == .OK, let url = panel.url {
-            sourceFolderURL = url
-            phase = .idle
-            report = nil
-            logLines.removeAll()
-            if let profileStore, let profileID {
-                try? profileStore.saveLegacySource(profileID: profileID, url: url)
-            }
+    deinit {
+        let cToken = client
+        Task { await cToken?.disconnect() }
+    }
+
+    func connect(password: String) async throws {
+        if client != nil {
+            isClientConnected = true
+            return
+        }
+        let c = try storageClientFactory.makeClient(profile: profile, password: password)
+        try await c.connect()
+        client = c
+        isClientConnected = true
+    }
+
+    func setLegacyPath(_ path: String) {
+        let normalized = RemotePathBuilder.normalizePath(path)
+        legacyFolderPath = normalized
+        phase = .idle
+        report = nil
+        logLines.removeAll()
+        if let id = profile.id {
+            try? profileStore.saveLegacyFolderPath(profileID: id, path: normalized)
         }
     }
 
     func startScan() {
-        guard let url = sourceFolderURL else { return }
+        guard let path = legacyFolderPath, let client else { return }
         scanTask?.cancel()
         phase = .scanning
         report = nil
         logLines.removeAll()
 
         scanTask = Task { [weak self, planner] in
-            let didStart = url.startAccessingSecurityScopedResource()
-            defer {
-                if didStart { url.stopAccessingSecurityScopedResource() }
-            }
             do {
-                let result = try await planner.scan(rootURL: url)
+                let result = try await planner.scan(client: client, rootPath: path)
                 await MainActor.run {
                     self?.report = result
                     self?.phase = .scanned
@@ -92,9 +98,8 @@ final class LegacyMigrationViewModel: ObservableObject {
         if phase == .scanning { phase = .idle }
     }
 
-    func startCommit(profile: ServerProfileRecord, password: String) {
-        guard let report else { return }
-        guard let url = sourceFolderURL else { return }
+    func startCommit() {
+        guard let report, let client else { return }
         commitTask?.cancel()
         phase = .committing
         totals = LegacyImportTotals()
@@ -103,22 +108,15 @@ final class LegacyMigrationViewModel: ObservableObject {
 
         ExecutionLogFileStore.prepareForBackgroundUse()
         let writer = ExecutionLogFileStore.beginSession(kind: .manual)
-        let startMessage = "Mac legacy import started · profile=\(profile.name) (\(profile.resolvedStorageType.rawValue)) · source=\(url.path)"
+        let startMessage = "Mac legacy import started · profile=\(profile.name) (\(profile.resolvedStorageType.rawValue)) · source=\(legacyFolderPath ?? "")"
         Task { await writer.appendLog(startMessage, level: .info) }
         logWriter = writer
 
-        let session = LegacyImportSession(sourceURL: url)
-        let executor = LegacyMigrationExecutor(
-            storageClientFactory: storageClientFactory,
-            session: session
-        )
-
+        let executor = LegacyMigrationExecutor(client: client, profile: profile)
         commitTask = Task { [weak self] in
-            let stream = executor.run(report: report, profile: profile, password: password)
+            let stream = executor.run(report: report)
             for await event in stream {
-                await MainActor.run {
-                    self?.handle(event: event)
-                }
+                await MainActor.run { self?.handle(event: event) }
             }
         }
     }
@@ -126,9 +124,7 @@ final class LegacyMigrationViewModel: ObservableObject {
     func cancelCommit() {
         commitTask?.cancel()
         commitTask = nil
-        if phase == .committing {
-            phase = .scanned
-        }
+        if phase == .committing { phase = .scanned }
     }
 
     func resetForNewScan() {
@@ -147,17 +143,19 @@ final class LegacyMigrationViewModel: ObservableObject {
         switch event {
         case .started(let totals):
             self.totals = totals
-            appendLog("Started import: \(totals.bundlesPlanned) bundles across \(totals.monthsTotal) months.")
+            appendLog("Started: \(totals.bundlesPlanned) bundles across \(totals.monthsTotal) months.")
         case .monthStarted(let month, let bundleCount):
             currentMonth = month
             appendLog("→ \(month.text): \(bundleCount) bundle(s)")
         case .bundleResult(_, let bundle, let outcome):
             switch outcome {
-            case .imported(let bytes, let uploaded, let skipped):
-                if skipped == 0 {
-                    appendLog("  imported fp:\(bundle.assetFingerprint.hexString.prefix(8)) (\(uploaded) files, \(formatBytes(bytes)))")
+            case .imported(let bytes, let copied, let inPlace):
+                if copied == 0 {
+                    appendLog("  registered fp:\(bundle.assetFingerprint.hexString.prefix(8)) (\(inPlace) already in place)")
+                } else if inPlace == 0 {
+                    appendLog("  copied fp:\(bundle.assetFingerprint.hexString.prefix(8)) (\(copied) files, \(formatBytes(bytes)))")
                 } else {
-                    appendLog("  imported fp:\(bundle.assetFingerprint.hexString.prefix(8)) (\(uploaded) new + \(skipped) hash-existed, \(formatBytes(bytes)))")
+                    appendLog("  copied fp:\(bundle.assetFingerprint.hexString.prefix(8)) (\(copied) copied + \(inPlace) in-place, \(formatBytes(bytes)))")
                 }
             case .skippedFingerprintExists:
                 appendLog("  skipped fp:\(bundle.assetFingerprint.hexString.prefix(8)) (already in manifest)")
@@ -174,7 +172,7 @@ final class LegacyMigrationViewModel: ObservableObject {
             self.totals = totals
             currentMonth = nil
             phase = .committed
-            appendLog("Finished. imported=\(totals.bundlesImported), skipped(fp)=\(totals.bundlesSkippedFingerprintExists), failed=\(totals.bundlesFailed), uploaded=\(formatBytes(totals.bytesUploaded)).")
+            appendLog("Finished. imported=\(totals.bundlesImported), skipped(fp)=\(totals.bundlesSkippedFingerprintExists), failed=\(totals.bundlesFailed), copied=\(formatBytes(totals.bytesUploaded)).")
             finalizeLogWriter()
         case .failed(let error, let totals):
             self.totals = totals

@@ -5,6 +5,23 @@ enum LegacyMediaKind {
     case video
 }
 
+enum LegacyMediaExtensions {
+    static let imageExtensions: Set<String> = [
+        "heic", "heif", "jpg", "jpeg", "png", "gif",
+        "tiff", "tif", "webp", "dng", "raw",
+        "cr2", "cr3", "nef", "arw", "rw2", "orf", "raf", "srw"
+    ]
+    static let videoExtensions: Set<String> = [
+        "mp4", "mov", "m4v", "hevc"
+    ]
+
+    static func kind(forExtension lowercasedExt: String) -> LegacyMediaKind? {
+        if imageExtensions.contains(lowercasedExt) { return .image }
+        if videoExtensions.contains(lowercasedExt) { return .video }
+        return nil
+    }
+}
+
 enum LegacyTimestampSource: String {
     case exif
     case quickTime
@@ -14,14 +31,15 @@ enum LegacyTimestampSource: String {
 
 struct LegacyFileCandidate: Identifiable, Hashable {
     let id = UUID()
-    let url: URL
-    let sanitizedStem: String          // file stem after RemotePathBuilder.sanitizeFilename + extension stripped
-    let originalFilename: String       // sanitized filename WITH extension
-    let lowercasedExtension: String    // e.g. "heic", "mov"
+    let remotePath: String                // path on the connected storage client
+    let sanitizedStem: String
+    let originalFilename: String
+    let lowercasedExtension: String
     let kind: LegacyMediaKind
     let fileSize: Int64
     let timestamp: Date?
     let timestampSource: LegacyTimestampSource
+    let contentHash: Data?                // nil when scheduling will skip this file (missing timestamp etc)
 
     static func == (lhs: LegacyFileCandidate, rhs: LegacyFileCandidate) -> Bool {
         lhs.id == rhs.id
@@ -40,7 +58,7 @@ enum LegacyBundleKind: Hashable {
 struct LegacyResourceComponent: Hashable {
     let role: Int
     let slot: Int
-    let url: URL
+    let remotePath: String
     let originalFilename: String
     let fileSize: Int64
     let contentHash: Data
@@ -78,6 +96,6 @@ struct LegacyMonthPlan: Identifiable {
 
 struct LegacyScanReport {
     let plans: [LegacyMonthPlan]
-    let unscheduledCandidates: [LegacyFileCandidate]   // skipped because timestamp couldn't be determined
+    let unscheduledCandidates: [LegacyFileCandidate]
     let warnings: [String]
 }

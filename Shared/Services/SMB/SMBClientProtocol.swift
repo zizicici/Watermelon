@@ -84,6 +84,7 @@ protocol RemoteStorageClientProtocol: Sendable {
     func delete(path: String) async throws
     func createDirectory(path: String) async throws
     func move(from sourcePath: String, to destinationPath: String) async throws
+    func copy(from sourcePath: String, to destinationPath: String) async throws
 }
 
 extension RemoteStorageClientProtocol {
@@ -93,6 +94,13 @@ extension RemoteStorageClientProtocol {
 
     func shouldLimitUploadRetries(for _: Error) -> Bool {
         false
+    }
+
+    /// Returns a local URL for a remote path if the underlying storage already keeps the file
+    /// on this device's filesystem (e.g. external volumes). Returns nil otherwise — caller must
+    /// `download(remotePath:localURL:)` to materialize. Default returns nil.
+    func directReadURL(forRemotePath _: String) async -> URL? {
+        nil
     }
 
     func disconnectSafely() async {

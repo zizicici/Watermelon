@@ -321,6 +321,26 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         throw RemoteStorageClientError.unavailable
         #endif
     }
+
+    func copy(from sourcePath: String, to destinationPath: String) async throws {
+        #if canImport(AMSMB2)
+        let normalizedSource = RemotePathBuilder.normalizePath(sourcePath)
+        let normalizedDestination = RemotePathBuilder.normalizePath(destinationPath)
+        // AMSMB2 has no native copy on the protocol; round-trip via a local temp file.
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("smb-copy-\(UUID().uuidString)")
+        do {
+            try await manager.downloadItem(atPath: normalizedSource, to: tempURL, progress: nil)
+            try await manager.uploadItem(at: tempURL, toPath: normalizedDestination, progress: nil)
+        } catch {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw error
+        }
+        try? FileManager.default.removeItem(at: tempURL)
+        #else
+        throw RemoteStorageClientError.unavailable
+        #endif
+    }
 }
 
 enum SMBErrorClassifier {

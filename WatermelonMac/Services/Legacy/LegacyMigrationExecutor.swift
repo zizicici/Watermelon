@@ -1,30 +1,22 @@
 import Foundation
 
-/// Drives a real legacy-data import for a single profile + scan report.
-/// Reports progress via an AsyncStream of LegacyImportEvent.
+/// Drives a non-destructive legacy import: source files live on the SAME storage as the
+/// Watermelon backup root, so we copy them into the canonical /{YYYY}/{MM}/ layout while
+/// leaving the originals untouched, then register them in the manifest.
 final class LegacyMigrationExecutor {
-    private let storageClientFactory: StorageClientFactory
-    private let session: LegacyImportSession
+    private let client: any RemoteStorageClientProtocol
+    private let profile: ServerProfileRecord
 
-    init(storageClientFactory: StorageClientFactory, session: LegacyImportSession) {
-        self.storageClientFactory = storageClientFactory
-        self.session = session
+    init(client: any RemoteStorageClientProtocol, profile: ServerProfileRecord) {
+        self.client = client
+        self.profile = profile
     }
 
-    func run(
-        report: LegacyScanReport,
-        profile: ServerProfileRecord,
-        password: String
-    ) -> AsyncStream<LegacyImportEvent> {
+    func run(report: LegacyScanReport) -> AsyncStream<LegacyImportEvent> {
         AsyncStream { continuation in
             let task = Task { [self] in
                 do {
-                    try await self.execute(
-                        report: report,
-                        profile: profile,
-                        password: password,
-                        emit: { continuation.yield($0) }
-                    )
+                    try await self.execute(report: report) { continuation.yield($0) }
                 } catch is CancellationError {
                     continuation.finish()
                     return
@@ -39,24 +31,14 @@ final class LegacyMigrationExecutor {
 
     private func execute(
         report: LegacyScanReport,
-        profile: ServerProfileRecord,
-        password: String,
         emit: @Sendable (LegacyImportEvent) -> Void
     ) async throws {
-        session.begin()
-        defer { session.end() }
-
         var totals = LegacyImportTotals()
         totals.monthsTotal = report.plans.count
         totals.bundlesPlanned = report.plans.reduce(0) { $0 + $1.totalAssetCount }
         emit(.started(totals: totals))
 
-        let client = try storageClientFactory.makeClient(profile: profile, password: password)
-        try await client.connect()
-        defer {
-            Task { await client.disconnect() }
-        }
-        try await ensureBasePathExists(profile: profile, client: client)
+        try await ensureBasePathExists()
 
         for plan in report.plans {
             try Task.checkCancellation()
@@ -106,6 +88,8 @@ final class LegacyMigrationExecutor {
 
         emit(.finished(totals: totals))
     }
+
+    // MARK: - Retry wrapper
 
     private static let maxRetryAttempts = 3
     private static let retryBackoffSchedule: [UInt64] = [
@@ -185,9 +169,9 @@ final class LegacyMigrationExecutor {
         )
         var collisionKeys = RemoteFileNaming.collisionKeySet(from: monthStore.existingFileNames())
 
-        var perBundleBytesUploaded: Int64 = 0
-        var resourcesUploaded = 0
-        var resourcesSkipped = 0
+        var bytesCopied: Int64 = 0
+        var resourcesCopied = 0
+        var resourcesAlreadyInPlace = 0
         var resourceLinks: [RemoteAssetResourceLink] = []
         let backedUpAtMs = Date().millisecondsSinceEpoch
 
@@ -202,11 +186,11 @@ final class LegacyMigrationExecutor {
                     collisionKeys: &collisionKeys
                 )
                 switch outcome {
-                case .uploaded(let bytes):
-                    perBundleBytesUploaded += bytes
-                    resourcesUploaded += 1
-                case .skipped:
-                    resourcesSkipped += 1
+                case .copied(let bytes):
+                    bytesCopied += bytes
+                    resourcesCopied += 1
+                case .alreadyInPlace, .skippedHashExists:
+                    resourcesAlreadyInPlace += 1
                 }
                 resourceLinks.append(
                     RemoteAssetResourceLink(
@@ -245,17 +229,18 @@ final class LegacyMigrationExecutor {
 
         return BundleAttemptResult(
             outcome: .imported(
-                bytesUploaded: perBundleBytesUploaded,
-                resourcesUploaded: resourcesUploaded,
-                resourcesSkippedHashExists: resourcesSkipped
+                bytesUploaded: bytesCopied,
+                resourcesUploaded: resourcesCopied,
+                resourcesSkippedHashExists: resourcesAlreadyInPlace
             ),
             error: nil
         )
     }
 
     private enum ResourceOutcome {
-        case uploaded(bytes: Int64)
-        case skipped
+        case copied(bytes: Int64)
+        case alreadyInPlace
+        case skippedHashExists
     }
 
     private func processResource(
@@ -267,7 +252,7 @@ final class LegacyMigrationExecutor {
         collisionKeys: inout Set<String>
     ) async throws -> ResourceOutcome {
         if monthStore.findResourceByHash(component.contentHash) != nil {
-            return .skipped
+            return .skippedHashExists
         }
 
         let baseFileName = RemoteFileNaming.preferredRemoteFileName(
@@ -284,18 +269,19 @@ final class LegacyMigrationExecutor {
         )
         collisionKeys.insert(RemoteFileNaming.collisionKey(for: targetFileName))
 
-        let remoteRelativePath = monthStore.monthRelativePath + "/" + targetFileName
-        let remoteAbsolutePath = RemotePathBuilder.absolutePath(
+        let monthRelativePath = monthStore.monthRelativePath
+        let targetAbsolutePath = RemotePathBuilder.absolutePath(
             basePath: monthStore.basePath,
-            remoteRelativePath: remoteRelativePath
+            remoteRelativePath: monthRelativePath + "/" + targetFileName
         )
 
-        try await monthStore.client.upload(
-            localURL: component.url,
-            remotePath: remoteAbsolutePath,
-            respectTaskCancellation: true,
-            onProgress: nil
-        )
+        let sourcePath = RemotePathBuilder.normalizePath(component.remotePath)
+        let normalizedTarget = RemotePathBuilder.normalizePath(targetAbsolutePath)
+
+        let alreadyInPlace = (sourcePath == normalizedTarget)
+        if !alreadyInPlace {
+            try await client.copy(from: sourcePath, to: normalizedTarget)
+        }
 
         let resource = RemoteManifestResource(
             year: monthStore.year,
@@ -310,13 +296,10 @@ final class LegacyMigrationExecutor {
         _ = try monthStore.upsertResource(resource)
         monthStore.markRemoteFile(name: targetFileName, size: component.fileSize)
 
-        return .uploaded(bytes: component.fileSize)
+        return alreadyInPlace ? .alreadyInPlace : .copied(bytes: component.fileSize)
     }
 
-    private func ensureBasePathExists(
-        profile: ServerProfileRecord,
-        client: any RemoteStorageClientProtocol
-    ) async throws {
+    private func ensureBasePathExists() async throws {
         let normalized = RemotePathBuilder.normalizePath(profile.basePath)
         try await client.createDirectory(path: normalized)
     }

@@ -243,6 +243,11 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         }
     }
 
+    func directReadURL(forRemotePath remotePath: String) async -> URL? {
+        guard let root = rootURL else { return nil }
+        return try? remoteFileURL(forRemotePath: remotePath, rootURL: root)
+    }
+
     func download(remotePath: String, localURL: URL) async throws {
         let root = try requireRootURL()
         do {
@@ -314,6 +319,22 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
                 return
             }
             try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+        } catch {
+            throw mapStorageError(error)
+        }
+    }
+
+    func copy(from sourcePath: String, to destinationPath: String) async throws {
+        let root = try requireRootURL()
+        do {
+            let sourceURL = try remoteFileURL(forRemotePath: sourcePath, rootURL: root)
+            let destinationURL = try remoteFileURL(forRemotePath: destinationPath, rootURL: root)
+            let destinationParent = destinationURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: destinationParent, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try FileManager.default.removeItem(at: destinationURL)
+            }
+            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
         } catch {
             throw mapStorageError(error)
         }

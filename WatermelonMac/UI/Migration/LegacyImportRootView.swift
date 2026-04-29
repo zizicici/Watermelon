@@ -5,7 +5,16 @@ struct LegacyImportRootView: View {
 
     @EnvironmentObject private var container: MacDependencyContainer
     @StateObject private var viewModel: LegacyMigrationViewModel
+    @State private var pickerVisible = false
     @State private var passwordPromptVisible = false
+    @State private var pendingAction: PendingAction?
+    @State private var connectError: String?
+
+    private enum PendingAction {
+        case browse
+        case scan
+        case commit
+    }
 
     init(
         profile: ServerProfileRecord,
@@ -14,9 +23,9 @@ struct LegacyImportRootView: View {
     ) {
         self.profile = profile
         _viewModel = StateObject(wrappedValue: LegacyMigrationViewModel(
+            profile: profile,
             storageClientFactory: storageClientFactory,
-            profileStore: profileStore,
-            profileID: profile.id
+            profileStore: profileStore
         ))
     }
 
@@ -36,13 +45,28 @@ struct LegacyImportRootView: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sheet(isPresented: $pickerVisible) {
+            if let client = viewModel.client {
+                LegacyFolderPickerView(
+                    client: client,
+                    initialPath: viewModel.legacyFolderPath ?? defaultBrowseStart()
+                ) { path in
+                    viewModel.setLegacyPath(path)
+                }
+            }
+        }
         .sheet(isPresented: $passwordPromptVisible) {
             StoragePasswordPromptView(
                 profileName: profile.name,
                 username: profile.username
             ) { password in
-                viewModel.startCommit(profile: profile, password: password)
+                Task { await connectAndExecute(action: pendingAction, password: password) }
             }
+        }
+        .alert(String(localized: "legacy.connect.failed"), isPresented: .constant(connectError != nil)) {
+            Button(String(localized: "common.ok")) { connectError = nil }
+        } message: {
+            Text(connectError ?? "")
         }
     }
 
@@ -51,12 +75,13 @@ struct LegacyImportRootView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(String(localized: "migration.section.legacyFolder")).font(.headline)
             HStack {
-                Text(viewModel.sourceFolderURL?.path ?? String(localized: "common.notSelected"))
+                Text(viewModel.legacyFolderPath ?? String(localized: "common.notSelected"))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .foregroundStyle(viewModel.sourceFolderURL == nil ? .secondary : .primary)
+                    .font(.body.monospaced())
+                    .foregroundStyle(viewModel.legacyFolderPath == nil ? .secondary : .primary)
                 Spacer()
-                Button(String(localized: "common.choose.folder")) { viewModel.pickSourceFolder() }
+                Button(String(localized: "legacy.folder.browse")) { handle(.browse) }
                     .disabled(viewModel.phase == .scanning || viewModel.phase == .committing)
             }
             .padding(8)
@@ -72,18 +97,18 @@ struct LegacyImportRootView: View {
                 } else {
                     Spacer()
                     Button {
-                        viewModel.startScan()
+                        handle(.scan)
                     } label: {
                         Label(String(localized: "migration.button.scan"), systemImage: "magnifyingglass")
                     }
                     .keyboardShortcut("r", modifiers: [.command])
-                    .disabled(viewModel.sourceFolderURL == nil ||
+                    .disabled(viewModel.legacyFolderPath == nil ||
                               viewModel.phase == .committing ||
                               viewModel.phase == .committed)
 
                     if viewModel.phase == .scanned, let report = viewModel.report, !report.plans.isEmpty {
                         Button {
-                            launchCommit()
+                            handle(.commit)
                         } label: {
                             Label(String(localized: "migration.button.commit"), systemImage: "tray.and.arrow.down")
                         }
@@ -118,17 +143,56 @@ struct LegacyImportRootView: View {
         }
     }
 
-    private func launchCommit() {
-        let display = StorageProfile(record: profile)
-        if !display.requiresPassword {
-            viewModel.startCommit(profile: profile, password: "")
+    private func defaultBrowseStart() -> String {
+        switch profile.resolvedStorageType {
+        case .smb, .webdav, .externalVolume:
+            return "/"
+        }
+    }
+
+    // MARK: - Connect-then-execute
+
+    private func handle(_ action: PendingAction) {
+        connectError = nil
+        if viewModel.client != nil {
+            execute(action: action)
+            return
+        }
+        pendingAction = action
+        if profile.resolvedStorageType == .externalVolume {
+            // No password needed; connect inline.
+            Task { await connectAndExecute(action: action, password: "") }
             return
         }
         if let stored = try? container.profileStore.password(for: profile), !stored.isEmpty {
-            viewModel.startCommit(profile: profile, password: stored)
+            Task { await connectAndExecute(action: action, password: stored) }
             return
         }
         passwordPromptVisible = true
+    }
+
+    private func connectAndExecute(action: PendingAction?, password: String) async {
+        guard let action else { return }
+        do {
+            try await viewModel.connect(password: password)
+            await MainActor.run {
+                pendingAction = nil
+                execute(action: action)
+            }
+        } catch {
+            await MainActor.run {
+                pendingAction = nil
+                connectError = error.localizedDescription
+            }
+        }
+    }
+
+    private func execute(action: PendingAction) {
+        switch action {
+        case .browse: pickerVisible = true
+        case .scan: viewModel.startScan()
+        case .commit: viewModel.startCommit()
+        }
     }
 }
 

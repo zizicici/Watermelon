@@ -856,6 +856,26 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
     }
 
+    func copy(from sourcePath: String, to destinationPath: String) async throws {
+        try requireConnected()
+        await drainPendingCancelledUploadCleanup()
+
+        let sourceURL = try remoteURL(forRemotePath: sourcePath)
+        let destinationURL = try remoteURL(forRemotePath: destinationPath)
+        let request = makeRequest(
+            url: sourceURL,
+            method: "COPY",
+            headers: [
+                "Destination": destinationURL.absoluteString,
+                "Overwrite": "T"
+            ]
+        )
+        let status = try await sendStatus(request)
+        guard (200 ... 299).contains(status) else {
+            throw Self.statusError(status, method: "COPY", url: request.url)
+        }
+    }
+
     private static let propfindBody = Data(
         """
         <?xml version="1.0" encoding="utf-8" ?>

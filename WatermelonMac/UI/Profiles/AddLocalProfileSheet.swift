@@ -2,34 +2,47 @@ import AppKit
 import SwiftUI
 
 struct AddLocalProfileSheet: View {
-    @ObservedObject var store: ProfileStore
-    let onSaved: (ServerProfileRecord) -> Void
+    let title: String
+    let folderLabel: String
+    let pickerMessage: String
+    let save: (_ name: String, _ folderURL: URL) throws -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var name: String = ""
     @State private var folderURL: URL?
     @State private var saveError: String?
 
+    init(
+        title: String = String(localized: "profile.add.local.title"),
+        folderLabel: String = String(localized: "profile.add.local.folder"),
+        pickerMessage: String = String(localized: "profile.add.local.pickerMessage"),
+        save: @escaping (_ name: String, _ folderURL: URL) throws -> Void
+    ) {
+        self.title = title
+        self.folderLabel = folderLabel
+        self.pickerMessage = pickerMessage
+        self.save = save
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Add Local Folder Profile")
-                .font(.headline)
+            Text(title).font(.headline)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Profile Name").font(.callout).foregroundStyle(.secondary)
-                TextField("Optional — defaults to folder name", text: $name)
+                Text(String(localized: "profile.add.local.name")).font(.callout).foregroundStyle(.secondary)
+                TextField(String(localized: "profile.add.local.name.placeholder"), text: $name)
                     .textFieldStyle(.roundedBorder)
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Backup Root Folder").font(.callout).foregroundStyle(.secondary)
+                Text(folderLabel).font(.callout).foregroundStyle(.secondary)
                 HStack {
-                    Text(folderURL?.path ?? "Not selected")
+                    Text(folderURL?.path ?? String(localized: "common.notSelected"))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .foregroundStyle(folderURL == nil ? .secondary : .primary)
                     Spacer()
-                    Button("Choose…") { pickFolder() }
+                    Button(String(localized: "common.choose")) { pickFolder() }
                 }
                 .padding(8)
                 .background(Color(nsColor: .controlBackgroundColor))
@@ -44,9 +57,9 @@ struct AddLocalProfileSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button(String(localized: "common.cancel")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Save") { save() }
+                Button(String(localized: "common.save")) { commit() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(folderURL == nil)
             }
@@ -61,8 +74,8 @@ struct AddLocalProfileSheet: View {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
-        panel.message = "Select the Watermelon backup root folder"
-        panel.prompt = "Choose"
+        panel.message = pickerMessage
+        panel.prompt = String(localized: "common.choose")
         if panel.runModal() == .OK, let url = panel.url {
             folderURL = url
             if name.isEmpty {
@@ -71,11 +84,10 @@ struct AddLocalProfileSheet: View {
         }
     }
 
-    private func save() {
+    private func commit() {
         guard let folderURL else { return }
         do {
-            let record = try store.saveLocalProfile(name: name, folderURL: folderURL)
-            onSaved(record)
+            try save(name, folderURL)
             dismiss()
         } catch {
             saveError = error.localizedDescription

@@ -66,21 +66,45 @@ struct ProfileListView: View {
         }
         .navigationTitle("Watermelon")
         .sheet(isPresented: $addLocalSheetVisible) {
-            AddLocalProfileSheet(store: store) { newProfile in
-                selection = newProfile.id
+            AddLocalProfileSheet(
+                title: String(localized: "profile.add.local.title"),
+                folderLabel: String(localized: "profile.add.local.backupRoot"),
+                pickerMessage: String(localized: "profile.add.local.pickerMessage")
+            ) { name, url in
+                let record = try store.saveLocalProfile(name: name, folderURL: url)
+                selection = record.id
             }
         }
         .sheet(isPresented: $addSMBSheetVisible) {
-            AddSMBProfileSheet(store: store) { newProfile in
-                selection = newProfile.id
+            AddSMBProfileSheet { context in
+                let record = try store.saveSMBProfile(
+                    name: context.auth.name,
+                    host: context.auth.host,
+                    port: context.auth.port,
+                    shareName: context.shareName,
+                    basePath: context.basePath,
+                    username: context.auth.username,
+                    domain: context.auth.domain,
+                    password: context.auth.password
+                )
+                selection = record.id
             }
         }
         .sheet(isPresented: $addWebDAVSheetVisible) {
             AddWebDAVProfileSheet(
-                store: store,
                 storageClientFactory: storageClientFactory
-            ) { newProfile in
-                selection = newProfile.id
+            ) { snapshot in
+                let record = try store.saveWebDAVProfile(
+                    name: snapshot.name,
+                    scheme: snapshot.scheme,
+                    host: snapshot.host,
+                    port: snapshot.port,
+                    mountPath: snapshot.mountPath,
+                    basePath: snapshot.basePath,
+                    username: snapshot.username,
+                    password: snapshot.password
+                )
+                selection = record.id
             }
         }
         .sheet(item: $renamingProfile) { profile in

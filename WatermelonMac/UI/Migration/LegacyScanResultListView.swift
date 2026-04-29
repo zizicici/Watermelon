@@ -23,7 +23,7 @@ struct LegacyScanResultListView: View {
                             HStack {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .foregroundStyle(.orange)
-                                Text(candidate.url.lastPathComponent)
+                                Text(candidate.originalFilename)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                                 Spacer()

@@ -2,84 +2,135 @@ import Foundation
 
 @MainActor
 final class LegacyMigrationPlanner {
-    private let scanner = LegacyFolderScanner()
     private let timestampReader = MediaTimestampReader()
     private let matcher = LiveBundleMatcher()
 
-    func scan(rootURL: URL) async throws -> LegacyScanReport {
+    func scan(client: any RemoteStorageClientProtocol, rootPath: String) async throws -> LegacyScanReport {
         try Task.checkCancellation()
 
-        let scanned = try scanner.enumerate(at: rootURL)
+        let entries = try await enumerate(client: client, root: rootPath)
         var candidates: [LegacyFileCandidate] = []
         var warnings: [String] = []
 
-        for file in scanned {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("watermelon-legacy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        for entry in entries {
             try Task.checkCancellation()
-            let ext = file.url.pathExtension.lowercased()
+            let ext = (entry.name as NSString).pathExtension.lowercased()
             guard let kind = LegacyMediaExtensions.kind(forExtension: ext) else { continue }
 
-            let timestamp = await timestampReader.read(url: file.url, kind: kind, fallbackMtime: file.mtime)
+            // Fast path: storage already keeps the file on disk (e.g. external volume) — read in place,
+            // no copy to /tmp. Otherwise download a single temp copy that feeds both metadata + hash.
+            let readURL: URL
+            let needsCleanup: Bool
+            if let direct = await client.directReadURL(forRemotePath: entry.path) {
+                readURL = direct
+                needsCleanup = false
+            } else {
+                let temp = tempDir.appendingPathComponent(UUID().uuidString + "." + ext)
+                do {
+                    try await client.download(remotePath: entry.path, localURL: temp)
+                } catch {
+                    warnings.append("Failed to read \(entry.name): \(error.localizedDescription)")
+                    continue
+                }
+                readURL = temp
+                needsCleanup = true
+            }
 
-            let original = file.url.lastPathComponent
-            let sanitizedFull = RemotePathBuilder.sanitizeFilename(original)
-            let stem = (sanitizedFull as NSString).deletingPathExtension
+            let timestamp = await timestampReader.read(url: readURL, kind: kind, fallbackMtime: entry.modificationDate)
+
+            var hash: Data?
+            var size: Int64 = entry.size
+            if timestamp.date != nil {
+                do {
+                    let result = try FileHasher.sha256(of: readURL)
+                    hash = result.hash
+                    if result.size > 0 { size = result.size }
+                } catch {
+                    warnings.append("Failed to hash \(entry.name): \(error.localizedDescription)")
+                }
+            }
+            if needsCleanup {
+                try? FileManager.default.removeItem(at: readURL)
+            }
+
+            let sanitized = RemotePathBuilder.sanitizeFilename(entry.name)
+            let stem = (sanitized as NSString).deletingPathExtension
 
             candidates.append(
                 LegacyFileCandidate(
-                    url: file.url,
+                    remotePath: entry.path,
                     sanitizedStem: stem,
-                    originalFilename: sanitizedFull,
+                    originalFilename: sanitized,
                     lowercasedExtension: ext,
                     kind: kind,
-                    fileSize: file.fileSize,
+                    fileSize: size,
                     timestamp: timestamp.date,
-                    timestampSource: timestamp.source
+                    timestampSource: timestamp.source,
+                    contentHash: hash
                 )
             )
         }
 
-        // Skip candidates that lack any timestamp — never silently bucket into 1970.
-        let usable = candidates.filter { $0.timestamp != nil }
-        let unscheduled = candidates.filter { $0.timestamp == nil }
+        let usable = candidates.filter { $0.timestamp != nil && $0.contentHash != nil }
+        let unscheduled = candidates.filter { $0.timestamp == nil || $0.contentHash == nil }
 
         let bundleSpecs = matcher.match(candidates: usable)
 
         var bundles: [LegacyAssetBundle] = []
         for spec in bundleSpecs {
             try Task.checkCancellation()
-            do {
-                let bundle = try await buildBundle(from: spec)
-                bundles.append(bundle)
-            } catch {
-                warnings.append("Failed to hash bundle for \(spec.components.first?.candidate.url.lastPathComponent ?? "unknown"): \(error.localizedDescription)")
-            }
+            bundles.append(buildBundle(from: spec))
         }
 
         let plans = bundlesByMonth(bundles)
         return LegacyScanReport(plans: plans, unscheduledCandidates: unscheduled, warnings: warnings)
     }
 
-    private func buildBundle(from spec: LegacyMatchedBundleSpec) async throws -> LegacyAssetBundle {
-        var components: [LegacyResourceComponent] = []
-        components.reserveCapacity(spec.components.count)
+    // MARK: - Recursive listing
 
-        for entry in spec.components {
+    private func enumerate(
+        client: any RemoteStorageClientProtocol,
+        root: String
+    ) async throws -> [RemoteStorageEntry] {
+        let normalizedRoot = RemotePathBuilder.normalizePath(root)
+        var pending: [String] = [normalizedRoot]
+        var files: [RemoteStorageEntry] = []
+        while let dir = pending.popLast() {
             try Task.checkCancellation()
-            let (hash, size) = try FileHasher.sha256(of: entry.candidate.url)
-            components.append(
-                LegacyResourceComponent(
-                    role: entry.role,
-                    slot: entry.slot,
-                    url: entry.candidate.url,
-                    originalFilename: entry.candidate.originalFilename,
-                    fileSize: size > 0 ? size : entry.candidate.fileSize,
-                    contentHash: hash
-                )
+            let entries = try await client.list(path: dir)
+            for entry in entries {
+                if entry.name == "." || entry.name == ".." { continue }
+                if entry.isDirectory {
+                    pending.append(entry.path)
+                } else {
+                    files.append(entry)
+                }
+            }
+        }
+        return files
+    }
+
+    private func buildBundle(from spec: LegacyMatchedBundleSpec) -> LegacyAssetBundle {
+        let components: [LegacyResourceComponent] = spec.components.compactMap { entry in
+            guard let hash = entry.candidate.contentHash else { return nil }
+            return LegacyResourceComponent(
+                role: entry.role,
+                slot: entry.slot,
+                remotePath: entry.candidate.remotePath,
+                originalFilename: entry.candidate.originalFilename,
+                fileSize: entry.candidate.fileSize,
+                contentHash: hash
             )
         }
 
-        let fingerprintTuples = components.map { (role: $0.role, slot: $0.slot, contentHash: $0.contentHash) }
-        let fingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: fingerprintTuples)
+        let fingerprint = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: components.map { (role: $0.role, slot: $0.slot, contentHash: $0.contentHash) }
+        )
 
         return LegacyAssetBundle(
             kind: spec.kind,

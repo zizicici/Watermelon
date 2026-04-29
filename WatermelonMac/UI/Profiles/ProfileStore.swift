@@ -189,37 +189,23 @@ final class ProfileStore: ObservableObject {
         return try keychainService.readPassword(account: profile.credentialRef)
     }
 
-    // MARK: - Legacy source folder bookmark per profile
+    // MARK: - Legacy folder path per profile (sync_state key-value, no schema change)
 
-    private func legacySourceKey(profileID: Int64) -> String {
-        "mac.legacySourceBookmark.\(profileID)"
+    private func legacyFolderPathKey(profileID: Int64) -> String {
+        "mac.legacyFolderPath.\(profileID)"
     }
 
-    func saveLegacySource(profileID: Int64, url: URL) throws {
-        let bookmark = try bookmarkStore.makeBookmarkData(for: url)
-        let encoded = bookmark.base64EncodedString()
-        try databaseManager.setSyncState(key: legacySourceKey(profileID: profileID), value: encoded)
+    func saveLegacyFolderPath(profileID: Int64, path: String) throws {
+        try databaseManager.setSyncState(key: legacyFolderPathKey(profileID: profileID), value: path)
     }
 
-    func clearLegacySource(profileID: Int64) {
-        try? databaseManager.setSyncState(key: legacySourceKey(profileID: profileID), value: "")
+    func clearLegacyFolderPath(profileID: Int64) {
+        try? databaseManager.setSyncState(key: legacyFolderPathKey(profileID: profileID), value: "")
     }
 
-    func resolveLegacySource(profileID: Int64) -> URL? {
-        guard let encoded = try? databaseManager.syncStateValue(for: legacySourceKey(profileID: profileID)),
-              !encoded.isEmpty,
-              let bookmark = Data(base64Encoded: encoded) else {
-            return nil
-        }
-        do {
-            let resolved = try bookmarkStore.resolveBookmarkData(bookmark)
-            if let refreshed = resolved.refreshedBookmarkData {
-                let encodedRefreshed = refreshed.base64EncodedString()
-                try? databaseManager.setSyncState(key: legacySourceKey(profileID: profileID), value: encodedRefreshed)
-            }
-            return resolved.url
-        } catch {
-            return nil
-        }
+    func loadLegacyFolderPath(profileID: Int64) -> String? {
+        guard let value = try? databaseManager.syncStateValue(for: legacyFolderPathKey(profileID: profileID)),
+              !value.isEmpty else { return nil }
+        return value
     }
 }
