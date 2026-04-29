@@ -4,6 +4,41 @@ import os.log
 
 private let executorLog = Logger(subsystem: "com.zizicici.watermelon", category: "BackupParallel")
 
+private actor BackupThermalThrottle {
+    static let shared = BackupThermalThrottle()
+    private var lastObservedState: ProcessInfo.ThermalState = .nominal
+
+    func waitIfNeeded() async {
+        let state = ProcessInfo.processInfo.thermalState
+        if state != lastObservedState {
+            executorLog.info("thermal state \(Self.name(self.lastObservedState)) -> \(Self.name(state))")
+            lastObservedState = state
+        }
+        switch state {
+        case .nominal, .fair:
+            return
+        case .serious:
+            try? await Task.sleep(for: .seconds(2))
+        case .critical:
+            while !Task.isCancelled, ProcessInfo.processInfo.thermalState == .critical {
+                try? await Task.sleep(for: .seconds(10))
+            }
+        @unknown default:
+            return
+        }
+    }
+
+    private static func name(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal: return "nominal"
+        case .fair: return "fair"
+        case .serious: return "serious"
+        case .critical: return "critical"
+        @unknown default: return "unknown"
+        }
+    }
+}
+
 struct BackupParallelExecutor: Sendable {
     private let hashIndexRepository: ContentHashIndexRepository
     private let assetProcessor: AssetProcessor
@@ -283,6 +318,12 @@ struct BackupParallelExecutor: Sendable {
                     missingAssetCount += max(batchAssetIDs.count - batchAssetsByLocalIdentifier.count, 0)
 
                     for assetID in batchAssetIDs {
+                        if Task.isCancelled {
+                            workerState.paused = true
+                            break
+                        }
+
+                        await BackupThermalThrottle.shared.waitIfNeeded()
                         if Task.isCancelled {
                             workerState.paused = true
                             break

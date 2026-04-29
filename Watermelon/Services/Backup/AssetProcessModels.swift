@@ -11,6 +11,23 @@ struct AssetProcessContext {
     let profile: ServerProfileRecord
     let assetPosition: Int
     let totalAssets: Int
+
+    func withRefreshedAsset(
+        _ asset: PHAsset,
+        selectedResources: [BackupSelectedResource]
+    ) -> AssetProcessContext {
+        AssetProcessContext(
+            workerID: workerID,
+            asset: asset,
+            selectedResources: selectedResources,
+            cachedLocalHash: cachedLocalHash,
+            iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+            monthStore: monthStore,
+            profile: profile,
+            assetPosition: assetPosition,
+            totalAssets: totalAssets
+        )
+    }
 }
 
 struct AssetProcessResult: Sendable {

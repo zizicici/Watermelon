@@ -32,6 +32,46 @@ final class AssetProcessor: Sendable {
         eventStream: BackupEventStream,
         cancellationController: BackupCancellationController?
     ) async throws -> AssetProcessResult {
+        // Re-fetch — stale PHAsset (deleted/edited mid-batch) surfaces as PHPhotosErrorDomain -1 deep in requestData.
+        var context = context
+        let refetchResult = PHAsset.fetchAssets(
+            withLocalIdentifiers: [context.asset.localIdentifier],
+            options: nil
+        )
+        guard refetchResult.count > 0 else {
+            return AssetProcessResult(
+                status: .skipped,
+                reason: "asset_gone",
+                displayName: BackupAssetResourcePlanner.assetDisplayName(
+                    asset: context.asset,
+                    selectedResources: context.selectedResources
+                ),
+                assetFingerprint: nil,
+                timing: AssetProcessTiming(),
+                totalFileSizeBytes: 0,
+                uploadedFileSizeBytes: 0
+            )
+        }
+        let refetchedAsset = refetchResult.object(at: 0)
+        let refetchedResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
+            from: PHAssetResource.assetResources(for: refetchedAsset)
+        )
+        guard !refetchedResources.isEmpty else {
+            return AssetProcessResult(
+                status: .skipped,
+                reason: "asset_no_resources",
+                displayName: BackupAssetResourcePlanner.assetDisplayName(
+                    asset: refetchedAsset,
+                    selectedResources: []
+                ),
+                assetFingerprint: nil,
+                timing: AssetProcessTiming(),
+                totalFileSizeBytes: 0,
+                uploadedFileSizeBytes: 0
+            )
+        }
+        context = context.withRefreshedAsset(refetchedAsset, selectedResources: refetchedResources)
+
         var preparedResources: [PreparedResource] = []
         preparedResources.reserveCapacity(context.selectedResources.count)
         var timing = AssetProcessTiming()

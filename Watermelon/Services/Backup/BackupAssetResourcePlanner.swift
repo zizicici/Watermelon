@@ -11,7 +11,10 @@ struct BackupSelectedResource {
 
 enum BackupAssetResourcePlanner {
     static func orderedResourcesWithRoleSlot(from resources: [PHAssetResource]) -> [BackupSelectedResource] {
-        let sorted = Array(resources.enumerated()).sorted { lhs, rhs in
+        let filtered = resources.enumerated().filter { _, resource in
+            !shouldExcludeFromBackup(resource: resource)
+        }
+        let sorted = Array(filtered).sorted { lhs, rhs in
             let lhsRole = PhotoLibraryService.resourceTypeCode(lhs.1.type)
             let rhsRole = PhotoLibraryService.resourceTypeCode(rhs.1.type)
             if lhsRole != rhsRole { return lhsRole < rhsRole }
@@ -42,6 +45,14 @@ enum BackupAssetResourcePlanner {
         }
 
         return result
+    }
+
+    // iOS 17+ returns .photoProxy as a low-res stand-in alongside the real .photo for iCloud assets.
+    private static func shouldExcludeFromBackup(resource: PHAssetResource) -> Bool {
+        if #available(iOS 17, *), resource.type == .photoProxy {
+            return true
+        }
+        return false
     }
 
     static func assetFingerprint(resourceRoleSlotHashes: [(role: Int, slot: Int, contentHash: Data)]) -> Data {
