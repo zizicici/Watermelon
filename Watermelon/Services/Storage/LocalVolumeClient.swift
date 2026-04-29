@@ -18,7 +18,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         .fileSizeKey,
         .nameKey
     ]
-    private static let uploadBufferSize = 8 * 1024 * 1024
+    private static let uploadBufferSize = 16 * 1024 * 1024
     private static let uploadProgressStepBytes: Int64 = 8 * 1024 * 1024
 
     private var config: Config
