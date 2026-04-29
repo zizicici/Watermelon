@@ -15,10 +15,8 @@ private actor BackupThermalThrottle {
             lastObservedState = state
         }
         switch state {
-        case .nominal, .fair:
+        case .nominal, .fair, .serious:
             return
-        case .serious:
-            try? await Task.sleep(for: .seconds(2))
         case .critical:
             while !Task.isCancelled, ProcessInfo.processInfo.thermalState == .critical {
                 try? await Task.sleep(for: .seconds(10))
