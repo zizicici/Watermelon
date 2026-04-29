@@ -8,20 +8,6 @@
 import Foundation
 import MoreKit
 
-// MARK: - App Name
-
-enum AppName {
-    static var localized: String {
-        if let name = Bundle.main.localizedInfoDictionary?["CFBundleDisplayName"] as? String, !name.isEmpty {
-            return name
-        }
-        if let name = Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String, !name.isEmpty {
-            return name
-        }
-        return "Watermelon"
-    }
-}
-
 // MARK: - BackupWorkerCountMode
 
 enum BackupWorkerCountMode: Int, CaseIterable, Codable {

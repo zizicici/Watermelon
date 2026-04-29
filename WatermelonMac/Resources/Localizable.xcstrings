@@ -1,0 +1,834 @@
+{
+  "sourceLanguage" : "en",
+  "version" : "1.0",
+  "strings" : {
+    "common.cancel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Abbrechen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Cancelar" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Cancelar" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Annuler" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "キャンセル" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "취소" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Cancelar" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Cancelar" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Скасувати" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "取消" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "取消" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "取消" } }
+      }
+    },
+    "common.save" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Speichern" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Save" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Guardar" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Guardar" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Enregistrer" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "保存" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "저장" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Salvar" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Guardar" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Зберегти" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "儲存" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "保存" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "儲存" } }
+      }
+    },
+    "common.saving" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Wird gespeichert…" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Saving…" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Guardando…" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Guardando…" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Enregistrement…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "保存中…" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "저장 중…" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Salvando…" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "A guardar…" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Збереження…" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "儲存中…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "保存中…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "儲存中…" } }
+      }
+    },
+    "common.delete" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Löschen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Delete" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Eliminar" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Eliminar" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Supprimer" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "削除" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "삭제" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Excluir" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Apagar" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Видалити" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "刪除" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "删除" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "刪除" } }
+      }
+    },
+    "common.connect" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Verbinden" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Connect" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Conectar" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Conectar" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Connecter" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "接続" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "연결" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Conectar" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Ligar" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Підключити" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "連線" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "连接" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "連線" } }
+      }
+    },
+    "common.done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Fertig" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Done" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Listo" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Listo" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Terminé" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "完了" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "완료" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Concluído" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Concluído" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Готово" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "完成" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "完成" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "完成" } }
+      }
+    },
+    "common.ok" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "OK" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "OK" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "OK" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "OK" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "OK" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "OK" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "확인" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "OK" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "OK" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "OK" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "好" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "好" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "好" } }
+      }
+    },
+    "common.choose" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Auswählen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Choose" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Elegir" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Elegir" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Choisir" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "選択" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "선택" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Escolher" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Escolher" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Вибрати" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "選擇" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "选择" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "選擇" } }
+      }
+    },
+    "common.choose.folder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Ordner auswählen…" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Choose folder…" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Elegir carpeta…" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Elegir carpeta…" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Choisir un dossier…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "フォルダを選択…" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "폴더 선택…" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Escolher pasta…" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Escolher pasta…" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Вибрати теку…" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "選擇資料夾…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "选择文件夹…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "選擇資料夾…" } }
+      }
+    },
+    "common.notSelected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Nicht ausgewählt" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Not selected" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Sin seleccionar" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Sin seleccionar" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Non sélectionné" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "未選択" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "선택되지 않음" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Não selecionado" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Não selecionado" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Не вибрано" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "未選擇" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未选择" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "未選擇" } }
+      }
+    },
+    "menu.about" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Über Watermelon" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "About Watermelon" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Acerca de Watermelon" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Acerca de Watermelon" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "À propos de Watermelon" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "Watermelon について" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Watermelon 정보" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Sobre o Watermelon" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Acerca de Watermelon" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Про Watermelon" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "關於 Watermelon" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "关于 Watermelon" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "關於 Watermelon" } }
+      }
+    },
+    "profile.rename.menu" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Umbenennen…" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Rename…" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Renombrar…" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Renombrar…" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Renommer…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "名前を変更…" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이름 변경…" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Renomear…" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Mudar nome…" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Перейменувати…" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "重新命名…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "重命名…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "重新命名…" } }
+      }
+    },
+    "profile.rename.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Profil umbenennen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Rename Profile" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Renombrar perfil" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Renombrar perfil" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Renommer le profil" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "プロファイル名を変更" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "프로필 이름 변경" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Renomear perfil" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Mudar nome do perfil" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Перейменувати профіль" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "重新命名設定檔" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "重命名配置文件" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "重新命名設定檔" } }
+      }
+    },
+    "menu.openLogs" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Import-Protokolle anzeigen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Show Import Logs" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Mostrar registros de importación" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Mostrar registros de importación" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Afficher les journaux d’import" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "インポートログを表示" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "가져오기 로그 보기" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Mostrar registros de importação" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Mostrar registos de importação" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Показати журнали імпорту" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "顯示匯入紀錄" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "显示导入日志" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "顯示匯入紀錄" } }
+      }
+    },
+    "profiles.section" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Profile" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Profiles" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Perfiles" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Perfiles" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Profils" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "プロファイル" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "프로필" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Perfis" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Perfis" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Профілі" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "設定檔" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "配置文件" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "設定檔" } }
+      }
+    },
+    "profiles.add" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Profil hinzufügen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add Profile" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Añadir perfil" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Añadir perfil" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Ajouter un profil" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "プロファイルを追加" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "프로필 추가" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Adicionar perfil" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Adicionar perfil" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Додати профіль" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "新增設定檔" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "添加配置文件" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "新增設定檔" } }
+      }
+    },
+    "profiles.add.local" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Lokaler Ordner…" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Local Folder…" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Carpeta local…" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Carpeta local…" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Dossier local…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ローカルフォルダ…" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "로컬 폴더…" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Pasta local…" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Pasta local…" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Локальна тека…" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "本機資料夾…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "本地文件夹…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "本機資料夾…" } }
+      }
+    },
+    "profiles.detail.empty.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Profil auswählen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Select a profile" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Selecciona un perfil" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Selecciona un perfil" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Sélectionnez un profil" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "プロファイルを選択" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "프로필 선택" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Selecione um perfil" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Selecione um perfil" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Виберіть профіль" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "選擇設定檔" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "选择一个配置文件" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "選擇設定檔" } }
+      }
+    },
+    "profiles.detail.empty.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Verbinde dich mit einem SMB-, WebDAV- oder lokalen Ordner-Profil, um Altdaten zu importieren." } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Connect to an SMB / WebDAV / local-folder profile to import legacy data." } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Conéctate a un perfil SMB / WebDAV / carpeta local para importar datos antiguos." } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Conéctate a un perfil SMB / WebDAV / carpeta local para importar datos antiguos." } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Connectez-vous à un profil SMB / WebDAV / dossier local pour importer d’anciennes données." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "SMB / WebDAV / ローカルフォルダのプロファイルに接続して、過去のデータをインポートします。" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "SMB / WebDAV / 로컬 폴더 프로필에 연결하여 기존 데이터를 가져옵니다." } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Conecte-se a um perfil SMB / WebDAV / pasta local para importar dados antigos." } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Liga-te a um perfil SMB / WebDAV / pasta local para importar dados antigos." } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Підключіться до профілю SMB / WebDAV / локальної теки, щоб імпортувати старі дані." } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "連線至 SMB / WebDAV / 本機資料夾設定檔，以匯入舊有資料。" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "连接到 SMB / WebDAV / 本地文件夹配置文件以导入老数据。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "連線至 SMB / WebDAV / 本機資料夾設定檔，以匯入舊有資料。" } }
+      }
+    },
+    "migration.section.legacyFolder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Ordner mit Altdaten" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Legacy data folder" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Carpeta de datos antiguos" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Carpeta de datos antiguos" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Dossier de données anciennes" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "過去データのフォルダ" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이전 데이터 폴더" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Pasta de dados antigos" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Pasta de dados antigos" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Тека зі старими даними" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "舊有資料資料夾" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "老数据文件夹" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "舊有資料資料夾" } }
+      }
+    },
+    "migration.button.scan" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Scannen (Test)" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Scan (dry run)" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Escanear (prueba)" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Escanear (prueba)" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Analyser (test)" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "スキャン(ドライラン)" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "스캔(드라이런)" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Escanear (teste)" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Analisar (teste)" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Сканувати (пробне)" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "掃描(預演)" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "扫描(预演)" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "掃描(預演)" } }
+      }
+    },
+    "migration.button.commit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Import bestätigen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Commit Import" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Confirmar importación" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Confirmar importación" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Valider l’import" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "インポートを実行" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "가져오기 실행" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Confirmar importação" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Confirmar importação" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Підтвердити імпорт" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "確認匯入" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "确认导入" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "確認匯入" } }
+      }
+    },
+    "migration.scanning" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Wird gescannt…" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Scanning…" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Escaneando…" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Escaneando…" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Analyse…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "スキャン中…" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "스캔 중…" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Escaneando…" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "A analisar…" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Сканування…" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "掃描中…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "扫描中…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "掃描中…" } }
+      }
+    },
+    "migration.idle.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Wähle einen Altdaten-Ordner und scanne" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Pick a legacy folder, then Scan" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Selecciona una carpeta antigua y luego Escanea" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Selecciona una carpeta antigua y luego Escanea" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Choisissez un dossier ancien, puis Analysez" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "過去フォルダを選び、スキャンしてください" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이전 폴더를 선택한 후 스캔하세요" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Escolha uma pasta antiga e clique em Escanear" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Escolhe uma pasta antiga e analisa" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Виберіть стару теку, потім скануйте" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "請選擇舊有資料資料夾，然後掃描" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请选择老数据文件夹，然后扫描" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "請選擇舊有資料資料夾，然後掃描" } }
+      }
+    },
+    "migration.idle.detail" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Dieser Probelauf listet die Bündel auf, die importiert würden. Es werden noch keine Daten kopiert." } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This dry-run lists the bundles that would be imported. No data is moved or copied yet." } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Esta prueba muestra los paquetes que se importarían. Aún no se mueve ni copia nada." } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Esta prueba muestra los paquetes que se importarían. Aún no se mueve ni copia nada." } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Cet essai à blanc liste les paquets qui seraient importés. Aucune donnée n’est encore déplacée ni copiée." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "このドライランでは、インポート対象のバンドルを一覧表示します。データはまだ移動・コピーされません。" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이 드라이런은 가져올 번들을 보여줍니다. 아직 어떤 데이터도 이동하거나 복사하지 않습니다." } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Este teste mostra os pacotes que seriam importados. Nenhum dado é movido ou copiado ainda." } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Esta análise lista os pacotes que seriam importados. Ainda nada é movido nem copiado." } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Це пробне сканування показує пакети, які будуть імпортовані. Жодні дані ще не переміщуються й не копіюються." } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "此預演會列出將要匯入的批次。尚未複製或移動任何資料。" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此预演会列出将要导入的批次。还没有复制或移动任何数据。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此預演會列出將要匯入的批次。尚未複製或移動任何資料。" } }
+      }
+    },
+    "migration.scanning.text" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Lese Datei-Metadaten und berechne Hashes…" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Reading file metadata and computing hashes…" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Leyendo metadatos y calculando hashes…" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Leyendo metadatos y calculando hashes…" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Lecture des métadonnées et calcul des hachages…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ファイルメタデータを読み取り、ハッシュを計算中…" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "파일 메타데이터 읽기 및 해시 계산 중…" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Lendo metadados de arquivos e calculando hashes…" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "A ler metadados de ficheiros e a calcular hashes…" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Читання метаданих та обчислення хешів…" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "讀取檔案中繼資料並計算雜湊…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在读取文件元数据并计算哈希…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "讀取檔案中繼資料並計算雜湊…" } }
+      }
+    },
+    "migration.password.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Gib das Passwort für %1$@ (%2$@) ein." } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enter the password for %1$@ (%2$@)." } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Introduce la contraseña de %1$@ (%2$@)." } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Introduce la contraseña de %1$@ (%2$@)." } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Saisissez le mot de passe pour %1$@ (%2$@)." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%1$@ (%2$@) のパスワードを入力してください。" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "%1$@ (%2$@)의 비밀번호를 입력하세요." } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Digite a senha de %1$@ (%2$@)." } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Introduz a palavra-passe para %1$@ (%2$@)." } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Введіть пароль для %1$@ (%2$@)." } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "請輸入 %1$@ (%2$@) 的密碼。" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请输入 %1$@（%2$@）的密码。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "請輸入 %1$@（%2$@）的密碼。" } }
+      }
+    },
+    "migration.password.field" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Passwort" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Password" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Contraseña" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Contraseña" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Mot de passe" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "パスワード" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "비밀번호" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Senha" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Palavra-passe" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Пароль" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "密碼" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "密码" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "密碼" } }
+      }
+    },
+    "migration.summary.months" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Monate" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Months" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Meses" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Meses" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Mois" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "月数" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "월" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Meses" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Meses" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Місяці" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "月份" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "月份" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "月份" } }
+      }
+    },
+    "migration.summary.bundles" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Bündel" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Bundles" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Paquetes" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Paquetes" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Paquets" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "バンドル" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "번들" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Pacotes" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Pacotes" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Пакети" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "批次" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "批次" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "批次" } }
+      }
+    },
+    "migration.summary.files" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Dateien" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Files" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Archivos" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Archivos" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Fichiers" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ファイル" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "파일" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Arquivos" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Ficheiros" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Файли" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "檔案" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "文件" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "檔案" } }
+      }
+    },
+    "migration.summary.total" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Gesamt" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Total" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Total" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Total" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Total" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "合計" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "합계" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Total" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Total" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Всього" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "總計" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "总计" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "總計" } }
+      }
+    },
+    "migration.summary.estimatedTime" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Gesch. Dauer" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Est. time" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Tiempo est." } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Tiempo est." } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Durée est." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "推定時間" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "예상 시간" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Tempo est." } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Tempo est." } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Очікуваний час" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "預估時間" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "预计时长" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "預估時間" } }
+      }
+    },
+    "migration.skipped.section" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Übersprungen — kein lesbarer Zeitstempel" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Skipped — no readable timestamp" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Omitido — sin marca de tiempo legible" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Omitido — sin marca de tiempo legible" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Ignoré — horodatage illisible" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "スキップ — タイムスタンプが読み取れません" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "건너뜀 — 읽을 수 있는 타임스탬프 없음" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Ignorado — sem timestamp legível" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Ignorado — sem indicação de tempo legível" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Пропущено — немає читабельної мітки часу" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "已略過 — 無可讀時間戳" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已跳过 — 没有可读的时间戳" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已略過 — 無可讀時間戳" } }
+      }
+    },
+    "migration.progress.importing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Wird importiert" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Importing" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Importando" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Importando" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Importation" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "インポート中" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "가져오는 중" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Importando" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "A importar" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Імпортування" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "匯入中" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "导入中" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "匯入中" } }
+      }
+    },
+    "migration.progress.imported" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Importiert" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Imported" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Importado" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Importado" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Importé" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "インポート済み" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "가져옴" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Importado" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Importado" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Імпортовано" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "已匯入" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已导入" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已匯入" } }
+      }
+    },
+    "migration.progress.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Fehlgeschlagen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Failed" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Falló" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Falló" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Échec" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "失敗" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "실패" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Falhou" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Falhou" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Помилка" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "失敗" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "失败" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "失敗" } }
+      }
+    },
+    "migration.progress.connecting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Verbinde…" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Connecting…" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Conectando…" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Conectando…" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Connexion…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "接続中…" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "연결 중…" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Conectando…" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "A ligar…" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Підключення…" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "連線中…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "连接中…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "連線中…" } }
+      }
+    },
+    "migration.progress.complete" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Import abgeschlossen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Import complete" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Importación completa" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Importación completa" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Import terminé" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "インポートが完了しました" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "가져오기 완료" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Importação concluída" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Importação concluída" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Імпорт завершено" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "匯入完成" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "导入完成" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "匯入完成" } }
+      }
+    },
+    "migration.progress.month.format" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Importiere %@…" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Importing %@…" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Importando %@…" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Importando %@…" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Import de %@…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@ をインポート中…" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "%@ 가져오는 중…" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Importando %@…" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "A importar %@…" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Імпортується %@…" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "正在匯入 %@…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在导入 %@…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在匯入 %@…" } }
+      }
+    },
+    "migration.progress.stat.imported" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Importiert" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Imported" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Importado" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Importado" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Importé" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "インポート済み" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "가져옴" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Importado" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Importado" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Імпортовано" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "已匯入" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已导入" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已匯入" } }
+      }
+    },
+    "migration.progress.stat.skippedFp" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Übersprungen (Fingerprint)" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Skipped (fp)" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Omitido (huella)" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Omitido (huella)" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Ignoré (empreinte)" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "スキップ (FP)" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "건너뜀 (지문)" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Ignorado (fp)" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Ignorado (fp)" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Пропущено (FP)" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "已略過(指紋)" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已跳过(指纹)" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已略過(指紋)" } }
+      }
+    },
+    "migration.progress.stat.skippedHash" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Übersprungen (Hash)" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Skipped (hash)" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Omitido (hash)" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Omitido (hash)" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Ignoré (hash)" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "スキップ (ハッシュ)" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "건너뜀 (해시)" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Ignorado (hash)" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Ignorado (hash)" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Пропущено (хеш)" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "已略過(雜湊)" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已跳过(哈希)" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已略過(雜湊)" } }
+      }
+    },
+    "migration.progress.stat.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Fehlgeschlagen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Failed" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Falló" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Falló" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Échec" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "失敗" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "실패" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Falhou" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Falhou" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Помилки" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "失敗" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "失败" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "失敗" } }
+      }
+    },
+    "migration.progress.stat.uploaded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Hochgeladen" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Uploaded" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Subido" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Subido" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Envoyé" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "アップロード済み" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "업로드됨" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Enviado" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Enviado" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Передано" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "已上傳" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已上传" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已上傳" } }
+      }
+    },
+    "migration.password.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Passwort erforderlich" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Password required" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Contraseña requerida" } },
+        "es-419" : { "stringUnit" : { "state" : "translated", "value" : "Contraseña requerida" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Mot de passe requis" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "パスワードが必要です" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "비밀번호 필요" } },
+        "pt-BR" : { "stringUnit" : { "state" : "translated", "value" : "Senha necessária" } },
+        "pt-PT" : { "stringUnit" : { "state" : "translated", "value" : "Palavra-passe necessária" } },
+        "uk" : { "stringUnit" : { "state" : "translated", "value" : "Потрібен пароль" } },
+        "zh-HK" : { "stringUnit" : { "state" : "translated", "value" : "需要密碼" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "需要密码" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "需要密碼" } }
+      }
+    }
+  }
+}

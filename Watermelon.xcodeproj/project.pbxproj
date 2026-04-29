@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0C4F7F917F12A2F9739440F5 /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		144234A12F4EAFB600293274 /* JXPhotoBrowser in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A02F4EAFB600293274 /* JXPhotoBrowser */; };
 		144234A42F4EAFC200293274 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A32F4EAFC200293274 /* Kingfisher */; };
 		144234A72F4EAFE800293274 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A62F4EAFE800293274 /* GRDB */; };
@@ -18,6 +19,8 @@
 		14FB00032FEA000100000001 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00022FEA000100000001 /* FirebaseCrashlytics */; };
 		14FB00062FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport */; };
 		1FA88BC501DC6CDE49D62941 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 55784EA3B978EE3197A59404 /* Foundation.framework */; };
+		224E0653EB5B7EB82D0E3835 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A62F4EAFE800293274 /* GRDB */; };
+		772FD6D7F2F82EB5F0CE1EE9 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,9 +45,21 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B98BFE22B617A5D907D2C8DE /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				0C4F7F917F12A2F9739440F5 /* AMSMB2 in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		141A9F772FA2112100DF249B /* WatermelonMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WatermelonMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		148EF9522F4EABFE0025F409 /* Watermelon.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Watermelon.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		48AF7F5640AC24EDC2D9AEBB /* WatermelonTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WatermelonTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		55784EA3B978EE3197A59404 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
@@ -61,6 +76,16 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		141A9F782FA2112100DF249B /* WatermelonMac */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WatermelonMac;
+			sourceTree = "<group>";
+		};
+		141A9FB02FA2112300DF249C /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
 		148EF9542F4EABFE0025F409 /* Watermelon */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -77,6 +102,15 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		141A9F742FA2112100DF249B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				224E0653EB5B7EB82D0E3835 /* GRDB in Frameworks */,
+				772FD6D7F2F82EB5F0CE1EE9 /* AMSMB2 in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		148EF94F2F4EABFE0025F409 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -107,7 +141,9 @@
 		148EF9492F4EABFE0025F409 = {
 			isa = PBXGroup;
 			children = (
+				141A9FB02FA2112300DF249C /* Shared */,
 				148EF9542F4EABFE0025F409 /* Watermelon */,
+				141A9F782FA2112100DF249B /* WatermelonMac */,
 				148EF9532F4EABFE0025F409 /* Products */,
 				33F2ABBE08821C14B2AE7156 /* Frameworks */,
 				380376F0D988D50E5271B4D2 /* WatermelonTests */,
@@ -119,6 +155,7 @@
 			children = (
 				148EF9522F4EABFE0025F409 /* Watermelon.app */,
 				48AF7F5640AC24EDC2D9AEBB /* WatermelonTests.xctest */,
+				141A9F772FA2112100DF249B /* WatermelonMac.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -142,6 +179,32 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		141A9F762FA2112100DF249B /* WatermelonMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 141A9F7F2FA2112200DF249B /* Build configuration list for PBXNativeTarget "WatermelonMac" */;
+			buildPhases = (
+				141A9F732FA2112100DF249B /* Sources */,
+				141A9F742FA2112100DF249B /* Frameworks */,
+				141A9F752FA2112100DF249B /* Resources */,
+				B98BFE22B617A5D907D2C8DE /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				141A9F782FA2112100DF249B /* WatermelonMac */,
+				141A9FB02FA2112300DF249C /* Shared */,
+			);
+			name = WatermelonMac;
+			packageProductDependencies = (
+				144234A62F4EAFE800293274 /* GRDB */,
+				14B0C0A32F4F000100111111 /* AMSMB2 */,
+			);
+			productName = WatermelonMac;
+			productReference = 141A9F772FA2112100DF249B /* WatermelonMac.app */;
+			productType = "com.apple.product-type.application";
+		};
 		148EF9512F4EABFE0025F409 /* Watermelon */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 148EF9652F4EABFF0025F409 /* Build configuration list for PBXNativeTarget "Watermelon" */;
@@ -156,6 +219,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
+				141A9FB02FA2112300DF249C /* Shared */,
 				148EF9542F4EABFE0025F409 /* Watermelon */,
 			);
 			name = Watermelon;
@@ -202,9 +266,12 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2620;
+				LastSwiftUpdateCheck = 2630;
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
+					141A9F762FA2112100DF249B = {
+						CreatedOnToolsVersion = 26.3;
+					};
 					148EF9512F4EABFE0025F409 = {
 						CreatedOnToolsVersion = 26.2;
 					};
@@ -248,11 +315,19 @@
 			targets = (
 				148EF9512F4EABFE0025F409 /* Watermelon */,
 				69A7F09A10C2D14C88257489 /* WatermelonTests */,
+				141A9F762FA2112100DF249B /* WatermelonMac */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		141A9F752FA2112100DF249B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		148EF9502F4EABFE0025F409 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -270,6 +345,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		141A9F732FA2112100DF249B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		148EF94E2F4EABFE0025F409 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -296,6 +378,74 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		141A9F802FA2112200DF249B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KKQQQNKMM6;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.zizicici.watermelon-mac";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		141A9F812FA2112200DF249B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KKQQQNKMM6;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.zizicici.watermelon-mac";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 		148EF9662F4EABFF0025F409 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -550,6 +700,15 @@
 			buildConfigurations = (
 				E9415D9AAE0B6A2F2E25BC84 /* Release */,
 				D17AD1F4FCFB39764A3C3C3E /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		141A9F7F2FA2112200DF249B /* Build configuration list for PBXNativeTarget "WatermelonMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				141A9F802FA2112200DF249B /* Debug */,
+				141A9F812FA2112200DF249B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -1,15 +1,33 @@
 import CryptoKit
 import Foundation
+#if os(iOS)
 import Photos
+#endif
 
+#if os(iOS)
 struct BackupSelectedResource {
     let resourceIndex: Int
     let resource: PHAssetResource
     let role: Int
     let slot: Int
 }
+#endif
 
 enum BackupAssetResourcePlanner {
+    static func assetFingerprint(resourceRoleSlotHashes: [(role: Int, slot: Int, contentHash: Data)]) -> Data {
+        let tokens = resourceRoleSlotHashes
+            .map { token in
+                let hashHex = token.contentHash.hexString
+                return "\(token.role)|\(token.slot)|\(hashHex)"
+            }
+            .sorted()
+            .joined(separator: "\n")
+
+        let digest = SHA256.hash(data: Data(tokens.utf8))
+        return Data(digest)
+    }
+
+    #if os(iOS)
     static func orderedResourcesWithRoleSlot(from resources: [PHAssetResource]) -> [BackupSelectedResource] {
         let filtered = resources.enumerated().filter { _, resource in
             !shouldExcludeFromBackup(resource: resource)
@@ -55,23 +73,11 @@ enum BackupAssetResourcePlanner {
         return false
     }
 
-    static func assetFingerprint(resourceRoleSlotHashes: [(role: Int, slot: Int, contentHash: Data)]) -> Data {
-        let tokens = resourceRoleSlotHashes
-            .map { token in
-                let hashHex = token.contentHash.hexString
-                return "\(token.role)|\(token.slot)|\(hashHex)"
-            }
-            .sorted()
-            .joined(separator: "\n")
-
-        let digest = SHA256.hash(data: Data(tokens.utf8))
-        return Data(digest)
-    }
-
     static func assetDisplayName(asset: PHAsset, selectedResources: [BackupSelectedResource]) -> String {
         if let first = selectedResources.first {
             return first.resource.originalFilename
         }
         return "asset_\(asset.creationDate?.millisecondsSinceEpoch ?? 0)"
     }
+    #endif
 }

@@ -1,5 +1,7 @@
 import Foundation
+#if os(iOS)
 import Photos
+#endif
 
 enum ExecutionLogLevel: String, CaseIterable, Sendable {
     case debug
@@ -46,6 +48,7 @@ struct BackupTransferState {
     let stageDescription: String
 }
 
+#if os(iOS)
 struct LocalPhotoResource {
     let asset: PHAsset
     let resource: PHAssetResource
@@ -61,6 +64,7 @@ struct LocalPhotoResource {
     let fileSize: Int64
     let resourceModificationDate: Date?
 }
+#endif
 
 struct BackupProgress {
     let succeeded: Int

@@ -8,7 +8,7 @@ final class SecurityScopedBookmarkStore {
 
     func makeBookmarkData(for directoryURL: URL) throws -> Data {
         try directoryURL.bookmarkData(
-            options: [],
+            options: Self.creationOptions,
             includingResourceValuesForKeys: nil,
             relativeTo: nil
         )
@@ -18,7 +18,7 @@ final class SecurityScopedBookmarkStore {
         var isStale = false
         let url = try URL(
             resolvingBookmarkData: bookmarkData,
-            options: [.withoutUI],
+            options: Self.resolutionOptions,
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         )
@@ -28,4 +28,12 @@ final class SecurityScopedBookmarkStore {
         }
         return ResolvedBookmark(url: url, refreshedBookmarkData: nil)
     }
+
+    #if os(macOS)
+    private static let creationOptions: URL.BookmarkCreationOptions = [.withSecurityScope]
+    private static let resolutionOptions: URL.BookmarkResolutionOptions = [.withSecurityScope, .withoutUI]
+    #else
+    private static let creationOptions: URL.BookmarkCreationOptions = []
+    private static let resolutionOptions: URL.BookmarkResolutionOptions = [.withoutUI]
+    #endif
 }

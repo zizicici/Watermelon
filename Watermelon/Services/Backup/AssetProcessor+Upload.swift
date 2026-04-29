@@ -125,8 +125,8 @@ extension AssetProcessor {
         var attemptedFileNames: Set<String> = [targetFileName]
 
         let existingFileNames = monthStore.existingFileNames()
-        let existingCollisionKeys = Self.collisionKeySet(from: existingFileNames)
-        if existingCollisionKeys.contains(Self.collisionKey(for: targetFileName)) {
+        let existingCollisionKeys = RemoteFileNaming.collisionKeySet(from: existingFileNames)
+        if existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: targetFileName)) {
             let existingManifestResource = monthStore.findByFileName(targetFileName)
             let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: targetFileName)
             if localFileSize < Self.smallFileThresholdBytes {
@@ -150,7 +150,7 @@ extension AssetProcessor {
                 }
             }
             if skipReason == nil {
-                targetFileName = Self.resolveNextAvailableName(
+                targetFileName = RemoteFileNaming.resolveNextAvailableName(
                     baseName: baseFileName,
                     collisionKeys: existingCollisionKeys
                 )
@@ -316,7 +316,7 @@ extension AssetProcessor {
                     occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
                     occupiedNames.insert(uploadPreparation.targetFileName)
                     let previousFileName = uploadPreparation.targetFileName
-                    uploadPreparation.targetFileName = Self.resolveNextAvailableName(
+                    uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
                         baseName: uploadPreparation.baseFileName,
                         occupiedNames: occupiedNames
                     )
@@ -358,39 +358,6 @@ extension AssetProcessor {
         }
 
         return UploadRetryOutcome(fileName: nil, lastError: lastError)
-    }
-
-    private static func resolveNextAvailableName(baseName: String, occupiedNames: Set<String>) -> String {
-        resolveNextAvailableName(baseName: baseName, collisionKeys: collisionKeySet(from: occupiedNames))
-    }
-
-    private static func resolveNextAvailableName(baseName: String, collisionKeys: Set<String>) -> String {
-        guard collisionKeys.contains(collisionKey(for: baseName)) else {
-            return baseName
-        }
-
-        let nsName = baseName as NSString
-        let ext = nsName.pathExtension
-        let stem = nsName.deletingPathExtension
-
-        var suffix = 1
-        while true {
-            let candidateStem = "\(stem)_\(suffix)"
-            let candidate = ext.isEmpty ? candidateStem : "\(candidateStem).\(ext)"
-            if !collisionKeys.contains(collisionKey(for: candidate)) {
-                return candidate
-            }
-            suffix += 1
-        }
-    }
-
-    private static func collisionKeySet(from fileNames: Set<String>) -> Set<String> {
-        Set(fileNames.map(collisionKey(for:)))
-    }
-
-    private static func collisionKey(for fileName: String) -> String {
-        fileName.precomposedStringWithCanonicalMapping
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
     }
 
     func recordUploadedResource(

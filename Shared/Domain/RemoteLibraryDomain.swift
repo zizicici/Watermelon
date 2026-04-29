@@ -1,5 +1,7 @@
 import Foundation
+#if os(iOS)
 import Photos
+#endif
 
 struct RemoteManifestAsset: Hashable, Identifiable {
     let year: Int
@@ -87,10 +89,12 @@ struct RemoteAssetResourceInstance: Hashable, Identifiable, Sendable {
         "\(role)|\(slot)|\(resourceHash.hexString)"
     }
 
+    #if os(iOS)
     var resourceType: PHAssetResourceType? {
         guard role > 0 else { return nil }
         return PHAssetResourceType(rawValue: role)
     }
+    #endif
 
     var contentHashHex: String {
         resourceHash.hexString
