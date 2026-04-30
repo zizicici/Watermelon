@@ -31,9 +31,7 @@ enum HomeAlbumMatching {
     ) -> [RemoteAlbumItem] {
         guard !assets.isEmpty else { return [] }
 
-        // Same hash → same content, so keeping first-seen is correct. assert+log on collision
-        // because the upstream invariants (SQL unique index, upsertResource hash dedup) are
-        // supposed to make this unreachable.
+        // Same hash → same content; SQL unique index should make collisions unreachable.
         var resourcesByMonthHash: [ResourceLookupKey: RemoteManifestResource] = [:]
         resourcesByMonthHash.reserveCapacity(resources.count)
         for resource in resources {
