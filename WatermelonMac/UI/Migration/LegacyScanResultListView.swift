@@ -107,11 +107,11 @@ struct LegacyScanResultListView: View {
         case .toImport:
             switch action {
             case .insertNew, .replacesSubsets: return true
-            case .skipExactMatch, .skipEnclosed: return false
+            case .skipExactMatch, .skipEnclosed, .skipPerceptualDuplicate: return false
             }
         case .alreadyInTarget:
             switch action {
-            case .skipExactMatch, .skipEnclosed: return true
+            case .skipExactMatch, .skipEnclosed, .skipPerceptualDuplicate: return true
             case .insertNew, .replacesSubsets: return false
             }
         }
@@ -141,7 +141,7 @@ private struct ScanSummaryHeader: View {
             acc + plan.bundles.reduce(Int64(0)) { inner, bundle in
                 switch bundle.action {
                 case .insertNew, .replacesSubsets: return inner + bundle.totalFileSize
-                case .skipExactMatch, .skipEnclosed: return inner
+                case .skipExactMatch, .skipEnclosed, .skipPerceptualDuplicate: return inner
                 }
             }
         }
@@ -239,6 +239,13 @@ private struct BundleRow: View {
                 label: String(localized: "migration.scan.action.skip"),
                 chipColor: .gray,
                 reason: String(localized: "migration.scan.reason.enclosedAsset"),
+                reasonColor: .secondary
+            )
+        case .skipPerceptualDuplicate:
+            return ActionStyle(
+                label: String(localized: "migration.scan.action.skip"),
+                chipColor: .gray,
+                reason: String(localized: "migration.scan.reason.perceptualDuplicate"),
                 reasonColor: .secondary
             )
         case .replacesSubsets(let count):

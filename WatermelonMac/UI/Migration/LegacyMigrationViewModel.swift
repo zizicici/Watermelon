@@ -24,6 +24,7 @@ final class LegacyMigrationViewModel: ObservableObject {
     @Published var currentMonth: LibraryMonthKey?
     @Published var logLines: [LegacyImportLogEntry] = []
     @Published var replaceSubsetAssets: Bool = false
+    @Published var skipPerceptualDuplicates: Bool = true
     @Published private(set) var isClientConnected = false
 
     private var nextLogId: Int = 0
@@ -88,12 +89,14 @@ final class LegacyMigrationViewModel: ObservableObject {
         nextLogId = 0
 
         let targetBase = profile.basePath
+        let dedup = skipPerceptualDuplicates
         scanTask = Task { [weak self, planner] in
             do {
                 let result = try await planner.scan(
                     client: client,
                     rootPath: path,
-                    targetBasePath: targetBase
+                    targetBasePath: targetBase,
+                    enablePerceptualDedup: dedup
                 )
                 await MainActor.run {
                     self?.report = result

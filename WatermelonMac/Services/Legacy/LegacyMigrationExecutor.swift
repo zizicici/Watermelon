@@ -56,6 +56,20 @@ final class LegacyMigrationExecutor {
             try Task.checkCancellation()
             emit(.monthStarted(month: plan.month, bundleCount: plan.bundles.count))
 
+            // Fast path: every bundle is a scan-time skip → don't open or flush the target
+            // manifest. Saves a download + upload per all-skip month.
+            if plan.bundles.allSatisfy({ Self.isScanTimeSkip($0.action) }) {
+                for bundle in plan.bundles {
+                    totals.bundlesProcessed += 1
+                    totals.bundlesSkippedFingerprintExists += 1
+                    emit(.bundleResult(month: plan.month, bundle: bundle, outcome: .skippedFingerprintExists))
+                }
+                totals.monthsDone += 1
+                emit(.monthCompleted(month: plan.month))
+                emit(.progress(totals: totals))
+                continue
+            }
+
             let store: MonthManifestStore
             do {
                 store = try await MonthManifestStore.loadOrCreate(
@@ -100,6 +114,13 @@ final class LegacyMigrationExecutor {
         }
 
         emit(.finished(totals: totals))
+    }
+
+    private static func isScanTimeSkip(_ action: LegacyBundleAction) -> Bool {
+        switch action {
+        case .skipExactMatch, .skipEnclosed, .skipPerceptualDuplicate: return true
+        case .insertNew, .replacesSubsets: return false
+        }
     }
 
     // MARK: - Retry wrapper
@@ -181,6 +202,11 @@ final class LegacyMigrationExecutor {
         monthStore: MonthManifestStore,
         options: LegacyMigrationOptions
     ) async -> BundleAttemptResult {
+        // Honor scan-time perceptual decision: dHash data isn't in the manifest, so executor
+        // can't re-derive it cheaply. Trust the scan classification.
+        if case .skipPerceptualDuplicate = bundle.action {
+            return BundleAttemptResult(outcome: .skippedFingerprintExists, error: nil)
+        }
         if monthStore.containsAssetFingerprint(bundle.assetFingerprint) {
             return BundleAttemptResult(outcome: .skippedFingerprintExists, error: nil)
         }
@@ -212,7 +238,7 @@ final class LegacyMigrationExecutor {
             orderedResources: identities,
             fallbackTimestampMs: bundle.creationDate?.millisecondsSinceEpoch
         )
-        var collisionKeys = RemoteFileNaming.collisionKeySet(from: monthStore.existingFileNames())
+        var collisionKeys = monthStore.existingCollisionKeys()
 
         var bytesCopied: Int64 = 0
         var resourcesCopied = 0

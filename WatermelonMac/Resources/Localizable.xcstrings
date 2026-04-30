@@ -8186,6 +8186,587 @@
     },
     "webdav.error.uploadStalled" : {
 
+    },
+    "migration.options.skipPerceptual.label" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wahrnehmungsähnliche Fotos überspringen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skip perceptually similar photos"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Omitir fotos perceptualmente similares"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Omitir fotos perceptualmente similares"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ignorer les photos perceptuellement similaires"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知覚的に類似した画像をスキップ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지각적으로 유사한 사진 건너뛰기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pular fotos perceptualmente similares"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ignorar fotos percetualmente semelhantes"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пропускати перцептивно схожі фото"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳過感知相似嘅相"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳过感知相似的图片"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳過感知相似的圖片"
+          }
+        }
+      }
+    },
+    "migration.options.skipPerceptual.description" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Berechnet einen Wahrnehmungs-Hash für heic/jpg-Fotos aus Legacy. Wenn das Ziel dasselbe Bild bereits enthält (in irgendeinem Format), wird die Legacy-Kopie übersprungen. Der erste Scan lädt Zielfotos zum Indizieren herunter; spätere Scans nutzen den lokalen Cache."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Computes a perceptual hash for legacy heic/jpg photos. If the target already contains the same picture in any format, the legacy copy is skipped. First scan downloads target photos to index them; subsequent scans use the local cache."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calcula un hash perceptual para las fotos heic/jpg de legacy. Si el destino ya contiene la misma foto (en cualquier formato), se omite la copia legacy. El primer escaneo descarga las fotos del destino para indexarlas; los escaneos posteriores usan la caché local."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calcula un hash perceptual para las fotos heic/jpg de legacy. Si el destino ya contiene la misma foto (en cualquier formato), se omite la copia legacy. El primer escaneo descarga las fotos del destino para indexarlas; los escaneos posteriores usan la caché local."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calcule un hash perceptuel pour les heic/jpg legacy. Si la cible contient déjà la même photo (quel que soit le format), la copie legacy est ignorée. Le premier scan télécharge les photos cibles pour les indexer ; les scans suivants utilisent le cache local."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "レガシーの heic/jpg に知覚ハッシュを計算します。ターゲットに同じ写真(任意の形式)が既にある場合、レガシーのコピーをスキップします。初回スキャンはターゲット写真をダウンロードしてインデックスを構築し、以降はローカルキャッシュを使用します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "레거시의 heic/jpg에 지각 해시를 계산합니다. 대상에 같은 사진(어떤 형식이든)이 이미 있으면 레거시 사본을 건너뜁니다. 첫 스캔은 대상 사진을 다운로드해 인덱싱하고, 이후 스캔은 로컬 캐시를 사용합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calcula um hash perceptual para as fotos heic/jpg do legacy. Se o destino já contém a mesma foto (em qualquer formato), a cópia legacy é pulada. A primeira varredura baixa as fotos do destino para indexá-las; varreduras subsequentes usam o cache local."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calcula um hash percetual para as fotos heic/jpg do legacy. Se o destino já contém a mesma foto (em qualquer formato), a cópia legacy é ignorada. A primeira análise descarrega as fotos do destino para indexá-las; análises subsequentes usam a cache local."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обчислює перцептивний хеш для heic/jpg фото з legacy. Якщо в цілі вже є те саме фото (у будь-якому форматі), копію з legacy пропускають. Перше сканування завантажує фото з цілі для індексування; наступні сканування використовують локальний кеш."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "對 legacy 入面嘅 heic/jpg 計感知雜湊。如果目標已經有同一張相(任意格式)，跳過 legacy 嗰份。第一次掃描會下載目標相片去建索引，之後用本地快取。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对 legacy 里的 heic/jpg 算感知哈希。如果目标里已经有同一张照片(任意格式)，跳过 legacy 这一份。首次 scan 会下载目标照片建索引，之后命中本地缓存。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "對 legacy 中的 heic/jpg 算感知雜湊。若目標中已有同一張相片(任意格式)，跳過 legacy 那一份。首次掃描會下載目標相片建索引，後續掃描用本地快取。"
+          }
+        }
+      }
+    },
+    "migration.scan.reason.perceptualDuplicate" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Im Ziel existiert dasselbe Bild bereits in einem anderen Format"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Target already has the same picture in another format"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El destino ya tiene la misma foto en otro formato"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El destino ya tiene la misma foto en otro formato"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cible contient déjà la même photo dans un autre format"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターゲットに別の形式で同じ写真があります"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대상에 같은 사진이 다른 형식으로 이미 있습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O destino já tem a mesma foto em outro formato"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O destino já tem a mesma foto noutro formato"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У цілі вже є те саме фото в іншому форматі"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目標入面已經有同一張相嘅其它格式"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标里已有同一张照片的其它格式"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目標中已有同一張相片的其它格式"
+          }
+        }
+      }
+    },
+    "menu.clearPerceptualCache" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wahrnehmungs-Hash-Cache löschen…"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear perceptual hash cache…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar caché de hash perceptual…"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar caché de hash perceptual…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Effacer le cache de hash perceptuel…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知覚ハッシュキャッシュを削除…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지각 해시 캐시 지우기…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limpar cache de hash perceptual…"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limpar cache de hash percetual…"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Очистити кеш перцептивних хешів…"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除感知雜湊快取…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除感知哈希缓存…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除感知雜湊快取…"
+          }
+        }
+      }
+    },
+    "menu.clearPerceptualCache.confirm.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wahrnehmungs-Hash-Cache löschen?"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear perceptual hash cache?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Borrar la caché de hash perceptual?"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Borrar la caché de hash perceptual?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Effacer le cache de hash perceptuel ?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知覚ハッシュキャッシュを削除しますか？"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지각 해시 캐시를 지우시겠습니까?"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limpar o cache de hash perceptual?"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limpar a cache de hash percetual?"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Очистити кеш перцептивних хешів?"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除感知雜湊快取？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除感知哈希缓存？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除感知雜湊快取？"
+          }
+        }
+      }
+    },
+    "menu.clearPerceptualCache.confirm.message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Einträge (%@) werden gelöscht. Spätere Scans müssen die Hashes für Legacy- und Zielfotos neu berechnen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld entries (%@) will be deleted. Future scans will need to recompute hashes for legacy and target photos."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se eliminarán %lld entradas (%@). Los próximos escaneos deberán recalcular los hashes de las fotos legacy y de destino."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se eliminarán %lld entradas (%@). Los próximos escaneos deberán recalcular los hashes de las fotos legacy y de destino."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld entrées (%@) seront supprimées. Les prochains scans devront recalculer les hashs des photos legacy et cible."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 件 (%@) を削除します。次回のスキャンでは、レガシーとターゲットの写真のハッシュを再計算する必要があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld개 항목(%@)이 삭제됩니다. 이후 스캔에서는 레거시와 대상 사진의 해시를 다시 계산해야 합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld entradas (%@) serão excluídas. Varreduras futuras precisarão recalcular os hashes das fotos legacy e do destino."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld entradas (%@) serão eliminadas. Análises futuras terão de recalcular os hashes das fotos legacy e de destino."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Буде видалено %lld записів (%@). Наступні сканування доведеться перерахувати хеші для legacy та цільових фото."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "會刪除 %lld 條記錄 (%@)。下次掃描要對 legacy 同 target 嘅相重新計算雜湊。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将删除 %lld 条记录 (%@)。下次 scan 需要对 legacy 和 target 照片重新计算哈希。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將刪除 %lld 筆記錄 (%@)。下次掃描需要對 legacy 和 target 相片重新計算雜湊。"
+          }
+        }
+      }
+    },
+    "menu.clearPerceptualCache.confirm.proceed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Löschen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Effacer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지우기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limpar"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limpar"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Очистити"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

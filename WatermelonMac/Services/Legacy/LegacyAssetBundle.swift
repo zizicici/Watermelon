@@ -14,6 +14,11 @@ enum LegacyMediaExtensions {
     static let videoExtensions: Set<String> = [
         "mp4", "mov", "m4v", "hevc"
     ]
+    /// Extensions eligible for perceptual-hash dedup. Other formats (RAW, TIFF, PNG, …) are
+    /// skipped — same-shot duplicates across those formats are rare in practice.
+    static let perceptualHashExtensions: Set<String> = [
+        "heic", "heif", "jpg", "jpeg"
+    ]
 
     static func kind(forExtension lowercasedExt: String) -> LegacyMediaKind? {
         if imageExtensions.contains(lowercasedExt) { return .image }
@@ -41,6 +46,7 @@ struct LegacyFileCandidate: Identifiable, Hashable {
     let timestamp: Date?
     let timestampSource: LegacyTimestampSource
     let contentHash: Data?                // nil when scheduling will skip this file (missing timestamp etc)
+    let dhash: Data?                      // 8-byte perceptual hash; nil for non-image kinds or compute failures
 
     static func == (lhs: LegacyFileCandidate, rhs: LegacyFileCandidate) -> Bool {
         lhs.id == rhs.id
@@ -67,6 +73,7 @@ enum LegacyBundleAction: Equatable, Hashable {
     case insertNew
     case skipExactMatch
     case skipEnclosed
+    case skipPerceptualDuplicate
     case replacesSubsets(count: Int)
 }
 
@@ -77,6 +84,7 @@ struct LegacyResourceComponent: Hashable {
     let originalFilename: String
     let fileSize: Int64
     let contentHash: Data
+    let dhash: Data?
 }
 
 struct LegacyAssetBundle: Identifiable, Hashable {

@@ -4,6 +4,7 @@ import Foundation
 final class LegacyMigrationPlanner {
     private let timestampReader = MediaTimestampReader()
     private let matcher = LiveBundleMatcher()
+    private var perceptualDedupEnabled = false
 
     private struct ManifestSpec {
         let basePath: String              // dir above YYYY/
@@ -22,9 +23,11 @@ final class LegacyMigrationPlanner {
     func scan(
         client: any RemoteStorageClientProtocol,
         rootPath: String,
-        targetBasePath: String
+        targetBasePath: String,
+        enablePerceptualDedup: Bool
     ) async throws -> LegacyScanReport {
         try Task.checkCancellation()
+        self.perceptualDedupEnabled = enablePerceptualDedup
         let allFiles = try await enumerate(client: client, root: rootPath)
 
         let manifestSpecs = detectManifestSpecs(in: allFiles)
@@ -153,9 +156,20 @@ final class LegacyMigrationPlanner {
                 continue
             }
 
+            var targetDHashes: Set<Data> = []
+            if perceptualDedupEnabled {
+                do {
+                    targetDHashes = try await buildTargetDHashSet(store: store, client: client)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    warnings.append("Target dHash index for \(plan.month.text) failed: \(error.localizedDescription)")
+                }
+            }
+
             let updatedBundles = plan.bundles.map { bundle -> LegacyAssetBundle in
                 var b = bundle
-                b.action = computeAction(for: bundle, store: store)
+                b.action = computeAction(for: bundle, store: store, targetDHashes: targetDHashes)
                 return b
             }
             result.append(LegacyMonthPlan(id: plan.id, month: plan.month, bundles: updatedBundles))
@@ -163,13 +177,97 @@ final class LegacyMigrationPlanner {
         return result
     }
 
-    private func computeAction(for bundle: LegacyAssetBundle, store: MonthManifestStore) -> LegacyBundleAction {
+    private func buildTargetDHashSet(
+        store: MonthManifestStore,
+        client: any RemoteStorageClientProtocol
+    ) async throws -> Set<Data> {
+        let imageResources = store.unsortedSnapshot().resources.filter { resource in
+            let ext = (resource.fileName as NSString).pathExtension.lowercased()
+            return LegacyMediaExtensions.perceptualHashExtensions.contains(ext)
+        }
+        let cached = PerceptualHashCache.shared.lookupAll(
+            contentHashes: imageResources.map(\.contentHash)
+        )
+
+        var result: Set<Data> = []
+        for resource in imageResources {
+            try Task.checkCancellation()
+            if let dhash = cached[resource.contentHash] {
+                result.insert(dhash)
+                continue
+            }
+            let ext = (resource.fileName as NSString).pathExtension.lowercased()
+            let absolutePath = RemotePathBuilder.absolutePath(
+                basePath: store.basePath,
+                remoteRelativePath: resource.remoteRelativePath
+            )
+            do {
+                let dhash = try await withLocalReadURL(
+                    client: client,
+                    remotePath: absolutePath,
+                    extensionHint: ext
+                ) { url in
+                    try DHashComputer.compute(url: url)
+                }
+                PerceptualHashCache.shared.store(contentHash: resource.contentHash, dhash: dhash)
+                result.insert(dhash)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Single-resource failure shouldn't fail the whole month.
+            }
+        }
+        return result
+    }
+
+    /// Materialize a remote file as a local URL for the duration of `body`. Uses the storage
+    /// client's directReadURL when available (LocalVolume); otherwise downloads to a temp file
+    /// that is removed on body exit, success or failure.
+    private func withLocalReadURL<T>(
+        client: any RemoteStorageClientProtocol,
+        remotePath: String,
+        extensionHint: String,
+        body: (URL) async throws -> T
+    ) async throws -> T {
+        if let direct = await client.directReadURL(forRemotePath: remotePath) {
+            return try await body(direct)
+        }
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("watermelon-legacy-\(UUID().uuidString)." + extensionHint)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        try await client.download(remotePath: remotePath, localURL: temp)
+        return try await body(temp)
+    }
+
+    private func dhash(forContentHash hash: Data, fileURL: URL) -> Data? {
+        if let cached = PerceptualHashCache.shared.lookup(contentHash: hash) {
+            return cached
+        }
+        guard let computed = try? DHashComputer.compute(url: fileURL) else { return nil }
+        PerceptualHashCache.shared.store(contentHash: hash, dhash: computed)
+        return computed
+    }
+
+    private func computeAction(
+        for bundle: LegacyAssetBundle,
+        store: MonthManifestStore,
+        targetDHashes: Set<Data>
+    ) -> LegacyBundleAction {
         if store.containsAssetFingerprint(bundle.assetFingerprint) {
             return .skipExactMatch
         }
         let resources = bundle.resources.map { (role: $0.role, slot: $0.slot, hash: $0.contentHash) }
         if store.findEnclosingAssetFingerprint(forResources: resources) != nil {
             return .skipEnclosed
+        }
+        // Manifest-driven bundles carry authoritative role assignments — never drop perceptually.
+        if bundle.source == .scanner, !targetDHashes.isEmpty {
+            for component in bundle.resources {
+                guard let bundleDhash = component.dhash else { continue }
+                if targetDHashes.contains(where: { DHashComputer.hammingDistance(bundleDhash, $0) <= 5 }) {
+                    return .skipPerceptualDuplicate
+                }
+            }
         }
         let subsets = store.findStrictSubsetAssetFingerprints(forResources: resources)
         if !subsets.isEmpty {
@@ -231,7 +329,8 @@ final class LegacyMigrationPlanner {
                 remotePath: remotePath,
                 originalFilename: resource.fileName,
                 fileSize: resource.fileSize,
-                contentHash: resource.contentHash
+                contentHash: resource.contentHash,
+                dhash: nil   // manifest-driven bundles aren't subject to perceptual dedup
             ))
         }
 
@@ -304,6 +403,15 @@ final class LegacyMigrationPlanner {
                     warnings.append("Failed to hash \(entry.name): \(error.localizedDescription)")
                 }
             }
+
+            var dhash: Data?
+            if perceptualDedupEnabled, let hash, LegacyMediaExtensions.perceptualHashExtensions.contains(ext) {
+                dhash = self.dhash(forContentHash: hash, fileURL: readURL)
+                if dhash == nil {
+                    warnings.append("Failed to dHash \(entry.name)")
+                }
+            }
+
             if needsCleanup {
                 try? FileManager.default.removeItem(at: readURL)
             }
@@ -325,7 +433,8 @@ final class LegacyMigrationPlanner {
                     fileSize: size,
                     timestamp: timestamp.date,
                     timestampSource: timestamp.source,
-                    contentHash: hash
+                    contentHash: hash,
+                    dhash: dhash
                 )
             )
         }
@@ -368,7 +477,8 @@ final class LegacyMigrationPlanner {
                 remotePath: entry.candidate.remotePath,
                 originalFilename: entry.candidate.originalFilename,
                 fileSize: entry.candidate.fileSize,
-                contentHash: hash
+                contentHash: hash,
+                dhash: entry.candidate.dhash
             )
         }
 

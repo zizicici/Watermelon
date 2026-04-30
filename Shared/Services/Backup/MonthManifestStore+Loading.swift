@@ -431,5 +431,7 @@ extension MonthManifestStore {
         self.assetsByFingerprint = assetsByFingerprint
         assetLinksByFingerprint = linksByFingerprint
         existingFileNameSet = Set(resourcesByName.keys).union(remoteFilesByName.keys)
+        rebuildLinkIndexes()
+        invalidateCollisionKeyCache()
     }
 }

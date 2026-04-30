@@ -45,8 +45,19 @@ final class MonthManifestStore {
     var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
     var assetLinksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
 
+    // Indexes derived from assetLinksByFingerprint. Maintained incrementally on upsertAsset
+    // and applyDeletions; rebuilt wholesale on reloadCache. Without these, the legacy-import
+    // finders below would scan all assets and rebuild link Sets per call → O(N²) per month
+    // when the manifest fills up.
+    private var linkKeySetByFingerprint: [Data: Set<LinkKey>] = [:]
+    private var assetsByResourceHash: [Data: Set<Data>] = [:]
+
     var remoteFilesByName: [String: RemoteFileMetadata] = [:]
     var existingFileNameSet: Set<String> = []
+    /// Lazily-built fold of `existingFileNameSet` through `RemoteFileNaming.collisionKey`.
+    /// Built on first read, incrementally updated on insert, invalidated on removal.
+    /// Without this cache, processBundle re-folds the entire set per bundle → O(N²) per month.
+    private var collisionKeysCache: Set<String>?
     private(set) var dirty: Bool = false
 
     init(
@@ -84,10 +95,24 @@ final class MonthManifestStore {
         forResources resources: [(role: Int, slot: Int, hash: Data)]
     ) -> Data? {
         guard !resources.isEmpty else { return nil }
+        // Candidates = fingerprints whose links cover ALL of resources' hashes.
+        // Intersect over each hash bucket; if any hash has no asset, no enclosing exists.
+        var candidates: Set<Data>?
+        for r in resources {
+            guard let bucket = assetsByResourceHash[r.hash], !bucket.isEmpty else { return nil }
+            if let existing = candidates {
+                let inter = existing.intersection(bucket)
+                if inter.isEmpty { return nil }
+                candidates = inter
+            } else {
+                candidates = bucket
+            }
+        }
+        guard let candidates else { return nil }
         let needed = Self.linkKeySet(fromTuples: resources)
-        for (fingerprint, links) in assetLinksByFingerprint {
-            if links.count < needed.count { continue }
-            let have = Self.linkKeySet(fromLinks: links)
+        for fingerprint in candidates {
+            guard let have = linkKeySetByFingerprint[fingerprint] else { continue }
+            if have.count < needed.count { continue }
             if have.isSuperset(of: needed) { return fingerprint }
         }
         return nil
@@ -99,12 +124,19 @@ final class MonthManifestStore {
         forResources resources: [(role: Int, slot: Int, hash: Data)]
     ) -> [Data] {
         guard !resources.isEmpty else { return [] }
+        // Candidates = fingerprints sharing AT LEAST ONE hash with resources. A strict subset's
+        // links are a subset of resources' tuples → its hashes are necessarily a subset too.
+        var candidates: Set<Data> = []
+        for r in resources {
+            if let bucket = assetsByResourceHash[r.hash] { candidates.formUnion(bucket) }
+        }
+        if candidates.isEmpty { return [] }
         let needed = Self.linkKeySet(fromTuples: resources)
         var result: [Data] = []
-        for (fingerprint, links) in assetLinksByFingerprint {
-            if links.isEmpty { continue }
-            if links.count >= needed.count { continue }
-            let have = Self.linkKeySet(fromLinks: links)
+        for fingerprint in candidates {
+            guard let have = linkKeySetByFingerprint[fingerprint] else { continue }
+            if have.isEmpty { continue }
+            if have.count >= needed.count { continue }
             if needed.isSuperset(of: have) { result.append(fingerprint) }
         }
         return result
@@ -122,6 +154,39 @@ final class MonthManifestStore {
 
     private static func linkKeySet(fromLinks links: [RemoteAssetResourceLink]) -> Set<LinkKey> {
         Set(links.map { LinkKey(role: $0.role, slot: $0.slot, hash: $0.resourceHash) })
+    }
+
+    /// Rebuilds the link/hash indexes from `assetLinksByFingerprint`. Call after wholesale
+    /// reloads (`reloadCache`, `seedDatabase`) where assetLinksByFingerprint is replaced en masse.
+    func rebuildLinkIndexes() {
+        linkKeySetByFingerprint.removeAll(keepingCapacity: true)
+        assetsByResourceHash.removeAll(keepingCapacity: true)
+        linkKeySetByFingerprint.reserveCapacity(assetLinksByFingerprint.count)
+        for (fingerprint, links) in assetLinksByFingerprint {
+            linkKeySetByFingerprint[fingerprint] = Self.linkKeySet(fromLinks: links)
+            for link in links {
+                assetsByResourceHash[link.resourceHash, default: []].insert(fingerprint)
+            }
+        }
+    }
+
+    private func indexAddAsset(fingerprint: Data, links: [RemoteAssetResourceLink]) {
+        linkKeySetByFingerprint[fingerprint] = Self.linkKeySet(fromLinks: links)
+        for link in links {
+            assetsByResourceHash[link.resourceHash, default: []].insert(fingerprint)
+        }
+    }
+
+    private func indexRemoveAsset(fingerprint: Data) {
+        if let oldLinks = assetLinksByFingerprint[fingerprint] {
+            for link in oldLinks {
+                assetsByResourceHash[link.resourceHash]?.remove(fingerprint)
+                if assetsByResourceHash[link.resourceHash]?.isEmpty == true {
+                    assetsByResourceHash.removeValue(forKey: link.resourceHash)
+                }
+            }
+        }
+        linkKeySetByFingerprint.removeValue(forKey: fingerprint)
     }
 
     func findByFileName(_ fileName: String) -> RemoteManifestResource? {
@@ -143,6 +208,22 @@ final class MonthManifestStore {
 
     func existingFileNames() -> Set<String> {
         existingFileNameSet
+    }
+
+    /// Folded view of existingFileNames for Unicode-insensitive collision checks. Cached.
+    func existingCollisionKeys() -> Set<String> {
+        if let cache = collisionKeysCache { return cache }
+        var built = Set<String>()
+        built.reserveCapacity(existingFileNameSet.count)
+        for name in existingFileNameSet {
+            built.insert(RemoteFileNaming.collisionKey(for: name))
+        }
+        collisionKeysCache = built
+        return built
+    }
+
+    func invalidateCollisionKeyCache() {
+        collisionKeysCache = nil
     }
 
     /// Unsorted bulk export for snapshotCache — avoids sorting overhead
@@ -198,6 +279,7 @@ final class MonthManifestStore {
         itemsByFileName[item.fileName] = item
         itemsByHash[item.contentHash] = item.fileName
         existingFileNameSet.insert(item.fileName)
+        collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: item.fileName))
         dirty = true
 
         return item
@@ -286,17 +368,21 @@ final class MonthManifestStore {
         }
 
         for fingerprint in subsetsToDelete {
+            indexRemoveAsset(fingerprint: fingerprint)
             assetsByFingerprint[fingerprint] = nil
             assetLinksByFingerprint[fingerprint] = nil
         }
+        indexRemoveAsset(fingerprint: asset.assetFingerprint)
         assetsByFingerprint[asset.assetFingerprint] = asset
         assetLinksByFingerprint[asset.assetFingerprint] = normalizedLinks
+        indexAddAsset(fingerprint: asset.assetFingerprint, links: normalizedLinks)
         dirty = true
     }
 
     func markRemoteFile(name: String, size: Int64) {
         remoteFilesByName[name] = RemoteFileMetadata(size: size)
         existingFileNameSet.insert(name)
+        collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: name))
     }
 
     /// Phantom asset (assets row with no asset_resources rows) counts as incomplete.
@@ -436,19 +522,24 @@ final class MonthManifestStore {
         }
 
         for fingerprint in assetsToRemove {
+            indexRemoveAsset(fingerprint: fingerprint)
             assetsByFingerprint.removeValue(forKey: fingerprint)
             assetLinksByFingerprint.removeValue(forKey: fingerprint)
         }
         for fingerprint in orphanLinkFingerprints {
+            indexRemoveAsset(fingerprint: fingerprint)
             assetLinksByFingerprint.removeValue(forKey: fingerprint)
         }
+        var anyFileNameRemoved = false
         for hash in actualMissing {
             guard let fileName = itemsByHash.removeValue(forKey: hash) else { continue }
             itemsByFileName.removeValue(forKey: fileName)
             if remoteFilesByName[fileName] == nil {
                 existingFileNameSet.remove(fileName)
+                anyFileNameRemoved = true
             }
         }
+        if anyFileNameRemoved { collisionKeysCache = nil }
         dirty = true
 
         return CleanupMissingResourcesResult(
