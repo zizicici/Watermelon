@@ -1,5 +1,8 @@
 import Foundation
 import GRDB
+import os.log
+
+private let manifestLoadLog = Logger(subsystem: "com.zizicici.watermelon", category: "MonthManifestStore")
 
 extension MonthManifestStore {
     static func loadOrCreate(
@@ -25,16 +28,7 @@ extension MonthManifestStore {
 
         let entries = try await client.list(path: monthAbsolutePath)
         let manifestExists = entries.contains { $0.name == Self.manifestFileName && !$0.isDirectory }
-        let remoteFilesByName = Dictionary(
-            uniqueKeysWithValues: entries
-                .filter { !$0.isDirectory && $0.name != Self.manifestFileName }
-                .map {
-                    (
-                        $0.name,
-                        RemoteFileMetadata(size: $0.size)
-                    )
-                }
-        )
+        let remoteFilesByName = Self.dedupedRemoteFilesByName(entries: entries, year: year, month: month)
 
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
@@ -128,11 +122,7 @@ extension MonthManifestStore {
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
         let entries = try await client.list(path: monthAbsolutePath)
-        let remoteFilesByName = Dictionary(
-            uniqueKeysWithValues: entries
-                .filter { !$0.isDirectory && $0.name != Self.manifestFileName }
-                .map { ($0.name, RemoteFileMetadata(size: $0.size)) }
-        )
+        let remoteFilesByName = Self.dedupedRemoteFilesByName(entries: entries, year: year, month: month)
 
         let store = MonthManifestStore(
             client: client,
@@ -433,5 +423,24 @@ extension MonthManifestStore {
         existingFileNameSet = Set(resourcesByName.keys).union(remoteFilesByName.keys)
         rebuildLinkIndexes()
         invalidateCollisionKeyCache()
+    }
+
+    // Defensive: case-insensitive volumes / buggy listings can surface the same name twice.
+    static func dedupedRemoteFilesByName(
+        entries: [RemoteStorageEntry],
+        year: Int,
+        month: Int
+    ) -> [String: RemoteFileMetadata] {
+        var result: [String: RemoteFileMetadata] = [:]
+        result.reserveCapacity(entries.count)
+        for entry in entries where !entry.isDirectory && entry.name != Self.manifestFileName {
+            if let existing = result[entry.name] {
+                manifestLoadLog.error("[MonthManifestStore] duplicate remote entry month=\(year)-\(month) name=\(entry.name, privacy: .public) existingSize=\(existing.size) duplicateSize=\(entry.size)")
+                assertionFailure("Duplicate remote file name in client.list result")
+                continue
+            }
+            result[entry.name] = RemoteFileMetadata(size: entry.size)
+        }
+        return result
     }
 }

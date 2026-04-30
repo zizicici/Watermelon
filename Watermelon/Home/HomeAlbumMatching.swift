@@ -1,5 +1,8 @@
 import Foundation
 import Photos
+import os.log
+
+private let albumMatchingLog = Logger(subsystem: "com.zizicici.watermelon", category: "HomeAlbumMatching")
 
 struct RemoteAlbumItem {
     let id: String
@@ -28,16 +31,24 @@ enum HomeAlbumMatching {
     ) -> [RemoteAlbumItem] {
         guard !assets.isEmpty else { return [] }
 
-        let resourcesByMonthHash = Dictionary(uniqueKeysWithValues: resources.map { resource in
-            (
-                ResourceLookupKey(
-                    year: resource.year,
-                    month: resource.month,
-                    hash: resource.contentHash
-                ),
-                resource
+        // Same hash → same content, so keeping first-seen is correct. assert+log on collision
+        // because the upstream invariants (SQL unique index, upsertResource hash dedup) are
+        // supposed to make this unreachable.
+        var resourcesByMonthHash: [ResourceLookupKey: RemoteManifestResource] = [:]
+        resourcesByMonthHash.reserveCapacity(resources.count)
+        for resource in resources {
+            let key = ResourceLookupKey(
+                year: resource.year,
+                month: resource.month,
+                hash: resource.contentHash
             )
-        })
+            if let existing = resourcesByMonthHash[key] {
+                albumMatchingLog.error("[HomeAlbumMatching] duplicate resource hash month=\(resource.year)-\(resource.month) hash=\(resource.contentHashHex, privacy: .public) existing=\(existing.fileName, privacy: .public) duplicate=\(resource.fileName, privacy: .public)")
+                assertionFailure("Duplicate (year, month, contentHash) in buildRemoteItems")
+                continue
+            }
+            resourcesByMonthHash[key] = resource
+        }
 
         var linksByAssetID: [String: [RemoteAssetResourceLink]] = [:]
         linksByAssetID.reserveCapacity(assets.count)

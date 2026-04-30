@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let snapshotCacheLog = Logger(subsystem: "com.zizicici.watermelon", category: "RemoteLibrarySnapshotCache")
 
 final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     private struct LinkKey: Hashable {
@@ -357,19 +360,21 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         assetResourceLinks: [RemoteAssetResourceLink]
     ) -> Bool {
         lock.withLock {
-            let nextResources = Dictionary(uniqueKeysWithValues: resources.map { ($0.id, $0) })
-            let nextAssets = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
-            let nextLinks = Dictionary(uniqueKeysWithValues: assetResourceLinks.map { link in
-                (
+            let nextResources = Self.dedupedByKey(resources, key: \.id, scope: "resource", month: month) { $0.fileName }
+            let nextAssets = Self.dedupedByKey(assets, key: \.id, scope: "asset", month: month) { $0.assetFingerprintHex }
+            let nextLinks = Self.dedupedByKey(
+                assetResourceLinks,
+                key: { link in
                     LinkKey(
                         month: LibraryMonthKey(year: link.year, month: link.month),
                         assetFingerprint: link.assetFingerprint,
                         role: link.role,
                         slot: link.slot
-                    ),
-                    link
-                )
-            })
+                    )
+                },
+                scope: "link",
+                month: month
+            ) { "fp=\($0.assetFingerprint.hexString) r=\($0.role) s=\($0.slot)" }
 
             let previousResources = resourcesByMonth[month] ?? [:]
             let previousAssets = assetsByMonth[month] ?? [:]
@@ -676,5 +681,26 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
-
+    // Callers' SQL PK should make duplicates unreachable; defensive first-seen + assert.
+    private static func dedupedByKey<Element, Key: Hashable>(
+        _ elements: [Element],
+        key: (Element) -> Key,
+        scope: String,
+        month: LibraryMonthKey,
+        describe: (Element) -> String
+    ) -> [Key: Element] {
+        var result: [Key: Element] = [:]
+        result.reserveCapacity(elements.count)
+        for element in elements {
+            let k = key(element)
+            if result[k] != nil {
+                let descr = describe(element)
+                snapshotCacheLog.error("[RemoteLibrarySnapshotCache] duplicate \(scope, privacy: .public) month=\(month.text, privacy: .public) entry=\(descr, privacy: .public)")
+                assertionFailure("Duplicate \(scope) key in replaceMonth — SQL invariant broken")
+                continue
+            }
+            result[k] = element
+        }
+        return result
+    }
 }
