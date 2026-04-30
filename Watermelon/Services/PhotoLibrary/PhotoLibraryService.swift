@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Photos
 import UIKit
@@ -21,7 +20,6 @@ final class PhotoLibraryService: @unchecked Sendable {
     private final class ExportRequestState: @unchecked Sendable {
         private let lock = NSLock()
         private var continuation: CheckedContinuation<Void, Error>?
-        private var requestID: PHAssetResourceDataRequestID?
         private var completed = false
 
         func bind(continuation: CheckedContinuation<Void, Error>) -> Bool {
@@ -32,24 +30,12 @@ final class PhotoLibraryService: @unchecked Sendable {
             }
         }
 
-        func attachRequestID(_ requestID: PHAssetResourceDataRequestID, using manager: PHAssetResourceManager) {
-            let shouldCancel: Bool = lock.withLock {
-                if completed { return true }
-                self.requestID = requestID
-                return false
-            }
-            if shouldCancel {
-                manager.cancelDataRequest(requestID)
-            }
-        }
-
         func complete(_ result: Result<Void, Error>) {
             let captured: CheckedContinuation<Void, Error>? = lock.withLock {
                 guard !completed else { return nil }
                 completed = true
                 let c = self.continuation
                 self.continuation = nil
-                requestID = nil
                 return c
             }
 
@@ -62,16 +48,7 @@ final class PhotoLibraryService: @unchecked Sendable {
             }
         }
 
-        func cancelRequest(using manager: PHAssetResourceManager) {
-            let id: PHAssetResourceDataRequestID? = lock.withLock { self.requestID }
-
-            if let id {
-                manager.cancelDataRequest(id)
-            }
-        }
-
-        func cancel(using manager: PHAssetResourceManager) {
-            cancelRequest(using: manager)
+        func cancel() {
             complete(.failure(CancellationError()))
         }
     }
@@ -316,116 +293,12 @@ final class PhotoLibraryService: @unchecked Sendable {
         return exported.fileURL
     }
 
-    // requestData can deliver a multi-GB local resource as one Data buffer (OOM jetsam); writeData lets PhotoKit chunk internally.
-    private static let largeResourceWriteDataThresholdBytes: Int64 = 200 * 1024 * 1024
-
+    // requestData can deliver a multi-GB resource as one Data buffer (OOM jetsam).
     func exportResourceToTempFileAndDigest(
         _ resource: PHAssetResource,
         cancellationController: BackupCancellationController? = nil,
         allowNetworkAccess: Bool = true
     ) async throws -> ExportedResourceFile {
-        if Self.resourceFileSize(resource) >= Self.largeResourceWriteDataThresholdBytes {
-            return try await exportResourceViaWriteData(
-                resource,
-                cancellationController: cancellationController,
-                allowNetworkAccess: allowNetworkAccess
-            )
-        }
-
-        let ext = (resource.originalFilename as NSString).pathExtension
-        let temp = FileManager.default.temporaryDirectory
-        let filename = UUID().uuidString + (ext.isEmpty ? "" : ".\(ext)")
-        let url = temp.appendingPathComponent(filename)
-        try? FileManager.default.removeItem(at: url)
-        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
-                code: NSFileWriteUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: String(localized: "photo.error.createTempExportFile")]
-            )
-        }
-
-        let fileHandle = try FileHandle(forWritingTo: url)
-        defer {
-            try? fileHandle.close()
-        }
-        let digestState = ExportDigestState()
-
-        let options = PHAssetResourceRequestOptions()
-        options.isNetworkAccessAllowed = allowNetworkAccess
-
-        let resourceManager = self.resourceManager
-        let state = ExportRequestState()
-        let cancellationHandlerID = cancellationController?.addCancellationHandler {
-            state.cancel(using: resourceManager)
-        }
-        defer {
-            if let cancellationHandlerID {
-                cancellationController?.removeCancellationHandler(cancellationHandlerID)
-            }
-        }
-        try cancellationController?.throwIfCancelled()
-
-        do {
-            try await withTaskCancellationHandler(operation: {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    guard state.bind(continuation: continuation) else {
-                        continuation.resume(throwing: CancellationError())
-                        return
-                    }
-
-                    let requestID = resourceManager.requestData(
-                        for: resource,
-                        options: options,
-                        dataReceivedHandler: { data in
-                            autoreleasepool {
-                                guard !data.isEmpty else { return }
-                                do {
-                                    try fileHandle.write(contentsOf: data)
-                                    digestState.update(with: data)
-                                } catch {
-                                    state.cancelRequest(using: resourceManager)
-                                    state.complete(.failure(error))
-                                }
-                            }
-                        },
-                        completionHandler: { error in
-                            if let error {
-                                state.complete(.failure(error))
-                            } else {
-                                state.complete(.success(()))
-                            }
-                        }
-                    )
-
-                    state.attachRequestID(requestID, using: resourceManager)
-
-                    if Task.isCancelled {
-                        state.cancel(using: resourceManager)
-                    }
-                }
-            }, onCancel: {
-                state.cancel(using: resourceManager)
-            })
-        } catch {
-            try? FileManager.default.removeItem(at: url)
-            throw error
-        }
-
-        let fileSizeFromDisk = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?
-            .int64Value ?? 0
-        return ExportedResourceFile(
-            fileURL: url,
-            contentHash: digestState.finalizeDigest(),
-            fileSize: max(digestState.totalBytes, fileSizeFromDisk)
-        )
-    }
-
-    private func exportResourceViaWriteData(
-        _ resource: PHAssetResource,
-        cancellationController: BackupCancellationController?,
-        allowNetworkAccess: Bool
-    ) async throws -> ExportedResourceFile {
         let ext = (resource.originalFilename as NSString).pathExtension
         let temp = FileManager.default.temporaryDirectory
         let filename = UUID().uuidString + (ext.isEmpty ? "" : ".\(ext)")
@@ -438,7 +311,7 @@ final class PhotoLibraryService: @unchecked Sendable {
         let resourceManager = self.resourceManager
         let state = ExportRequestState()
         let cancellationHandlerID = cancellationController?.addCancellationHandler {
-            state.cancel(using: resourceManager)
+            state.cancel()
         }
         defer {
             if let cancellationHandlerID {
@@ -469,11 +342,11 @@ final class PhotoLibraryService: @unchecked Sendable {
                     )
 
                     if Task.isCancelled {
-                        state.cancel(using: resourceManager)
+                        state.cancel()
                     }
                 }
             }, onCancel: {
-                state.cancel(using: resourceManager)
+                state.cancel()
             })
         } catch {
             try? FileManager.default.removeItem(at: url)
@@ -643,22 +516,5 @@ final class PhotoLibraryService: @unchecked Sendable {
         default:
             return "unknown"
         }
-    }
-}
-
-private final class ExportDigestState {
-    private let lock = NSLock()
-    private var hasher = SHA256()
-    private(set) var totalBytes: Int64 = 0
-
-    func update(with data: Data) {
-        lock.withLock {
-            hasher.update(data: data)
-            totalBytes += Int64(data.count)
-        }
-    }
-
-    func finalizeDigest() -> Data {
-        lock.withLock { Data(hasher.finalize()) }
     }
 }
