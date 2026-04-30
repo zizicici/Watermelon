@@ -135,11 +135,10 @@ final class PiPProgressManager: NSObject {
     }
 
     @objc private func settingsDidUpdate() {
-        guard PiPProgressSoundSetting.getValue().playsKeyboardSound else {
-            stopAmbientLoop()
+        if let player = ambientPlayer {
+            player.volume = ambientVolume
             return
         }
-
         if isPiPShowing, !isFinished {
             startAmbientLoop()
         }
@@ -253,17 +252,22 @@ final class PiPProgressManager: NSObject {
 
     private func startAmbientLoop() {
         guard ambientPlayer == nil, !isFinished,
-              PiPProgressSoundSetting.getValue().playsKeyboardSound,
               let url = Bundle.main.url(forResource: "keyboard-typing", withExtension: "mp3") else {
             return
         }
         do {
             let player = try AVAudioPlayer(contentsOf: url)
             player.numberOfLoops = -1
-            player.volume = 0.15
+            player.volume = ambientVolume
             player.play()
             ambientPlayer = player
         } catch {}
+    }
+
+    // Near-silent fallback keeps the audio session producing PCM so iOS honors
+    // the audio background mode and doesn't suspend the app on lock.
+    private var ambientVolume: Float {
+        PiPProgressSoundSetting.getValue().playsKeyboardSound ? 0.15 : 0.001
     }
 
     private func stopAmbientLoop() {
