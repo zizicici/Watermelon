@@ -19,10 +19,19 @@ final class LiveBundleMatcher {
     }
 
     func match(candidates: [LegacyFileCandidate]) -> [LegacyMatchedBundleSpec] {
-        let groupedByStem = Dictionary(grouping: candidates) { $0.sanitizedStem.lowercased() }
+        // Per-directory grouping: a photo and its paired .mov must live in the same folder
+        // to be considered a Live Photo. Prevents cross-directory false matches when two
+        // unrelated trips happen to share a stem like IMG_0001.
+        struct GroupKey: Hashable {
+            let directory: String
+            let stem: String
+        }
+        let groups = Dictionary(grouping: candidates) { c in
+            GroupKey(directory: c.parentDirectory.lowercased(), stem: c.sanitizedStem.lowercased())
+        }
         var bundles: [LegacyMatchedBundleSpec] = []
 
-        for (_, files) in groupedByStem {
+        for (_, files) in groups {
             if let pair = matchLivePhoto(files: files) {
                 bundles.append(pair)
                 continue

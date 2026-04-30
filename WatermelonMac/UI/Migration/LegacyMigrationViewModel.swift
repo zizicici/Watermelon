@@ -1,6 +1,11 @@
 import Combine
 import Foundation
 
+struct LegacyImportLogEntry: Identifiable, Equatable {
+    let id: Int
+    let message: String
+}
+
 @MainActor
 final class LegacyMigrationViewModel: ObservableObject {
     enum Phase: Equatable {
@@ -17,8 +22,11 @@ final class LegacyMigrationViewModel: ObservableObject {
     @Published var report: LegacyScanReport?
     @Published var totals: LegacyImportTotals = .init()
     @Published var currentMonth: LibraryMonthKey?
-    @Published var logLines: [String] = []
+    @Published var logLines: [LegacyImportLogEntry] = []
+    @Published var replaceSubsetAssets: Bool = false
     @Published private(set) var isClientConnected = false
+
+    private var nextLogId: Int = 0
 
     let profile: ServerProfileRecord
     private let storageClientFactory: StorageClientFactory
@@ -65,6 +73,7 @@ final class LegacyMigrationViewModel: ObservableObject {
         phase = .idle
         report = nil
         logLines.removeAll()
+        nextLogId = 0
         if let id = profile.id {
             try? profileStore.saveLegacyFolderPath(profileID: id, path: normalized)
         }
@@ -76,10 +85,16 @@ final class LegacyMigrationViewModel: ObservableObject {
         phase = .scanning
         report = nil
         logLines.removeAll()
+        nextLogId = 0
 
+        let targetBase = profile.basePath
         scanTask = Task { [weak self, planner] in
             do {
-                let result = try await planner.scan(client: client, rootPath: path)
+                let result = try await planner.scan(
+                    client: client,
+                    rootPath: path,
+                    targetBasePath: targetBase
+                )
                 await MainActor.run {
                     self?.report = result
                     self?.phase = .scanned
@@ -105,16 +120,18 @@ final class LegacyMigrationViewModel: ObservableObject {
         totals = LegacyImportTotals()
         currentMonth = nil
         logLines.removeAll()
+        nextLogId = 0
 
         ExecutionLogFileStore.prepareForBackgroundUse()
         let writer = ExecutionLogFileStore.beginSession(kind: .manual)
-        let startMessage = "Mac legacy import started · profile=\(profile.name) (\(profile.resolvedStorageType.rawValue)) · source=\(legacyFolderPath ?? "")"
+        let startMessage = "Mac legacy import started · profile=\(profile.name) (\(profile.resolvedStorageType.rawValue)) · source=\(legacyFolderPath ?? "") · replaceSubsets=\(replaceSubsetAssets)"
         Task { await writer.appendLog(startMessage, level: .info) }
         logWriter = writer
 
+        let options = LegacyMigrationOptions(replaceSubsetAssets: replaceSubsetAssets)
         let executor = LegacyMigrationExecutor(client: client, profile: profile)
         commitTask = Task { [weak self] in
-            let stream = executor.run(report: report)
+            let stream = executor.run(report: report, options: options)
             for await event in stream {
                 await MainActor.run { self?.handle(event: event) }
             }
@@ -137,6 +154,7 @@ final class LegacyMigrationViewModel: ObservableObject {
         totals = LegacyImportTotals()
         currentMonth = nil
         logLines.removeAll()
+        nextLogId = 0
     }
 
     private func handle(event: LegacyImportEvent) {
@@ -183,10 +201,8 @@ final class LegacyMigrationViewModel: ObservableObject {
     }
 
     private func appendLog(_ message: String, level: ExecutionLogLevel = .info) {
-        logLines.append(message)
-        if logLines.count > 500 {
-            logLines.removeFirst(logLines.count - 500)
-        }
+        nextLogId += 1
+        logLines.append(LegacyImportLogEntry(id: nextLogId, message: message))
         if let writer = logWriter {
             Task { await writer.appendLog(message, level: level) }
         }

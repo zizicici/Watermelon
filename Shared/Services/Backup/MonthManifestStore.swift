@@ -78,6 +78,52 @@ final class MonthManifestStore {
         assetsByFingerprint[fingerprint] != nil
     }
 
+    /// Existing asset whose link set ⊇ the given (role, slot, hash) tuples — used by legacy
+    /// import to skip bundles already represented by an Asset with extra (adjustment, etc.) roles.
+    func findEnclosingAssetFingerprint(
+        forResources resources: [(role: Int, slot: Int, hash: Data)]
+    ) -> Data? {
+        guard !resources.isEmpty else { return nil }
+        let needed = Self.linkKeySet(fromTuples: resources)
+        for (fingerprint, links) in assetLinksByFingerprint {
+            if links.count < needed.count { continue }
+            let have = Self.linkKeySet(fromLinks: links)
+            if have.isSuperset(of: needed) { return fingerprint }
+        }
+        return nil
+    }
+
+    /// Existing assets whose link set is a strict subset of the given (role, slot, hash) tuples
+    /// — used by legacy import to find older partial Assets that the incoming bundle supersedes.
+    func findStrictSubsetAssetFingerprints(
+        forResources resources: [(role: Int, slot: Int, hash: Data)]
+    ) -> [Data] {
+        guard !resources.isEmpty else { return [] }
+        let needed = Self.linkKeySet(fromTuples: resources)
+        var result: [Data] = []
+        for (fingerprint, links) in assetLinksByFingerprint {
+            if links.isEmpty { continue }
+            if links.count >= needed.count { continue }
+            let have = Self.linkKeySet(fromLinks: links)
+            if needed.isSuperset(of: have) { result.append(fingerprint) }
+        }
+        return result
+    }
+
+    private struct LinkKey: Hashable {
+        let role: Int
+        let slot: Int
+        let hash: Data
+    }
+
+    private static func linkKeySet(fromTuples tuples: [(role: Int, slot: Int, hash: Data)]) -> Set<LinkKey> {
+        Set(tuples.map { LinkKey(role: $0.role, slot: $0.slot, hash: $0.hash) })
+    }
+
+    private static func linkKeySet(fromLinks links: [RemoteAssetResourceLink]) -> Set<LinkKey> {
+        Set(links.map { LinkKey(role: $0.role, slot: $0.slot, hash: $0.resourceHash) })
+    }
+
     func findByFileName(_ fileName: String) -> RemoteManifestResource? {
         itemsByFileName[fileName]
     }
@@ -159,7 +205,8 @@ final class MonthManifestStore {
 
     func upsertAsset(
         _ asset: RemoteManifestAsset,
-        links: [RemoteAssetResourceLink]
+        links: [RemoteAssetResourceLink],
+        replacingSubsetFingerprints: Set<Data> = []
     ) throws {
         for link in links where itemsByHash[link.resourceHash] == nil {
             throw NSError(
@@ -175,7 +222,20 @@ final class MonthManifestStore {
             return lhs.resourceHash.lexicographicallyPrecedes(rhs.resourceHash)
         }
 
+        let subsetsToDelete = replacingSubsetFingerprints.subtracting([asset.assetFingerprint])
+
         try dbQueue.write { db in
+            for fingerprint in subsetsToDelete {
+                try db.execute(
+                    sql: "DELETE FROM asset_resources WHERE assetFingerprint = ?",
+                    arguments: [fingerprint]
+                )
+                try db.execute(
+                    sql: "DELETE FROM assets WHERE assetFingerprint = ?",
+                    arguments: [fingerprint]
+                )
+            }
+
             try db.execute(
                 sql: """
                 INSERT INTO assets (
@@ -225,6 +285,10 @@ final class MonthManifestStore {
             }
         }
 
+        for fingerprint in subsetsToDelete {
+            assetsByFingerprint[fingerprint] = nil
+            assetLinksByFingerprint[fingerprint] = nil
+        }
         assetsByFingerprint[asset.assetFingerprint] = asset
         assetLinksByFingerprint[asset.assetFingerprint] = normalizedLinks
         dirty = true

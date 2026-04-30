@@ -32,6 +32,7 @@ enum LegacyTimestampSource: String {
 struct LegacyFileCandidate: Identifiable, Hashable {
     let id = UUID()
     let remotePath: String                // path on the connected storage client
+    let parentDirectory: String           // remotePath's parent, normalized; used as a grouping key
     let sanitizedStem: String
     let originalFilename: String
     let lowercasedExtension: String
@@ -55,6 +56,20 @@ enum LegacyBundleKind: Hashable {
     case livePhoto
 }
 
+enum LegacyBundleSource: String {
+    case scanner
+    case manifest
+}
+
+/// Pre-computed at scan time so the result UI can show what will happen on commit.
+/// Executor still runs its own checks at commit time and is authoritative.
+enum LegacyBundleAction: Equatable, Hashable {
+    case insertNew
+    case skipExactMatch
+    case skipEnclosed
+    case replacesSubsets(count: Int)
+}
+
 struct LegacyResourceComponent: Hashable {
     let role: Int
     let slot: Int
@@ -67,10 +82,16 @@ struct LegacyResourceComponent: Hashable {
 struct LegacyAssetBundle: Identifiable, Hashable {
     let id = UUID()
     let kind: LegacyBundleKind
+    let source: LegacyBundleSource
     let creationDate: Date?
     let timestampSource: LegacyTimestampSource
     let resources: [LegacyResourceComponent]
     let assetFingerprint: Data
+    /// Authoritative month bucket. When nil, the bundle is bucketed by creationDate.
+    /// Manifest-driven bundles set this to the source manifest's (year, month) so cross-month
+    /// creationDates don't get rerouted on import.
+    let preferredMonth: LibraryMonthKey?
+    var action: LegacyBundleAction = .insertNew
 
     var totalFileSize: Int64 {
         resources.reduce(0) { $0 + $1.fileSize }

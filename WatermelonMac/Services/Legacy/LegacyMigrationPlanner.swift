@@ -5,10 +5,260 @@ final class LegacyMigrationPlanner {
     private let timestampReader = MediaTimestampReader()
     private let matcher = LiveBundleMatcher()
 
-    func scan(client: any RemoteStorageClientProtocol, rootPath: String) async throws -> LegacyScanReport {
-        try Task.checkCancellation()
+    private struct ManifestSpec {
+        let basePath: String              // dir above YYYY/
+        let year: Int
+        let month: Int
+        let absolutePath: String          // full path to .watermelon_manifest.sqlite
+        let monthDirAbsolutePath: String  // basePath/YYYY/MM (normalized)
+    }
 
-        let entries = try await enumerate(client: client, root: rootPath)
+    private struct ScannerOutput {
+        let usable: [LegacyFileCandidate]
+        let unscheduled: [LegacyFileCandidate]
+        let warnings: [String]
+    }
+
+    func scan(
+        client: any RemoteStorageClientProtocol,
+        rootPath: String,
+        targetBasePath: String
+    ) async throws -> LegacyScanReport {
+        try Task.checkCancellation()
+        let allFiles = try await enumerate(client: client, root: rootPath)
+
+        let manifestSpecs = detectManifestSpecs(in: allFiles)
+
+        var warnings: [String] = []
+        var manifestBundles: [LegacyAssetBundle] = []
+        var ownedDirsByKey: [String: Set<String>] = [:]
+
+        for spec in manifestSpecs {
+            try Task.checkCancellation()
+            do {
+                guard let store = try await MonthManifestStore.loadManifestDirect(
+                    client: client,
+                    basePath: spec.basePath,
+                    year: spec.year,
+                    month: spec.month,
+                    manifestAbsolutePath: spec.absolutePath,
+                    pushSchemaUpgrade: false
+                ) else {
+                    warnings.append("Manifest \(spec.year)/\(spec.month) at \(spec.absolutePath) could not be opened")
+                    ownedDirsByKey[spec.monthDirAbsolutePath.lowercased()] = []
+                    continue
+                }
+
+                let snapshot = store.unsortedSnapshot()
+                let resourcesByHash = Dictionary(uniqueKeysWithValues: snapshot.resources.map { ($0.contentHash, $0) })
+                let linksByAsset = Dictionary(grouping: snapshot.links, by: \.assetFingerprint)
+
+                ownedDirsByKey[spec.monthDirAbsolutePath.lowercased()] = Set(
+                    snapshot.resources.map { RemoteFileNaming.collisionKey(for: $0.fileName) }
+                )
+
+                for asset in snapshot.assets {
+                    let links = linksByAsset[asset.assetFingerprint] ?? []
+                    if let bundle = buildManifestBundle(
+                        asset: asset,
+                        links: links,
+                        resourcesByHash: resourcesByHash,
+                        spec: spec
+                    ) {
+                        manifestBundles.append(bundle)
+                    } else {
+                        warnings.append("Manifest \(spec.year)/\(spec.month): asset fp:\(asset.assetFingerprint.hexString.prefix(8)) skipped (missing resource rows)")
+                    }
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                warnings.append("Manifest \(spec.year)/\(spec.month) read failed: \(error.localizedDescription)")
+                ownedDirsByKey[spec.monthDirAbsolutePath.lowercased()] = []
+            }
+        }
+
+        var scannerEntries: [RemoteStorageEntry] = []
+        for entry in allFiles {
+            try Task.checkCancellation()
+            let parentDir = RemotePathBuilder.normalizePath(
+                (entry.path as NSString).deletingLastPathComponent
+            ).lowercased()
+
+            if let owned = ownedDirsByKey[parentDir] {
+                if entry.name == MonthManifestStore.manifestFileName { continue }
+                let key = RemoteFileNaming.collisionKey(for: entry.name)
+                if !owned.contains(key) {
+                    warnings.append("Orphan: \(entry.path) is in a Watermelon month dir but not in its manifest")
+                }
+                continue
+            }
+            scannerEntries.append(entry)
+        }
+
+        let scannerOutput = try await runFileScanner(client: client, entries: scannerEntries)
+        warnings.append(contentsOf: scannerOutput.warnings)
+
+        let scannerSpecs = matcher.match(candidates: scannerOutput.usable)
+        var scannerBundles: [LegacyAssetBundle] = []
+        for spec in scannerSpecs {
+            try Task.checkCancellation()
+            scannerBundles.append(buildBundle(from: spec))
+        }
+
+        let rawPlans = bundlesByMonth(manifestBundles + scannerBundles)
+        let classifiedPlans = try await classifyAgainstTarget(
+            plans: rawPlans,
+            client: client,
+            targetBasePath: targetBasePath,
+            warnings: &warnings
+        )
+        return LegacyScanReport(
+            plans: classifiedPlans,
+            unscheduledCandidates: scannerOutput.unscheduled,
+            warnings: warnings
+        )
+    }
+
+    // MARK: - Target classification
+
+    private func classifyAgainstTarget(
+        plans: [LegacyMonthPlan],
+        client: any RemoteStorageClientProtocol,
+        targetBasePath: String,
+        warnings: inout [String]
+    ) async throws -> [LegacyMonthPlan] {
+        var result: [LegacyMonthPlan] = []
+        for plan in plans {
+            try Task.checkCancellation()
+            let store: MonthManifestStore?
+            do {
+                store = try await MonthManifestStore.loadManifestOnlyIfExists(
+                    client: client,
+                    basePath: targetBasePath,
+                    year: plan.month.year,
+                    month: plan.month.month
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                warnings.append("Could not classify against target manifest \(plan.month.text): \(error.localizedDescription)")
+                result.append(plan)
+                continue
+            }
+
+            guard let store else {
+                // Target has no manifest for this month — every bundle is genuinely new.
+                result.append(plan)
+                continue
+            }
+
+            let updatedBundles = plan.bundles.map { bundle -> LegacyAssetBundle in
+                var b = bundle
+                b.action = computeAction(for: bundle, store: store)
+                return b
+            }
+            result.append(LegacyMonthPlan(id: plan.id, month: plan.month, bundles: updatedBundles))
+        }
+        return result
+    }
+
+    private func computeAction(for bundle: LegacyAssetBundle, store: MonthManifestStore) -> LegacyBundleAction {
+        if store.containsAssetFingerprint(bundle.assetFingerprint) {
+            return .skipExactMatch
+        }
+        let resources = bundle.resources.map { (role: $0.role, slot: $0.slot, hash: $0.contentHash) }
+        if store.findEnclosingAssetFingerprint(forResources: resources) != nil {
+            return .skipEnclosed
+        }
+        let subsets = store.findStrictSubsetAssetFingerprints(forResources: resources)
+        if !subsets.isEmpty {
+            return .replacesSubsets(count: subsets.count)
+        }
+        return .insertNew
+    }
+
+    // MARK: - Manifest detection
+
+    private func detectManifestSpecs(in files: [RemoteStorageEntry]) -> [ManifestSpec] {
+        var result: [ManifestSpec] = []
+        for entry in files where !entry.isDirectory && entry.name == MonthManifestStore.manifestFileName {
+            guard let spec = parseManifestSpec(absolutePath: entry.path) else { continue }
+            result.append(spec)
+        }
+        return result.sorted { lhs, rhs in
+            if lhs.year != rhs.year { return lhs.year < rhs.year }
+            return lhs.month < rhs.month
+        }
+    }
+
+    private func parseManifestSpec(absolutePath: String) -> ManifestSpec? {
+        let normalized = RemotePathBuilder.normalizePath(absolutePath)
+        let monthDir = (normalized as NSString).deletingLastPathComponent
+        let monthComponent = (monthDir as NSString).lastPathComponent
+        let yearDir = (monthDir as NSString).deletingLastPathComponent
+        let yearComponent = (yearDir as NSString).lastPathComponent
+        let basePath = (yearDir as NSString).deletingLastPathComponent
+        guard let year = Int(yearComponent), (1900...9999).contains(year) else { return nil }
+        guard let month = Int(monthComponent), (1...12).contains(month) else { return nil }
+        let normalizedBase = basePath.isEmpty ? "/" : basePath
+        return ManifestSpec(
+            basePath: RemotePathBuilder.normalizePath(normalizedBase),
+            year: year,
+            month: month,
+            absolutePath: normalized,
+            monthDirAbsolutePath: RemotePathBuilder.normalizePath(monthDir)
+        )
+    }
+
+    private func buildManifestBundle(
+        asset: RemoteManifestAsset,
+        links: [RemoteAssetResourceLink],
+        resourcesByHash: [Data: RemoteManifestResource],
+        spec: ManifestSpec
+    ) -> LegacyAssetBundle? {
+        guard !links.isEmpty else { return nil }
+        var components: [LegacyResourceComponent] = []
+        for link in links {
+            guard let resource = resourcesByHash[link.resourceHash] else { return nil }
+            let remotePath = RemotePathBuilder.absolutePath(
+                basePath: spec.basePath,
+                remoteRelativePath: resource.remoteRelativePath
+            )
+            components.append(LegacyResourceComponent(
+                role: link.role,
+                slot: link.slot,
+                remotePath: remotePath,
+                originalFilename: resource.fileName,
+                fileSize: resource.fileSize,
+                contentHash: resource.contentHash
+            ))
+        }
+
+        let creationDate: Date? = asset.creationDateMs.map { Date(millisecondsSinceEpoch: $0) }
+        return LegacyAssetBundle(
+            kind: deriveKind(fromRoles: links.map { $0.role }),
+            source: .manifest,
+            creationDate: creationDate,
+            timestampSource: .unknown,
+            resources: components,
+            assetFingerprint: asset.assetFingerprint,
+            preferredMonth: LibraryMonthKey(year: spec.year, month: spec.month)
+        )
+    }
+
+    private func deriveKind(fromRoles roles: [Int]) -> LegacyBundleKind {
+        if roles.contains(where: { ResourceTypeCode.isPairedVideo($0) }) { return .livePhoto }
+        if roles.contains(where: { ResourceTypeCode.isVideoLike($0) }) { return .video }
+        return .photo
+    }
+
+    // MARK: - Per-file scanner
+
+    private func runFileScanner(
+        client: any RemoteStorageClientProtocol,
+        entries: [RemoteStorageEntry]
+    ) async throws -> ScannerOutput {
         var candidates: [LegacyFileCandidate] = []
         var warnings: [String] = []
 
@@ -60,10 +310,14 @@ final class LegacyMigrationPlanner {
 
             let sanitized = RemotePathBuilder.sanitizeFilename(entry.name)
             let stem = (sanitized as NSString).deletingPathExtension
+            let parentDir = RemotePathBuilder.normalizePath(
+                (entry.path as NSString).deletingLastPathComponent
+            )
 
             candidates.append(
                 LegacyFileCandidate(
                     remotePath: entry.path,
+                    parentDirectory: parentDir,
                     sanitizedStem: stem,
                     originalFilename: sanitized,
                     lowercasedExtension: ext,
@@ -78,17 +332,7 @@ final class LegacyMigrationPlanner {
 
         let usable = candidates.filter { $0.timestamp != nil && $0.contentHash != nil }
         let unscheduled = candidates.filter { $0.timestamp == nil || $0.contentHash == nil }
-
-        let bundleSpecs = matcher.match(candidates: usable)
-
-        var bundles: [LegacyAssetBundle] = []
-        for spec in bundleSpecs {
-            try Task.checkCancellation()
-            bundles.append(buildBundle(from: spec))
-        }
-
-        let plans = bundlesByMonth(bundles)
-        return LegacyScanReport(plans: plans, unscheduledCandidates: unscheduled, warnings: warnings)
+        return ScannerOutput(usable: usable, unscheduled: unscheduled, warnings: warnings)
     }
 
     // MARK: - Recursive listing
@@ -134,15 +378,19 @@ final class LegacyMigrationPlanner {
 
         return LegacyAssetBundle(
             kind: spec.kind,
+            source: .scanner,
             creationDate: spec.creationDate,
             timestampSource: spec.timestampSource,
             resources: components,
-            assetFingerprint: fingerprint
+            assetFingerprint: fingerprint,
+            preferredMonth: nil
         )
     }
 
     private func bundlesByMonth(_ bundles: [LegacyAssetBundle]) -> [LegacyMonthPlan] {
-        let grouped = Dictionary(grouping: bundles) { LibraryMonthKey.from(date: $0.creationDate) }
+        let grouped = Dictionary(grouping: bundles) { bundle in
+            bundle.preferredMonth ?? LibraryMonthKey.from(date: bundle.creationDate)
+        }
         let sortedKeys = grouped.keys.sorted()
         return sortedKeys.map { key in
             let monthBundles = (grouped[key] ?? []).sorted { lhs, rhs in

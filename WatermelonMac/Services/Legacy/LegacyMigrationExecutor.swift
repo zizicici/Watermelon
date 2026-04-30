@@ -1,5 +1,11 @@
 import Foundation
 
+struct LegacyMigrationOptions {
+    /// When true, an incoming bundle replaces existing target Assets whose (role, slot, hash)
+    /// set is a strict subset of the bundle's. When false (default), both coexist.
+    var replaceSubsetAssets: Bool = false
+}
+
 /// Drives a non-destructive legacy import: source files live on the SAME storage as the
 /// Watermelon backup root, so we copy them into the canonical /{YYYY}/{MM}/ layout while
 /// leaving the originals untouched, then register them in the manifest.
@@ -12,11 +18,16 @@ final class LegacyMigrationExecutor {
         self.profile = profile
     }
 
-    func run(report: LegacyScanReport) -> AsyncStream<LegacyImportEvent> {
+    func run(
+        report: LegacyScanReport,
+        options: LegacyMigrationOptions = LegacyMigrationOptions()
+    ) -> AsyncStream<LegacyImportEvent> {
         AsyncStream { continuation in
             let task = Task { [self] in
                 do {
-                    try await self.execute(report: report) { continuation.yield($0) }
+                    try await self.execute(report: report, options: options) {
+                        continuation.yield($0)
+                    }
                 } catch is CancellationError {
                     continuation.finish()
                     return
@@ -31,6 +42,7 @@ final class LegacyMigrationExecutor {
 
     private func execute(
         report: LegacyScanReport,
+        options: LegacyMigrationOptions,
         emit: @Sendable (LegacyImportEvent) -> Void
     ) async throws {
         var totals = LegacyImportTotals()
@@ -66,6 +78,7 @@ final class LegacyMigrationExecutor {
                 let outcome = await processBundleWithRetry(
                     bundle: bundle,
                     monthStore: store,
+                    options: options,
                     totals: &totals,
                     emit: emit
                 )
@@ -101,6 +114,7 @@ final class LegacyMigrationExecutor {
     private func processBundleWithRetry(
         bundle: LegacyAssetBundle,
         monthStore: MonthManifestStore,
+        options: LegacyMigrationOptions,
         totals: inout LegacyImportTotals,
         emit: @Sendable (LegacyImportEvent) -> Void
     ) async -> LegacyImportBundleOutcome {
@@ -110,7 +124,11 @@ final class LegacyMigrationExecutor {
                 totals.bundlesFailed += 1
                 return .failed(reason: "cancelled")
             }
-            let attemptResult = await processBundle(bundle: bundle, monthStore: monthStore)
+            let attemptResult = await processBundle(
+                bundle: bundle,
+                monthStore: monthStore,
+                options: options
+            )
             switch attemptResult.outcome {
             case .imported(let bytes, let uploaded, let skipped):
                 totals.bundlesProcessed += 1
@@ -118,6 +136,9 @@ final class LegacyMigrationExecutor {
                 totals.bytesUploaded += bytes
                 totals.resourcesUploaded += uploaded
                 totals.resourcesSkippedHashExists += skipped
+                if attemptResult.replacedSubsetCount > 0 {
+                    emit(.logMessage("  replaced \(attemptResult.replacedSubsetCount) subset asset(s) for fp:\(bundle.assetFingerprint.hexString.prefix(8))"))
+                }
                 return attemptResult.outcome
             case .skippedFingerprintExists:
                 totals.bundlesProcessed += 1
@@ -146,14 +167,38 @@ final class LegacyMigrationExecutor {
     private struct BundleAttemptResult {
         let outcome: LegacyImportBundleOutcome
         let error: Error?
+        let replacedSubsetCount: Int
+
+        init(outcome: LegacyImportBundleOutcome, error: Error?, replacedSubsetCount: Int = 0) {
+            self.outcome = outcome
+            self.error = error
+            self.replacedSubsetCount = replacedSubsetCount
+        }
     }
 
     private func processBundle(
         bundle: LegacyAssetBundle,
-        monthStore: MonthManifestStore
+        monthStore: MonthManifestStore,
+        options: LegacyMigrationOptions
     ) async -> BundleAttemptResult {
         if monthStore.containsAssetFingerprint(bundle.assetFingerprint) {
             return BundleAttemptResult(outcome: .skippedFingerprintExists, error: nil)
+        }
+
+        let bundleResources = bundle.resources.map {
+            (role: $0.role, slot: $0.slot, hash: $0.contentHash)
+        }
+        if monthStore.findEnclosingAssetFingerprint(forResources: bundleResources) != nil {
+            return BundleAttemptResult(outcome: .skippedFingerprintExists, error: nil)
+        }
+
+        let subsetFingerprints: Set<Data>
+        if options.replaceSubsetAssets {
+            subsetFingerprints = Set(
+                monthStore.findStrictSubsetAssetFingerprints(forResources: bundleResources)
+            )
+        } else {
+            subsetFingerprints = []
         }
 
         let identities = bundle.resources.map {
@@ -219,7 +264,11 @@ final class LegacyMigrationExecutor {
             totalFileSizeBytes: bundle.totalFileSize
         )
         do {
-            try monthStore.upsertAsset(asset, links: resourceLinks)
+            try monthStore.upsertAsset(
+                asset,
+                links: resourceLinks,
+                replacingSubsetFingerprints: subsetFingerprints
+            )
         } catch {
             return BundleAttemptResult(
                 outcome: .failed(reason: "upsertAsset: \(error.localizedDescription)"),
@@ -233,7 +282,8 @@ final class LegacyMigrationExecutor {
                 resourcesUploaded: resourcesCopied,
                 resourcesSkippedHashExists: resourcesAlreadyInPlace
             ),
-            error: nil
+            error: nil,
+            replacedSubsetCount: subsetFingerprints.count
         )
     }
 
@@ -281,6 +331,12 @@ final class LegacyMigrationExecutor {
         let alreadyInPlace = (sourcePath == normalizedTarget)
         if !alreadyInPlace {
             try await client.copy(from: sourcePath, to: normalizedTarget)
+        }
+
+        // Stamp the file's mtime to the asset's creationDate so target browsing reflects when the
+        // photo was taken, not when this import ran. Mirrors iOS AssetProcessor+Upload behavior.
+        if let shotDate = bundle.creationDate, client.shouldSetModificationDate() {
+            try? await client.setModificationDate(shotDate, forPath: normalizedTarget)
         }
 
         let resource = RemoteManifestResource(

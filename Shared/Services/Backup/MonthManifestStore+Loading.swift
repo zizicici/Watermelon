@@ -180,12 +180,15 @@ extension MonthManifestStore {
 
     /// Downloads and loads a manifest directly, skipping the existence check.
     /// Use when the caller has already confirmed the manifest exists (e.g., via scanManifestDigests).
+    /// Pass `pushSchemaUpgrade: false` when reading a manifest you don't own (e.g. legacy-import
+    /// scanning a backup folder) so a schema migration doesn't trigger flushToRemote on the source.
     static func loadManifestDirect(
         client: RemoteStorageClientProtocol,
         basePath: String,
         year: Int,
         month: Int,
-        manifestAbsolutePath: String? = nil
+        manifestAbsolutePath: String? = nil,
+        pushSchemaUpgrade: Bool = true
     ) async throws -> MonthManifestStore? {
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let absPath = manifestAbsolutePath ?? {
@@ -255,7 +258,7 @@ extension MonthManifestStore {
             )
         }
 
-        if prepared.requiresRemoteSync {
+        if prepared.requiresRemoteSync && pushSchemaUpgrade {
             try await store.flushToRemote()
         }
 

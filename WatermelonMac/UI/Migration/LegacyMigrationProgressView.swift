@@ -86,24 +86,23 @@ struct LegacyMigrationProgressView: View {
     @ViewBuilder
     private var logScroll: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(viewModel.logLines.enumerated()), id: \.offset) { idx, line in
-                        Text(line)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .id(idx)
-                    }
-                }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // List uses NSTableView on macOS — handles 100K+ rows with native cell recycling.
+            List(viewModel.logLines) { entry in
+                Text(entry.message)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+                    .id(entry.id)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .onChange(of: viewModel.logLines.count) { _, newValue in
-                if newValue > 0 {
-                    withAnimation(nil) {
-                        proxy.scrollTo(newValue - 1, anchor: .bottom)
+            .onChange(of: viewModel.logLines.last?.id) { _, newId in
+                if let newId {
+                    withAnimation(.none) {
+                        proxy.scrollTo(newId, anchor: .bottom)
                     }
                 }
             }

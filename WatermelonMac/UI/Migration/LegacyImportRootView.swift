@@ -88,6 +88,18 @@ struct LegacyImportRootView: View {
             .background(Color(nsColor: .controlBackgroundColor))
             .cornerRadius(6)
 
+            if viewModel.phase == .scanned, let report = viewModel.report, !report.plans.isEmpty {
+                Toggle(isOn: $viewModel.replaceSubsetAssets) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(String(localized: "migration.options.replaceSubsets.label"))
+                        Text(String(localized: "migration.options.replaceSubsets.description"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.checkbox)
+            }
+
             HStack {
                 if viewModel.phase == .scanning {
                     ProgressView().controlSize(.small)
