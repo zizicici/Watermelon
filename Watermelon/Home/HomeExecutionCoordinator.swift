@@ -34,6 +34,14 @@ final class HomeExecutionCoordinator {
 
     var phase: ExecutionPhase? { session.phase }
     var isActive: Bool { session.isActive }
+    var isRunning: Bool {
+        switch session.phase {
+        case .some(.uploading), .some(.uploadPaused), .some(.downloading), .some(.downloadPaused):
+            return true
+        case .some(.completed), .some(.failed), nil:
+            return false
+        }
+    }
     var currentState: HomeExecutionState? {
         session.currentState(
             controlState: currentControlState,
@@ -77,6 +85,7 @@ final class HomeExecutionCoordinator {
     private var currentStatusText = String(localized: "home.execution.notStarted")
     private var logEntries: [ExecutionLogEntry] = []
     private var logObservers: [UUID: @MainActor (HomeExecutionLogSnapshot) -> Void] = [:]
+    private var stateObservers: [UUID: @MainActor () -> Void] = [:]
     private var backupEventObserverID: UUID?
     private(set) var currentSessionLogURL: URL?
     private var sessionLogStreamContinuation: AsyncStream<ExecutionLogEntry>.Continuation?
@@ -440,6 +449,20 @@ final class HomeExecutionCoordinator {
 
     private func notifyStateChanged() {
         onStateChanged?()
+        for observer in stateObservers.values {
+            observer()
+        }
+    }
+
+    @discardableResult
+    func addStateObserver(_ observer: @escaping @MainActor () -> Void) -> UUID {
+        let id = UUID()
+        stateObservers[id] = observer
+        return id
+    }
+
+    func removeStateObserver(_ id: UUID) {
+        stateObservers[id] = nil
     }
 
     private func shouldRunLocalIndexPreflight() -> Bool {

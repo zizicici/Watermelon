@@ -22,7 +22,15 @@ final class HomeExecutionLogViewController: UIViewController {
         menu: makeFilterMenu()
     )
 
+    private lazy var focusBackupBarButtonItem = UIBarButtonItem(
+        title: String(localized: "log.focusMode.button"),
+        style: .plain,
+        target: self,
+        action: #selector(focusBackupTapped)
+    )
+
     private var logObserverID: UUID?
+    private var stateObserverID: UUID?
     private var statusText = String(localized: "home.execution.notStarted")
     private var currentEntries: [ExecutionLogEntry] = []
     private var entriesByID: [UUID: ExecutionLogEntry] = [:]
@@ -41,10 +49,12 @@ final class HomeExecutionLogViewController: UIViewController {
     }
 
     deinit {
-        guard let logObserverID else { return }
         let coordinator = coordinator
+        let logID = logObserverID
+        let stateID = stateObserverID
         Task { @MainActor in
-            coordinator.removeLogObserver(logObserverID)
+            if let logID { coordinator.removeLogObserver(logID) }
+            if let stateID { coordinator.removeStateObserver(stateID) }
         }
     }
 
@@ -52,6 +62,7 @@ final class HomeExecutionLogViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .appBackground
         title = String(localized: "log.title")
+        navigationItem.leftBarButtonItem = focusBackupBarButtonItem
         navigationItem.rightBarButtonItem = filterBarButtonItem
 
         buildUI()
@@ -60,6 +71,14 @@ final class HomeExecutionLogViewController: UIViewController {
         logObserverID = coordinator.addLogObserver { [weak self] snapshot in
             self?.apply(snapshot)
         }
+        stateObserverID = coordinator.addStateObserver { [weak self] in
+            self?.updateFocusBackupAvailability()
+        }
+        updateFocusBackupAvailability()
+    }
+
+    private func updateFocusBackupAvailability() {
+        focusBackupBarButtonItem.isEnabled = coordinator.isRunning
     }
 
     private func buildUI() {
@@ -261,6 +280,67 @@ final class HomeExecutionLogViewController: UIViewController {
             preference = preference.updating(level, isEnabled: selectedLevels.contains(level))
         }
         ExecutionLogFilterPreference.setValue(preference)
+    }
+
+    @objc
+    private func focusBackupTapped() {
+        let alert = UIAlertController(
+            title: String(localized: "log.focusMode.alertTitle"),
+            message: String(localized: "log.focusMode.alertMessage"),
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(
+            title: String(localized: "log.focusMode.alertConfirm"),
+            style: .default
+        ) { [weak self] _ in
+            self?.startFocusBackupIfAllowed()
+        })
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        present(alert, animated: true)
+    }
+
+    private func startFocusBackupIfAllowed() {
+        guard coordinator.isRunning else { return }
+        guard ProStatus.isPro else {
+            presentProUpgradeAlert()
+            return
+        }
+        let focus = FocusModeViewController(coordinator: coordinator)
+        present(focus, animated: true)
+    }
+
+    private func presentProUpgradeAlert() {
+        let alert = UIAlertController(
+            title: String(localized: "home.alert.upgradeTitle"),
+            message: String(localized: "home.alert.upgradeMessage"),
+            preferredStyle: .alert
+        )
+        if let price = Store.shared.membershipDisplayPrice() {
+            alert.addAction(UIAlertAction(
+                title: String(format: String(localized: "home.alert.upgradeAction"), price),
+                style: .default
+            ) { [weak self] _ in
+                Task { [weak self] in
+                    do {
+                        _ = try await Store.shared.purchaseLifetimeMembership()
+                    } catch {
+                        self?.presentPurchaseError(error)
+                    }
+                }
+            })
+        }
+        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
+        present(alert, animated: true)
+    }
+
+    private func presentPurchaseError(_ error: Error) {
+        let alert = UIAlertController(
+            title: nil,
+            message: error.localizedDescription,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
+        present(alert, animated: true)
     }
 
     @objc
