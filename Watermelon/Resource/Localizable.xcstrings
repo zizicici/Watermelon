@@ -26754,79 +26754,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Alle Fotos"
+            "value" : "Alle"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "All Photos"
+            "value" : "All"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Todas las fotos"
+            "value" : "Todo"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Todas las fotos"
+            "value" : "Todo"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Toutes les photos"
+            "value" : "Tout"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "すべての写真"
+            "value" : "すべて"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "모든 사진"
+            "value" : "전체"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Todas as Fotos"
+            "value" : "Tudo"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Todas as Fotografias"
+            "value" : "Tudo"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Усі фото"
+            "value" : "Усе"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部照片"
+            "value" : "全部"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部照片"
+            "value" : "全部"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部照片"
+            "value" : "全部"
           }
         }
       }
