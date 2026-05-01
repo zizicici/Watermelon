@@ -160,6 +160,16 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    func collectAssetIDs(query: PhotoLibraryQuery) -> Set<String> {
+        var ids = Set<String>()
+        for result in fetchResults(query: query) {
+            for index in 0 ..< result.count {
+                ids.insert(result.object(at: index).localIdentifier)
+            }
+        }
+        return ids
+    }
+
     func fetchUserAlbums(shouldCancel: () -> Bool = { false }) -> [LocalAlbumDescriptor] {
         guard !shouldCancel() else { return [] }
 

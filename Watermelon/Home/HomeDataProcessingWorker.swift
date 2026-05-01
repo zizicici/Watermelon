@@ -54,21 +54,34 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
     // Helpers bound to the processing queue: the engines that accept these closures
     // are only invoked while we're already executing on processingQueue.
-    private func fetchFingerprintsForIDs(_ ids: Set<String>) -> [String: Data] {
+    //
+    // PHFetch fresh mtimes per call: a PHChange that hasn't reached the engine yet
+    // would otherwise let a stale DB fingerprint slip through.
+    private func fetchFingerprintsForIDs(_ ids: Set<String>) -> [String: LocalAssetFingerprintRecord] {
         guard !ids.isEmpty else { return [:] }
         do {
-            return try contentHashIndexRepository.fetchAssetFingerprintsByAsset(assetIDs: ids)
+            let raw = try contentHashIndexRepository.fetchAssetFingerprintRecords(assetIDs: ids)
+            guard !raw.isEmpty else { return [:] }
+            let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(raw.keys))
+            var result: [String: LocalAssetFingerprintRecord] = [:]
+            result.reserveCapacity(raw.count)
+            for asset in phAssets {
+                guard let record = raw[asset.localIdentifier] else { continue }
+                if let mtime = asset.modificationDate, mtime > record.updatedAt { continue }
+                result[asset.localIdentifier] = record
+            }
+            return result
         } catch {
-            dataLog.error("[HomeData] fetchAssetFingerprintsByAsset(assetIDs:) failed: \(String(describing: error))")
+            dataLog.error("[HomeData] fetchAssetFingerprintRecords(assetIDs:) failed: \(String(describing: error))")
             return [:]
         }
     }
 
-    private func fetchAllFingerprints() -> [String: Data] {
+    private func fetchAllFingerprints() -> [String: LocalAssetFingerprintRecord] {
         do {
-            return try contentHashIndexRepository.fetchAssetFingerprintsByAsset()
+            return try contentHashIndexRepository.fetchAssetFingerprintRecords()
         } catch {
-            dataLog.error("[HomeData] fetchAssetFingerprintsByAsset() failed: \(String(describing: error))")
+            dataLog.error("[HomeData] fetchAssetFingerprintRecords() failed: \(String(describing: error))")
             return [:]
         }
     }
@@ -173,6 +186,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                                 (asset.localIdentifier, LibraryAssetSnapshot(
                                     localIdentifier: asset.localIdentifier,
                                     creationDate: asset.creationDate,
+                                    modificationDate: asset.modificationDate,
                                     mediaKind: libraryAssetMediaKind(for: asset)
                                 ))
                             })

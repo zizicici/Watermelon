@@ -8,6 +8,8 @@ final class DependencyContainer {
     let photoLibraryService: PhotoLibraryService
     let hashIndexRepository: ContentHashIndexRepository
     let localHashIndexBuildService: LocalHashIndexBuildService
+    let localIndexChangePublisher: LocalIndexChangePublisher
+    let localIndexBuildCoordinator: LocalIndexBuildCoordinator
     let backupCoordinator: BackupCoordinator
     let restoreService: RestoreService
     let appRuntimeFlags: AppRuntimeFlags
@@ -32,6 +34,14 @@ final class DependencyContainer {
         localHashIndexBuildService = LocalHashIndexBuildService(
             photoLibraryService: photoLibraryService,
             repository: hashIndexRepository
+        )
+        let localIndexChangePublisher = LocalIndexChangePublisher()
+        self.localIndexChangePublisher = localIndexChangePublisher
+        localIndexBuildCoordinator = LocalIndexBuildCoordinator(
+            buildService: localHashIndexBuildService,
+            photoLibraryService: photoLibraryService,
+            hashIndexRepository: hashIndexRepository,
+            changePublisher: localIndexChangePublisher
         )
 
         let backupCoordinator = BackupCoordinator(

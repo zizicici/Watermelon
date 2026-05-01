@@ -97,7 +97,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
 
     func reload(
         collections: [LibraryAssetCollection],
-        fingerprintByAsset: [String: Data],
+        fingerprintByAsset: [String: LocalAssetFingerprintRecord],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
         let oldMonths = allMonths
@@ -134,8 +134,9 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
                     insertAssetID(assetID, month: month, mediaKind: snapshot.mediaKind)
                     // Orphans (DB entry whose PHAsset no longer exists) are dropped
                     // implicitly by only copying fingerprints for IDs we actually saw.
-                    if let fp = fingerprintByAsset[assetID] {
-                        fingerprintByAssetID[assetID] = fp
+                    if let record = fingerprintByAsset[assetID],
+                       !isStaleFingerprint(record: record, modificationDate: snapshot.modificationDate) {
+                        fingerprintByAssetID[assetID] = record.fingerprint
                     }
                 }
             }
@@ -172,7 +173,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     /// Unknown IDs are silently skipped. Returns the months whose aggregates changed.
     func refreshExisting(
         assetIDs: Set<String>,
-        fingerprintsForIDs: (Set<String>) -> [String: Data],
+        fingerprintsForIDs: (Set<String>) -> [String: LocalAssetFingerprintRecord],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty, hasLoadedIndex else { return [] }
@@ -203,7 +204,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     /// skipped so a double call is idempotent.
     func eagerlyInsert(
         _ snapshots: [String: LibraryAssetSnapshot],
-        fingerprintsForIDs: (Set<String>) -> [String: Data],
+        fingerprintsForIDs: (Set<String>) -> [String: LocalAssetFingerprintRecord],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
         guard !snapshots.isEmpty, hasLoadedIndex else { return [] }
@@ -234,7 +235,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     /// last collection drops it.
     func applyChange(
         _ provider: LibraryChangeProvider,
-        fingerprintsForIDs: (Set<String>) -> [String: Data],
+        fingerprintsForIDs: (Set<String>) -> [String: LocalAssetFingerprintRecord],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
         guard !trackedCollections.isEmpty else { return [] }
@@ -383,15 +384,18 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
 
     private func refreshFingerprintCache(
         for ids: Set<String>,
-        using fingerprintsForIDs: (Set<String>) -> [String: Data]
+        using fingerprintsForIDs: (Set<String>) -> [String: LocalAssetFingerprintRecord]
     ) {
         guard !ids.isEmpty else { return }
         let fresh = fingerprintsForIDs(ids)
         for id in ids {
-            // A missing key means the DB row has no fingerprint (e.g., size-only scan);
-            // assigning nil clears any stale cache entry.
-            fingerprintByAssetID[id] = fresh[id]
+            fingerprintByAssetID[id] = fresh[id]?.fingerprint
         }
+    }
+
+    private func isStaleFingerprint(record: LocalAssetFingerprintRecord, modificationDate: Date?) -> Bool {
+        guard let mtime = modificationDate else { return false }
+        return mtime > record.updatedAt
     }
 
     private func recomputeAggregates(

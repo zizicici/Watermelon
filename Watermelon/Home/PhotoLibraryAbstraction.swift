@@ -11,6 +11,7 @@ enum AlbumMediaKind: Sendable {
 struct LibraryAssetSnapshot: Hashable, Sendable {
     let localIdentifier: String
     let creationDate: Date?
+    let modificationDate: Date?
     let mediaKind: AlbumMediaKind
 }
 

@@ -5,6 +5,7 @@ import os.log
 private let localHashIndexLog = Logger(subsystem: "com.zizicici.watermelon", category: "LocalHashIndex")
 
 typealias LocalHashIndexProgressHandler = @Sendable (String, ExecutionLogLevel) async -> Void
+typealias LocalHashIndexProgressTickHandler = @Sendable (_ processed: Int, _ total: Int) async -> Void
 
 struct LocalHashIndexBuildResult: Sendable {
     let requestedAssetIDs: Set<String>
@@ -72,22 +73,25 @@ private actor LocalHashIndexBuildProgressReporter {
     private let total: Int
     private let phaseLabel: String
     private let logHandler: LocalHashIndexProgressHandler?
+    private let tickHandler: LocalHashIndexProgressTickHandler?
 
     private var processed = 0
     private var cacheHitCount = 0
     private var rebuiltCount = 0
     private var unavailableCount = 0
     private var failedCount = 0
-    private var lastLoggedProcessed = 0
+    private var lastReportedProcessed = 0
 
     init(
         total: Int,
         phaseLabel: String,
-        logHandler: LocalHashIndexProgressHandler?
+        logHandler: LocalHashIndexProgressHandler?,
+        tickHandler: LocalHashIndexProgressTickHandler?
     ) {
         self.total = total
         self.phaseLabel = phaseLabel
         self.logHandler = logHandler
+        self.tickHandler = tickHandler
     }
 
     func record(_ result: LocalHashIndexProcessedAssetResult) async {
@@ -104,36 +108,39 @@ private actor LocalHashIndexBuildProgressReporter {
         case .failed:
             failedCount += 1
         }
-        await maybeLog(force: false)
+        await maybeReport(force: false)
     }
 
     func finish() async {
-        await maybeLog(force: true)
+        await maybeReport(force: true)
     }
 
-    private func maybeLog(force: Bool) async {
-        guard let logHandler, total > 0 else { return }
-
-        let shouldLog = force
+    private func maybeReport(force: Bool) async {
+        guard total > 0 else { return }
+        let shouldReport = force
             || processed == total
-            || processed - lastLoggedProcessed >= Self.logCountStep
-        guard shouldLog else { return }
-        guard processed > lastLoggedProcessed || force else { return }
+            || processed - lastReportedProcessed >= Self.logCountStep
+        guard shouldReport else { return }
+        guard processed > lastReportedProcessed || force else { return }
 
-        lastLoggedProcessed = processed
-        await logHandler(
-            String.localizedStringWithFormat(
-                String(localized: "backup.preflight.progressBuild"),
-                phaseLabel,
-                processed,
-                total,
-                cacheHitCount,
-                rebuiltCount,
-                unavailableCount,
-                failedCount
-            ),
-            .debug
-        )
+        lastReportedProcessed = processed
+
+        if let logHandler {
+            await logHandler(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.preflight.progressBuild"),
+                    phaseLabel,
+                    processed,
+                    total,
+                    cacheHitCount,
+                    rebuiltCount,
+                    unavailableCount,
+                    failedCount
+                ),
+                .debug
+            )
+        }
+        await tickHandler?(processed, total)
     }
 }
 
@@ -164,7 +171,8 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         for assetIDs: Set<String>,
         workerCount: Int = 2,
         allowNetworkAccess: Bool = false,
-        progressHandler: LocalHashIndexProgressHandler? = nil
+        progressHandler: LocalHashIndexProgressHandler? = nil,
+        tickHandler: LocalHashIndexProgressTickHandler? = nil
     ) async throws -> LocalHashIndexBuildResult {
         guard !assetIDs.isEmpty else {
             return LocalHashIndexBuildResult(
@@ -221,7 +229,8 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             let progressReporter = LocalHashIndexBuildProgressReporter(
                 total: preparedInput.assets.count,
                 phaseLabel: phaseLabel,
-                logHandler: progressHandler
+                logHandler: progressHandler,
+                tickHandler: tickHandler
             )
             let scanStart = CFAbsoluteTimeGetCurrent()
             let aggregate = try await withThrowingTaskGroup(of: LocalHashIndexWorkerResult.self) { group in

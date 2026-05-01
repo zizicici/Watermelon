@@ -16,6 +16,8 @@ struct HomeMenuFactory {
         var openManageProfiles: () -> Void
         var openCurrentProfileSettings: () -> Void
         var scrollToMonth: (LibraryMonthKey) -> Void
+        var openLocalIndex: () -> Void
+        var openDuplicates: () -> Void
     }
 
     private static let monthFormatter: DateFormatter = {
@@ -56,7 +58,29 @@ struct HomeMenuFactory {
             hooks.openLocalAlbumPicker()
         }
 
-        return UIMenu(children: [allPhotosAction, specificAlbumsAction])
+        let localIndexAction = UIAction(
+            title: String(localized: "home.localIndex.title"),
+            image: UIImage(systemName: "square.stack.3d.up"),
+            attributes: attributes
+        ) { [hooks] _ in
+            hooks.openLocalIndex()
+        }
+
+        let duplicatesAction = UIAction(
+            title: String(localized: "home.menu.duplicates"),
+            image: UIImage(systemName: "rectangle.on.rectangle.slash"),
+            attributes: attributes
+        ) { [hooks] _ in
+            hooks.openDuplicates()
+        }
+
+        let toolsSection = UIMenu(
+            title: "",
+            options: .displayInline,
+            children: [localIndexAction, duplicatesAction]
+        )
+
+        return UIMenu(children: [allPhotosAction, specificAlbumsAction, toolsSection])
     }
 
     func buildDestination() -> UIMenu {

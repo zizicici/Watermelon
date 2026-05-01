@@ -75,6 +75,7 @@ final class HomeScreenStore {
     private var lastMonthPhases: [LibraryMonthKey: MonthPlan.Phase] = [:]
     private var bootstrapTask: Task<Void, Never>?
     private var maintenanceObserver: NSObjectProtocol?
+    private var indexChangeObserverID: UUID?
 
     // MARK: - Init
 
@@ -126,6 +127,29 @@ final class HomeScreenStore {
         bind()
         pipBridge.attach()
         observeMaintenance()
+        observeLocalIndexChanges()
+    }
+
+    private func observeLocalIndexChanges() {
+        indexChangeObserverID = dependencies.localIndexChangePublisher.addObserver { [weak self] change in
+            Task { @MainActor [weak self] in
+                self?.handleLocalIndexChange(change)
+            }
+        }
+    }
+
+    private func handleLocalIndexChange(_ change: LocalIndexChangePublisher.Change) {
+        switch change {
+        case .touched(let assetIDs):
+            Task { [weak self] in
+                guard let self else { return }
+                let reconciledMonths = await self.dataManager.refreshLocalIndex(forAssetIDs: assetIDs)
+                guard !reconciledMonths.isEmpty else { return }
+                self.handleDataChange(reconciledMonths)
+            }
+        case .bulkInvalidation:
+            scheduleRefresh([.reloadLocal, .notifyStructural])
+        }
     }
 
     private func observeMaintenance() {
@@ -198,6 +222,9 @@ final class HomeScreenStore {
         bootstrapTask?.cancel()
         if let maintenanceObserver {
             NotificationCenter.default.removeObserver(maintenanceObserver)
+        }
+        if let id = indexChangeObserverID {
+            dependencies.localIndexChangePublisher.removeObserver(id)
         }
     }
 
@@ -311,6 +338,7 @@ final class HomeScreenStore {
 
     func startExecution(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) {
         guard !rejectIfMaintaining() else { return }
+        guard !rejectIfLocalIndexBuilding() else { return }
         executionCoordinator.enter(backup: backup, download: download, complement: complement)
     }
 
@@ -336,6 +364,15 @@ final class HomeScreenStore {
         onAlert?(
             String(localized: "common.error"),
             String(localized: "home.alert.maintenanceInProgress")
+        )
+        return true
+    }
+
+    private func rejectIfLocalIndexBuilding() -> Bool {
+        guard dependencies.localIndexBuildCoordinator.isRunning else { return false }
+        onAlert?(
+            String(localized: "common.error"),
+            String(localized: "home.alert.localIndexBuildInProgress")
         )
         return true
     }

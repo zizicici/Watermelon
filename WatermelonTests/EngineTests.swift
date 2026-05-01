@@ -9,7 +9,7 @@ final class EngineTests: XCTestCase {
     private func reload(
         _ engine: HomeLocalIndexEngine,
         _ collections: [LibraryAssetCollection],
-        fingerprints: [String: Data] = [:],
+        fingerprints: [String: LocalAssetFingerprintRecord] = [:],
         remoteFingerprintsForMonth: ((LibraryMonthKey) -> Set<Data>)? = nil
     ) -> Set<LibraryMonthKey> {
         engine.reload(
@@ -421,7 +421,7 @@ final class EngineTests: XCTestCase {
         ])
         _ = engine.reload(
             collections: [collection],
-            fingerprintByAsset: ["a": fp, "b": fp],
+            fingerprintByAsset: ["a": TestFixtures.record(fp), "b": TestFixtures.record(fp)],
             remoteFingerprintsForMonth: { _ in [fp] }
         )
 
@@ -440,7 +440,7 @@ final class EngineTests: XCTestCase {
 
         _ = engine.reload(
             collections: [TestAssetCollection([TestFixtures.snapshot(id: "a", year: 2024, month: 3)])],
-            fingerprintByAsset: ["a": fp],
+            fingerprintByAsset: ["a": TestFixtures.record(fp)],
             remoteFingerprintsForMonth: { remoteFps[$0] ?? [] }
         )
         XCTAssertEqual(engine.localMonthSummary(for: key)?.backedUpCount, 0)

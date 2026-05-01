@@ -33,17 +33,23 @@ enum TestFixtures {
         year: Int = 2024,
         month: Int = 1,
         day: Int = 15,
-        kind: AlbumMediaKind = .photo
+        kind: AlbumMediaKind = .photo,
+        modificationDate: Date? = nil
     ) -> LibraryAssetSnapshot {
         LibraryAssetSnapshot(
             localIdentifier: id,
             creationDate: date(year, month, day),
+            modificationDate: modificationDate,
             mediaKind: kind
         )
     }
 
-    static func emptyFingerprint(for ids: Set<String>) -> [String: Data] {
+    static func emptyFingerprint(for ids: Set<String>) -> [String: LocalAssetFingerprintRecord] {
         [:]
+    }
+
+    static func record(_ fingerprint: Data, updatedAt: Date = Date()) -> LocalAssetFingerprintRecord {
+        LocalAssetFingerprintRecord(fingerprint: fingerprint, updatedAt: updatedAt)
     }
 
     static func emptyRemoteFingerprints(for month: LibraryMonthKey) -> Set<Data> {

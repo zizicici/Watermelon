@@ -27,7 +27,9 @@ final class HomeViewController: UIViewController {
             openNewStorageFlow: { [weak self] dest in self?.openNewStorageFlow(dest) },
             openManageProfiles: { [weak self] in self?.openManageProfiles() },
             openCurrentProfileSettings: { [weak self] in self?.openCurrentProfileSettings() },
-            scrollToMonth: { [weak self] month in self?.scrollToMonth(month) }
+            scrollToMonth: { [weak self] month in self?.scrollToMonth(month) },
+            openLocalIndex: { [weak self] in self?.openLocalIndex() },
+            openDuplicates: { [weak self] in self?.openDuplicates() }
         )
     )
 
@@ -949,6 +951,50 @@ final class HomeViewController: UIViewController {
         if let presentation = container.sheetPresentationController {
             presentation.prefersGrabberVisible = true
             presentation.detents = [.medium(), .large()]
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
+    private func openLocalIndex() {
+        guard store.executionState == nil else { return }
+        guard store.localPhotoAccessState.isAuthorized else {
+            localOverlayButtonTapped()
+            return
+        }
+
+        let viewController = LocalIndexViewController(
+            coordinator: dependencies.localIndexBuildCoordinator,
+            photoLibraryService: dependencies.photoLibraryService,
+            hashIndexRepository: dependencies.hashIndexRepository
+        )
+
+        let container = UINavigationController(rootViewController: viewController)
+        if let presentation = container.sheetPresentationController {
+            presentation.prefersGrabberVisible = true
+            presentation.detents = [.medium(), .large()]
+        }
+        present(container, animated: ConsideringUser.animated)
+    }
+
+    private func openDuplicates() {
+        guard store.executionState == nil else { return }
+        guard store.localPhotoAccessState.isAuthorized else {
+            localOverlayButtonTapped()
+            return
+        }
+
+        let viewController = DuplicatesViewController(
+            coordinator: dependencies.localIndexBuildCoordinator,
+            hashIndexRepository: dependencies.hashIndexRepository,
+            photoLibraryService: dependencies.photoLibraryService,
+            changePublisher: dependencies.localIndexChangePublisher,
+            scope: store.localLibraryScope
+        )
+
+        let container = UINavigationController(rootViewController: viewController)
+        if let presentation = container.sheetPresentationController {
+            presentation.prefersGrabberVisible = true
+            presentation.detents = [.large()]
         }
         present(container, animated: ConsideringUser.animated)
     }

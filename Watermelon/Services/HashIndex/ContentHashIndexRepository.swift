@@ -14,6 +14,18 @@ struct LocalAssetHashCache: Sendable {
     var hashesByRoleSlot: [AssetResourceRoleSlot: Data]
 }
 
+struct IndexedAssetRow: Sendable {
+    let assetLocalIdentifier: String
+    let assetFingerprint: Data
+    let totalFileSizeBytes: Int64
+    let updatedAt: Date
+}
+
+struct LocalAssetFingerprintRecord: Sendable, Equatable {
+    let fingerprint: Data
+    let updatedAt: Date
+}
+
 struct AssetSizeSnapshot: Sendable {
     let totalFileSizeBytes: Int64
     let modificationDateMs: Int64
@@ -177,38 +189,40 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         )
     }
 
-    func fetchAssetFingerprintsByAsset() throws -> [String: Data] {
+    func fetchAssetFingerprintRecords() throws -> [String: LocalAssetFingerprintRecord] {
         try databaseManager.read { db in
             let rows = try Row.fetchAll(
                 db,
                 sql: """
-                SELECT assetLocalIdentifier, assetFingerprint
+                SELECT assetLocalIdentifier, assetFingerprint, updatedAt
                 FROM local_assets
                 WHERE assetFingerprint IS NOT NULL
                 """
             )
-            var result: [String: Data] = [:]
+            var result: [String: LocalAssetFingerprintRecord] = [:]
             result.reserveCapacity(rows.count)
             for row in rows {
                 let assetID: String = row["assetLocalIdentifier"]
-                let fingerprint: Data = row["assetFingerprint"]
-                result[assetID] = fingerprint
+                result[assetID] = LocalAssetFingerprintRecord(
+                    fingerprint: row["assetFingerprint"],
+                    updatedAt: row["updatedAt"]
+                )
             }
             return result
         }
     }
 
-    func fetchAssetFingerprintsByAsset(assetIDs: Set<String>) throws -> [String: Data] {
+    func fetchAssetFingerprintRecords(assetIDs: Set<String>) throws -> [String: LocalAssetFingerprintRecord] {
         guard !assetIDs.isEmpty else { return [:] }
 
         return try databaseManager.read { db in
-            var result: [String: Data] = [:]
+            var result: [String: LocalAssetFingerprintRecord] = [:]
             result.reserveCapacity(assetIDs.count)
             try Self.forEachIDChunk(assetIDs) { chunk, placeholders in
                 let rows = try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT assetLocalIdentifier, assetFingerprint
+                    SELECT assetLocalIdentifier, assetFingerprint, updatedAt
                     FROM local_assets
                     WHERE assetLocalIdentifier IN (\(placeholders))
                       AND assetFingerprint IS NOT NULL
@@ -217,8 +231,40 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 )
                 for row in rows {
                     let assetID: String = row["assetLocalIdentifier"]
-                    let fingerprint: Data = row["assetFingerprint"]
-                    result[assetID] = fingerprint
+                    result[assetID] = LocalAssetFingerprintRecord(
+                        fingerprint: row["assetFingerprint"],
+                        updatedAt: row["updatedAt"]
+                    )
+                }
+            }
+            return result
+        }
+    }
+
+    func fetchValidIndexedRows(assetIDs: Set<String>) throws -> [String: IndexedAssetRow] {
+        guard !assetIDs.isEmpty else { return [:] }
+
+        return try databaseManager.read { db in
+            var result: [String: IndexedAssetRow] = [:]
+            try Self.forEachIDChunk(assetIDs) { chunk, placeholders in
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT assetLocalIdentifier, assetFingerprint, totalFileSizeBytes, updatedAt
+                    FROM local_assets
+                    WHERE assetLocalIdentifier IN (\(placeholders))
+                      AND assetFingerprint IS NOT NULL
+                    """,
+                    arguments: StatementArguments(chunk)
+                )
+                for row in rows {
+                    let assetID: String = row["assetLocalIdentifier"]
+                    result[assetID] = IndexedAssetRow(
+                        assetLocalIdentifier: assetID,
+                        assetFingerprint: row["assetFingerprint"],
+                        totalFileSizeBytes: row["totalFileSizeBytes"],
+                        updatedAt: row["updatedAt"]
+                    )
                 }
             }
             return result

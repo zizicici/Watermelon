@@ -15,6 +15,7 @@ private func snapshot(_ asset: PHAsset) -> LibraryAssetSnapshot {
     LibraryAssetSnapshot(
         localIdentifier: asset.localIdentifier,
         creationDate: asset.creationDate,
+        modificationDate: asset.modificationDate,
         mediaKind: libraryAssetMediaKind(for: asset)
     )
 }
