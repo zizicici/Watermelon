@@ -987,8 +987,7 @@ final class HomeViewController: UIViewController {
             coordinator: dependencies.localIndexBuildCoordinator,
             hashIndexRepository: dependencies.hashIndexRepository,
             photoLibraryService: dependencies.photoLibraryService,
-            changePublisher: dependencies.localIndexChangePublisher,
-            scope: store.localLibraryScope
+            changePublisher: dependencies.localIndexChangePublisher
         )
 
         let container = UINavigationController(rootViewController: viewController)

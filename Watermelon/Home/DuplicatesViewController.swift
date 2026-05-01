@@ -45,7 +45,6 @@ final class DuplicatesViewController: UIViewController {
     private let hashIndexRepository: ContentHashIndexRepository
     private let photoLibraryService: PhotoLibraryService
     private let changePublisher: LocalIndexChangePublisher
-    private let scope: HomeLocalLibraryScope
 
     private let summaryContainer = UIView()
     private let summaryLabel = UILabel()
@@ -84,14 +83,12 @@ final class DuplicatesViewController: UIViewController {
         coordinator: LocalIndexBuildCoordinator,
         hashIndexRepository: ContentHashIndexRepository,
         photoLibraryService: PhotoLibraryService,
-        changePublisher: LocalIndexChangePublisher,
-        scope: HomeLocalLibraryScope
+        changePublisher: LocalIndexChangePublisher
     ) {
         self.coordinator = coordinator
         self.hashIndexRepository = hashIndexRepository
         self.photoLibraryService = photoLibraryService
         self.changePublisher = changePublisher
-        self.scope = scope
         self.emptyStateView = makeAlbumEmptyStateView(
             title: String(localized: "home.duplicates.emptyTitle"),
             message: String(localized: "home.duplicates.emptyMessage")
@@ -279,12 +276,10 @@ final class DuplicatesViewController: UIViewController {
 
         let repository = hashIndexRepository
         let photoLibraryService = photoLibraryService
-        let scope = scope
         loadTask = Task { [weak self] in
             let data = await Self.computeData(
                 repository: repository,
-                photoLibraryService: photoLibraryService,
-                scope: scope
+                photoLibraryService: photoLibraryService
             )
             guard !Task.isCancelled else { return }
             self?.applyData(data)
@@ -469,13 +464,11 @@ final class DuplicatesViewController: UIViewController {
         let photoLibraryService = photoLibraryService
         let repository = hashIndexRepository
         let publisher = changePublisher
-        let scope = scope
         executeTask = Task { [weak self] in
             let stillDuplicate = await Self.revalidate(
                 pairs: pairs,
                 repository: repository,
-                photoLibraryService: photoLibraryService,
-                scope: scope
+                photoLibraryService: photoLibraryService
             )
             guard stillDuplicate else {
                 self?.handleStaleSnapshot()
@@ -530,12 +523,11 @@ final class DuplicatesViewController: UIViewController {
 
     private nonisolated static func computeData(
         repository: ContentHashIndexRepository,
-        photoLibraryService: PhotoLibraryService,
-        scope: HomeLocalLibraryScope
+        photoLibraryService: PhotoLibraryService
     ) async -> DuplicatesData {
         await withCancellableDetachedValue(priority: .userInitiated) {
-            let scopeIDs = photoLibraryService.collectAssetIDs(query: scope.photoLibraryQuery)
-            let valid = (try? repository.fetchValidIndexedRows(assetIDs: scopeIDs)) ?? [:]
+            let allIDs = photoLibraryService.collectAssetIDs(query: .allAssets)
+            let valid = (try? repository.fetchValidIndexedRows(assetIDs: allIDs)) ?? [:]
 
             let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(valid.keys))
             var assetsByID: [String: PHAsset] = [:]
@@ -581,7 +573,7 @@ final class DuplicatesViewController: UIViewController {
             }
 
             return DuplicatesData(
-                scopeTotal: scopeIDs.count,
+                scopeTotal: allIDs.count,
                 scopeIndexed: validFingerprints.count,
                 groups: groups
             )
@@ -591,8 +583,7 @@ final class DuplicatesViewController: UIViewController {
     private nonisolated static func revalidate(
         pairs: [KeepDeletePair],
         repository: ContentHashIndexRepository,
-        photoLibraryService: PhotoLibraryService,
-        scope: HomeLocalLibraryScope
+        photoLibraryService: PhotoLibraryService
     ) async -> Bool {
         await withCancellableDetachedValue(priority: .userInitiated) {
             let allIDs = Set(pairs.flatMap { [$0.keep, $0.delete] })
@@ -604,11 +595,7 @@ final class DuplicatesViewController: UIViewController {
             for asset in phAssets {
                 phAssetByID[asset.localIdentifier] = asset
             }
-            let scopeIDs = photoLibraryService.collectAssetIDs(query: scope.photoLibraryQuery)
             for pair in pairs {
-                guard scopeIDs.contains(pair.keep), scopeIDs.contains(pair.delete) else {
-                    return false
-                }
                 guard let keepRow = valid[pair.keep],
                       let deleteRow = valid[pair.delete],
                       let keepAsset = phAssetByID[pair.keep],
