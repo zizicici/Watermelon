@@ -5,6 +5,7 @@ enum NewStorageDestination {
     case smbDiscovery
     case webdav
     case externalVolume
+    case s3
 }
 
 @MainActor
@@ -129,6 +130,9 @@ struct HomeMenuFactory {
                 ),
                 UIAction(title: "WebDAV", image: UIImage(systemName: "network")) { [hooks] _ in
                     hooks.openNewStorageFlow(.webdav)
+                },
+                UIAction(title: "S3", image: UIImage(systemName: "cloud.fill")) { [hooks] _ in
+                    hooks.openNewStorageFlow(.s3)
                 },
                 UIAction(title: String(localized: "home.menu.externalStorage"), image: UIImage(systemName: "externaldrive")) { [hooks] _ in
                     hooks.openNewStorageFlow(.externalVolume)

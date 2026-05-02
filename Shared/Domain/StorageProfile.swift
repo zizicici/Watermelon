@@ -5,6 +5,18 @@ struct ExternalVolumeConnectionParams: Codable {
     let displayPath: String
 }
 
+struct S3ConnectionParams: Codable {
+    let scheme: String
+    let region: String
+    let usePathStyle: Bool
+
+    init(scheme: String, region: String, usePathStyle: Bool) {
+        self.scheme = scheme.lowercased()
+        self.region = region
+        self.usePathStyle = usePathStyle
+    }
+}
+
 struct WebDAVConnectionParams: Codable {
     let scheme: String
 
@@ -52,7 +64,7 @@ struct StorageProfile {
 
     var requiresPassword: Bool {
         switch storageType {
-        case .smb, .webdav:
+        case .smb, .webdav, .s3:
             return true
         case .externalVolume:
             return false
@@ -67,6 +79,8 @@ struct StorageProfile {
             return "\(record.username)@\(record.name)"
         case .externalVolume:
             return record.name
+        case .s3:
+            return "\(record.username)@\(record.name)"
         }
     }
 
@@ -86,6 +100,8 @@ struct StorageProfile {
                 return Self.relativeExternalPath(from: path)
             }
             return String(localized: "storage.error.externalFallback")
+        case .s3:
+            return record.s3DisplayURLString ?? "S3"
         }
     }
 
@@ -97,6 +113,8 @@ struct StorageProfile {
             return "\(record.username)@\(record.name)"
         case .externalVolume:
             return record.name
+        case .s3:
+            return "\(record.username)@\(record.shareName)\(record.basePath)"
         }
     }
 
@@ -129,6 +147,22 @@ extension ServerProfileRecord {
 
     var webDAVParams: WebDAVConnectionParams? {
         decodedConnectionParams(as: WebDAVConnectionParams.self)
+    }
+
+    var s3Params: S3ConnectionParams? {
+        decodedConnectionParams(as: S3ConnectionParams.self)
+    }
+
+    var s3DisplayURLString: String? {
+        guard resolvedStorageType == .s3, let params = s3Params, !host.isEmpty, !shareName.isEmpty else { return nil }
+        let scheme = params.scheme.isEmpty ? "https" : params.scheme
+        let defaultPort = scheme == "https" ? 443 : 80
+        let portSuffix = (port == 0 || port == defaultPort) ? "" : ":\(port)"
+        let trimmedBase = basePath == "/" ? "" : basePath
+        if params.usePathStyle {
+            return "\(scheme)://\(host)\(portSuffix)/\(shareName)\(trimmedBase)"
+        }
+        return "\(scheme)://\(shareName).\(host)\(portSuffix)\(trimmedBase)"
     }
 
     /// Canonical WebDAV endpoint built from the structured fields.
@@ -190,6 +224,8 @@ extension ServerProfileRecord {
             return SMBErrorClassifier.isConnectionUnavailable(error)
         case .webdav:
             return false
+        case .s3:
+            return S3ErrorClassifier.isConnectionUnavailable(error)
         }
     }
 
@@ -205,6 +241,9 @@ extension ServerProfileRecord {
         }
         if resolvedStorageType == .webdav {
             return WebDAVErrorClassifier.describe(error)
+        }
+        if resolvedStorageType == .s3 {
+            return S3ErrorClassifier.describe(error)
         }
         return error.localizedDescription
     }

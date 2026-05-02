@@ -46,6 +46,8 @@ enum StorageProfileIcon {
             return .Material.Teal._500
         case .externalVolume:
             return .Material.Orange._500
+        case .s3:
+            return .Material.Indigo._500
         }
     }
 
@@ -57,6 +59,8 @@ enum StorageProfileIcon {
             return "network"
         case .externalVolume:
             return "externaldrive"
+        case .s3:
+            return "cloud.fill"
         }
     }
 }

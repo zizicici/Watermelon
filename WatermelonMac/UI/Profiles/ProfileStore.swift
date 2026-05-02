@@ -174,6 +174,52 @@ final class ProfileStore: ObservableObject {
         return record
     }
 
+    @discardableResult
+    func saveS3Profile(
+        name: String,
+        scheme: String,
+        host: String,
+        port: Int,
+        region: String,
+        bucket: String,
+        basePath: String,
+        usePathStyle: Bool,
+        accessKeyID: String,
+        secretAccessKey: String
+    ) throws -> ServerProfileRecord {
+        let normalizedScheme = scheme.lowercased()
+        let normalizedBase = RemotePathBuilder.normalizePath(basePath)
+        let resolvedName = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? bucket
+            : name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let credentialRef = "s3|\(host):\(port)|\(bucket)|\(accessKeyID)"
+        let params = S3ConnectionParams(scheme: normalizedScheme, region: region, usePathStyle: usePathStyle)
+        let connectionParams = try ServerProfileRecord.encodedConnectionParams(params)
+
+        var record = ServerProfileRecord(
+            id: nil,
+            name: resolvedName,
+            storageType: StorageType.s3.rawValue,
+            connectionParams: connectionParams,
+            sortOrder: 0,
+            host: host,
+            port: port,
+            shareName: bucket,
+            basePath: normalizedBase,
+            username: accessKeyID,
+            domain: nil,
+            credentialRef: credentialRef,
+            backgroundBackupEnabled: false,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        try databaseManager.saveServerProfile(&record)
+        try keychainService.save(password: secretAccessKey, account: credentialRef)
+        reload()
+        return record
+    }
+
     func renameProfile(id: Int64, newName: String) throws {
         guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
         var record = profiles[index]

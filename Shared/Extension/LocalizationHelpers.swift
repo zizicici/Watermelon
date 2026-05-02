@@ -22,6 +22,8 @@ enum UserFacingErrorLocalizer {
                 }
             case .webdav:
                 return WebDAVErrorClassifier.describe(error)
+            case .s3:
+                return S3ErrorClassifier.describe(error)
             }
         }
 

@@ -7,6 +7,7 @@ struct ProfileListView: View {
     @State private var addLocalSheetVisible = false
     @State private var addSMBSheetVisible = false
     @State private var addWebDAVSheetVisible = false
+    @State private var addS3SheetVisible = false
     @State private var renamingProfile: ServerProfileRecord?
 
     var body: some View {
@@ -53,6 +54,11 @@ struct ProfileListView: View {
                         addWebDAVSheetVisible = true
                     } label: {
                         Label("WebDAV…", systemImage: "network")
+                    }
+                    Button {
+                        addS3SheetVisible = true
+                    } label: {
+                        Label("S3…", systemImage: "cloud.fill")
                     }
                 } label: {
                     Label(String(localized: "profiles.add"), systemImage: "plus")
@@ -107,6 +113,25 @@ struct ProfileListView: View {
                 selection = record.id
             }
         }
+        .sheet(isPresented: $addS3SheetVisible) {
+            AddS3ProfileSheet(
+                storageClientFactory: storageClientFactory
+            ) { snapshot in
+                let record = try store.saveS3Profile(
+                    name: snapshot.name,
+                    scheme: snapshot.scheme,
+                    host: snapshot.host,
+                    port: snapshot.port,
+                    region: snapshot.region,
+                    bucket: snapshot.bucket,
+                    basePath: snapshot.basePath,
+                    usePathStyle: snapshot.usePathStyle,
+                    accessKeyID: snapshot.accessKeyID,
+                    secretAccessKey: snapshot.secretAccessKey
+                )
+                selection = record.id
+            }
+        }
         .sheet(item: $renamingProfile) { profile in
             if let id = profile.id {
                 RenameProfileSheet(store: store, profileID: id, initialName: profile.name)
@@ -128,6 +153,7 @@ private struct ProfileRow: View {
         case .smb: return "server.rack"
         case .webdav: return "network"
         case .externalVolume: return "externaldrive"
+        case .s3: return "cloud.fill"
         }
     }
 
