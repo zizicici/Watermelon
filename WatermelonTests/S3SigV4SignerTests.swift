@@ -2,7 +2,6 @@ import XCTest
 @testable import Watermelon
 
 final class S3SigV4SignerTests: XCTestCase {
-    // AWS-published example credentials (only valid as test fixtures, never as real keys).
     private let accessKey = "AKIAIOSFODNN7EXAMPLE"
     private let secretKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
     private let region = "us-east-1"
@@ -19,8 +18,6 @@ final class S3SigV4SignerTests: XCTestCase {
         return Calendar(identifier: .gregorian).date(from: components)!
     }
 
-    /// AWS S3 SigV4 documented example: GET test.txt with a Range header.
-    /// https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html
     func testGetObjectWithRangeHeader() {
         let url = URL(string: "https://examplebucket.s3.amazonaws.com/test.txt")!
 
@@ -57,8 +54,6 @@ final class S3SigV4SignerTests: XCTestCase {
         XCTAssertEqual(result.headers["authorization"], expectedAuth)
     }
 
-    /// AWS S3 SigV4 documented example: PUT object with a body and storage-class header.
-    /// https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html
     func testPutObjectWithBodyAndStorageClass() {
         let url = URL(string: "https://examplebucket.s3.amazonaws.com/test$file.text")!
         let body = Data("Welcome to Amazon S3.".utf8)
@@ -96,7 +91,6 @@ final class S3SigV4SignerTests: XCTestCase {
         XCTAssertEqual(result.payloadHash, "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072")
     }
 
-    /// Query-string canonicalization: parameters must be sorted by name and percent-encoded.
     func testQueryStringSortedAndEncoded() {
         let url = URL(string: "https://examplebucket.s3.amazonaws.com/?prefix=somePrefix&max-keys=1000")!
 
@@ -116,7 +110,6 @@ final class S3SigV4SignerTests: XCTestCase {
         XCTAssertEqual(lines[2], "max-keys=1000&prefix=somePrefix")
     }
 
-    /// Path encoding: per S3 SigV4, each path segment is URI-encoded once. Slash is preserved.
     func testPathEncodingPreservesSlashesAndEncodesSpecials() {
         let url = URL(string: "https://example.s3.amazonaws.com/folder/photo+name.jpg")!
 
@@ -134,7 +127,6 @@ final class S3SigV4SignerTests: XCTestCase {
         XCTAssertEqual(lines[1], "/folder/photo%2Bname.jpg")
     }
 
-    /// Empty body must hash to the well-known SHA256("") constant.
     func testEmptyPayloadHashConstant() {
         XCTAssertEqual(
             S3SigV4Signer.hashString(for: .empty),
@@ -142,8 +134,41 @@ final class S3SigV4SignerTests: XCTestCase {
         )
     }
 
-    /// Unsigned payload literal must match the SigV4 sentinel string.
     func testUnsignedPayloadSentinel() {
         XCTAssertEqual(S3SigV4Signer.hashString(for: .unsigned), "UNSIGNED-PAYLOAD")
+    }
+
+    func testHostHeaderIncludesNonDefaultPort() {
+        let url = URL(string: "http://minio.local:9000/bucket/test.bin")!
+        let result = S3SigV4Signer.sign(
+            method: "GET",
+            url: url,
+            bodyHash: .empty,
+            accessKeyID: accessKey,
+            secretAccessKey: secretKey,
+            region: region,
+            date: fixedDate
+        )
+        XCTAssertEqual(result.headers["host"], "minio.local:9000")
+        let canonicalLines = result.canonicalRequest.components(separatedBy: "\n")
+        XCTAssertTrue(canonicalLines.contains("host:minio.local:9000"),
+                      "canonical request missing host:port; lines=\(canonicalLines)")
+    }
+
+    func testUnsignedPayloadIntegratesIntoSignedRequest() {
+        let url = URL(string: "https://examplebucket.s3.amazonaws.com/big.bin?partNumber=1&uploadId=abc")!
+        let result = S3SigV4Signer.sign(
+            method: "PUT",
+            url: url,
+            bodyHash: .unsigned,
+            accessKeyID: accessKey,
+            secretAccessKey: secretKey,
+            region: region,
+            date: fixedDate
+        )
+        XCTAssertEqual(result.payloadHash, "UNSIGNED-PAYLOAD")
+        XCTAssertEqual(result.headers["x-amz-content-sha256"], "UNSIGNED-PAYLOAD")
+        XCTAssertTrue(result.canonicalRequest.hasSuffix("UNSIGNED-PAYLOAD"),
+                      "canonical request must end with UNSIGNED-PAYLOAD; got \(result.canonicalRequest)")
     }
 }

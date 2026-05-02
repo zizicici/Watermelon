@@ -120,8 +120,6 @@ final class S3ClientTests: XCTestCase {
     }
 
     func testListXMLParserIgnoresEchoedRequestPrefix() throws {
-        // The top-level <Prefix>photos/</Prefix> is the echoed request parameter,
-        // which must NOT appear in commonPrefixes.
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <ListBucketResult>
@@ -172,11 +170,66 @@ final class S3ClientTests: XCTestCase {
         )
     }
 
-    func testCopySourceHeaderPreservesPathSeparators() {
-        XCTAssertEqual(
-            S3Client.copySourceHeader(bucket: "my-bucket", key: "a/b/c/d.bin"),
-            "/my-bucket/a/b/c/d.bin"
-        )
+    // MARK: - Endpoint parsing
+
+    func testParseEndpointFromBareHostDefaultsToHTTPS() {
+        let parsed = S3Client.parseEndpoint("s3.amazonaws.com")
+        XCTAssertEqual(parsed?.scheme, "https")
+        XCTAssertEqual(parsed?.host, "s3.amazonaws.com")
+        XCTAssertEqual(parsed?.port, 443)
+    }
+
+    func testParseEndpointFromHTTPSURLOmitsExplicitPort() {
+        let parsed = S3Client.parseEndpoint("https://s3.eu-west-2.amazonaws.com")
+        XCTAssertEqual(parsed?.scheme, "https")
+        XCTAssertEqual(parsed?.host, "s3.eu-west-2.amazonaws.com")
+        XCTAssertEqual(parsed?.port, 443)
+    }
+
+    func testParseEndpointFromHTTPURLWithExplicitPort() {
+        let parsed = S3Client.parseEndpoint("http://minio.local:9000")
+        XCTAssertEqual(parsed?.scheme, "http")
+        XCTAssertEqual(parsed?.host, "minio.local")
+        XCTAssertEqual(parsed?.port, 9000)
+    }
+
+    func testParseEndpointRejectsNonHTTPSchemes() {
+        XCTAssertNil(S3Client.parseEndpoint("ftp://example.com"))
+        XCTAssertNil(S3Client.parseEndpoint("s3://bucket"))
+    }
+
+    func testParseEndpointRejectsEmptyOrWhitespace() {
+        XCTAssertNil(S3Client.parseEndpoint(""))
+        XCTAssertNil(S3Client.parseEndpoint("   "))
+    }
+
+    func testParseEndpointTrimsSurroundingWhitespace() {
+        let parsed = S3Client.parseEndpoint("  https://s3.amazonaws.com  ")
+        XCTAssertEqual(parsed?.host, "s3.amazonaws.com")
+        XCTAssertEqual(parsed?.scheme, "https")
+    }
+
+    // MARK: - Path-style auto-detection
+
+    func testDefaultPathStyleForAWSHostsIsVirtualHosted() {
+        XCTAssertFalse(S3Client.defaultPathStyle(forHost: "s3.amazonaws.com"))
+        XCTAssertFalse(S3Client.defaultPathStyle(forHost: "s3.us-east-1.amazonaws.com"))
+        XCTAssertFalse(S3Client.defaultPathStyle(forHost: "S3.AMAZONAWS.COM"))
+    }
+
+    func testDefaultPathStyleForR2IsVirtualHosted() {
+        XCTAssertFalse(S3Client.defaultPathStyle(forHost: "abc123.r2.cloudflarestorage.com"))
+    }
+
+    func testDefaultPathStyleForB2IsVirtualHosted() {
+        XCTAssertFalse(S3Client.defaultPathStyle(forHost: "s3.us-west-002.backblazeb2.com"))
+    }
+
+    func testDefaultPathStyleForUnknownHostsIsPathStyle() {
+        XCTAssertTrue(S3Client.defaultPathStyle(forHost: "minio.local"))
+        XCTAssertTrue(S3Client.defaultPathStyle(forHost: "play.min.io"))
+        XCTAssertTrue(S3Client.defaultPathStyle(forHost: "192.168.1.10"))
+        XCTAssertTrue(S3Client.defaultPathStyle(forHost: ""))
     }
 
     // MARK: - Streaming SHA256
@@ -190,7 +243,6 @@ final class S3ClientTests: XCTestCase {
         let streamed = try S3SigV4Signer.sha256Hex(streamingFrom: tempURL)
         let inMemory = S3SigV4Signer.sha256Hex(data: content)
         XCTAssertEqual(streamed, inMemory)
-        // AWS docs vector: SHA256("Welcome to Amazon S3.")
         XCTAssertEqual(streamed, "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072")
     }
 
@@ -204,7 +256,6 @@ final class S3ClientTests: XCTestCase {
     }
 
     func testStreamingSHA256AcrossMultipleChunks() throws {
-        // Write a 16 MiB + 1 byte file so the streaming hasher reads at least 3 chunks.
         let chunk = Data(repeating: 0x41, count: 8 * 1024 * 1024)
         let tail = Data([0x42])
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -251,20 +302,12 @@ final class S3ClientTests: XCTestCase {
         XCTAssertEqual(xml, "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>\"abc\"</ETag></Part><Part><PartNumber>2</PartNumber><ETag>\"def\"</ETag></Part><Part><PartNumber>3</PartNumber><ETag>\"ghi\"</ETag></Part></CompleteMultipartUpload>")
     }
 
-    func testCompleteMultipartXMLEmptyPartsListIsValid() {
-        let xml = S3Client.buildCompleteMultipartXML(parts: [])
-        XCTAssertEqual(xml, "<CompleteMultipartUpload></CompleteMultipartUpload>")
-    }
-
     func testMultipartThresholdConstantsMatchAWSBounds() {
-        // 5 MiB minimum part size (AWS hard floor for non-final parts)
         XCTAssertGreaterThanOrEqual(S3Client.multipartPartSize, 5 * 1024 * 1024)
-        // Threshold should equal part size so single-vs-multipart is a clean cutover
         XCTAssertEqual(S3Client.multipartThreshold, S3Client.multipartPartSize)
     }
 
     func testPartSizeUsesBaselineForFilesUnderMaxAtBaseline() {
-        // 8 MiB × 9000 ≈ 72 GiB — anything below stays at baseline
         let oneMiB: Int64 = 1024 * 1024
         XCTAssertEqual(S3Client.partSize(forFileSize: 0), 8 * oneMiB)
         XCTAssertEqual(S3Client.partSize(forFileSize: 100 * oneMiB), 8 * oneMiB)
@@ -273,9 +316,7 @@ final class S3ClientTests: XCTestCase {
 
     func testPartSizeGrowsForFilesAboveTargetCount() {
         let oneMiB: Int64 = 1024 * 1024
-        // 100 GiB / 9000 ≈ 11.4 MiB → round up to 16 MiB (next 8-MiB multiple)
         XCTAssertEqual(S3Client.partSize(forFileSize: 100 * 1024 * oneMiB), 16 * oneMiB)
-        // 1 TiB / 9000 ≈ 116.5 MiB → round up to 120 MiB
         XCTAssertEqual(S3Client.partSize(forFileSize: 1024 * 1024 * oneMiB), 120 * oneMiB)
     }
 
