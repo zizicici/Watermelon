@@ -31259,6 +31259,908 @@
         }
       }
     },
+    "onboarding.button.next" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weiter"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Next"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Siguiente"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Siguiente"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suivant"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次へ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Próximo"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguinte"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Далі"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一步"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一步"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一步"
+          }
+        }
+      }
+    },
+    "onboarding.button.start" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loslegen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Get Started"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empezar"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empezar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Commencer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "はじめる"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "시작하기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Começar"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Começar"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Почати"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始使用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始使用"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始使用"
+          }
+        }
+      }
+    },
+    "onboarding.item.dedup.subtitle" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn dieselbe Foto- oder Videodatei in einem Monat mehrfach vorkommt, behält die Sicherung nur eine Kopie. Lokale und entfernte Anzahlen können dadurch leicht abweichen — das ist normal."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If the same photo or video appears more than once in a single month, the backup keeps a single copy. Local and remote totals may differ slightly — that's expected."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si la misma foto o vídeo aparece varias veces en un solo mes, el backup conserva solo una copia. Los totales local y remoto pueden no coincidir por completo, y eso es normal."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si la misma foto o video aparece varias veces en un solo mes, el backup conserva solo una copia. Los totales local y remoto pueden no coincidir por completo, y eso es normal."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si la même photo ou vidéo apparaît plusieurs fois dans le même mois, la sauvegarde n'en garde qu'une copie. Les totaux locaux et distants peuvent légèrement différer, c'est normal."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同じ月の中で同一の写真や動画が複数回現れた場合、バックアップでは 1 つだけ保持します。ローカルとリモートの件数が完全には一致しないことがあるのは、このためです。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "같은 달 안에서 동일한 사진이나 동영상이 여러 번 등장하면 백업은 한 개만 보관합니다. 로컬과 원격의 항목 수가 약간 달라지는 것은 정상입니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se a mesma foto ou vídeo aparecer mais de uma vez no mesmo mês, o backup mantém apenas uma cópia. Os totais local e remoto podem diferir um pouco — isso é esperado."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se a mesma foto ou vídeo aparecer mais do que uma vez no mesmo mês, o backup mantém apenas uma cópia. Os totais local e remoto podem diferir ligeiramente — isso é esperado."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Якщо одне й те саме фото або відео з'являється кілька разів за один місяць, у резервній копії залишається лише одна. Тому локальна й віддалена суми можуть трохи відрізнятися — це нормально."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果同一个月里出现完全相同的照片或视频，备份只会保留一份。因此本地与远端的数量可能略有差异，这是正常现象。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果同一個月裡出現完全相同的照片或影片，備份只會保留一份。因此本地與遠端的數量可能略有差異，這是正常現象。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果同一個月入面出現完全相同嘅相片或影片，備份只會保留一份。所以本地同遠端嘅數量可能略有差異，呢個係正常嘅。"
+          }
+        }
+      }
+    },
+    "onboarding.item.dedup.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Doppelte Inhalte eines Monats werden nur einmal gespeichert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duplicates within a month are stored once"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los duplicados de un mismo mes se guardan una sola vez"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los duplicados de un mismo mes se guardan una sola vez"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les doublons d'un même mois ne sont stockés qu'une fois"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同じ月の重複は 1 つだけ保存"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "한 달 안의 중복은 한 번만 저장됩니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duplicatas dentro de um mês são guardadas apenas uma vez"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duplicados no mesmo mês são guardados apenas uma vez"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Дублікати в межах одного місяця зберігаються лише раз"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同一个月内的重复内容只保留一份"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同一個月內的重複內容只保留一份"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同一個月內嘅重複內容只保留一份"
+          }
+        }
+      }
+    },
+    "onboarding.item.edited.subtitle" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn Sie ein Foto oder Video angepasst, zugeschnitten oder gekürzt haben, sichert Watermelon sowohl die Bearbeitung als auch das unbearbeitete Original und eine kleine Anpassungsdatei."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If you've adjusted, cropped, or trimmed a photo or video, the backup includes both the edit and the unedited original, along with a small adjustment file."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si has ajustado, recortado o editado una foto o un vídeo, el backup incluye tanto la edición como el original sin editar, junto con un pequeño archivo de ajustes."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si ajustaste, recortaste o editaste una foto o un video, el backup incluye tanto la edición como el original sin editar, junto con un pequeño archivo de ajustes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si vous avez ajusté, recadré ou raccourci une photo ou une vidéo, la sauvegarde inclut la version modifiée, l'original non modifié et un petit fichier d'ajustements."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真や動画を調整・切り抜き・トリミングした場合、編集後のファイルと未編集の元データ、調整内容を記録した小さなファイルがすべて含まれます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사진이나 동영상을 보정하거나 자르거나 잘라낸 경우 편집본과 편집되지 않은 원본, 그리고 작은 보정 파일이 함께 백업됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se você ajustou, cortou ou aparou uma foto ou vídeo, o backup inclui a edição, o original sem edição e um pequeno arquivo de ajustes."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se ajustou, cortou ou aparou uma foto ou vídeo, o backup inclui a edição, o original sem edição e um pequeno ficheiro de ajustes."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Якщо ви налаштовували, обрізали або скорочували фото чи відео, у бекапі будуть і відредагована версія, і незмінений оригінал, а також невеликий файл із налаштуваннями."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若照片或视频经过调整、裁剪或剪辑，备份会同时包含编辑后版本、未编辑的原始文件，以及一个记录调整的小文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若照片或影片經過調整、裁剪或剪輯，備份會同時包含編輯後版本、未編輯的原始檔案，以及一個記錄調整的小檔案。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若相片或影片經過調整、裁剪或剪輯，備份會同時包含編輯後版本、未編輯嘅原始檔案，以及一個記錄調整嘅小檔案。"
+          }
+        }
+      }
+    },
+    "onboarding.item.edited.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bearbeitete Fotos behalten das Original"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edited photos keep the original"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las fotos editadas conservan el original"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las fotos editadas conservan el original"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les photos modifiées conservent l'original"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編集した写真は元のデータも保持"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "편집한 사진은 원본도 함께 보관됩니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fotos editadas mantêm o original"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As fotos editadas mantêm o original"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Редаговані фото зберігають оригінал"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑过的照片会同时保留原片"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯過的照片會同時保留原片"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編輯過嘅相片會同時保留原片"
+          }
+        }
+      }
+    },
+    "onboarding.item.live_photo.subtitle" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon sichert jedes Live Photo als Standbild und zugehöriges Video. Beim erneuten Import über Watermelon werden sie automatisch wieder zu einem Live Photo zusammengeführt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon backs up each Live Photo as a still image and a paired video. When you re-import using Watermelon, they're automatically merged back into a Live Photo."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon guarda cada Live Photo como una imagen fija y su vídeo. Al volver a importarlas con Watermelon, se combinan de nuevo en una Live Photo automáticamente."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon guarda cada Live Photo como una imagen fija y su video. Al volver a importarlas con Watermelon, se combinan de nuevo en una Live Photo automáticamente."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon sauvegarde chaque Live Photo sous forme d'image fixe et de vidéo associée. Lors d'un réimport via Watermelon, elles sont automatiquement recombinées en Live Photo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon は Live Photos を静止画と動画のペアとして保存します。Watermelon で読み込み直すと自動的に Live Photo に戻ります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon은 Live Photo를 정지 이미지와 동영상 한 쌍으로 백업합니다. Watermelon으로 다시 가져오면 자동으로 Live Photo로 병합됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon faz backup de cada Live Photo como uma imagem estática e um vídeo emparelhado. Ao reimportar pelo Watermelon, eles voltam a ser combinados em uma Live Photo automaticamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon faz backup de cada Live Photo como uma imagem estática e um vídeo emparelhado. Ao reimportar através do Watermelon, voltam a ser combinados numa Live Photo automaticamente."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon зберігає кожне Live Photo як нерухоме зображення й пов'язане відео. Під час повторного імпорту через Watermelon вони автоматично об'єднуються назад у Live Photo."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份会把每张 Live 图分别保存为静态图和配套视频。再次用西瓜备份导入时，会自动合并回 Live 图。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份會把每張 Live 圖分別儲存為靜態圖與配套影片。再次用西瓜備份匯入時，會自動合併回 Live 圖。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份會將每張 Live 圖分別儲存為靜態相片同配套影片，再次用西瓜備份匯入時會自動合併返做 Live 圖。"
+          }
+        }
+      }
+    },
+    "onboarding.item.live_photo.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photos werden als Foto und Video gespeichert"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photos save as a photo plus a video"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las Live Photos se guardan como foto más vídeo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las Live Photos se guardan como foto más video"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les Live Photos sont enregistrées en photo et vidéo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photos は写真と動画に分けて保存"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photo는 사진과 동영상으로 저장됩니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photos são salvas como foto mais vídeo"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As Live Photos são guardadas como foto mais vídeo"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live Photo зберігається як фото плюс відео"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live 图会拆成照片和视频"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live 圖會拆成照片和影片"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live 圖會拆成相片同影片"
+          }
+        }
+      }
+    },
+    "onboarding.item.single_client.subtitle" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn mehrere Geräte gleichzeitig in denselben Remote-Ordner schreiben, können Inhalte überschrieben oder verloren gehen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If two or more devices back up to the same remote folder at once, items can be dropped or overwritten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si dos o más dispositivos hacen copia de seguridad en la misma carpeta remota a la vez, algunos elementos pueden sobrescribirse o perderse."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si dos o más dispositivos hacen backup en la misma carpeta remota a la vez, algunos elementos pueden sobrescribirse o perderse."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si deux appareils ou plus sauvegardent simultanément dans le même dossier distant, certains éléments peuvent être écrasés ou perdus."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "複数の端末が同じリモートフォルダへ同時にバックアップすると、一部のファイルが上書きされたり欠落したりすることがあります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "두 대 이상의 기기가 같은 원격 폴더에 동시에 백업하면 일부 항목이 덮어써지거나 누락될 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se dois ou mais dispositivos fizerem backup na mesma pasta remota ao mesmo tempo, itens podem ser descartados ou sobrescritos."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se dois ou mais dispositivos fizerem cópia de segurança na mesma pasta remota ao mesmo tempo, itens podem ser descartados ou sobrescritos."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Якщо кілька пристроїв одночасно створюють резервні копії в одній і тій самій віддаленій папці, частина файлів може бути перезаписана або втрачена."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若多台设备同时向同一远端文件夹写入，部分内容可能被覆盖或遗漏。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若多台裝置同時向同一遠端資料夾寫入，部分內容可能被覆寫或遺漏。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若多部裝置同時向同一遠端資料夾寫入，部分內容可能被覆寫或遺漏。"
+          }
+        }
+      }
+    },
+    "onboarding.item.single_client.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mehrere Geräte gleichzeitig werden noch nicht unterstützt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Multi-device backup isn't supported yet"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún no se admiten varios dispositivos a la vez"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún no se admiten varios dispositivos a la vez"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarde multi-appareils pas encore prise en charge"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "複数端末からの同時バックアップは未対応です"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "여러 기기 동시 백업은 아직 지원되지 않습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup de vários dispositivos ainda não é suportado"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópia de segurança de vários dispositivos ainda não é suportada"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Кілька пристроїв одночасно поки не підтримуються"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂不支持多端同时备份"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫不支援多端同時備份"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫不支援多部裝置同時備份"
+          }
+        }
+      }
+    },
+    "onboarding.title" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bevor Sie beginnen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Before You Start"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antes de empezar"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antes de empezar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avant de commencer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "はじめる前に"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "시작하기 전에"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antes de começar"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antes de começar"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перед початком"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始之前"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始之前"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始之前"
+          }
+        }
+      }
+    },
     "panel.backup" : {
       "localizations" : {
         "de" : {
