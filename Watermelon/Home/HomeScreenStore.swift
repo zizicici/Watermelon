@@ -76,6 +76,7 @@ final class HomeScreenStore {
     private var bootstrapTask: Task<Void, Never>?
     private var maintenanceObserver: NSObjectProtocol?
     private var indexChangeObserverID: UUID?
+    private var enteredBackgroundAt: Date?
 
     // MARK: - Init
 
@@ -398,8 +399,41 @@ final class HomeScreenStore {
     func refreshLocalPhotoAccessIfNeeded() {
         let scopeChanged = normalizeLocalLibraryScopeIfNeeded(shouldAlert: true)
         let accessChanged = photoAccessGate.hasSystemStateDiverged()
-        guard scopeChanged || accessChanged else { return }
-        scheduleRefresh([.reloadLocal, .notifyStructural])
+        if scopeChanged || accessChanged {
+            scheduleRefresh([.reloadLocal, .notifyStructural])
+            return
+        }
+        refreshAfterBackgroundBackupIfRan()
+    }
+
+    func appDidEnterBackground() {
+        enteredBackgroundAt = Date()
+    }
+
+    /// Background backup runs in a separate DependencyContainer, so the foreground's
+    /// snapshotCache + fingerprintByAssetID don't reflect its writes without a refresh.
+    private func refreshAfterBackgroundBackupIfRan() {
+        guard let enteredBg = enteredBackgroundAt else { return }
+        enteredBackgroundAt = nil
+
+        guard let profile = dependencies.appSession.activeProfile,
+              profile.backgroundBackupEnabled,
+              let profileID = profile.id,
+              let completedAt = try? dependencies.databaseManager.backgroundBackupLastCompletedAt(profileID: profileID),
+              completedAt > enteredBg,
+              let password = profile.resolvedSessionPassword(from: dependencies.appSession) else {
+            return
+        }
+
+        Task { [weak self, dependencies] in
+            _ = try? await dependencies.backupCoordinator.reloadRemoteIndex(
+                profile: profile,
+                password: password
+            )
+            await MainActor.run {
+                self?.scheduleRefresh([.reloadLocal, .syncRemote, .notifyStructural])
+            }
+        }
     }
 
     // MARK: - Derived State
@@ -524,7 +558,10 @@ final class HomeScreenStore {
             // the remote engine and record a stale revision, causing the subsequent .connected
             // refresh to get an empty delta.
             scheduleRefresh([.notifyConnection])
-        case .connected, .disconnected:
+        case .connected:
+            // .reloadLocal here picks up bg-backup fingerprints written from a separate DependencyContainer.
+            scheduleRefresh([.reloadLocal, .syncRemote, .notifyConnection])
+        case .disconnected:
             scheduleRefresh([.syncRemote, .notifyConnection])
         }
     }
