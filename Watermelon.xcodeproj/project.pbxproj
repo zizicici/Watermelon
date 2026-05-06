@@ -799,7 +799,7 @@
 			repositoryURL = "https://github.com/zizicici/MoreKit";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 1.9.0;
+				minimumVersion = 1.9.1;
 			};
 		};
 		14FB00012FEA000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
