@@ -19,10 +19,6 @@ struct LocalHashIndexBuildResult: Sendable {
     }
 }
 
-private struct LocalHashIndexAssetRef: @unchecked Sendable {
-    let asset: PHAsset
-}
-
 private enum LocalHashIndexAssetOutcome: Sendable {
     case ready(String)
     case unavailable(String)
@@ -52,18 +48,18 @@ private struct LocalHashIndexProcessedAssetResult: Sendable {
 }
 
 private actor LocalHashIndexWorklist {
-    private let assets: [LocalHashIndexAssetRef]
+    private let assetIDs: [String]
     private var nextIndex = 0
 
-    init(assets: [LocalHashIndexAssetRef]) {
-        self.assets = assets
+    init(assetIDs: [String]) {
+        self.assetIDs = assetIDs
     }
 
-    func nextAsset() -> LocalHashIndexAssetRef? {
-        guard nextIndex < assets.count else { return nil }
-        let asset = assets[nextIndex]
-        nextIndex += 1
-        return asset
+    func nextBatch(maxSize: Int) -> ArraySlice<String> {
+        let start = nextIndex
+        let end = min(start + maxSize, assetIDs.count)
+        nextIndex = end
+        return assetIDs[start ..< end]
     }
 }
 
@@ -146,16 +142,18 @@ private actor LocalHashIndexBuildProgressReporter {
 
 private struct LocalHashIndexBuildPreparedInput: Sendable {
     let cachedHashesByAssetID: [String: LocalAssetHashCache]
-    let assets: [LocalHashIndexAssetRef]
+    let assetIDs: [String]
     let missingAssetIDs: Set<String>
 }
 
 private struct LocalHashIndexAssetFetchInput: Sendable {
-    let assets: [LocalHashIndexAssetRef]
+    let assetIDs: [String]
     let missingAssetIDs: Set<String>
 }
 
 final class LocalHashIndexBuildService: @unchecked Sendable {
+    private static let workerFetchBatchSize = 200
+
     private let photoLibraryService: PhotoLibraryService
     private let repository: ContentHashIndexRepository
 
@@ -204,12 +202,12 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             )
             let preparedInput = try await prepareInput(for: assetIDs)
             let prepareElapsed = CFAbsoluteTimeGetCurrent() - prepareStart
-            let worklist = LocalHashIndexWorklist(assets: preparedInput.assets)
+            let worklist = LocalHashIndexWorklist(assetIDs: preparedInput.assetIDs)
             await progressHandler?(
                 String.localizedStringWithFormat(
                     String(localized: "backup.preflight.prepareDone"),
                     phaseLabel,
-                    preparedInput.assets.count,
+                    preparedInput.assetIDs.count,
                     preparedInput.cachedHashesByAssetID.count,
                     preparedInput.missingAssetIDs.count,
                     Self.formatElapsed(prepareElapsed)
@@ -217,7 +215,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 .debug
             )
 
-            let effectiveWorkerCount = min(max(workerCount, 1), max(preparedInput.assets.count, 1))
+            let effectiveWorkerCount = min(max(workerCount, 1), max(preparedInput.assetIDs.count, 1))
             await progressHandler?(
                 String.localizedStringWithFormat(
                     String(localized: "backup.preflight.scanStart"),
@@ -227,7 +225,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 .info
             )
             let progressReporter = LocalHashIndexBuildProgressReporter(
-                total: preparedInput.assets.count,
+                total: preparedInput.assetIDs.count,
                 phaseLabel: phaseLabel,
                 logHandler: progressHandler,
                 tickHandler: tickHandler
@@ -238,16 +236,38 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                     group.addTask { [self, progressReporter] in
                         var result = LocalHashIndexWorkerResult()
 
-                        while let assetRef = await worklist.nextAsset() {
-                            try Task.checkCancellation()
-                            let cachedLocalHash = preparedInput.cachedHashesByAssetID[assetRef.asset.localIdentifier]
-                            let processedAsset = try await processAsset(
-                                assetRef.asset,
-                                cachedLocalHash: cachedLocalHash,
-                                allowNetworkAccess: allowNetworkAccess
-                            )
-                            result.record(processedAsset.outcome)
-                            await progressReporter.record(processedAsset)
+                        while true {
+                            let batch = await worklist.nextBatch(maxSize: Self.workerFetchBatchSize)
+                            if batch.isEmpty { break }
+
+                            let phAssets = self.photoLibraryService
+                                .fetchAssets(localIdentifiers: Set(batch))
+                            var assetByID: [String: PHAsset] = [:]
+                            assetByID.reserveCapacity(phAssets.count)
+                            for asset in phAssets {
+                                assetByID[asset.localIdentifier] = asset
+                            }
+
+                            for assetID in batch {
+                                try Task.checkCancellation()
+                                guard let asset = assetByID[assetID] else {
+                                    let processedAsset = LocalHashIndexProcessedAssetResult(
+                                        outcome: .failed(assetID),
+                                        reusedCache: false
+                                    )
+                                    result.record(processedAsset.outcome)
+                                    await progressReporter.record(processedAsset)
+                                    continue
+                                }
+                                let cachedLocalHash = preparedInput.cachedHashesByAssetID[assetID]
+                                let processedAsset = try await processAsset(
+                                    asset,
+                                    cachedLocalHash: cachedLocalHash,
+                                    allowNetworkAccess: allowNetworkAccess
+                                )
+                                result.record(processedAsset.outcome)
+                                await progressReporter.record(processedAsset)
+                            }
                         }
 
                         return result
@@ -323,7 +343,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         let cachedHashes = try await cachedHashesByAssetID
         return LocalHashIndexBuildPreparedInput(
             cachedHashesByAssetID: cachedHashes,
-            assets: preparedAssets.assets,
+            assetIDs: preparedAssets.assetIDs,
             missingAssetIDs: preparedAssets.missingAssetIDs
         )
     }
@@ -335,18 +355,19 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         let task = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
             let fetchedAssets = photoLibraryService.fetchAssets(localIdentifiers: assetIDs)
-            let sortedAssets = fetchedAssets.sorted { lhs, rhs in
-                let lhsDate = lhs.creationDate ?? .distantPast
-                let rhsDate = rhs.creationDate ?? .distantPast
-                if lhsDate != rhsDate {
-                    return lhsDate < rhsDate
+            let sortedIDs: [String] = fetchedAssets
+                .sorted { lhs, rhs in
+                    let lhsDate = lhs.creationDate ?? .distantPast
+                    let rhsDate = rhs.creationDate ?? .distantPast
+                    if lhsDate != rhsDate {
+                        return lhsDate < rhsDate
+                    }
+                    return lhs.localIdentifier < rhs.localIdentifier
                 }
-                return lhs.localIdentifier < rhs.localIdentifier
-            }
-            let resolvedAssetIDs = Set(sortedAssets.map(\.localIdentifier))
+                .map(\.localIdentifier)
             return LocalHashIndexAssetFetchInput(
-                assets: sortedAssets.map(LocalHashIndexAssetRef.init(asset:)),
-                missingAssetIDs: assetIDs.subtracting(resolvedAssetIDs)
+                assetIDs: sortedIDs,
+                missingAssetIDs: assetIDs.subtracting(sortedIDs)
             )
         }
 
