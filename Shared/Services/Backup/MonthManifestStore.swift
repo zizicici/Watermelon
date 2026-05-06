@@ -1,6 +1,8 @@
 import Foundation
 import GRDB
 
+typealias MonthManifestStepLogger = @Sendable (String) -> Void
+
 final class MonthManifestStore {
     static let manifestFileName = ".watermelon_manifest.sqlite"
     static let tempFilePrefix = "month_manifest_"
@@ -60,6 +62,8 @@ final class MonthManifestStore {
     private var collisionKeysCache: Set<String>?
     private(set) var dirty: Bool = false
 
+    let stepLogger: MonthManifestStepLogger?
+
     init(
         client: RemoteStorageClientProtocol,
         basePath: String,
@@ -68,7 +72,8 @@ final class MonthManifestStore {
         localManifestURL: URL,
         dbQueue: DatabaseQueue,
         remoteFilesByName: [String: RemoteFileMetadata],
-        dirty: Bool
+        dirty: Bool,
+        stepLogger: MonthManifestStepLogger? = nil
     ) {
         self.client = client
         self.basePath = basePath
@@ -79,6 +84,7 @@ final class MonthManifestStore {
         self.remoteFilesByName = remoteFilesByName
         existingFileNameSet = Set(remoteFilesByName.keys)
         self.dirty = dirty
+        self.stepLogger = stepLogger
     }
 
     deinit {
@@ -577,21 +583,42 @@ final class MonthManifestStore {
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
-        try await client.createDirectory(path: monthAbsolutePath)
+        do {
+            try await client.createDirectory(path: monthAbsolutePath)
+        } catch {
+            stepLogger?(String.localizedStringWithFormat(
+                String(localized: "backup.manifest.diagnostic.createMonthDirFailed"),
+                monthRelativePath,
+                error.localizedDescription
+            ))
+            throw error
+        }
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
 
         let finalPath = manifestAbsolutePath
-        let tempRemotePath = finalPath + ".tmp.\(UUID().uuidString)"
+        // Avoid dot-prefix + `.sqlite` here: some NAS AV/extension filters reject those with STATUS_OBJECT_NAME_NOT_FOUND.
+        let tempRemotePath = monthAbsolutePath + "/manifest_\(UUID().uuidString).tmp"
 
         do {
-            try await client.upload(
-                localURL: localManifestURL,
-                remotePath: tempRemotePath,
-                respectTaskCancellation: !ignoreCancellation,
-                onProgress: nil
-            )
+            do {
+                try await client.upload(
+                    localURL: localManifestURL,
+                    remotePath: tempRemotePath,
+                    respectTaskCancellation: !ignoreCancellation,
+                    onProgress: nil
+                )
+            } catch {
+                if !(error is CancellationError) {
+                    stepLogger?(String.localizedStringWithFormat(
+                        String(localized: "backup.manifest.diagnostic.uploadManifestTempFailed"),
+                        monthRelativePath,
+                        error.localizedDescription
+                    ))
+                }
+                throw error
+            }
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
@@ -647,10 +674,15 @@ final class MonthManifestStore {
             }
             let finalExists = try await client.exists(path: finalPath)
             guard finalExists else {
+                stepLogger?(String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.diagnostic.renameManifestFailed"),
+                    monthRelativePath,
+                    error.localizedDescription
+                ))
                 throw error
             }
 
-            let backupPath = finalPath + ".bak.\(UUID().uuidString)"
+            let backupPath = monthAbsolutePath + "/manifest_\(UUID().uuidString).bak"
             if !ignoreCancellation {
                 try Task.checkCancellation()
             }
@@ -671,6 +703,11 @@ final class MonthManifestStore {
                 if (try? await client.exists(path: backupPath)) == true {
                     try? await client.move(from: backupPath, to: finalPath)
                 }
+                stepLogger?(String.localizedStringWithFormat(
+                    String(localized: "backup.manifest.diagnostic.renameManifestFailed"),
+                    monthRelativePath,
+                    error.localizedDescription
+                ))
                 throw error
             }
 
@@ -682,6 +719,7 @@ final class MonthManifestStore {
             }
         }
     }
+
 }
 
 extension MonthManifestStore {

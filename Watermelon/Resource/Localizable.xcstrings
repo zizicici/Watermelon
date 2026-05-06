@@ -9349,6 +9349,334 @@
         }
       }
     },
+    "backup.manifest.diagnostic.createMonthDirFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erstellen des Monatsverzeichnisses %1$@ auf dem Remote fehlgeschlagen: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to create remote month directory %1$@: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Error al crear el directorio mensual remoto %1$@: %2$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Error al crear el directorio mensual remoto %1$@: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec de la création du répertoire mensuel distant %1$@ : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートの月次ディレクトリ %1$@ の作成に失敗しました：%2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 월간 디렉터리 %1$@ 생성에 실패했습니다: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao criar o diretório mensal remoto %1$@: %2$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao criar o diretório mensal remoto %1$@: %2$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося створити віддалений місячний каталог %1$@: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在远端创建月份目录 %1$@ 失败：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在遠端建立月份目錄 %1$@ 失敗：%2$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在遠端建立月份目錄 %1$@ 失敗：%2$@"
+          }
+        }
+      }
+    },
+    "backup.manifest.diagnostic.listMonthDirFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auflisten des Monatsverzeichnisses %1$@ auf dem Remote fehlgeschlagen: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to list remote month directory %1$@: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Error al listar el directorio mensual remoto %1$@: %2$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Error al listar el directorio mensual remoto %1$@: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec du listage du répertoire mensuel distant %1$@ : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートの月次ディレクトリ %1$@ の一覧取得に失敗しました：%2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 월간 디렉터리 %1$@ 목록 조회에 실패했습니다: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao listar o diretório mensal remoto %1$@: %2$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao listar o diretório mensal remoto %1$@: %2$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося отримати вміст віддаленого місячного каталогу %1$@: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列出远端月份目录 %1$@ 失败：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列出遠端月份目錄 %1$@ 失敗：%2$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列出遠端月份目錄 %1$@ 失敗：%2$@"
+          }
+        }
+      }
+    },
+    "backup.manifest.diagnostic.renameManifestFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Umbenennen des Manifests für %1$@ an den endgültigen Ort fehlgeschlagen: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to rename manifest into place for %1$@: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Error al renombrar el manifiesto en su lugar para %1$@: %2$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Error al renombrar el manifiesto en su lugar para %1$@: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec du renommage du manifeste en place pour %1$@ : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ の manifest のリネームに失敗しました：%2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ manifest 이름 변경에 실패했습니다: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao renomear o manifesto para o local final de %1$@: %2$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao renomear o manifesto para o local final de %1$@: %2$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося перейменувати маніфест на остаточну назву для %1$@: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名 %1$@ 的 manifest 失败：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名 %1$@ 的 manifest 失敗：%2$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新命名 %1$@ 的 manifest 失敗：%2$@"
+          }
+        }
+      }
+    },
+    "backup.manifest.diagnostic.uploadManifestTempFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hochladen der temporären Manifestdatei für %1$@ fehlgeschlagen: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to upload manifest temp file for %1$@: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Error al cargar el archivo temporal de manifiesto de %1$@: %2$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Error al cargar el archivo temporal de manifiesto de %1$@: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec du téléversement du fichier manifeste temporaire pour %1$@ : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ の manifest 一時ファイルのアップロードに失敗しました：%2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ manifest 임시 파일 업로드에 실패했습니다: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao enviar o arquivo temporário de manifesto de %1$@: %2$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha ao carregar o ficheiro temporário de manifesto de %1$@: %2$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося надіслати тимчасовий файл маніфесту для %1$@: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上传 %1$@ 的 manifest 临时文件失败：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳 %1$@ 的 manifest 臨時檔失敗：%2$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上傳 %1$@ 的 manifest 臨時檔失敗：%2$@"
+          }
+        }
+      }
+    },
     "backup.manifest.error.downloadedManifestInvalid" : {
       "localizations" : {
         "de" : {

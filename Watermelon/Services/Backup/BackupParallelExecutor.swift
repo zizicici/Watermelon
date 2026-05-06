@@ -198,7 +198,10 @@ struct BackupParallelExecutor: Sendable {
                         basePath: profile.basePath,
                         year: monthKey.year,
                         month: monthKey.month,
-                        seed: snapshotSeedLookup?.seed(for: monthKey)
+                        seed: snapshotSeedLookup?.seed(for: monthKey),
+                        stepLogger: { message in
+                            eventStream.emitLog(message, level: .error)
+                        }
                     )
                 } catch {
                     if error is CancellationError {

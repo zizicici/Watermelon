@@ -232,7 +232,10 @@ final class BackgroundBackupRunner {
                     client: client,
                     basePath: profile.basePath,
                     year: monthKey.year,
-                    month: monthKey.month
+                    month: monthKey.month,
+                    stepLogger: { message in
+                        eventStream.emitLog(message, level: .error)
+                    }
                 )
             } catch {
                 if Task.isCancelled { break }
