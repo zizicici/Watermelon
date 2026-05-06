@@ -17,7 +17,6 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     }
 
     private struct TrackedCollection {
-        let collection: LibraryAssetCollection
         var assetIDs: Set<String>
     }
 
@@ -96,7 +95,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     }
 
     func reload(
-        collections: [LibraryAssetCollection],
+        payload: LibraryInitialPayload,
         fingerprintByAsset: [String: LocalAssetFingerprintRecord],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
@@ -112,16 +111,15 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         // different scope and would mislead the UI until startFileSizeScan repopulates.
         monthFileSizes.removeAll(keepingCapacity: true)
 
-        let assetCountHint = collections.reduce(0) { $0 + $1.assetSnapshots.count }
+        let assetCountHint = payload.collections.reduce(0) { $0 + $1.count }
         assetIDToMonth.reserveCapacity(assetCountHint)
         mediaKindByAssetID.reserveCapacity(assetCountHint)
         fingerprintByAssetID.reserveCapacity(min(fingerprintByAsset.count, assetCountHint))
         assetMembershipCount.reserveCapacity(assetCountHint)
-        trackedCollections.reserveCapacity(collections.count)
+        trackedCollections.reserveCapacity(payload.collections.count)
 
-        for collection in collections {
+        for snapshots in payload.collections {
             var collectionAssetIDs = Set<String>()
-            let snapshots = collection.assetSnapshots
             collectionAssetIDs.reserveCapacity(snapshots.count)
             for snapshot in snapshots {
                 let assetID = snapshot.localIdentifier
@@ -140,10 +138,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
                     }
                 }
             }
-            trackedCollections.append(TrackedCollection(
-                collection: collection,
-                assetIDs: collectionAssetIDs
-            ))
+            trackedCollections.append(TrackedCollection(assetIDs: collectionAssetIDs))
         }
 
         let newMonths = Set(localAssetIDsByMonth.keys)
@@ -234,7 +229,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     /// multiple tracked collections is evicted from the month index only when its
     /// last collection drops it.
     func applyChange(
-        _ provider: LibraryChangeProvider,
+        _ payload: LibraryChangePayload,
         fingerprintsForIDs: (Set<String>) -> [String: LocalAssetFingerprintRecord],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
@@ -243,37 +238,25 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         var changedMonths = Set<LibraryMonthKey>()
         var fingerprintRefreshIDs = Set<String>()
 
-        for index in trackedCollections.indices {
-            let tracked = trackedCollections[index]
-            guard let change = provider.change(for: tracked.collection) else { continue }
+        for change in payload.collectionChanges {
+            let index = change.collectionIndex
+            guard trackedCollections.indices.contains(index) else { continue }
 
-            let previousAssetIDs = tracked.assetIDs
+            let previousAssetIDs = trackedCollections[index].assetIDs
             var nextAssetIDs: Set<String>
             var upsertSnapshots: [String: LibraryAssetSnapshot] = [:]
 
-            if change.hasIncrementalChanges {
+            switch change {
+            case .incremental(_, let removed, let inserted, let changed, let moved):
                 nextAssetIDs = previousAssetIDs
-
-                for assetID in change.removedAssetIDs {
+                for assetID in removed {
                     nextAssetIDs.remove(assetID)
                 }
-
-                for snapshot in change.insertedAssets {
+                for snapshot in inserted + changed + moved {
                     nextAssetIDs.insert(snapshot.localIdentifier)
                     upsertSnapshots[snapshot.localIdentifier] = snapshot
                 }
-
-                for snapshot in change.changedAssets {
-                    nextAssetIDs.insert(snapshot.localIdentifier)
-                    upsertSnapshots[snapshot.localIdentifier] = snapshot
-                }
-
-                for snapshot in change.movedAssets {
-                    nextAssetIDs.insert(snapshot.localIdentifier)
-                    upsertSnapshots[snapshot.localIdentifier] = snapshot
-                }
-            } else {
-                let nextSnapshots = change.nextCollection.assetSnapshots
+            case .nonIncremental(_, let nextSnapshots):
                 nextAssetIDs = Set<String>()
                 nextAssetIDs.reserveCapacity(nextSnapshots.count)
                 upsertSnapshots.reserveCapacity(nextSnapshots.count)
@@ -285,10 +268,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
                 }
             }
 
-            trackedCollections[index] = TrackedCollection(
-                collection: change.nextCollection,
-                assetIDs: nextAssetIDs
-            )
+            trackedCollections[index] = TrackedCollection(assetIDs: nextAssetIDs)
 
             let removed = previousAssetIDs.subtracting(nextAssetIDs)
             let added = nextAssetIDs.subtracting(previousAssetIDs)

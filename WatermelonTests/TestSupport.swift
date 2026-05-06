@@ -1,26 +1,6 @@
 import Foundation
 @testable import Watermelon
 
-final class TestAssetCollection: LibraryAssetCollection, @unchecked Sendable {
-    let assetSnapshots: [LibraryAssetSnapshot]
-
-    init(_ snapshots: [LibraryAssetSnapshot]) {
-        self.assetSnapshots = snapshots
-    }
-}
-
-final class TestChangeProvider: LibraryChangeProvider {
-    private var changes: [ObjectIdentifier: LibraryCollectionChange] = [:]
-
-    func setChange(for collection: LibraryAssetCollection, _ change: LibraryCollectionChange) {
-        changes[ObjectIdentifier(collection)] = change
-    }
-
-    func change(for collection: LibraryAssetCollection) -> LibraryCollectionChange? {
-        changes[ObjectIdentifier(collection)]
-    }
-}
-
 enum TestFixtures {
     private static let calendar = Calendar(identifier: .gregorian)
 
@@ -42,6 +22,37 @@ enum TestFixtures {
             modificationDate: modificationDate,
             mediaKind: kind
         )
+    }
+
+    static func initialPayload(_ snapshotsPerCollection: [[LibraryAssetSnapshot]]) -> LibraryInitialPayload {
+        LibraryInitialPayload(collections: snapshotsPerCollection)
+    }
+
+    static func incrementalChange(
+        at collectionIndex: Int,
+        removed: [String] = [],
+        inserted: [LibraryAssetSnapshot] = [],
+        changed: [LibraryAssetSnapshot] = [],
+        moved: [LibraryAssetSnapshot] = []
+    ) -> LibraryChangePayload.CollectionChange {
+        .incremental(
+            collectionIndex: collectionIndex,
+            removed: removed,
+            inserted: inserted,
+            changed: changed,
+            moved: moved
+        )
+    }
+
+    static func nonIncrementalChange(
+        at collectionIndex: Int,
+        nextSnapshots: [LibraryAssetSnapshot]
+    ) -> LibraryChangePayload.CollectionChange {
+        .nonIncremental(collectionIndex: collectionIndex, nextSnapshots: nextSnapshots)
+    }
+
+    static func changePayload(_ collectionChanges: [LibraryChangePayload.CollectionChange]) -> LibraryChangePayload {
+        LibraryChangePayload(collectionChanges: collectionChanges)
     }
 
     static func emptyFingerprint(for ids: Set<String>) -> [String: LocalAssetFingerprintRecord] {
