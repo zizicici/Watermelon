@@ -10,7 +10,8 @@ extension MonthManifestStore {
         basePath: String,
         year: Int,
         month: Int,
-        seed: Seed? = nil
+        seed: Seed? = nil,
+        stepLogger: MonthManifestStepLogger? = nil
     ) async throws -> MonthManifestStore {
         if let seed {
             return try await loadSeeded(
@@ -18,15 +19,35 @@ extension MonthManifestStore {
                 basePath: basePath,
                 year: year,
                 month: month,
-                seed: seed
+                seed: seed,
+                stepLogger: stepLogger
             )
         }
 
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
-        try await client.createDirectory(path: monthAbsolutePath)
+        do {
+            try await client.createDirectory(path: monthAbsolutePath)
+        } catch {
+            stepLogger?(String.localizedStringWithFormat(
+                String(localized: "backup.manifest.diagnostic.createMonthDirFailed"),
+                monthRelativePath,
+                error.localizedDescription
+            ))
+            throw error
+        }
 
-        let entries = try await client.list(path: monthAbsolutePath)
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: monthAbsolutePath)
+        } catch {
+            stepLogger?(String.localizedStringWithFormat(
+                String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
+                monthRelativePath,
+                error.localizedDescription
+            ))
+            throw error
+        }
         let manifestExists = entries.contains { $0.name == Self.manifestFileName && !$0.isDirectory }
         let remoteFilesByName = Self.dedupedRemoteFilesByName(entries: entries, year: year, month: month)
 
@@ -91,7 +112,8 @@ extension MonthManifestStore {
             localManifestURL: localURL,
             dbQueue: prepared.queue,
             remoteFilesByName: remoteFilesByName,
-            dirty: prepared.requiresRemoteSync
+            dirty: prepared.requiresRemoteSync,
+            stepLogger: stepLogger
         )
 
         // reloadCache doubles as the integrity check: corruption surfaces
@@ -108,7 +130,8 @@ extension MonthManifestStore {
         basePath: String,
         year: Int,
         month: Int,
-        seed: Seed
+        seed: Seed,
+        stepLogger: MonthManifestStepLogger? = nil
     ) async throws -> MonthManifestStore {
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
@@ -121,7 +144,17 @@ extension MonthManifestStore {
         // STATUS_OBJECT_NAME_COLLISION.
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
-        let entries = try await client.list(path: monthAbsolutePath)
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: monthAbsolutePath)
+        } catch {
+            stepLogger?(String.localizedStringWithFormat(
+                String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
+                monthRelativePath,
+                error.localizedDescription
+            ))
+            throw error
+        }
         let remoteFilesByName = Self.dedupedRemoteFilesByName(entries: entries, year: year, month: month)
 
         let store = MonthManifestStore(
@@ -132,7 +165,8 @@ extension MonthManifestStore {
             localManifestURL: localURL,
             dbQueue: dbQueue,
             remoteFilesByName: remoteFilesByName,
-            dirty: false
+            dirty: false,
+            stepLogger: stepLogger
         )
         try store.seedDatabase(seed)
         try store.reloadCache()

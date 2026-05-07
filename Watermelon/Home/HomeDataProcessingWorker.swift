@@ -26,6 +26,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
     private let localIndex = HomeLocalIndexEngine()
     private let remoteIndex = HomeRemoteIndexEngine()
+    private var trackedFetchResults: [PHFetchResult<PHAsset>] = []
 
     // Compared against `expectedScope` on stale-detectable queries so callers never
     // receive asset IDs from a scope different from the one they asked under.
@@ -119,6 +120,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         guard authorized else {
             let changedMonths = await withCheckedContinuation { continuation in
                 processingQueue.async {
+                    self.trackedFetchResults.removeAll()
                     self.loadedScope = nil
                     continuation.resume(returning: self.localIndex.clearIfNeeded())
                 }
@@ -126,14 +128,14 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
             return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: false)
         }
 
-        let collections: [LibraryAssetCollection] = photoLibraryService
-            .fetchResults(query: scope.photoLibraryQuery)
-            .map { PhotoKitAssetCollection(fetchResult: $0) }
         let changedMonths = await withCheckedContinuation { continuation in
             processingQueue.async {
+                let results = self.photoLibraryService.fetchResults(query: scope.photoLibraryQuery)
+                let snapshotsPerCollection = results.map(snapshots(of:))
+                self.trackedFetchResults = results
                 let fingerprintByAsset = self.fetchAllFingerprints()
                 let changed = self.localIndex.reload(
-                    collections: collections,
+                    payload: LibraryInitialPayload(collections: snapshotsPerCollection),
                     fingerprintByAsset: fingerprintByAsset,
                     remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
                 )
@@ -249,20 +251,64 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
-    func applyPhotoLibraryChange(_ changeInstance: PHChange, scope: HomeLocalLibraryScope) async -> Set<LibraryMonthKey> {
-        if processingQueue.sync(execute: { loadedScope != scope }) {
-            return await loadLocalIndex(forceReload: true, scope: scope).changedMonths
-        }
+    func handlePhotoLibraryChange(
+        _ change: PHChange,
+        completion: @escaping (Set<LibraryMonthKey>) -> Void
+    ) {
+        processingQueue.async {
+            var collectionChanges: [LibraryChangePayload.CollectionChange] = []
+            collectionChanges.reserveCapacity(self.trackedFetchResults.count)
 
-        let provider = PhotoKitChangeProvider(change: changeInstance)
-        return await withCheckedContinuation { continuation in
-            processingQueue.async {
-                let changedMonths = self.localIndex.applyChange(
-                    provider,
-                    fingerprintsForIDs: self.fetchFingerprintsForIDs,
-                    remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
-                )
-                continuation.resume(returning: changedMonths)
+            for index in self.trackedFetchResults.indices {
+                let fetchResult = self.trackedFetchResults[index]
+                guard let details = change.changeDetails(for: fetchResult) else { continue }
+                let nextFetchResult = details.fetchResultAfterChanges
+
+                let entry: LibraryChangePayload.CollectionChange
+                if details.hasIncrementalChanges {
+                    let removedIDs = details.removedIndexes.map { idxs in
+                        idxs.map { fetchResult.object(at: $0).localIdentifier }
+                    } ?? []
+                    let inserted = details.insertedIndexes.map { idxs in
+                        idxs.map { snapshot(nextFetchResult.object(at: $0)) }
+                    } ?? []
+                    let changed = details.changedIndexes.map { idxs in
+                        idxs.map { snapshot(nextFetchResult.object(at: $0)) }
+                    } ?? []
+                    var moved: [LibraryAssetSnapshot] = []
+                    if details.hasMoves {
+                        details.enumerateMoves { _, toIndex in
+                            moved.append(snapshot(nextFetchResult.object(at: toIndex)))
+                        }
+                    }
+                    entry = .incremental(
+                        collectionIndex: index,
+                        removed: removedIDs,
+                        inserted: inserted,
+                        changed: changed,
+                        moved: moved
+                    )
+                } else {
+                    entry = .nonIncremental(
+                        collectionIndex: index,
+                        nextSnapshots: snapshots(of: nextFetchResult)
+                    )
+                }
+
+                collectionChanges.append(entry)
+                self.trackedFetchResults[index] = nextFetchResult
+            }
+
+            guard !collectionChanges.isEmpty else { return }
+            let changedMonths = self.localIndex.applyChange(
+                LibraryChangePayload(collectionChanges: collectionChanges),
+                fingerprintsForIDs: self.fetchFingerprintsForIDs,
+                remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
+            )
+            guard !changedMonths.isEmpty else { return }
+
+            DispatchQueue.main.async {
+                completion(changedMonths)
             }
         }
     }
@@ -452,10 +498,10 @@ extension HomeDataProcessingWorker {
     /// Seed the worker into a "loaded" state without running PhotoKit. Tests use this
     /// to drive the scope-guard logic deterministically (PhotoKit auth would otherwise
     /// gate `loadLocalIndex`).
-    func _testSeed(scope: HomeLocalLibraryScope, collections: [LibraryAssetCollection]) {
+    func _testSeed(scope: HomeLocalLibraryScope, payload: LibraryInitialPayload) {
         processingQueue.sync {
             _ = self.localIndex.reload(
-                collections: collections,
+                payload: payload,
                 fingerprintByAsset: [:],
                 remoteFingerprintsForMonth: { _ in [] }
             )

@@ -13,13 +13,6 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     private let hooks: Hooks
 
     private var isObservingPhotoLibrary = false
-    // Reentrancy guard for `photoLibraryDidChange`. While the manager has an in-flight
-    // worker mutation (a refresh/sync/apply), incoming PHChanges queue into
-    // `deferredPhotoChanges` instead of racing into the worker. Not a mutex — actor
-    // reentrancy across `await` is what makes this necessary.
-    private var processingMutationCount = 0
-    private var deferredPhotoChanges: [PHChange] = []
-    private var isDrainingDeferredPhotoChanges = false
 
     var onMonthsChanged: ((Set<LibraryMonthKey>) -> Void)?
 
@@ -59,14 +52,10 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     @discardableResult
     func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) async -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty else { return [] }
-        let scope = hooks.currentScope()
-        beginProcessingMutation()
-        let reconciledMonths = await processingWorker.refreshLocalIndex(
+        return await processingWorker.refreshLocalIndex(
             forAssetIDs: assetIDs,
-            expectedScope: scope
+            expectedScope: hooks.currentScope()
         )
-        finishProcessingMutation()
-        return reconciledMonths
     }
 
     @discardableResult
@@ -74,13 +63,10 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         state: RemoteLibrarySnapshotState,
         hasActiveConnection: Bool
     ) async -> Set<LibraryMonthKey> {
-        beginProcessingMutation()
-        let reconciledMonths = await processingWorker.syncRemoteSnapshot(
+        await processingWorker.syncRemoteSnapshot(
             state: state,
             hasActiveConnection: hasActiveConnection
         )
-        finishProcessingMutation()
-        return reconciledMonths
     }
 
     func monthRow(for month: LibraryMonthKey) -> HomeMonthRow {
@@ -104,28 +90,13 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            if self.processingMutationCount > 0 || self.isDrainingDeferredPhotoChanges {
-                self.deferredPhotoChanges.append(changeInstance)
-                return
+        processingWorker.handlePhotoLibraryChange(changeInstance) { [weak self] changedMonths in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.fileSizeCoordinator.enqueueRescan(for: changedMonths)
+                self.onMonthsChanged?(changedMonths)
             }
-
-            await self.applyPhotoLibraryChangeNow(changeInstance)
         }
-    }
-
-    private func beginProcessingMutation() {
-        processingMutationCount += 1
-    }
-
-    private func finishProcessingMutation() {
-        if processingMutationCount > 0 {
-            processingMutationCount -= 1
-        }
-
-        scheduleDeferredPhotoChangeDrainIfNeeded()
     }
 
     @discardableResult
@@ -146,20 +117,6 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         return !result.changedMonths.isEmpty
     }
 
-    private func applyPhotoLibraryChangeNow(_ changeInstance: PHChange) async {
-        let scope = hooks.currentScope()
-        beginProcessingMutation()
-        let reconciledMonths = await processingWorker.applyPhotoLibraryChange(
-            changeInstance,
-            scope: scope
-        )
-        finishProcessingMutation()
-        if !reconciledMonths.isEmpty {
-            fileSizeCoordinator.enqueueRescan(for: reconciledMonths)
-            onMonthsChanged?(reconciledMonths)
-        }
-    }
-
     private func registerPhotoLibraryObserverIfNeeded() {
         guard !isObservingPhotoLibrary else { return }
         PHPhotoLibrary.shared().register(self)
@@ -170,31 +127,5 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         guard isObservingPhotoLibrary else { return }
         PHPhotoLibrary.shared().unregisterChangeObserver(self)
         isObservingPhotoLibrary = false
-    }
-
-    private func scheduleDeferredPhotoChangeDrainIfNeeded() {
-        guard processingMutationCount == 0,
-              !deferredPhotoChanges.isEmpty,
-              !isDrainingDeferredPhotoChanges else { return }
-        Task { @MainActor [weak self] in
-            await self?.drainDeferredPhotoChangesIfNeeded()
-        }
-    }
-
-    private func drainDeferredPhotoChangesIfNeeded() async {
-        guard processingMutationCount == 0,
-              !deferredPhotoChanges.isEmpty,
-              !isDrainingDeferredPhotoChanges else { return }
-
-        isDrainingDeferredPhotoChanges = true
-        defer {
-            isDrainingDeferredPhotoChanges = false
-            scheduleDeferredPhotoChangeDrainIfNeeded()
-        }
-
-        while processingMutationCount == 0, !deferredPhotoChanges.isEmpty {
-            let deferred = deferredPhotoChanges.removeFirst()
-            await applyPhotoLibraryChangeNow(deferred)
-        }
     }
 }

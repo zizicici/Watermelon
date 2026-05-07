@@ -93,6 +93,7 @@ final class HomeViewController: UIViewController {
     private let remoteOverlaySpinner = UIActivityIndicatorView(style: .medium)
     private let remoteOverlayButton = UIButton(type: .system)
     private var didBecomeActiveObserver: NSObjectProtocol?
+    private var didEnterBackgroundObserver: NSObjectProtocol?
 
     private let rightHeaderBg = UIView()
     private var isPanelShown = false
@@ -115,6 +116,9 @@ final class HomeViewController: UIViewController {
     deinit {
         if let didBecomeActiveObserver {
             NotificationCenter.default.removeObserver(didBecomeActiveObserver)
+        }
+        if let didEnterBackgroundObserver {
+            NotificationCenter.default.removeObserver(didEnterBackgroundObserver)
         }
     }
 
@@ -831,7 +835,7 @@ final class HomeViewController: UIViewController {
                     .init(type: .version, value: SpecificationsViewController.getAppVersion() ?? ""),
                     .init(type: .manufacturer, value: "@App君"),
                     .init(type: .publisher, value: "ZIZICICI LIMITED"),
-                    .init(type: .dateOfProduction, value: "2026/05/01"),
+                    .init(type: .dateOfProduction, value: "2026/05/06"),
                     .init(type: .license, value: "粤ICP备2025448771号-6A"),
                 ],
                 thirdPartyLibraries: [
@@ -1205,6 +1209,15 @@ final class HomeViewController: UIViewController {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.store.refreshLocalPhotoAccessIfNeeded()
+            }
+        }
+        didEnterBackgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.store.appDidEnterBackground()
             }
         }
     }

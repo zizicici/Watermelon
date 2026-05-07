@@ -35,6 +35,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     private var resourceHashesByMonth: [LibraryMonthKey: Set<Data>] = [:]
     private var resourceBytesByMonth: [LibraryMonthKey: Int64] = [:]
     private var lastSyncedAt: Date?
+    /// Forces the next state(since:) to full snapshot — post-reset revision can collide
+    /// with the engine's old snapshotRevision and silently produce an empty delta.
+    private var freshlyReset: Bool = false
 
     private struct ChangeKind {
         let resources: Bool
@@ -118,6 +121,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             lastSyncedAt = nil
             revision = 0
             monthLastChangedRevision.removeAll()
+            freshlyReset = true
         }
     }
 
@@ -511,6 +515,11 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     }
 
     private func changedMonthsLocked(since baseRevision: UInt64?) -> (Bool, Set<LibraryMonthKey>) {
+        if freshlyReset {
+            freshlyReset = false
+            return (true, allKnownMonthsLocked())
+        }
+
         guard let baseRevision else {
             return (true, allKnownMonthsLocked())
         }

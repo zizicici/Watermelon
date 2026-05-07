@@ -35,7 +35,7 @@ final class WorkerTests: XCTestCase {
         let key = LibraryMonthKey(year: 2024, month: 5)
         worker._testSeed(
             scope: .allPhotos,
-            collections: [TestAssetCollection([TestFixtures.snapshot(id: "a", year: 2024, month: 5)])]
+            payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a", year: 2024, month: 5)]])
         )
 
         XCTAssertEqual(worker.localAssetIDs(for: key, expectedScope: .allPhotos), ["a"])
@@ -48,7 +48,7 @@ final class WorkerTests: XCTestCase {
         let worker = makeWorker()
         worker._testSeed(
             scope: .allPhotos,
-            collections: [TestAssetCollection([TestFixtures.snapshot(id: "a", year: 2024, month: 5)])]
+            payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a", year: 2024, month: 5)]])
         )
 
         let result = await worker.refreshLocalIndex(
@@ -65,7 +65,7 @@ final class WorkerTests: XCTestCase {
         let key = LibraryMonthKey(year: 2024, month: 5)
         worker._testSeed(
             scope: .allPhotos,
-            collections: [TestAssetCollection([TestFixtures.snapshot(id: "a", year: 2024, month: 5)])]
+            payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a", year: 2024, month: 5)]])
         )
 
         let didWrite = await worker.writeFileSizeIfScopeStable(
@@ -114,7 +114,7 @@ final class WorkerTests: XCTestCase {
         let key = LibraryMonthKey(year: 2024, month: 5)
         worker._testSeed(
             scope: .allPhotos,
-            collections: [TestAssetCollection([TestFixtures.snapshot(id: "a", year: 2024, month: 5)])]
+            payload: TestFixtures.initialPayload([[TestFixtures.snapshot(id: "a", year: 2024, month: 5)]])
         )
 
         let sample = await worker.sampleFileSizeScan(for: key)
