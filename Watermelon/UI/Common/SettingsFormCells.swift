@@ -41,7 +41,7 @@ final class SettingsTextFieldCell: UITableViewCell, UITextFieldDelegate {
         textField.borderStyle = .none
         textField.textAlignment = .right
         textField.font = .preferredFont(forTextStyle: .body)
-        textField.textColor = .secondaryLabel
+        textField.textColor = .label
         textField.clearButtonMode = .whileEditing
         textField.autocorrectionType = .no
         textField.autocapitalizationType = .none
