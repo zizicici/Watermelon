@@ -85,33 +85,64 @@ struct HomeMenuFactory {
     }
 
     func buildDestination() -> UIMenu {
-        let disconnected = !store.connectionState.isConnected
+        let activeProfile = store.connectionState.isConnected ? store.connectionState.activeProfile : nil
         let busyAttributes: UIMenuElement.Attributes =
             (store.executionState != nil || store.isRemoteMaintenanceActive) ? .disabled : []
 
-        let disconnectAction = UIAction(
-            title: String(localized: "home.menu.notConnected"),
-            attributes: busyAttributes,
-            state: disconnected ? .on : .off
-        ) { [store] _ in
-            store.disconnect()
-        }
-
-        var profileActions: [UIAction] = []
+        let typeOrder: [StorageType] = [.smb, .webdav, .s3, .externalVolume]
+        var profilesByType: [StorageType: [UIAction]] = [:]
         for profile in store.savedProfiles {
-            let isActive = store.connectionState.activeProfile?.id == profile.id
+            if let active = activeProfile, active.id == profile.id { continue }
+            let storageType = profile.storageProfile.storageType
             let action = UIAction(
                 title: profile.name,
                 subtitle: profile.storageProfile.displaySubtitle,
-                attributes: busyAttributes,
-                state: isActive ? .on : .off
+                image: UIImage(systemName: StorageProfileIcon.symbolName(for: storageType)),
+                attributes: busyAttributes
             ) { [store] _ in
                 store.connectProfile(profile)
             }
-            profileActions.append(action)
+            profilesByType[storageType, default: []].append(action)
         }
 
-        let profileSection = UIMenu(title: "", options: .displayInline, children: profileActions)
+        var connectionChildren: [UIMenuElement] = []
+        if activeProfile != nil {
+            let currentProfileAction = UIAction(
+                title: String(localized: "home.menu.currentProfileSettings"),
+                image: UIImage(systemName: "slider.horizontal.3"),
+                attributes: busyAttributes
+            ) { [hooks] _ in
+                hooks.openCurrentProfileSettings()
+            }
+            let disconnectAction = UIAction(
+                title: String(localized: "home.menu.disconnect"),
+                image: UIImage(systemName: "xmark.circle"),
+                attributes: busyAttributes
+            ) { [store] _ in
+                store.disconnect()
+            }
+            connectionChildren.append(
+                UIMenu(title: "", options: .displayInline, children: [currentProfileAction, disconnectAction])
+            )
+        }
+        for type in typeOrder {
+            guard let actions = profilesByType[type], !actions.isEmpty else { continue }
+            connectionChildren.append(
+                UIMenu(title: typeSectionTitle(for: type), options: .displayInline, children: actions)
+            )
+        }
+
+        let connectionTitle = activeProfile?.name ?? String(localized: "home.menu.selectNode")
+        let connectionImage = UIImage(
+            systemName: activeProfile.map { StorageProfileIcon.symbolName(for: $0.storageProfile.storageType) }
+                ?? "link"
+        )
+        let connectionMenu = UIMenu(
+            title: connectionTitle,
+            subtitle: activeProfile?.storageProfile.displaySubtitle,
+            image: connectionImage,
+            children: connectionChildren
+        )
         let addStorageMenu = UIMenu(
             title: String(localized: "home.menu.addStorage"),
             image: UIImage(systemName: "plus.circle"),
@@ -131,7 +162,7 @@ struct HomeMenuFactory {
                 UIAction(title: "WebDAV", image: UIImage(systemName: "network")) { [hooks] _ in
                     hooks.openNewStorageFlow(.webdav)
                 },
-                UIAction(title: "S3", image: UIImage(systemName: "cloud.fill")) { [hooks] _ in
+                UIAction(title: "S3", image: UIImage(systemName: "cloud")) { [hooks] _ in
                     hooks.openNewStorageFlow(.s3)
                 },
                 UIAction(title: String(localized: "home.menu.externalStorage"), image: UIImage(systemName: "externaldrive")) { [hooks] _ in
@@ -146,22 +177,18 @@ struct HomeMenuFactory {
             hooks.openManageProfiles()
         }
 
-        var topItems: [UIMenuElement] = [addStorageMenu, manageAction]
-        // `activeProfile` is also non-nil mid-connect; the detail page reads
-        // `appSession.activeProfile`, which is only set after a successful reload.
-        if store.connectionState.isConnected, let active = store.connectionState.activeProfile {
-            let currentProfileAction = UIAction(
-                title: String(localized: "home.menu.currentProfileSettings"),
-                subtitle: active.name,
-                image: UIImage(systemName: "slider.horizontal.3"),
-                attributes: busyAttributes
-            ) { [hooks] _ in
-                hooks.openCurrentProfileSettings()
-            }
-            topItems.append(currentProfileAction)
+        let manageSection = UIMenu(title: "", options: .displayInline, children: [addStorageMenu, manageAction])
+        let connectionSection = UIMenu(title: "", options: .displayInline, children: [connectionMenu])
+        return UIMenu(children: [manageSection, connectionSection])
+    }
+
+    private func typeSectionTitle(for type: StorageType) -> String {
+        switch type {
+        case .smb: return "SMB"
+        case .webdav: return "WebDAV"
+        case .s3: return "S3"
+        case .externalVolume: return String(localized: "home.menu.externalStorage")
         }
-        let disconnectSection = UIMenu(title: "", options: .displayInline, children: [disconnectAction])
-        return UIMenu(children: topItems + [profileSection, disconnectSection])
     }
 
     func buildCategory(for intent: MonthIntent) -> UIMenu {

@@ -51,7 +51,7 @@ enum StorageProfileIcon {
         }
     }
 
-    private static func symbolName(for storageType: StorageType) -> String {
+    static func symbolName(for storageType: StorageType) -> String {
         switch storageType {
         case .smb:
             return "server.rack"
@@ -60,7 +60,7 @@ enum StorageProfileIcon {
         case .externalVolume:
             return "externaldrive"
         case .s3:
-            return "cloud.fill"
+            return "cloud"
         }
     }
 }

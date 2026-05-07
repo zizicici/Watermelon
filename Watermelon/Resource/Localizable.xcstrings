@@ -28968,79 +28968,161 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Speicher hinzufügen"
+            "value" : "Knoten hinzufügen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Add Storage"
+            "value" : "Add Node"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agregar almacenamiento"
+            "value" : "Agregar nodo"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agregar almacenamiento"
+            "value" : "Agregar nodo"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ajouter un stockage"
+            "value" : "Ajouter un nœud"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ストレージを追加"
+            "value" : "ノードを追加"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "저장소 추가"
+            "value" : "노드 추가"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Adicionar armazenamento"
+            "value" : "Adicionar nó"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Adicionar armazenamento"
+            "value" : "Adicionar nó"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Додати сховище"
+            "value" : "Додати вузол"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新增存储"
+            "value" : "新增节点"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新增儲存"
+            "value" : "新增節點"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "新增儲存"
+            "value" : "新增節點"
+          }
+        }
+      }
+    },
+    "home.menu.selectNode" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Knoten auswählen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select Node"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seleccionar nodo"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seleccionar nodo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sélectionner un nœud"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ノードを選択"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "노드 선택"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecionar nó"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selecionar nó"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Виберіть вузол"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择节点"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇節點"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇節點"
           }
         }
       }
@@ -29291,84 +29373,84 @@
         }
       }
     },
-    "home.menu.notConnected" : {
+    "home.menu.disconnect" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nicht verbunden"
+            "value" : "Verbindung trennen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Not Connected"
+            "value" : "Disconnect"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No conectado"
+            "value" : "Desconectar"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No conectado"
+            "value" : "Desconectar"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Non connecté"
+            "value" : "Déconnecter"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未接続"
+            "value" : "接続を切断"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "연결되지 않음"
+            "value" : "연결 해제"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não conectado"
+            "value" : "Desconectar"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não ligado"
+            "value" : "Desligar"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Не під'єднано"
+            "value" : "Від'єднати"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未连接"
+            "value" : "断开连接"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未連接"
+            "value" : "中斷連線"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未連接"
+            "value" : "中斷連線"
           }
         }
       }
@@ -32494,79 +32576,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Speicher verwalten"
+            "value" : "Knoten verwalten"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Manage Remote Storage"
+            "value" : "Manage Nodes"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Administrar almacenamiento remoto"
+            "value" : "Administrar nodos"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Administrar almacenamiento remoto"
+            "value" : "Administrar nodos"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gérer le stockage distant"
+            "value" : "Gérer les nœuds"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リモートストレージを管理"
+            "value" : "ノードを管理"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 저장소 관리"
+            "value" : "노드 관리"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gerenciar armazenamento remoto"
+            "value" : "Gerenciar nós"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gerir armazenamento remoto"
+            "value" : "Gerir nós"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Керувати віддаленим сховищем"
+            "value" : "Керувати вузлами"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理远端存储"
+            "value" : "管理节点"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理遠端儲存"
+            "value" : "管理節點"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理遠端儲存"
+            "value" : "管理節點"
           }
         }
       }
