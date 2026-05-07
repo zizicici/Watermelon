@@ -9,6 +9,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         let scheme: String
         let region: String
         let bucket: String
+        let basePath: String
         let usePathStyle: Bool
         let accessKeyID: String
         let secretAccessKey: String
@@ -28,6 +29,7 @@ final actor S3Client: RemoteStorageClientProtocol {
     private static let multipartMaxParts = 10_000
     // Buffer below the 10000-part hard ceiling.
     private static let multipartTargetParts: Int64 = 9_000
+    private static let probeKeyPrefix = ".watermelon_probe_"
 
     static func partSize(forFileSize size: Int64) -> Int64 {
         let baseline = multipartPartSize
@@ -95,10 +97,15 @@ final actor S3Client: RemoteStorageClientProtocol {
     }
 
     func connect() async throws {
-        let url = try makeURL(key: "", query: [
+        var query: [(String, String)] = [
             ("list-type", "2"),
-            ("max-keys", "0")
-        ])
+            ("max-keys", "1")
+        ]
+        let prefix = keyPrefix(forListPath: config.basePath)
+        if !prefix.isEmpty {
+            query.append(("prefix", prefix))
+        }
+        let url = try makeURL(key: "", query: query)
         let request = signedRequest(method: "GET", url: url, bodyHash: .empty)
         _ = try await performMetadata(request)
     }
@@ -110,6 +117,67 @@ final actor S3Client: RemoteStorageClientProtocol {
             // Orphaned parts are billed; tolerate abort failure (lifecycle policy is the safety net).
             try? await abortMultipartUpload(key: handle.key, uploadId: handle.uploadId)
         }
+    }
+
+    func verifyWriteAccess() async throws {
+        let keyA = makeProbeKey()
+        let keyB = makeProbeKey()
+        let urlA = try makeURL(key: keyA, query: [])
+        let urlB = try makeURL(key: keyB, query: [])
+
+        var orphans: Set<URL> = []
+        do {
+            try await putEmptyObject(at: urlA)
+            orphans.insert(urlA)
+
+            try await serverSideCopy(sourceKey: keyA, destinationURL: urlB)
+            orphans.insert(urlB)
+
+            async let delA: Void = deleteObject(at: urlA)
+            async let delB: Void = deleteObject(at: urlB)
+            try await delA
+            try await delB
+            orphans.removeAll()
+        } catch {
+            await withTaskGroup(of: Void.self) { group in
+                for url in orphans {
+                    group.addTask { [self] in
+                        let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
+                        _ = try? await performMetadata(req)
+                    }
+                }
+            }
+            throw error
+        }
+    }
+
+    nonisolated private func makeProbeKey() -> String {
+        let absolute = RemotePathBuilder.absolutePath(
+            basePath: config.basePath,
+            remoteRelativePath: Self.probeKeyPrefix + UUID().uuidString.lowercased()
+        )
+        return key(forPath: absolute)
+    }
+
+    private func putEmptyObject(at url: URL) async throws {
+        let req = signedRequest(method: "PUT", url: url, bodyHash: .empty)
+        _ = try await performMetadata(req, from: Data())
+    }
+
+    private func serverSideCopy(sourceKey: String, destinationURL: URL) async throws {
+        let req = signedRequest(
+            method: "PUT",
+            url: destinationURL,
+            additionalHeaders: ["x-amz-copy-source": Self.copySourceHeader(bucket: config.bucket, key: sourceKey)],
+            bodyHash: .empty
+        )
+        let (body, _) = try await performMetadata(req)
+        try throwIfEmbeddedError(method: "PUT", url: destinationURL, body: body)
+    }
+
+    private func deleteObject(at url: URL) async throws {
+        let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
+        _ = try await performMetadata(req)
     }
 
     func storageCapacity() async throws -> RemoteStorageCapacity? {
@@ -135,7 +203,7 @@ final actor S3Client: RemoteStorageClientProtocol {
             }
             let url = try makeURL(key: "", query: query)
             let request = signedRequest(method: "GET", url: url, bodyHash: .empty)
-            let data = try await performMetadata(request)
+            let (data, _) = try await performMetadata(request)
             let parsed = try S3ListXMLParser().parse(data: data)
 
             for content in parsed.contents {
@@ -156,7 +224,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         let url = try makeURL(key: key, query: [])
         let request = signedRequest(method: "HEAD", url: url, bodyHash: .empty)
         do {
-            let (_, http) = try await performMetadataResponse(request)
+            let (_, http) = try await performMetadata(request)
             return parseHeadEntry(http: http, key: key)
         } catch {
             if Self.isNotFoundError(error) { return nil }
@@ -190,11 +258,7 @@ final actor S3Client: RemoteStorageClientProtocol {
 
     private func singlePartUpload(localURL: URL, key: String, size: Int64) async throws {
         if size > Self.singlePartMaxSize {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "File exceeds 5 GiB single-part limit"]
-            ))
+            throw Self.internalError("File exceeds 5 GiB single-part limit")
         }
         let url = try makeURL(key: key, query: [])
         let request = signedRequest(
@@ -203,39 +267,86 @@ final actor S3Client: RemoteStorageClientProtocol {
             additionalHeaders: ["Content-Type": "application/octet-stream"],
             bodyHash: .unsigned
         )
-        let (data, response) = try await transferSession.upload(for: request, fromFile: localURL)
-        guard let http = response as? HTTPURLResponse else {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Unexpected response type"]
-            ))
-        }
-        if !(200 ..< 300).contains(http.statusCode) {
-            throw makeServerError(method: "PUT", url: url, statusCode: http.statusCode, body: data)
-        }
+        _ = try await performTransfer(request, fromFile: localURL)
     }
 
-    private func multipartUpload(localURL: URL, key: String, size: Int64, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+    typealias PartUploader = @Sendable (_ uploadId: String, _ partNumber: Int, _ offset: Int64, _ length: Int64) async throws -> UploadedPart
+
+    private func runMultipartTransfer(
+        key: String,
+        totalSize: Int64,
+        respectCancellation: Bool,
+        onProgress: ((Double) -> Void)?,
+        uploadPart: @escaping PartUploader
+    ) async throws {
+        let partSize = Self.partSize(forFileSize: totalSize)
+        let totalParts = Int((totalSize + partSize - 1) / partSize)
+        if totalParts > Self.multipartMaxParts {
+            throw Self.internalError("Object exceeds maximum part count of \(Self.multipartMaxParts)")
+        }
+
         let uploadId = try await createMultipartUpload(key: key)
         let handle = MultipartUploadHandle(key: key, uploadId: uploadId)
         activeMultipartUploads.insert(handle)
+
         do {
-            let parts = try await uploadAllParts(
-                localURL: localURL,
-                key: key,
-                uploadId: uploadId,
-                size: size,
-                respectTaskCancellation: respectTaskCancellation,
-                onProgress: onProgress
-            )
-            try await completeMultipartUpload(key: key, uploadId: uploadId, parts: parts)
+            var collected: [UploadedPart] = []
+            var nextPartNumber = 1
+            var bytesUploaded: Int64 = 0
+
+            while nextPartNumber <= totalParts {
+                if respectCancellation {
+                    try Task.checkCancellation()
+                }
+                let batchEnd = min(nextPartNumber + Self.multipartConcurrency - 1, totalParts)
+                let batch = try await withThrowingTaskGroup(of: UploadedPart.self) { group in
+                    for partNumber in nextPartNumber...batchEnd {
+                        let offset = Int64(partNumber - 1) * partSize
+                        let length = min(partSize, totalSize - offset)
+                        group.addTask {
+                            try await uploadPart(uploadId, partNumber, offset, length)
+                        }
+                    }
+                    var results: [UploadedPart] = []
+                    for try await part in group {
+                        results.append(part)
+                    }
+                    return results
+                }
+                collected.append(contentsOf: batch)
+                bytesUploaded += batch.reduce(0) { $0 + $1.size }
+                if totalSize > 0 {
+                    onProgress?(Double(bytesUploaded) / Double(totalSize))
+                }
+                nextPartNumber = batchEnd + 1
+            }
+
+            collected.sort { $0.partNumber < $1.partNumber }
+            try await completeMultipartUpload(key: key, uploadId: uploadId, parts: collected)
             activeMultipartUploads.remove(handle)
             onProgress?(1.0)
         } catch {
             activeMultipartUploads.remove(handle)
             try? await abortMultipartUpload(key: key, uploadId: uploadId)
             throw error
+        }
+    }
+
+    private func multipartUpload(localURL: URL, key: String, size: Int64, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await runMultipartTransfer(
+            key: key,
+            totalSize: size,
+            respectCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        ) { [self] uploadId, partNumber, offset, length in
+            try await uploadOnePart(
+                localURL: localURL,
+                key: key,
+                uploadId: uploadId,
+                partNumber: partNumber,
+                offset: offset,
+                length: length
+            )
         }
     }
 
@@ -247,76 +358,12 @@ final actor S3Client: RemoteStorageClientProtocol {
             additionalHeaders: ["Content-Type": "application/octet-stream"],
             bodyHash: .empty
         )
-        let data = try await performMetadata(request)
+        let (data, _) = try await performMetadata(request)
         guard let uploadId = S3SimpleXMLValueParser(target: "UploadId").parse(data: data),
               !uploadId.isEmpty else {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Missing UploadId in CreateMultipartUpload response"]
-            ))
+            throw Self.internalError("Missing UploadId in CreateMultipartUpload response")
         }
         return uploadId
-    }
-
-    private func uploadAllParts(
-        localURL: URL,
-        key: String,
-        uploadId: String,
-        size: Int64,
-        respectTaskCancellation: Bool,
-        onProgress: ((Double) -> Void)?
-    ) async throws -> [UploadedPart] {
-        let partSize = Self.partSize(forFileSize: size)
-        let totalParts = Int((size + partSize - 1) / partSize)
-        if totalParts > Self.multipartMaxParts {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "File exceeds maximum upload size"]
-            ))
-        }
-
-        var collected: [UploadedPart] = []
-        var nextPartNumber = 1
-        var bytesUploaded: Int64 = 0
-
-        while nextPartNumber <= totalParts {
-            if respectTaskCancellation {
-                try Task.checkCancellation()
-            }
-            let batchEnd = min(nextPartNumber + Self.multipartConcurrency - 1, totalParts)
-            let batch = try await withThrowingTaskGroup(of: UploadedPart.self) { group in
-                for partNumber in nextPartNumber...batchEnd {
-                    let offset = Int64(partNumber - 1) * partSize
-                    let length = min(partSize, size - offset)
-                    group.addTask { [self] in
-                        try await uploadOnePart(
-                            localURL: localURL,
-                            key: key,
-                            uploadId: uploadId,
-                            partNumber: partNumber,
-                            offset: offset,
-                            length: length
-                        )
-                    }
-                }
-                var results: [UploadedPart] = []
-                for try await part in group {
-                    results.append(part)
-                }
-                return results
-            }
-            collected.append(contentsOf: batch)
-            bytesUploaded += batch.reduce(0) { $0 + $1.size }
-            if size > 0 {
-                onProgress?(Double(bytesUploaded) / Double(size))
-            }
-            nextPartNumber = batchEnd + 1
-        }
-
-        collected.sort { $0.partNumber < $1.partNumber }
-        return collected
     }
 
     private func uploadOnePart(
@@ -332,29 +379,11 @@ final actor S3Client: RemoteStorageClientProtocol {
             ("partNumber", String(partNumber)),
             ("uploadId", uploadId)
         ])
-        let request = signedRequest(
-            method: "PUT",
-            url: url,
-            bodyHash: .unsigned
-        )
-        let (responseBody, response) = try await transferSession.upload(for: request, from: partData)
-        guard let http = response as? HTTPURLResponse else {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Unexpected response type for UploadPart"]
-            ))
-        }
-        if !(200 ..< 300).contains(http.statusCode) {
-            throw makeServerError(method: "PUT", url: url, statusCode: http.statusCode, body: responseBody)
-        }
+        let request = signedRequest(method: "PUT", url: url, bodyHash: .unsigned)
+        let (_, http) = try await performTransfer(request, from: partData)
         let etag = http.value(forHTTPHeaderField: "ETag") ?? ""
         if etag.isEmpty {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Missing ETag header on UploadPart response (part \(partNumber))"]
-            ))
+            throw Self.internalError("Missing ETag header on UploadPart response (part \(partNumber))")
         }
         return UploadedPart(partNumber: partNumber, etag: etag, size: Int64(partData.count))
     }
@@ -369,17 +398,7 @@ final actor S3Client: RemoteStorageClientProtocol {
             bodyHash: .data(body)
         )
         // Large-upload assembly can exceed metadata session's 120s timeout.
-        let (data, response) = try await transferSession.upload(for: request, from: body)
-        guard let http = response as? HTTPURLResponse else {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Unexpected response type for CompleteMultipartUpload"]
-            ))
-        }
-        if !(200 ..< 300).contains(http.statusCode) {
-            throw makeServerError(method: "POST", url: url, statusCode: http.statusCode, body: data)
-        }
+        let (data, _) = try await performTransfer(request, from: body)
         try throwIfEmbeddedError(method: "POST", url: url, body: data)
     }
 
@@ -414,19 +433,8 @@ final actor S3Client: RemoteStorageClientProtocol {
         }
         let url = try makeURL(key: key, query: [])
         let request = signedRequest(method: "GET", url: url, bodyHash: .empty)
-        let (tempURL, response) = try await transferSession.download(for: request)
+        let (tempURL, _) = try await performTransferDownload(request)
         defer { try? FileManager.default.removeItem(at: tempURL) }
-        guard let http = response as? HTTPURLResponse else {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Unexpected response type"]
-            ))
-        }
-        if !(200 ..< 300).contains(http.statusCode) {
-            let body = (try? Data(contentsOf: tempURL)) ?? Data()
-            throw makeServerError(method: "GET", url: url, statusCode: http.statusCode, body: body)
-        }
         let parent = localURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
         if FileManager.default.fileExists(atPath: localURL.path) {
@@ -477,77 +485,26 @@ final actor S3Client: RemoteStorageClientProtocol {
             additionalHeaders: ["x-amz-copy-source": Self.copySourceHeader(bucket: config.bucket, key: sourceKey)],
             bodyHash: .empty
         )
-        let data = try await performMetadata(request)
+        let (data, _) = try await performMetadata(request)
         try throwIfEmbeddedError(method: "PUT", url: destinationURL, body: data)
     }
 
     private func multipartCopy(sourceKey: String, destinationKey: String, sourceSize: Int64) async throws {
-        let uploadId = try await createMultipartUpload(key: destinationKey)
-        let handle = MultipartUploadHandle(key: destinationKey, uploadId: uploadId)
-        activeMultipartUploads.insert(handle)
-        do {
-            let parts = try await uploadAllCopyParts(
+        try await runMultipartTransfer(
+            key: destinationKey,
+            totalSize: sourceSize,
+            respectCancellation: true,
+            onProgress: nil
+        ) { [self] uploadId, partNumber, offset, length in
+            try await uploadOneCopyPart(
                 sourceKey: sourceKey,
                 destinationKey: destinationKey,
                 uploadId: uploadId,
-                sourceSize: sourceSize
+                partNumber: partNumber,
+                rangeStart: offset,
+                rangeEnd: offset + length - 1
             )
-            try await completeMultipartUpload(key: destinationKey, uploadId: uploadId, parts: parts)
-            activeMultipartUploads.remove(handle)
-        } catch {
-            activeMultipartUploads.remove(handle)
-            try? await abortMultipartUpload(key: destinationKey, uploadId: uploadId)
-            throw error
         }
-    }
-
-    private func uploadAllCopyParts(
-        sourceKey: String,
-        destinationKey: String,
-        uploadId: String,
-        sourceSize: Int64
-    ) async throws -> [UploadedPart] {
-        let partSize = Self.partSize(forFileSize: sourceSize)
-        let totalParts = Int((sourceSize + partSize - 1) / partSize)
-        if totalParts > Self.multipartMaxParts {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Source object exceeds maximum copy size"]
-            ))
-        }
-
-        var collected: [UploadedPart] = []
-        var nextPartNumber = 1
-        while nextPartNumber <= totalParts {
-            try Task.checkCancellation()
-            let batchEnd = min(nextPartNumber + Self.multipartConcurrency - 1, totalParts)
-            let batch = try await withThrowingTaskGroup(of: UploadedPart.self) { group in
-                for partNumber in nextPartNumber...batchEnd {
-                    let offset = Int64(partNumber - 1) * partSize
-                    let endByte = min(offset + partSize - 1, sourceSize - 1)
-                    group.addTask { [self] in
-                        try await uploadOneCopyPart(
-                            sourceKey: sourceKey,
-                            destinationKey: destinationKey,
-                            uploadId: uploadId,
-                            partNumber: partNumber,
-                            rangeStart: offset,
-                            rangeEnd: endByte
-                        )
-                    }
-                }
-                var results: [UploadedPart] = []
-                for try await part in group {
-                    results.append(part)
-                }
-                return results
-            }
-            collected.append(contentsOf: batch)
-            nextPartNumber = batchEnd + 1
-        }
-        collected.sort { $0.partNumber < $1.partNumber }
-        return collected
     }
 
     private func uploadOneCopyPart(
@@ -572,25 +529,11 @@ final actor S3Client: RemoteStorageClientProtocol {
             bodyHash: .empty
         )
         // Large server-side part copy can exceed metadata session's 120s timeout.
-        let (data, response) = try await transferSession.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Unexpected response type for UploadPartCopy"]
-            ))
-        }
-        if !(200 ..< 300).contains(http.statusCode) {
-            throw makeServerError(method: "PUT", url: url, statusCode: http.statusCode, body: data)
-        }
+        let (data, _) = try await performTransferData(request)
         try throwIfEmbeddedError(method: "PUT", url: url, body: data)
         guard let etag = S3SimpleXMLValueParser(target: "ETag").parse(data: data),
               !etag.isEmpty else {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Missing ETag in UploadPartCopy response (part \(partNumber))"]
-            ))
+            throw Self.internalError("Missing ETag in UploadPartCopy response (part \(partNumber))")
         }
         return UploadedPart(partNumber: partNumber, etag: etag, size: rangeEnd - rangeStart + 1)
     }
@@ -689,7 +632,45 @@ final actor S3Client: RemoteStorageClientProtocol {
         if lower.hasSuffix(".amazonaws.com") { return false }
         if lower.hasSuffix(".cloudflarestorage.com") { return false }
         if lower.hasSuffix(".backblazeb2.com") { return false }
+        if lower.hasSuffix(".digitaloceanspaces.com") { return false }
+        if lower.hasSuffix(".wasabisys.com") { return false }
         return true
+    }
+
+    nonisolated static func resolveRegion(userInput: String, host: String) -> String {
+        let trimmed = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return defaultRegion(forHost: host) ?? ""
+    }
+
+    nonisolated static func defaultRegion(forHost host: String) -> String? {
+        let lower = host.lowercased()
+        if lower.hasSuffix(".r2.cloudflarestorage.com") { return "auto" }
+        if let region = extractMiddleSegment(host: lower, prefix: "s3.", suffix: ".amazonaws.com") {
+            return region
+        }
+        if let region = extractMiddleSegment(host: lower, prefix: "s3.", suffix: ".backblazeb2.com") {
+            return region
+        }
+        if let region = extractMiddleSegment(host: lower, prefix: "s3.", suffix: ".wasabisys.com") {
+            return region
+        }
+        if lower.hasSuffix(".digitaloceanspaces.com") {
+            let trimmed = String(lower.dropLast(".digitaloceanspaces.com".count))
+            if !trimmed.isEmpty, !trimmed.contains(".") {
+                return trimmed
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func extractMiddleSegment(host: String, prefix: String, suffix: String) -> String? {
+        guard host.hasPrefix(prefix), host.hasSuffix(suffix), host.count > prefix.count + suffix.count else {
+            return nil
+        }
+        let middle = host.dropFirst(prefix.count).dropLast(suffix.count)
+        if middle.isEmpty || middle.contains(".") { return nil }
+        return String(middle)
     }
 
     nonisolated private func fileSize(at url: URL) throws -> Int64 {
@@ -730,8 +711,8 @@ final actor S3Client: RemoteStorageClientProtocol {
         )
         var request = URLRequest(url: url)
         request.httpMethod = method
-        // host and content-length are set automatically by URLSession.
-        for (key, value) in signed.headers where key != "host" && key != "content-length" {
+        // URLSession derives host from URL; setting it on the request would conflict.
+        for (key, value) in signed.headers where key != "host" {
             request.setValue(value, forHTTPHeaderField: key)
         }
         return request
@@ -739,34 +720,61 @@ final actor S3Client: RemoteStorageClientProtocol {
 
     // MARK: - Request execution
 
-    private func performMetadata(_ request: URLRequest) async throws -> Data {
+    private func performMetadata(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Unexpected response type"]
-            ))
-        }
-        if !(200 ..< 300).contains(http.statusCode) {
-            throw makeServerError(method: request.httpMethod ?? "?", url: request.url, statusCode: http.statusCode, body: data)
-        }
-        return data
+        return try validateResponse(request: request, data: data, response: response)
     }
 
-    private func performMetadataResponse(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await session.data(for: request)
+    private func performMetadata(_ request: URLRequest, from body: Data) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await session.upload(for: request, from: body)
+        return try validateResponse(request: request, data: data, response: response)
+    }
+
+    private func performTransfer(_ request: URLRequest, from body: Data) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await transferSession.upload(for: request, from: body)
+        return try validateResponse(request: request, data: data, response: response)
+    }
+
+    private func performTransfer(_ request: URLRequest, fromFile fileURL: URL) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await transferSession.upload(for: request, fromFile: fileURL)
+        return try validateResponse(request: request, data: data, response: response)
+    }
+
+    private func performTransferData(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await transferSession.data(for: request)
+        return try validateResponse(request: request, data: data, response: response)
+    }
+
+    private func performTransferDownload(_ request: URLRequest) async throws -> (URL, HTTPURLResponse) {
+        let (tempURL, response) = try await transferSession.download(for: request)
         guard let http = response as? HTTPURLResponse else {
-            throw RemoteStorageClientError.underlying(NSError(
-                domain: Self.errorDomain,
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Unexpected response type"]
-            ))
+            try? FileManager.default.removeItem(at: tempURL)
+            throw Self.internalError("Unexpected response type")
+        }
+        if !(200 ..< 300).contains(http.statusCode) {
+            let body = (try? Data(contentsOf: tempURL)) ?? Data()
+            try? FileManager.default.removeItem(at: tempURL)
+            throw makeServerError(method: request.httpMethod ?? "?", url: request.url, statusCode: http.statusCode, body: body)
+        }
+        return (tempURL, http)
+    }
+
+    nonisolated private func validateResponse(request: URLRequest, data: Data, response: URLResponse) throws -> (Data, HTTPURLResponse) {
+        guard let http = response as? HTTPURLResponse else {
+            throw Self.internalError("Unexpected response type")
         }
         if !(200 ..< 300).contains(http.statusCode) {
             throw makeServerError(method: request.httpMethod ?? "?", url: request.url, statusCode: http.statusCode, body: data)
         }
         return (data, http)
+    }
+
+    nonisolated private static func internalError(_ message: String) -> RemoteStorageClientError {
+        .underlying(NSError(
+            domain: errorDomain,
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: message]
+        ))
     }
 
     // MARK: - Error construction

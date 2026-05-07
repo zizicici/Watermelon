@@ -54,9 +54,9 @@ enum S3ErrorClassifier {
             switch self {
             case .invalidAccessKeyID, .signatureDoesNotMatch, .accessDenied,
                  .noSuchBucket, .noSuchKey, .authorizationHeaderMalformed,
-                 .entityTooLarge, .bucketRegionError:
+                 .entityTooLarge, .bucketRegionError, .requestTimeTooSkewed:
                 return true
-            case .requestTimeTooSkewed, .slowDown, .serviceUnavailable, .internalError:
+            case .slowDown, .serviceUnavailable, .internalError:
                 return false
             }
         }

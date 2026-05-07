@@ -2,13 +2,20 @@ import XCTest
 @testable import Watermelon
 
 final class S3ClientTests: XCTestCase {
-    private func makeClient(usePathStyle: Bool, host: String = "s3.us-east-1.amazonaws.com", port: Int = 0, scheme: String = "https") -> S3Client {
+    private func makeClient(
+        usePathStyle: Bool,
+        host: String = "s3.us-east-1.amazonaws.com",
+        port: Int = 0,
+        scheme: String = "https",
+        basePath: String = "/"
+    ) -> S3Client {
         S3Client(config: S3Client.Config(
             endpointHost: host,
             endpointPort: port,
             scheme: scheme,
             region: "us-east-1",
             bucket: "examplebucket",
+            basePath: basePath,
             usePathStyle: usePathStyle,
             accessKeyID: "AKIAIOSFODNN7EXAMPLE",
             secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
@@ -333,5 +340,53 @@ final class S3ClientTests: XCTestCase {
             XCTAssertLessThanOrEqual(parts, 10_000, "size=\(size) part=\(part) parts=\(parts)")
             XCTAssertGreaterThanOrEqual(part, 5 * 1024 * 1024, "part below AWS minimum at size=\(size)")
         }
+    }
+
+    // MARK: - Default region per provider
+
+    func testDefaultRegionForR2IsAuto() {
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "abc123.r2.cloudflarestorage.com"), "auto")
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "ABC123.R2.CLOUDFLARESTORAGE.COM"), "auto")
+    }
+
+    func testDefaultRegionForAWSExtractsRegionFromHost() {
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "s3.us-east-1.amazonaws.com"), "us-east-1")
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "s3.eu-west-2.amazonaws.com"), "eu-west-2")
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "s3.ap-northeast-1.amazonaws.com"), "ap-northeast-1")
+    }
+
+    func testDefaultRegionForB2ExtractsRegionFromHost() {
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "s3.us-west-002.backblazeb2.com"), "us-west-002")
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "s3.eu-central-003.backblazeb2.com"), "eu-central-003")
+    }
+
+    func testDefaultRegionForWasabiExtractsRegionFromHost() {
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "s3.us-east-1.wasabisys.com"), "us-east-1")
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "s3.ap-northeast-1.wasabisys.com"), "ap-northeast-1")
+    }
+
+    func testDefaultRegionForDigitalOceanExtractsRegionFromHost() {
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "nyc3.digitaloceanspaces.com"), "nyc3")
+        XCTAssertEqual(S3Client.defaultRegion(forHost: "fra1.digitaloceanspaces.com"), "fra1")
+    }
+
+    func testDefaultRegionForUnknownHostReturnsNil() {
+        XCTAssertNil(S3Client.defaultRegion(forHost: "minio.local"))
+        XCTAssertNil(S3Client.defaultRegion(forHost: "192.168.1.10"))
+        XCTAssertNil(S3Client.defaultRegion(forHost: ""))
+        XCTAssertNil(S3Client.defaultRegion(forHost: "amazonaws.com"))
+    }
+
+    func testDefaultRegionRejectsBareSuffix() {
+        XCTAssertNil(S3Client.defaultRegion(forHost: ".amazonaws.com"))
+        XCTAssertNil(S3Client.defaultRegion(forHost: "s3..amazonaws.com"))
+        XCTAssertNil(S3Client.defaultRegion(forHost: "s3.us-east-1.extra.amazonaws.com"))
+    }
+
+    // MARK: - Path-style auto-detection (provider expansion)
+
+    func testDefaultPathStyleForDigitalOceanAndWasabiIsVirtualHosted() {
+        XCTAssertFalse(S3Client.defaultPathStyle(forHost: "nyc3.digitaloceanspaces.com"))
+        XCTAssertFalse(S3Client.defaultPathStyle(forHost: "s3.us-east-1.wasabisys.com"))
     }
 }

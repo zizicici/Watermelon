@@ -146,6 +146,9 @@ final class AddS3StorageViewController: UIViewController {
             guard let self else { return }
             do {
                 try await Self.verifyConnection(draft: draft)
+            } catch is CancellationError {
+                await MainActor.run { self.setSaving(false) }
+                return
             } catch {
                 await MainActor.run {
                     self.setSaving(false)
@@ -200,7 +203,7 @@ final class AddS3StorageViewController: UIViewController {
             throw NSError(domain: "AddS3Storage", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.bucket")])
         }
 
-        let region = regionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let region = S3Client.resolveRegion(userInput: regionText, host: parsed.host)
 
         let accessKey = accessKeyText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !accessKey.isEmpty else {
@@ -259,18 +262,16 @@ final class AddS3StorageViewController: UIViewController {
             scheme: draft.scheme,
             region: draft.region,
             bucket: draft.bucket,
+            basePath: draft.normalizedBasePath,
             usePathStyle: draft.usePathStyle,
             accessKeyID: draft.accessKeyID,
             secretAccessKey: draft.secretAccessKey,
             sessionToken: nil
         ))
-        do {
-            try await client.connect()
-        } catch {
-            await client.disconnect()
-            throw error
-        }
-        await client.disconnect()
+        try await S3ProfileVerifier.run(
+            client: client,
+            writeAccessMessageTemplate: String(localized: "auth.s3.validation.writeAccess")
+        )
     }
 
     private func commitProfile(draft: ValidatedDraft) throws -> ServerProfileRecord {

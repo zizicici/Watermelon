@@ -3035,6 +3035,88 @@
         }
       }
     },
+    "auth.s3.validation.writeAccess" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit den Anmeldedaten lässt sich der Schreib-Test nicht abschließen. Prüfen Sie s3:PutObject, s3:GetObject und s3:DeleteObject auf dem Sicherungspfad. Grund: %@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Credentials cannot complete a write probe. Confirm s3:PutObject, s3:GetObject, and s3:DeleteObject permissions on the backup path. Reason: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las credenciales no pueden completar la prueba de escritura. Verifica los permisos s3:PutObject, s3:GetObject y s3:DeleteObject en la ruta de copia. Motivo: %@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las credenciales no pueden completar la prueba de escritura. Verifica los permisos s3:PutObject, s3:GetObject y s3:DeleteObject en la ruta de copia. Motivo: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les identifiants ne peuvent pas terminer la sonde d'écriture. Vérifiez les autorisations s3:PutObject, s3:GetObject et s3:DeleteObject sur le chemin de sauvegarde. Motif : %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "認証情報で書き込みプローブを完了できません。バックアップパスで s3:PutObject、s3:GetObject、s3:DeleteObject の権限を確認してください。原因: %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "자격 증명으로 쓰기 프로브를 완료할 수 없습니다. 백업 경로에서 s3:PutObject, s3:GetObject, s3:DeleteObject 권한을 확인하세요. 원인: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As credenciais não conseguem concluir o teste de gravação. Verifique as permissões s3:PutObject, s3:GetObject e s3:DeleteObject no caminho de backup. Motivo: %@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As credenciais não conseguem concluir o teste de escrita. Verifique as permissões s3:PutObject, s3:GetObject e s3:DeleteObject no caminho de cópia. Motivo: %@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Облікові дані не можуть завершити перевірку запису. Перевірте дозволи s3:PutObject, s3:GetObject і s3:DeleteObject на шляху резервного копіювання. Причина: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "凭证无法完成写入探测。请确认备份路径上的 s3:PutObject、s3:GetObject 和 s3:DeleteObject 权限。原因：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "憑證無法完成寫入探測。請確認備份路徑上的 s3:PutObject、s3:GetObject 與 s3:DeleteObject 權限。原因：%@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "憑證無法完成寫入探測。請確認備份路徑上的 s3:PutObject、s3:GetObject 與 s3:DeleteObject 權限。原因：%@"
+          }
+        }
+      }
+    },
     "auth.saveFailed" : {
       "localizations" : {
         "de" : {

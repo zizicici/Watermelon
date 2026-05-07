@@ -87,7 +87,7 @@ struct AddS3ProfileSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button(saving ? String(localized: "common.saving") : String(localized: "common.save")) { commit() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!hasMinimumFields || saving)
+                    .disabled(!hasMinimumFields || saving || verifying)
             }
         }
         .padding(20)
@@ -117,23 +117,32 @@ struct AddS3ProfileSheet: View {
     private func verify() {
         verifyMessage = nil
         saveError = nil
-        guard let snapshot = makeProbeRecord() else {
+        guard let draft = resolveDraft() else {
+            saveError = String(localized: "profile.add.s3.error.invalidEndpoint")
+            return
+        }
+        guard let probe = makeProbeRecord(from: draft) else {
             saveError = String(localized: "profile.add.s3.error.invalidEndpoint")
             return
         }
         verifying = true
         Task { [storageClientFactory, secretKey] in
             do {
-                let client = try storageClientFactory.makeClient(profile: snapshot, password: secretKey)
-                try await client.connect()
+                let client = try storageClientFactory.makeClient(profile: probe, password: secretKey)
+                try await S3ProfileVerifier.run(
+                    client: client,
+                    writeAccessMessageTemplate: String(localized: "profile.add.s3.error.writeAccess")
+                )
                 await MainActor.run {
                     verifyMessage = String(localized: "profile.add.s3.verify.success")
                     verifying = false
                 }
-                await client.disconnect()
+            } catch is CancellationError {
+                await MainActor.run { verifying = false }
             } catch {
+                let message = error.localizedDescription
                 await MainActor.run {
-                    saveError = error.localizedDescription
+                    saveError = message
                     verifying = false
                 }
             }
@@ -141,50 +150,101 @@ struct AddS3ProfileSheet: View {
     }
 
     private func commit() {
-        saving = true
-        defer { saving = false }
-        guard let parsed = S3Client.parseEndpoint(endpoint) else {
+        verifyMessage = nil
+        saveError = nil
+        guard let draft = resolveDraft(), let probe = makeProbeRecord(from: draft) else {
             saveError = String(localized: "profile.add.s3.error.invalidEndpoint")
             return
         }
-        let resolvedPathStyle = pathStyleOverride ?? S3Client.defaultPathStyle(forHost: parsed.host)
-        let snapshot = S3ProfileSnapshot(
-            name: name.trimmed,
-            scheme: parsed.scheme,
-            host: parsed.host,
-            port: parsed.port,
-            region: region.trimmed,
-            bucket: bucket.trimmed,
-            basePath: basePath.trimmed.isEmpty ? "/" : basePath.trimmed,
-            usePathStyle: resolvedPathStyle,
-            accessKeyID: accessKey.trimmed,
-            secretAccessKey: secretKey
-        )
-        do {
-            try save(snapshot)
-            dismiss()
-        } catch {
-            saveError = error.localizedDescription
+        let snapshot = makeSnapshot(from: draft)
+        saving = true
+        Task { [storageClientFactory, secretKey, save] in
+            do {
+                let client = try storageClientFactory.makeClient(profile: probe, password: secretKey)
+                try await S3ProfileVerifier.run(
+                    client: client,
+                    writeAccessMessageTemplate: String(localized: "profile.add.s3.error.writeAccess")
+                )
+            } catch is CancellationError {
+                await MainActor.run { saving = false }
+                return
+            } catch {
+                let message = error.localizedDescription
+                await MainActor.run {
+                    saveError = message
+                    saving = false
+                }
+                return
+            }
+            await MainActor.run {
+                do {
+                    try save(snapshot)
+                    saving = false
+                    dismiss()
+                } catch {
+                    saveError = error.localizedDescription
+                    saving = false
+                }
+            }
         }
     }
 
-    private func makeProbeRecord() -> ServerProfileRecord? {
-        guard let parsed = S3Client.parseEndpoint(endpoint) else { return nil }
-        let resolvedPathStyle = pathStyleOverride ?? S3Client.defaultPathStyle(forHost: parsed.host)
-        let params = S3ConnectionParams(scheme: parsed.scheme, region: region.trimmed, usePathStyle: resolvedPathStyle)
-        guard let encoded = try? ServerProfileRecord.encodedConnectionParams(params) else { return nil }
+    private struct ResolvedDraft {
+        let scheme: String
+        let host: String
+        let port: Int
+        let usePathStyle: Bool
+        let region: String
+        let trimmedBucket: String
+        let trimmedName: String
+        let trimmedAccessKey: String
+        let trimmedBasePath: String
+    }
 
+    private func resolveDraft() -> ResolvedDraft? {
+        guard let parsed = S3Client.parseEndpoint(endpoint) else { return nil }
+        return ResolvedDraft(
+            scheme: parsed.scheme,
+            host: parsed.host,
+            port: parsed.port,
+            usePathStyle: pathStyleOverride ?? S3Client.defaultPathStyle(forHost: parsed.host),
+            region: S3Client.resolveRegion(userInput: region, host: parsed.host),
+            trimmedBucket: bucket.trimmed,
+            trimmedName: name.trimmed,
+            trimmedAccessKey: accessKey.trimmed,
+            trimmedBasePath: basePath.trimmed.isEmpty ? "/" : basePath.trimmed
+        )
+    }
+
+    private func makeSnapshot(from draft: ResolvedDraft) -> S3ProfileSnapshot {
+        S3ProfileSnapshot(
+            name: draft.trimmedName,
+            scheme: draft.scheme,
+            host: draft.host,
+            port: draft.port,
+            region: draft.region,
+            bucket: draft.trimmedBucket,
+            basePath: draft.trimmedBasePath,
+            usePathStyle: draft.usePathStyle,
+            accessKeyID: draft.trimmedAccessKey,
+            secretAccessKey: secretKey
+        )
+    }
+
+    private func makeProbeRecord(from draft: ResolvedDraft) -> ServerProfileRecord? {
+        let params = S3ConnectionParams(scheme: draft.scheme, region: draft.region, usePathStyle: draft.usePathStyle)
+        guard let encoded = try? ServerProfileRecord.encodedConnectionParams(params) else { return nil }
         return ServerProfileRecord(
             id: nil,
-            name: name.trimmed.isEmpty ? bucket.trimmed : name.trimmed,
+            name: draft.trimmedName.isEmpty ? draft.trimmedBucket : draft.trimmedName,
             storageType: StorageType.s3.rawValue,
             connectionParams: encoded,
             sortOrder: 0,
-            host: parsed.host,
-            port: parsed.port,
-            shareName: bucket.trimmed,
-            basePath: RemotePathBuilder.normalizePath(basePath.trimmed.isEmpty ? "/" : basePath.trimmed),
-            username: accessKey.trimmed,
+            host: draft.host,
+            port: draft.port,
+            shareName: draft.trimmedBucket,
+            basePath: RemotePathBuilder.normalizePath(draft.trimmedBasePath),
+            username: draft.trimmedAccessKey,
             domain: nil,
             credentialRef: "",
             backgroundBackupEnabled: false,
