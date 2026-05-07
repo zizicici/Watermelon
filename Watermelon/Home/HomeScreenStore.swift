@@ -62,6 +62,10 @@ final class HomeScreenStore {
 
     var savedProfiles: [ServerProfileRecord] { connectionController.savedProfiles }
 
+    func reachability(for profileID: Int64) -> ProfileReachabilityService.Reachability {
+        dependencies.profileReachabilityService.reachability(for: profileID)
+    }
+
     // MARK: - Notification
 
     var onChange: ((HomeChangeKind) -> Void)?
@@ -264,12 +268,23 @@ final class HomeScreenStore {
         connectionController.onConnectFailed = { [weak self] profile, error in
             self?.onConnectFailed?(profile, error)
         }
+        dependencies.profileReachabilityService.onChange = { [weak self] in
+            self?.scheduleRefresh([.notifyConnection])
+        }
+    }
+
+    private func pushProfilesToReachabilityService() {
+        dependencies.profileReachabilityService.setProfiles(
+            connectionController.savedProfiles,
+            activeProfileID: connectionState.activeProfile?.id
+        )
     }
 
     // MARK: - Lifecycle
 
     func load() {
         connectionController.loadProfiles()
+        pushProfilesToReachabilityService()
         bootstrapTask?.cancel()
         bootstrapTask = Task { [weak self] in
             guard let self else { return }
@@ -287,6 +302,7 @@ final class HomeScreenStore {
 
     func reloadProfiles() {
         connectionController.loadProfiles()
+        pushProfilesToReachabilityService()
         onChange?(.connection)
     }
 
@@ -544,6 +560,7 @@ final class HomeScreenStore {
         case .disconnected: stateDesc = "disconnected"
         }
         homeLog.info("[HomeSync] handleConnectionChange: state=\(stateDesc)")
+        pushProfilesToReachabilityService()
 
         if case .disconnected = connectionState, executionCoordinator.isActive {
             executionCoordinator.failForMissingConnection()

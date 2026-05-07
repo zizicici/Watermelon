@@ -94,9 +94,13 @@ struct HomeMenuFactory {
         for profile in store.savedProfiles {
             if let active = activeProfile, active.id == profile.id { continue }
             let storageType = profile.storageProfile.storageType
+            var subtitle = profile.storageProfile.displaySubtitle
+            if let id = profile.id, store.reachability(for: id) == .unreachable {
+                subtitle = String(localized: "home.menu.offlineMarker") + subtitle
+            }
             let action = UIAction(
                 title: profile.name,
-                subtitle: profile.storageProfile.displaySubtitle,
+                subtitle: subtitle,
                 image: UIImage(systemName: StorageProfileIcon.symbolName(for: storageType)),
                 attributes: busyAttributes
             ) { [store] _ in
