@@ -75,6 +75,8 @@ enum BackupMonthScheduler {
             protocolDefault = 2
         case .externalVolume:
             protocolDefault = 3
+        case .s3:
+            protocolDefault = 2
         }
 
         let requested = override ?? protocolDefault
@@ -89,7 +91,7 @@ enum BackupMonthScheduler {
         override: Int?
     ) -> Int {
         switch profile.resolvedStorageType {
-        case .smb, .webdav:
+        case .smb, .webdav, .s3:
             if override != nil {
                 return max(1, workerCount)
             }

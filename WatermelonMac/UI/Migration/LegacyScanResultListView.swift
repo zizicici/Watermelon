@@ -153,6 +153,7 @@ private struct ScanSummaryHeader: View {
         case .externalVolume: bytesPerSecond = 60_000_000
         case .smb: bytesPerSecond = 12_000_000
         case .webdav: bytesPerSecond = 6_000_000
+        case .s3: bytesPerSecond = 6_000_000
         }
         return Double(bytesToImport) / bytesPerSecond
     }

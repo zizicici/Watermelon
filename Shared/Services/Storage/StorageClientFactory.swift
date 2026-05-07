@@ -54,6 +54,22 @@ final class StorageClientFactory: @unchecked Sendable {
                 rootBookmarkData: params.rootBookmarkData,
                 onBookmarkRefreshed: onBookmarkRefreshed
             ))
+        case .s3:
+            guard let params = profile.s3Params, !profile.host.isEmpty, !profile.shareName.isEmpty else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            return S3Client(config: S3Client.Config(
+                endpointHost: profile.host,
+                endpointPort: profile.port,
+                scheme: params.scheme,
+                region: S3Client.resolveRegion(userInput: params.region, host: profile.host),
+                bucket: profile.shareName,
+                basePath: profile.basePath,
+                usePathStyle: params.usePathStyle,
+                accessKeyID: profile.username,
+                secretAccessKey: password,
+                sessionToken: nil
+            ))
         }
     }
 }

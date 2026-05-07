@@ -14,6 +14,7 @@ final class DependencyContainer {
     let restoreService: RestoreService
     let appRuntimeFlags: AppRuntimeFlags
     let remoteMaintenanceController: RemoteMaintenanceController
+    let profileReachabilityService: ProfileReachabilityService
 
     convenience init() {
         do {
@@ -63,6 +64,9 @@ final class DependencyContainer {
             appRuntimeFlags: appRuntimeFlags,
             databaseManager: databaseManager
         )
+        let profileReachabilityService = ProfileReachabilityService()
+        profileReachabilityService.start()
+        self.profileReachabilityService = profileReachabilityService
     }
 
     static func makeForBackgroundTask() throws -> DependencyContainer {

@@ -5,6 +5,7 @@ enum StorageType: String, Codable {
     case smb
     case webdav
     case externalVolume
+    case s3
 }
 
 struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, Identifiable, Sendable {

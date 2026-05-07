@@ -69,6 +69,7 @@ protocol RemoteStorageClientProtocol: Sendable {
     func shouldLimitUploadRetries(for error: Error) -> Bool
     func connect() async throws
     func disconnect() async
+    func verifyWriteAccess() async throws
     func storageCapacity() async throws -> RemoteStorageCapacity?
     func list(path: String) async throws -> [RemoteStorageEntry]
     func metadata(path: String) async throws -> RemoteStorageEntry?
@@ -95,6 +96,8 @@ extension RemoteStorageClientProtocol {
     func shouldLimitUploadRetries(for _: Error) -> Bool {
         false
     }
+
+    func verifyWriteAccess() async throws {}
 
     /// Returns a local URL for a remote path if the underlying storage already keeps the file
     /// on this device's filesystem (e.g. external volumes). Returns nil otherwise — caller must

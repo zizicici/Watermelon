@@ -1388,6 +1388,12 @@ final class HomeViewController: UIViewController {
                 shouldPopToRootOnSave: shouldPopToRootOnSave,
                 onSaved: onSaved
             )
+        case .s3:
+            return AddS3StorageViewController(
+                dependencies: dependencies,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
         }
     }
 

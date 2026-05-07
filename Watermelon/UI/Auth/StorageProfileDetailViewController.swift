@@ -479,6 +479,8 @@ final class StorageProfileDetailViewController: UIViewController {
             openWebDAVEditor()
         case .externalVolume:
             openExternalEditor()
+        case .s3:
+            openS3Editor()
         }
     }
 
@@ -514,6 +516,17 @@ final class StorageProfileDetailViewController: UIViewController {
 
     private func openExternalEditor() {
         let editor = AddExternalStorageViewController(
+            dependencies: dependencies,
+            editingProfile: profile,
+            shouldPopToRootOnSave: false
+        ) { [weak self] _, _ in
+            self?.handleConnectionEdited()
+        }
+        navigationController?.pushViewController(editor, animated: true)
+    }
+
+    private func openS3Editor() {
+        let editor = AddS3StorageViewController(
             dependencies: dependencies,
             editingProfile: profile,
             shouldPopToRootOnSave: false
