@@ -1,292 +1,60 @@
 # AGENTS.md
 
-This file is the canonical project guide for coding agents working in this repository. Claude Code reads it through the `CLAUDE.md` symlink; OpenAI Codex and other agents that honor the `AGENTS.md` convention read it directly.
+Briefing for coding agents. Loaded by Claude Code via the `CLAUDE.md` symlink and by Codex through the `AGENTS.md` convention. **Briefing, not reference** — point at `docs/` or read source for anything beyond.
 
-## Project Overview
+## Project
 
-Watermelon is an iOS photo backup app that reads from `PHAsset` and writes to remote storage (`SMB`, `WebDAV`, or an external-volume folder via security-scoped bookmark).
+iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compatible / external-volume storage. Single Home screen + More page + first-launch onboarding. Build with `Watermelon.xcodeproj`.
 
-The app currently centers on a single Home screen plus a More/settings page. Home is no longer a fat view controller; the runtime flow is split across `HomeViewController`, `HomeScreenStore`, `HomeConnectionController`, `HomeExecutionCoordinator`, and `HomeIncrementalDataManager`.
+`WatermelonMac/` is a separate macOS target for legacy-data migration only — it does **not** run the iOS backup pipeline, has no released build, and shouldn't be pointed at real user data.
 
-Build with `Watermelon.xcodeproj`. There is no automated test suite in the repo; critical-path validation is still manual.
+`WatermelonTests` (XCTest) covers Home pure-logic units and S3 SigV4. Anything that touches a real photo library or remote is manually regressed.
 
-## Source Layout
+## Targets
 
-```text
-Watermelon/
-  App/          # AppDelegate, SceneDelegate, AppCoordinator, AppSession,
-                # DependencyContainer, ProStatus, RatingPromptService
-  Home/         # HomeViewController, HomeScreenStore, HomeScreenState,
-                # HomeDataModels, HomeCollectionViewCells,
-                # HomeConnectionController, HomeExecutionCoordinator,
-                # HomeExecutionSession, HomeExecutionDataRefresher,
-                # HomeExecutionLogViewController, ExecutionLogEntryCell,
-                # ExecutionLogHistoryViewController,
-                # HomeLibraryEngines, HomeAlbumMatching,
-                # DownloadWorkflowHelper,
-                # SelectionActionPanel, SelectionActionPanelRenderState
-  Services/
-    Backup/     # BackupCoordinator, BackupRunPreparation, BackupParallelExecutor,
-                # BackupSessionController, BackupSessionAsyncBridge,
-                # BackupSessionReducer, BackupRunDriver, BackupResumePlanner,
-                # BackupMonthScheduler, BackupCancellationController,
-                # BackupAssetResourcePlanner, BackgroundBackupRunner,
-                # BackupEvent, BackupEventStream,
-                # BackupRunModels, BackupScopeModels,
-                # StorageClientPool,
-                # AssetProcessor (+Upload, +Naming), AssetProcessModels,
-                # MonthManifestStore (+Loading, +Schema),
-                # RemoteIndexSyncService, RemoteLibrarySnapshotCache
-    HashIndex/  # ContentHashIndexRepository, LocalHashIndexBuildService
-    Logging/    # ExecutionLogEntry, ExecutionLogFileStore,
-                # ExecutionLogSessionInfo, ExecutionLogSessionWriter
-    PiP/        # PiPExecutionBridge, PiPLogTailRenderer, PiPProgressManager
-    PhotoLibrary/
-    Restore/
-    SMB/
-    Storage/
-  UI/
-    Auth/       # storage profile create/edit flows
-    More/       # WatermelonMoreDataSource, Settings
-    Common/
-  Data/
-    Database/   # DatabaseManager, Records
-    Security/   # KeychainService
-  Domain/       # backup/storage/remote snapshot domain models
-  Extension/    # AppColor, ConsideringUser, hex/time/localization helpers
-  Resource/     # Localizable.xcstrings, assets
-```
+- `Watermelon/` — iOS app (Home UI, BackupCoordinator glue, iOS-only services)
+- `Shared/` — code shared with macOS (DB, Keychain, storage / SMB / S3 clients, `MonthManifestStore`, `RemoteIndexSyncService`, `RemoteLibrarySnapshotCache`, domain models, logging)
+- `WatermelonMac/` — macOS target (legacy migration, profile management)
+- `WatermelonTests/` — XCTest
 
-## Key Files (read in this order)
+## Key Files (read in this order for a substantive task)
 
 1. `Watermelon/App/DependencyContainer.swift`
 2. `Watermelon/Home/HomeViewController.swift`
 3. `Watermelon/Home/HomeScreenStore.swift`
 4. `Watermelon/Home/HomeConnectionController.swift`
 5. `Watermelon/Home/HomeExecutionCoordinator.swift`
-6. `Watermelon/Home/HomeExecutionSession.swift`
-7. `Watermelon/Home/HomeLibraryEngines.swift`
-8. `Watermelon/Services/HashIndex/LocalHashIndexBuildService.swift`
-9. `Watermelon/Services/Backup/BackupSessionController.swift`
-10. `Watermelon/Services/Backup/BackupRunPreparation.swift`
-11. `Watermelon/Services/Backup/BackupParallelExecutor.swift`
-12. `Watermelon/Services/Backup/AssetProcessor.swift`
-13. `Watermelon/Services/Backup/RemoteIndexSyncService.swift`
-14. `Watermelon/Services/Restore/RestoreService.swift`
+6. `Watermelon/Home/HomeIncrementalDataManager.swift` + `HomeDataProcessingWorker.swift` + `HomeLocalIndexEngine.swift` + `HomeRemoteIndexEngine.swift`
+7. `Watermelon/Services/HashIndex/LocalHashIndexBuildService.swift`
+8. `Watermelon/Services/Backup/BackupSessionController.swift` + `BackupCoordinator.swift` + `BackupRunPreparation.swift` + `BackupParallelExecutor.swift` + `AssetProcessor.swift`
+9. `Shared/Services/Backup/RemoteIndexSyncService.swift` + `MonthManifestStore.swift`
+10. `Watermelon/Services/Restore/RestoreService.swift`
 
-## Architecture
+## Architecture (only what filenames don't already tell you)
 
-### App Startup
+**Home is composed, not monolithic.** `HomeScreenStore` (main-actor) aggregates focused controllers and projects state via seven `HomeChangeKind` cases (`.data` / `.fileSizes` / `.execution` carry month sets; `.selection` / `.connection` / `.connectionProgress` / `.structural` don't). Index mutations run on `HomeDataProcessingWorker`'s serial queue — never call `PHAsset` fetches outside it.
 
-`SceneDelegate` -> `AppCoordinator.start()` -> `HomeViewController`.
+**Storage clients live behind one protocol.** `RemoteStorageClientProtocol` (in `Shared/Services/SMB/SMBClientProtocol.swift`) is implemented by `AMSMB2Client`, `WebDAVClient`, `LocalVolumeClient`, `S3Client`. Construct via `StorageClientFactory.makeClient(profile:password:)`. `ProfileReachabilityService` background-probes saved profiles for offline marking in the destination menu.
 
-There is no global TabBar and no root `UINavigationController`; `HomeViewController` is set directly as the window root.
+## Invariants Worth Memorising
 
-### Dependency Injection
+- Home selection is disabled when not connected, photo access missing, execution active, scope reloading, or remote maintenance running.
+- Local hash-index preflight runs before any download / sync execution. First round is always offline; iCloud-only assets get a network-allowed second pass only when `allow iCloud originals` is enabled (otherwise the run aborts).
+- `assetFingerprint` = SHA-256 of sorted `role|slot|hashHex` tokens joined by `\n`. It is the dedup key everywhere.
+- Sync months reach `uploadDone` after upload flush, then `completed` only after `BackupParallelExecutor`'s `onMonthUploaded` finishes the inline download. **Don't treat `uploadDone` as "month done".**
+- Successful downloads write a hash-index entry immediately, so they survive stop / restart.
+- `MonthManifestStore.loadSeeded(...)` lists the actual remote directory to detect orphans from an unflushed manifest.
+- Worker scheduling is dynamic by month. `iCloud originals enabled` + any iCloud-only asset in upload scope forces upload to 1 worker.
+- `S3Client.setModificationDate` is a no-op but `shouldSetModificationDate` still returns `true` to keep the upload path uniform.
 
-`DependencyContainer` owns the top-level services:
+## Code Style
 
-- `DatabaseManager`
-- `KeychainService`
-- `AppSession`
-- `StorageClientFactory`
-- `PhotoLibraryService`
-- `ContentHashIndexRepository`
-- `LocalHashIndexBuildService`
-- `BackupCoordinator`
-- `RestoreService`
+- **Comments**: default to none. When you do write one, keep it to a single short line and capture **why** (a non-obvious constraint, invariant, or workaround), never **what**. No multi-paragraph docstrings, no "added for X", no narration of the diff.
 
-`AppSession` stores the active profile and in-memory session password. SMB/WebDAV require passwords; external volume does not.
+## Doc Map
 
-### Home Layering
-
-#### `HomeViewController`
-
-UI-only layer for:
-
-- two-column month grid
-- top headers and profile menu
-- right-side remote overlay (`connecting` / `disconnected`)
-- bottom `SelectionActionPanel`
-- floating More/settings button
-
-It binds to `HomeScreenStore.onChange` and renders seven change kinds:
-
-- `.data`
-- `.fileSizes`
-- `.selection`
-- `.execution`
-- `.connection`
-- `.connectionProgress`
-- `.structural`
-
-#### `HomeScreenStore`
-
-State aggregator for Home. Owns:
-
-- `HomeIncrementalDataManager`
-- `HomeConnectionController`
-- `HomeExecutionCoordinator`
-- `PiPExecutionBridge` (forwards execution state into the Picture-in-Picture progress overlay)
-
-It maintains:
-
-- `sections`
-- `rowLookup`
-- `selection`
-- derived `connectionState`
-- derived `executionState`
-
-It also coalesces refresh work (`reloadLocal`, `syncRemote`, connection/structural notifications) instead of cancelling in-flight refreshes.
-
-#### `HomeConnectionController`
-
-Responsible for:
-
-- loading saved profiles
-- auto-connecting the last active profile using `sync_state` + Keychain
-- prompting for passwords
-- switching/disconnecting profiles
-- calling `BackupCoordinator.reloadRemoteIndex(...)`
-
-If a new connection attempt fails and a previous profile is still active, it tries to restore the old remote snapshot.
-
-#### `HomeExecutionCoordinator`
-
-Coordinates one execution session:
-
-1. local hash-index preflight via `LocalHashIndexBuildService`
-2. upload via `BackupSessionController` + `BackupSessionAsyncBridge`
-3. inline sync-month finalization after upload flush
-4. remaining download months
-5. pause / resume / stop / missing-connection failure
-
-State for a single execution lives in `HomeExecutionSession` and is exposed as `HomeExecutionState`.
-
-#### `HomeIncrementalDataManager`
-
-Owns the Home data pipeline:
-
-- local photo-library index (lightweight: month/mediaKind/fingerprint maps + per-month aggregates; no retained `PHAsset` per asset)
-- remote snapshot index (per-month fingerprint set + summary, keyed off `RemoteLibrarySnapshotCache` revisions)
-- on-demand item materialization — no standing reconcile cache; `remoteOnlyItems(for:)` is `async` and, in a single processing-queue hop, pulls the month's raw delta from `RemoteLibrarySnapshotCache` (via `BackupCoordinator.remoteMonthRawData(for:)`), builds `RemoteAlbumItem`s with `HomeAlbumMatching.buildRemoteItems`, and returns the subset whose fingerprints are not in the local fingerprint cache. No PHAsset or DB fetch happens outside the queue, so the remote/local view stays consistent against concurrent `PHChange`s.
-
-It registers as a `PHPhotoLibraryChangeObserver`, applies remote deltas on a processing queue, and scans file sizes on the main actor with `Task.yield()` between months. Two scan paths run independently: a startup/full scan (by-year notifications) and a PHChange-triggered rescan (coalesced, with a pending-months accumulator) — a shared refcount gates the asset-size snapshot release so one path can't pull the working set out from under the other.
-
-### Backup Control Plane
-
-`BackupSessionController` (`@MainActor`) is the upload control plane:
-
-- start / pause / stop / resume
-- run lifecycle
-- observer snapshots
-- month started/completed tracking
-- processed/failed counts per month
-
-Home creates a fresh `BackupSessionController` for each execution session.
-
-### Backup Execution Plane
-
-`BackupCoordinator` composes:
-
-- `BackupRunPreparationService`
-- `BackupParallelExecutor`
-- `RemoteIndexSyncService`
-
-#### Phase 1 — Preparation (`BackupRunPreparationService.prepareRun`)
-
-1. ensure photo authorization
-2. create/connect storage client
-3. ensure `basePath` exists
-4. sync remote manifests into `RemoteLibrarySnapshotCache`
-5. optionally build `MonthSeedLookup` when the snapshot is not too large
-6. load assets (`full`, `scoped`, or `retry`)
-7. group asset IDs by month
-8. estimate month bytes from the local hash index
-9. resolve worker count / connection pool size
-
-#### Phase 2 — Parallel execution (`BackupParallelExecutor.execute`)
-
-1. create `StorageClientPool`
-2. dynamically assign months via `MonthWorkQueue`
-3. per month: `MonthManifestStore.loadOrCreate(...)`
-4. process assets in batches of 500
-5. per asset: `AssetProcessor.process(...)`
-6. flush manifest when the month completes
-7. run `onMonthUploaded` callback after flush when provided
-
-### Sync-Month Finalization
-
-This is easy to miss from older docs:
-
-- sync months are not always deferred to a single download stage at the end
-- after a sync month uploads and flushes successfully, Home can immediately:
-  - sync remote data
-  - refresh local index
-  - download that month’s `remoteOnlyItems`
-
-Pure download months still run after the upload phase finishes.
-
-### Data Storage
-
-#### Local SQLite (`DatabaseManager`)
-
-Migration: `v1_initial`
-
-Tables:
-
-- `server_profiles`
-- `sync_state`
-- `local_assets`
-- `local_asset_resources`
-
-#### Remote Monthly Manifest (`MonthManifestStore`)
-
-Path: `/{YYYY}/{MM}/.watermelon_manifest.sqlite`
-
-Tables:
-
-- `resources`
-- `assets`
-- `asset_resources`
-
-Migration: `month_manifest_v1_initial`
-
-#### In-Memory Remote Snapshot
-
-Home consumes remote state via:
-
-- `RemoteLibrarySnapshot`
-- `RemoteLibrarySnapshotState(revision, isFullSnapshot, monthDeltas)`
-
-The remote snapshot cache is shared and incrementally updated; Home does not rescan the remote storage from scratch on every UI update.
-
-### Storage Clients
-
-Implementations of `RemoteStorageClientProtocol`:
-
-- `AMSMB2Client`
-- `WebDAVClient`
-- `LocalVolumeClient`
-
-Factory:
-
-- `StorageClientFactory.makeClient(profile:password:)`
-
-## Key Rules & Invariants
-
-- Home selection is disabled when no remote profile is connected or when execution is active.
-- Before download/sync execution, local hash-index preflight must succeed sufficiently to avoid duplicate imports.
-- `assetFingerprint` is SHA-256 of sorted `role|slot|hashHex` tokens joined by `\n`.
-- Sync months may reach `uploadDone` before they are fully complete; they become `completed` only after download finalization.
-- Download success writes hash-index entries per item, so completed items survive stop/restart.
-- `MonthManifestStore.loadSeeded(...)` lists the actual remote directory to detect orphaned files from an earlier unflushed manifest.
-- Worker scheduling is dynamic by month, not static partitioning.
-
-## Known Gaps
-
-- No automated tests; manual regression is still the main safety net.
-- Full backup resume still rescans the photo library to rebuild the pending set.
-- Manifest flush still has a force-kill window where recent deltas may not be pushed to the remote manifest.
-- Download/sync can be blocked by local hash-index preflight when originals are not present on-device (intentional safety tradeoff).
-- Home refresh/execution/connection interactions are clearer than before, but still subtle enough that refactors need careful validation.
+- `docs/01-Architecture.md` — full module layering, every helper's role
+- `docs/02-BackupCoreV2.md` — preflight / upload / sync / download details, constants, retry rules
+- `docs/03-DataModel.md` — SQLite schemas, `connectionParams` payloads, in-memory snapshot types
+- `docs/04-UIFlow.md` — Home, menus, selection, execution states, More page
+- `docs/05-OpenIssues.md` — known gaps and ordering for follow-up work

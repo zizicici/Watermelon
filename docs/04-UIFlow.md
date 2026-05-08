@@ -4,6 +4,8 @@
 
 App 启动后直接进入 `HomeViewController`。
 
+首次启动时（`CompletionGate.hasCompleted == false`），`AppCoordinator` 会以 `.pageSheet` 模态展示 `OnboardingViewController`，内部自带一层 `UINavigationController`，引导完成后回到首页。
+
 ### 顶部区域
 
 左右两栏 header：
@@ -11,25 +13,30 @@ App 启动后直接进入 `HomeViewController`。
 1. 左侧：`本地相册`
    - 全选 / 取消全选 toggle（本地相册未授权时隐藏）
    - 照片 / 视频 / 体积汇总
+   - 长按 / 菜单：可切换 scope（全部 / 指定相册）
 2. 右侧：`远端存储`
    - 当前连接名称
    - profile 下拉菜单
    - 全选 / 取消全选 toggle（远端未连接时隐藏）
    - 照片 / 视频 / 体积汇总
 
-右侧连接菜单内容：
+右侧连接菜单内容（由 `HomeMenuFactory.buildDestination()` 构建）：
 
-1. 已保存 profile 列表
-2. 当前连接项打勾
-3. `未连接` 断开项
+1. `添加存储`：SMB（手动 / Bonjour 发现）、WebDAV、S3、外接存储
+2. `管理存储` 入口
+3. 当前已连接 profile：`当前 Profile 设置` + `断开`
+4. 其它已保存 profile 按类型分组（SMB / WebDAV / S3 / 外接存储），并以 `name + 显示 URL` 为副标题
+5. `ProfileReachabilityService` 标记为 `unreachable` 的 profile 副标题前会带 `离线` 标识
 
-### 右侧 overlay
+### 左右 overlay
 
-远端未就绪时，右半栏会被 overlay 覆盖：
+未就绪时，对应一栏会被 overlay 覆盖：
 
-1. `connecting`：spinner + `连接中...`
-2. `disconnected`：`未连接远端存储` + `选择存储` 按钮
-3. `connected`：overlay 隐藏
+1. 左侧 `本地相册`：未授权时显示 `授予访问` 按钮
+2. 右侧 `远端存储`：
+   - `connecting`：spinner + `连接中...`
+   - `disconnected`：`未连接远端存储` + `选择存储` 按钮
+   - `connected`：overlay 隐藏
 
 ### 更多页入口
 
@@ -61,13 +68,17 @@ App 启动后直接进入 `HomeViewController`。
 
 ## 3. 选择规则
 
-### 可交互条件
+### 可交互条件 (`HomeScreenStore.isSelectable`)
 
-只有在下面三个条件都满足时，月份选择才允许：
+只有在下面五个条件都满足时，月份选择才允许：
 
 1. 已连接远端存储
 2. 已授权本地相册访问
 3. 当前不在执行态
+4. scope 没有正在重载
+5. `RemoteMaintenanceController` 没有在跑校验
+
+`isRemoteSelectionAllowed` 还会在 scope 为 “指定相册” 时屏蔽远端侧选择。
 
 ### 选择行为
 
@@ -75,6 +86,7 @@ App 启动后直接进入 `HomeViewController`。
 2. 支持年级 toggle
 3. 支持顶部左右全选 toggle
 4. 连接状态变化时，已选月份会被清空
+5. scope 变更（例如从 “全部” 切到指定相册）也会清空选择
 
 ## 4. 底部操作面板（`SelectionActionPanel`）
 
@@ -158,22 +170,15 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 
 ## 7. Cell 执行态样式
 
-当前 `MonthPlan.Phase` 与视觉大致对应：
+`MonthPlan.Phase` 与视觉对应：
 
-1. `pending`
-   - 正常样式
-2. `uploading / downloading`
-   - 正常底色 + spinner
-3. `uploadPaused / downloadPaused`
-   - 正常底色 + 暂停标记
-4. `uploadDone`
-   - 仍按运行中样式显示，等待 sync 下载完成
-5. `completed`
-   - 灰底 + 绿色勾
-6. `partiallyFailed`
-   - 运行态底色 + warning 指示
-7. `failed`
-   - 失败样式
+1. `pending` — 正常样式
+2. `uploading / downloading` — 正常底色 + spinner
+3. `uploadPaused / downloadPaused` — 正常底色 + 暂停标记
+4. `uploadDone` — 仍按运行中样式显示，等待 sync 下载完成
+5. `completed` — 灰底 + 绿色勾
+6. `partiallyFailed` — 运行态底色 + warning 指示
+7. `failed` — 失败样式
 
 ## 8. 进度规则
 
@@ -202,6 +207,7 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 
 1. 已完成月份不会重跑
 2. sync 月份若已上传但未下载完，会从下载态继续
+3. resume 沿用启动时冻结的 `上传并发 / 允许访问 iCloud 原件`
 
 ### 停止
 
@@ -209,7 +215,19 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 2. 停止后退出执行态
 3. 用户需要重新选择月份再执行
 
-## 10. More 页面
+## 10. 辅助页面
+
+均位于 `Watermelon/Home/` 与 `Watermelon/UI/`：
+
+1. `LocalAlbumPickerViewController` — 把本地图库 scope 切换为指定相册
+2. `LocalAlbumDetailViewController` / `LocalAlbumGridSupport` — 单相册网格预览
+3. `LocalIndexViewController` — 本地索引状态、覆盖率、`重建索引` 入口（走 `LocalIndexBuildCoordinator`）
+4. `DuplicatesViewController` — 按 fingerprint 展示重复资产（依赖本地索引）
+5. `FocusModeViewController` — 执行态全屏遮罩，关 idle timer
+6. `HomeExecutionLogViewController` / `ExecutionLogHistoryViewController` / `ExecutionLogEntryCell` — 当前 / 历史日志查看
+7. `RemoteIncompleteAssetsViewController`（`UI/Auth/`）— 校验出的不完整远端资产明细
+
+## 11. More 页面
 
 入口：
 
@@ -219,11 +237,16 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 
 1. `通用` → 系统语言入口
 2. `远端存储` → `管理存储`
-3. `备份` → `上传并发`
-4. `备份` → `允许访问 iCloud 原件`
-5. `备份` → `后台备份`（Pro）
-6. `备份` → `画中画进度`（Pro）
-7. `诊断` → `执行日志历史`（`ExecutionLogHistoryViewController`）
+3. `备份` →
+   - `上传并发`
+   - `允许访问 iCloud 原件`
+   - `后台备份`（Pro）
+4. `画中画进度` →
+   - `画中画进度`（Pro）
+   - 当 PiP 进度处于开启且持有 Pro 时，再露出 `画中画提示音`
+5. `诊断` →
+   - `执行日志历史`（`ExecutionLogHistoryViewController`）
+   - DEBUG 构建额外露出 `Test Crash`
 
 再叠加 MoreKit 自带的 `membership / contact / appjun / about` 段落。
 

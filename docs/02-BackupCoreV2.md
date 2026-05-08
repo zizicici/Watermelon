@@ -6,16 +6,19 @@
 
 1. **通用上传链路**
    `BackupSessionController` / `BackupCoordinator` / `AssetProcessor`
+   控制器 + 准备 + 并行执行 + 单 asset 处理
 2. **首页执行链路**
    `HomeExecutionCoordinator` 在通用上传链路外，再拼上本地索引预检查、同步月份内联下载和纯下载月份执行
+
+通用上传链路同时还被 `BackgroundBackupRunner`（后台备份）使用——它通过 `DependencyContainer.makeForBackgroundTask()` 拉起一份独立依赖，复用 `BackupCoordinator.runBackup(...)`。
 
 ## 2. 首页执行入口
 
 调用链：
 
 1. `HomeViewController.executeTapped()`
-2. `HomeScreenStore.startExecution(upload:download:sync:)`
-3. `HomeExecutionCoordinator.enter(upload:download:sync:)`
+2. `HomeScreenStore.startExecution(backup:download:complement:)`
+3. `HomeExecutionCoordinator.enter(...)`
 4. `HomeExecutionCoordinator.startExecution()`
 
 执行会话由 `HomeExecutionSession` 管理，按月保存 `MonthPlan`：
@@ -25,6 +28,8 @@
 - `phase`
 - `failedItemCount`
 - `failureMessage`
+
+`MonthPlan.Phase` 当前枚举：`pending / uploading / uploadPaused / uploadDone / downloading / downloadPaused / completed / partiallyFailed / failed`。
 
 进入执行时，`HomeExecutionCoordinator` 还会冻结一份本次执行配置快照：
 
@@ -54,6 +59,8 @@
    - 未启用：直接停止执行，并提示去设置启用该选项，或先在系统相册把原件下载到本机
 5. 如果联网补索引后仍有 `failedAssetIDs / unavailableAssetIDs`，则继续停止执行。
 
+`LocalIndexBuildCoordinator`（位于 `Watermelon/Services/HashIndex/`）是用户主动触发索引重建时使用的另一条入口（在更多页 / 索引页），与执行态预检查互不复用 worker。
+
 ## 4. 上传主流程
 
 上传实际通过 `BackupSessionAsyncBridge.runUpload(...)` 进入通用备份链路：
@@ -63,22 +70,25 @@
 3. `BackupRunDriver`
 4. `BackupCoordinator.runBackup(request:eventStream:)`
 
-### `BackupRunPreparationService.prepareRun`
+### `BackupRunPreparationService.prepareRun`（`BackupRunPreparation.swift`）
 
 准备阶段顺序：
 
 1. 校验或申请相册权限
 2. 创建并连接远端 client
 3. 保证 `basePath` 存在
-4. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest
-5. 如果快照条目数不大于 `120_000`，构建 `MonthSeedLookup`
-6. 读取待处理资产
+4. `RemoteFormatCompatibilityService.verify(...)` 校验远端格式（不同版本之间的兼容性）
+5. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest，写入 `RemoteLibrarySnapshotCache`
+6. 当 `digest.totalEntryCount` 不大于 `120_000` 时构建 `MonthSeedLookup`（仅在 manifest 缺失而需要 seed 时使用）
+7. 读取待处理资产
    - `full`：全图库，按创建时间升序
-   - `retry/scoped`：按指定 ID 获取，再按创建时间排序
-7. 按月份构建 `monthAssetIDsByMonth`
-8. 从本地 hash 索引读取 `totalFileSizeBytes`，估算每个月体积
-9. 按“预计字节数优先、数量次之、月份次之”构建 `MonthWorkItem`
-10. 决定 worker 数与连接池大小
+   - `retry / scoped`：按指定 ID 获取，再排序
+8. 按月份构建 `monthAssetIDsByMonth`
+9. 从本地 hash 索引读取 `totalFileSizeBytes`，估算每个月体积
+10. 按 “预计字节数 → 数量 → 月份键” 顺序构建 `MonthPlan / MonthWorkItem`
+11. 决定 worker 数与连接池大小
+
+如果 `RemoteIndexSyncService.syncIndex` 抛出非 “连接不可用” 类错误，会被降级成 warning 日志，让备份继续，但跳过 `MonthSeedLookup`。
 
 ### worker 数
 
@@ -90,16 +100,18 @@
 4. 启用 `允许访问 iCloud 原件` 时，不会直接永远单 worker；只有离线预检查在上传范围 (`upload + sync` 月份) 内产出 `unavailableAssetIDs`（包含 cache-hit 但已被系统回收到 iCloud 的资产）时，才会把本次 upload 强制改为 `1`
 5. 最终还会再按月份数裁剪
 
+连接池大小 `connectionPoolSize` 由 `BackupMonthScheduler.resolveConnectionPoolSize(...)` 推导，并保留 worker 数 + 1 左右的余量给 manifest flush 等带外操作。
+
 ## 5. 并行执行面
 
 `BackupParallelExecutor.execute(...)` 的核心步骤：
 
-1. 创建 `StorageClientPool`
+1. 创建 `StorageClientPool`（`Shared/Services/Backup/`）
 2. 用初始已连接 client 预热连接池
-3. 用 `MonthWorkQueue` 动态分发月份
+3. 用 `MonthWorkQueue`（actor，定义在 `Watermelon/Services/Backup/BackupMonthScheduler.swift`）动态分发月份
 4. 每个 worker：
    - 领取一个月份
-   - `MonthManifestStore.loadOrCreate(...)`
+   - `MonthManifestStore.loadOrCreate(...)` 装载或基于 seed 初始化月级 manifest
    - 以 `500` 个 asset 为一批处理
    - 批量读取本地 hash cache
    - 逐 asset 调 `AssetProcessor.process(...)`
@@ -109,19 +121,19 @@
 
 ## 6. 单 asset 处理
 
-`AssetProcessor.process(...)` 的关键规则：
+`AssetProcessor`（核心类在 `AssetProcessor.swift`，命名细节在 `+Naming`，上传策略在 `+Upload`）的关键规则：
 
-1. 先基于 `LocalHashIndexBuildService` / `ContentHashIndexRepository` 的结果尝试本地 cache 快速命中
-2. 未命中时，按 `BackupAssetResourcePlanner` 选择资源并分配 `role/slot`
+1. 先基于 `LocalHashIndexBuildService` / `ContentHashIndexRepository` 的结果尝试本地 cache 快速命中（`processWithLocalCache`）
+2. 未命中时，按 `BackupAssetResourcePlanner`（`Shared/Services/Backup/`）选择资源并分配 `role/slot`
 3. 将资源导出到临时文件并计算 `SHA-256`
-4. 生成 `assetFingerprint`
+4. 生成 `assetFingerprint`（`role|slot|hashHex` token 排序、`\n` 连接、再 SHA-256）
 5. 对每个资源执行上传或跳过：
    - 若未启用 `允许访问 iCloud 原件` 且导出遇到 `networkAccessRequired`：整条 asset 记为 `skipped`
    - manifest 中已有同 hash：直接跳过
    - 同名冲突：
-     - 小于 `5 MiB`：优先下载远端文件比 hash
+     - 小于 `5 MiB`（`smallFileThresholdBytes = 5 * 1024 * 1024`）：优先下载远端文件比 hash
      - 其他情况：走尺寸/重命名策略
-   - 上传失败最多重试 `3` 次
+   - 上传重试：默认上限 `3` 次；当 `client.shouldLimitUploadRetries(for:)` 命中（如 WebDAV 永久错误）会被压到 `2`
 6. 所有资源成功后才写：
    - 月 manifest 的 `assets / asset_resources / resources`
    - 本地 `local_assets / local_asset_resources`
@@ -136,12 +148,12 @@
 1. `HomeExecutionCoordinator.makeUploadMonthFinalizer()` 把回调传给 `BackupCoordinator`
 2. 某个 sync 月份 flush 完成后，worker 会调用 `onMonthUploaded(month)`
 3. 回调内部执行：
-   - 标记该月上传已完成
-   - 立刻 `syncRemoteDataAndWait()`
+   - 标记该月上传已完成（`uploadDone`）
+   - 立刻 `syncRemoteDataAndWait()`（驱动 `BackupCoordinator` 重新拉取最新远端快照）
    - 刷新该月相关本地索引
    - 取出该月 `remoteOnlyItems`
    - 交给 `DownloadWorkflowHelper.downloadItems(...)`
-4. 下载成功后再把该月标记为 `downloadCompleted`
+4. 下载成功后再把该月标记为 `completed`
 
 效果：
 
@@ -171,7 +183,7 @@
 3. 首页箭头百分比取：
    - `sessionPercent`
    - 基线进度（`HomeIncrementalDataManager.matchedCount(for:)` / `HomeLocalIndexEngine` 月级 `backedUpCount`，按 fingerprint 匹配本地和远端）
-   的较大值，保证不回退
+   - 二者中的较大值，保证不回退
 
 ### 下载阶段
 
@@ -212,12 +224,24 @@
    - 将错误向上抛出
 4. `loadSeeded(...)` 会额外列出真实远端目录，避免“文件已存在但 manifest 未记账”造成的重名冲突
 
-## 12. 关键常量
+`MonthManifestStore` 实现拆为三段（均位于 `Shared/Services/Backup/`）：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。
+
+## 12. 远端维护（用户主动触发）
+
+`RemoteMaintenanceController`（`Watermelon/Services/Backup/`）是 “验证远端” 入口：
+
+1. 通过 `BackupCoordinator.verifyAllMonths(...)` 检查所有月份的 manifest 与实际远端文件一致性
+2. 暴露 `isVerifying / progress / errors` 给 More 页 / 诊断页
+3. 校验运行期间会通过 `Notification.Name` 把 Home 的 `isMaintenanceBlocked` 拉为 `true`，从而让 `isSelectable` 与 `startExecution` 都被阻塞
+
+它不参与执行链路，但与执行链路互斥。
+
+## 13. 关键常量
 
 1. 本地索引离线预检查 worker：`2`
 2. iCloud recovery 预检查 worker：`1`
-4. Home 侧远端同步节流：`2s`
-5. month seed 内存阈值：`120_000` 条目
-6. 并行执行的 PHAsset 批大小：`500`
-7. 小文件碰撞校验阈值：`5 * 1024 * 1024`
-8. 上传最大重试次数：`3`
+3. Home 侧远端同步节流：`2s`
+4. month seed 内存阈值：`120_000` 条目
+5. 并行执行的 PHAsset 批大小：`500`
+6. 小文件碰撞校验阈值：`5 * 1024 * 1024`（`smallFileThresholdBytes`）
+7. 上传最大重试次数：`3`（`client.shouldLimitUploadRetries(for:)` 命中时降为 `2`）

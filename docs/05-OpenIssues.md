@@ -1,9 +1,11 @@
 # 当前风险点 / 技术债（按当前实现）
 
-## 1. 自动化测试仍不足
+## 1. 自动化测试只覆盖了纯逻辑层
 
-1. 目前没有成体系单测 / 集成测试。
-2. 连接切换、上传暂停恢复、sync 月份内联下载、外接存储拔出等链路仍主要依赖手工回归。
+1. `WatermelonTests` 已覆盖 Home 端的引擎（`HomeLocalIndexEngine` / `HomeRemoteIndexEngine`）、`HomeDataProcessingWorker`、`HomeRefreshScheduler`、`HomeScopeController` / `HomeScopeNormalizer`、`HomeSelectionController`、`HomeSectionBuilder`、`HomeHeaderSummaryFormatter`、`RemoteFileNaming` 等纯逻辑单元。
+2. `HomeExecutionCoordinator`、`BackupCoordinator`、`BackupParallelExecutor`、`AssetProcessor`、`RestoreService`、连接切换 / 暂停恢复 / sync 月份内联下载 / 外接存储拔出等真正涉及相册或远端的链路 **仍然没有自动化覆盖**。
+3. macOS target 和 `BackgroundBackupRunner` 也都不在测试范围内。
+4. 这些链路依旧依赖真机手工回归。
 
 ## 2. iCloud-only 资源仍有重复 I/O 成本
 
@@ -32,27 +34,31 @@
 
 1. `HomeScreenStore`
 2. `HomeConnectionController`
-3. `HomeExecutionCoordinator`
-4. `HomeExecutionDataRefresher`
-5. `HomeIncrementalDataManager`
+3. `HomeExecutionCoordinator` / `HomeExecutionDataRefresher` / `HomeExecutionSession`
+4. `HomeIncrementalDataManager` / `HomeDataProcessingWorker`
+5. `HomeRefreshScheduler` / `HomeFileSizeScanCoordinator`
+6. `HomeScopeController` / `HomeScopeNormalizer` / `HomeSelectionController` / `HomePhotoAccessGate`
+7. `RemoteMaintenanceController`（与执行态互斥）
 
-这套分层已经比旧版清晰，但连接变化、执行变化、相册变更同时发生时，仍需谨慎处理：
+这套分层已经比旧版清晰，但下面这些场景同时发生时仍需谨慎：
 
 1. refresh 合并
 2. deferred photo changes 排空
 3. 连接失败后的远端快照恢复
+4. scope 切换叠加 PHChange、再叠加 maintenance / 执行态
 
 ## 6. 大图库文件大小扫描仍有成本
 
-1. 首页会异步扫描每个月本地资源总大小。
-2. 当前已改为主 actor 上逐月 `Task.yield()` 的安全实现，但大图库初次进入仍可能较慢。
-3. 在文件大小全部补齐前，部分汇总会暂时显示 `-`。
+1. 首页会异步扫描每个月本地资源总大小，由 `HomeFileSizeScanCoordinator` 在主 actor 上逐月 `Task.yield()`。
+2. 启动全量扫描与 PHChange 增量 rescan 共用 size snapshot refcount，已避免被对方提前释放。
+3. 但大图库初次进入仍可能较慢；在文件大小全部补齐前，部分汇总会暂时显示 `-`。
 
 ## 7. 并发策略仍是“固定默认 + 手动覆盖”
 
-1. 默认并发：`SMB/WebDAV=2`、`externalVolume=3`
+1. 默认并发：`SMB / WebDAV = 2`、`externalVolume = 3`
 2. 用户可手动覆盖到 `1...4`
-3. 目前没有根据带宽、远端 RTT、失败率动态调节 worker 数
+3. iCloud-only 资产存在时上传会被强制单 worker
+4. 目前没有根据带宽、远端 RTT、失败率动态调节 worker 数
 
 ## 8. 下载取消粒度仍是 item 级
 
@@ -60,9 +66,16 @@
 2. 一个 item 内部若包含多资源（如 Live Photo），中断时仍可能丢掉该 item 的部分临时进度。
 3. 不过成功完成的 item 会立即写回 hash 索引，所以下次能跳过整 item。
 
-## 9. 建议优先级
+## 9. macOS Target 的定位仍偏窄
 
-1. 优先补首页执行链路的自动化测试，特别是暂停 / 恢复 / stop / 连接丢失。
+1. `WatermelonMac/` 目前主要承载 “遗留导入 + profile 管理” 功能，并不复用 iOS 备份链路。
+2. 它共享 `Shared/` 里的存储 / Keychain / 领域模型，但没有 `BackupCoordinator`，不能在桌面端做实际备份 / 下载。
+3. 短期内可视为 “数据迁移工具 + 远端配置工具”；如果要把 Mac 端纳入备份运行时，需要新设计触发与进度反馈层。
+
+## 10. 建议优先级
+
+1. 优先补 `HomeExecutionCoordinator` / `BackupCoordinator` 的中等粒度集成测试，特别是暂停 / 恢复 / stop / 连接丢失。
 2. 评估为 full run 持久化 pending 集，减少恢复时重扫。
 3. 评估复用 iCloud recovery 结果到上传阶段，降低 iCloud-only 资源的重复 I/O 成本。
 4. 评估按失败率和吞吐量自适应调整 worker 数。
+5. 决定 macOS target 的最终定位（迁移工具 / 完整备份端 / 仅配置端）。

@@ -1,10 +1,22 @@
 # 架构与关键组件（当前）
 
+## 0. 顶层目录结构
+
+仓库现已拆成多个 target / 共享源码：
+
+1. `Watermelon/`：iOS app target 源码（Home、`BackupCoordinator` 黏合层、PiP、Auth/More/Onboarding 等 iOS 专属代码）
+2. `Shared/`：iOS + macOS 共享源码（数据库、Keychain、存储/SMB 客户端、`MonthManifestStore`、`RemoteIndexSyncService`、`RemoteLibrarySnapshotCache`、`StorageClientPool`、执行日志、`Domain/` 模型、跨端扩展）
+3. `WatermelonMac/`：macOS app target，目前以遗留数据迁移工具与 profile 管理 UI 为主，**不**驱动 iOS 备份链路
+4. `WatermelonTests/`：XCTest 目标，覆盖 Home 纯逻辑单元
+
+下文除非显式标注路径，默认描述 iOS app 的运行时分层。
+
 ## 1. App 入口
 
 1. `SceneDelegate` 创建 `AppCoordinator`
 2. `AppCoordinator.start()` 直接把 `HomeViewController` 设为 `window.rootViewController`
 3. 当前不是 TabBar，也不是全局 `UINavigationController` 根结构
+4. 首次启动通过 `CompletionGate.hasCompleted` 判断后，会以 `.pageSheet` 形式 present `OnboardingViewController`（自包一层 `UINavigationController`）
 
 说明：
 
@@ -14,20 +26,30 @@
 
 `DependencyContainer` 当前提供：
 
-1. `DatabaseManager`
-2. `KeychainService`
-3. `AppSession`
-4. `StorageClientFactory`
-5. `PhotoLibraryService`
-6. `ContentHashIndexRepository`
-7. `LocalHashIndexBuildService`
-8. `BackupCoordinator`
-9. `RestoreService`
+1. `databaseManager` (`DatabaseManager`)
+2. `keychainService` (`KeychainService`)
+3. `appSession` (`AppSession`)
+4. `storageClientFactory` (`StorageClientFactory`)
+5. `photoLibraryService` (`PhotoLibraryService`)
+6. `hashIndexRepository` (`ContentHashIndexRepository`)
+7. `localHashIndexBuildService` (`LocalHashIndexBuildService`)
+8. `localIndexChangePublisher` (`LocalIndexChangePublisher`)
+9. `localIndexBuildCoordinator` (`LocalIndexBuildCoordinator`)
+10. `backupCoordinator` (`BackupCoordinator`)
+11. `restoreService` (`RestoreService`)
+12. `appRuntimeFlags` (`AppRuntimeFlags`)
+13. `remoteMaintenanceController` (`RemoteMaintenanceController`)
+14. `profileReachabilityService` (`ProfileReachabilityService`)
 
 说明：
 
-1. `AppSession` 保存当前激活 profile 和会话内密码。
-2. `LocalHashIndexBuildService` 既供更多页索引管理器使用，也供首页执行前的本地索引预检查使用。
+1. `AppSession` 保存当前激活 profile 和会话内密码。SMB / WebDAV / S3 需要密码（S3 把 secret access key 落 Keychain）；外接存储不需要。
+2. `LocalHashIndexBuildService` 直接被 `HomeExecutionCoordinator` 用作执行前预检查工具。
+3. `LocalIndexBuildCoordinator` 封装更多页 / 索引 UI 触发的非执行态索引构建，并叠加权限检查与进度通知。
+4. `LocalIndexChangePublisher` 把索引相关变更广播给 Home / 索引页，避免轮询。
+5. `RemoteMaintenanceController` 负责用户主动触发的远端月份校验任务；它在校验期间会把 Home 的 `isSelectable` 拉为 `false`。
+6. `ProfileReachabilityService` 在后台周期性探测已保存 profile（SMB 走 TCP、WebDAV / S3 走 HTTP HEAD、外接存储走 security-scoped bookmark resolve），结果以 `unknown / reachable / unreachable` 形式暴露给 Home，供右侧菜单标记 “离线”。`DependencyContainer` 在初始化时立刻 `start()` 它，并保留 NWPathMonitor 与前台进入通知触发的 force-sweep 能力。
+7. `DependencyContainer.makeForBackgroundTask()` 会构造一份独立的依赖给 `BackgroundBackupRunner` 使用。
 
 ## 3. Home 模块
 
@@ -35,19 +57,22 @@
 
 职责：
 
-1. 构建 UI：顶部本地/远端 header、月份列表、底部 `SelectionActionPanel`、右侧远端 overlay、右下角更多按钮
+1. 构建 UI：左右两栏 header（背景 + MarqueeLabel + toggle 按钮 + 菜单 overlay）、月份列表（`UICollectionViewCompositionalLayout`）、底部 `SelectionActionPanel`、左右两侧 overlay、右下角更多按钮 (FAB)
 2. 配置 diffable data source 和按年 section 的 supplementary views
 3. 只做渲染与交互分发，不直接承载首页业务状态
+4. 监听 `HomeScreenStore.onChange`，按 `HomeChangeKind` 七种 case 分别走 `renderDataChange / renderFileSizeChange / renderSelectionChange / renderExecutionChange / renderConnectionChange / updateRemoteOverlay / renderStructuralChange`；其中 `.data / .fileSizes / .execution` 都携带 `Set<LibraryMonthKey>`，保证首页在小变动时只重配特定月份
 
 ### `HomeScreenStore`
 
 职责：
 
-1. 聚合 `HomeIncrementalDataManager`、`HomeConnectionController`、`HomeExecutionCoordinator`
-2. 维护首页渲染所需状态：`sections`、`rowLookup`、`selection`
-3. 对外暴露 `connectionState` 与 `executionState`
+1. 聚合 Home 子组件：`HomeIncrementalDataManager`、`HomeConnectionController`、`HomeExecutionCoordinator`、`PiPExecutionBridge`、`HomeScopeController`、`HomeScopeNormalizer`、`HomeSectionBuilder`、`HomePhotoAccessGate`，以及 lazy 构造的 `HomeRefreshScheduler`、`HomeSelectionController`
+2. 维护首页渲染所需状态：`sections`、`rowLookup`、`selection`、`localPhotoAccessState`、`localLibraryScope`、`isReloadingScope`
+3. 对外暴露 `connectionState` 与 `executionState`，以及综合判断 `isSelectable`（要求已连接、已授权相册、不在执行态、不在 scope 重载、不在远端 maintenance）
 4. 把内部状态变化统一映射为 `HomeChangeKind`
-5. 串行合并 `reloadLocal / syncRemote / notifyConnection / notifyStructural` 刷新任务
+5. 串行合并 `reloadLocal / syncRemote / notifyConnection / notifyStructural` 等刷新任务（由 `HomeRefreshScheduler` 执行）
+6. 订阅 `LocalIndexChangePublisher` 与 `RemoteMaintenanceController`，把索引构建 / 校验事件转成 `.structural` 通知
+7. 在 `load / reloadProfiles / connect / disconnect` 等 profile 集合或 active profile 变化处把最新数据推给 `ProfileReachabilityService`；其 `onChange` 回调会被合并成一次 `.notifyConnection` 刷新，让目标菜单重新渲染 `离线` 标记
 
 ### `HomeConnectionController`
 
@@ -61,13 +86,58 @@
 
 ### `HomeIncrementalDataManager`
 
-职责：
+数据管线门面，把重活分给两位协作者：
 
-1. 维护本地图库索引、远端快照索引；**不再**缓存整库的 reconcile 结果，也不再做三元 (`.localOnly / .remoteOnly / .both`) 合并，按月匹配以月聚合的 `backedUpCount` 和 on-demand 构建的 `remoteOnlyItems` 取代
-2. 对外提供 `monthRow / allMonthRows / localAssetIDs / remoteOnlyItems / matchedCount`（`remoteOnlyItems(for:)` 已改为 `async`）
-3. 注册 `PHPhotoLibraryChangeObserver`
-4. 在处理队列上执行索引重建、远端增量同步；`remoteOnlyItems` 在单次处理队列 hop 里完成远端原始 delta 抓取、`HomeAlbumMatching.buildRemoteItems` 构建远端 items、以及本月本地 fingerprint 集合 snapshot，queue 外只做 fingerprint-set 差集过滤和按创建时间升序排序；全程不再走 `PHAsset` / `local_asset_resources` fetch
-5. 在主 actor 上调度文件大小扫描，并通过 `Task.yield()` 分摊大图库扫描成本；启动全量扫描与 `PHChange` 触发的增量 rescan 分两条 Task 各自跑（rescan 用 pending 集合合批），共用一个 refcount 避免 size snapshot 被提前释放
+1. `HomeDataProcessingWorker`：在串行处理队列上跑索引变更与远端快照同步，持有 `HomeLocalIndexEngine` 与 `HomeRemoteIndexEngine`
+2. `HomeFileSizeScanCoordinator`：在主 actor 上跑文件大小扫描，按月 `Task.yield()`，启动全量扫描与 `PHChange` 触发的 rescan 共用一个 refcount 控制 size snapshot 释放
+
+对外提供：
+
+1. `monthRow / allMonthRows / localAssetIDs / remoteOnlyItems / matchedCount`
+2. `remoteOnlyItems(for:)` 已改为 `async`：单次处理队列 hop 内同时抓远端原始 delta（经 `BackupCoordinator.remoteMonthRawData(for:)`）、用 `HomeAlbumMatching.buildRemoteItems` 构建 `RemoteAlbumItem`、并 snapshot 本月本地 fingerprint 集合，queue 外只做差集过滤 + 创建时间升序排序，全程不再走 `PHAsset` / `local_asset_resources` fetch
+3. 注册为 `PHPhotoLibraryChangeObserver`，并把 `RemoteLibrarySnapshotState` 增量写入 `HomeRemoteIndexEngine`
+
+### `HomeLocalIndexEngine` / `HomeRemoteIndexEngine`
+
+旧 `HomeLibraryEngines.swift` 已拆为两个独立文件，由 `HomeDataProcessingWorker` 持有。reconcile 仍然是 **按月聚合 + 按需构建** 的派生数据：
+
+1. `HomeLocalIndexEngine`
+   - 不持有 `PHAsset` 或每 asset 的 `LocalState`，只保存：月份分组、`assetID → month / mediaKind` 查表、`assetID → fingerprint` 镜像（与 `local_assets.assetFingerprint` 同步）、每月 `MonthAggregate`（assetCount / photoCount / videoCount / backedUpCount）、每月体积缓存
+   - `backedUpCount` 在 `recomputeAggregates` 中按月与 `HomeRemoteIndexEngine` 月级 fingerprint 集对比得出（用 fingerprint 去重，以防多本地指向同一远端）
+2. `HomeRemoteIndexEngine`
+   - 消费 `RemoteLibrarySnapshotState`，只保留每月的 fingerprint 集合、`HomeMonthSummary`、当前 `snapshotRevision`
+   - 不再缓存完整的 `remoteItemsByMonth` 或 fingerprint 引用计数；原始月 delta 需要时走 `BackupCoordinator.remoteMonthRawData(for:)` 实时取
+
+月级 `matchedCount` 直接等同于 `HomeLocalIndexEngine` 的 `backedUpCount`；`remoteOnlyItems(for:)` 是一次 `async` 调用，纯 fingerprint-set 差集派生。
+
+`HomeAlbumMatching.swift` 现已收窄为远端资源构造工具（`buildRemoteItems` + 代表资源选择），不再承担本地/远端合并；旧的 `mergeItems / LocalAlbumItem / HomeAlbumItem / ItemSourceTag` 均已移除。
+
+### Home 模块的辅助控制器
+
+以下文件都集中在 `Watermelon/Home/`，均为状态管理类小组件，没有 UI：
+
+1. `HomeRefreshScheduler` — 把 reloadLocal / syncRemote / notifyConnection / notifyStructural 合批，避免连续触发刷新
+2. `HomeScopeController` — 维护当前本地图库 scope（全部 / 指定相册），并标记 scope 重载中
+3. `HomeScopeNormalizer` — 校验已选相册 ID 是否仍然存在、是否需要弹提示
+4. `HomeSelectionController` — 月份选择状态（toggle、年级、双侧全选、连接变化清空）
+5. `HomeFileSizeScanCoordinator` — 文件大小扫描的 task / 引用计数管理
+6. `HomeDataProcessingWorker` — 串行处理队列 worker，持有两套引擎
+7. `HomeSectionBuilder` — 年聚合、构建 `sections` 和 `rowLookup`
+8. `HomeMenuFactory` — 构建左右 header 的 UIMenu（相册切换、profile 切换、设置等）
+9. `HomePhotoAccessGate` — 缓存 / 监听 PhotoKit 授权状态
+10. `HomeHeaderSummaryFormatter` — 把行集合聚合为 header 文本
+11. `HomeLocalLibraryScope` — scope 类型定义
+12. `PhotoKitChangeProvider` / `PhotoLibraryAbstraction` — `PHAsset` ↔ `LibraryAssetSnapshot` 转换层和跨 target 的纯类型
+
+辅助 UI：
+
+1. `LocalAlbumPickerViewController` — 多选相册作为 scope
+2. `LocalAlbumDetailViewController` / `LocalAlbumGridSupport` — 单相册网格预览
+3. `LocalIndexViewController` — 索引状态 / 重建入口
+4. `DuplicatesViewController` — fingerprint 重复组浏览
+5. `FocusModeViewController` — 执行态全屏遮罩
+6. `ExecutionLogHistoryViewController` / `ExecutionLogEntryCell` — 历史日志列表
+7. `HomeExecutionLogViewController` — 当前会话日志查看
 
 ### `HomeExecutionCoordinator`
 
@@ -87,26 +157,11 @@
 
 1. 保存 `monthPlans`
 2. 跟踪 `uploadMonths / downloadMonths / syncMonths`
-3. 管理执行阶段 `ExecutionPhase`
+3. 管理执行阶段 `ExecutionPhase`（`uploading / uploadPaused / downloading / downloadPaused / completed / failed(message)`）
 4. 汇总 `assetCountByMonth / processedCountByMonth`
 5. 维护上传阶段 remote sync 节流时间
 
-## 4. Home 数据引擎
-
-`HomeLibraryEngines.swift` 中的两个引擎被 `HomeIncrementalDataManager` 封装。此前的 `HomeReconcileEngine` 已被移除，reconcile 变成 **按月聚合 + 按需构建** 的派生数据：
-
-1. `HomeLocalIndexEngine`
-   - 不再持有 `PHAsset` 或每 asset 的 `LocalState`，只保存：月份分组、`assetID → month / mediaKind` 查表、`assetID → fingerprint` 镜像（与 `local_assets.assetFingerprint` 同步）、每月 `MonthAggregate`（assetCount / photoCount / videoCount / backedUpCount）、每月体积缓存
-   - `backedUpCount` 在 `recomputeAggregates` 中按月与 `HomeRemoteIndexEngine` 月级 fingerprint 集对比得出（用 fingerprint 去重，以防多本地指向同一远端）
-2. `HomeRemoteIndexEngine`
-   - 消费 `RemoteLibrarySnapshotState`，只保留每月的 fingerprint 集合和 `HomeMonthSummary`（在 `resolveMonth` 里按 `buildRemoteItems` 的相同资源可解析规则计算 assetCount / photoCount / videoCount / totalSize）
-   - 不再缓存完整的 `remoteItemsByMonth` 或 fingerprint 引用计数；原始月 delta 需要时走 `RemoteLibrarySnapshotCache.monthRawData(for:)` 实时取
-
-月级 `matchedCount` 直接等同于 `HomeLocalIndexEngine` 的 `backedUpCount`；`remoteOnlyItems(for:)` 是一次 `async` 调用，纯 fingerprint-set 差集派生——在单次处理队列 hop 内抓齐远端 items 与本地月 fingerprint 集合，queue 外只做差集过滤 + 排序，已不再构造 `LocalAlbumItem` / `HomeAlbumItem` 或触发 `PHAsset` fetch。
-
-`HomeAlbumMatching.swift` 现已收窄为远端资源构造工具（`buildRemoteItems` + 代表资源选择），不再承担本地/远端合并；旧的 `mergeItems / LocalAlbumItem / HomeAlbumItem / ItemSourceTag` 均已移除。
-
-## 5. 备份控制面
+## 4. 备份控制面
 
 ### `BackupSessionController`
 
@@ -121,56 +176,68 @@
 说明：
 
 1. 首页不会复用旧 controller；每次执行都会新建一份 `BackupSessionController`。
+2. `BackupSessionAsyncBridge` 把控制器适配为 `async/await` 接口，给 `HomeExecutionCoordinator` 使用。
+3. `BackupSessionReducer` 是控制器内部的状态机推导器。
+4. `BackupResumePlanner` 负责从历史 monthPlan / manifest 推导可恢复的执行计划。
 
-## 6. 备份执行面
+## 5. 备份执行面
 
 ### `BackupCoordinator`
 
-职责：
+聚合：
 
-1. 聚合 `BackupRunPreparationService`
-2. 聚合 `BackupParallelExecutor`
-3. 聚合 `RemoteIndexSyncService`
+1. `BackupRunPreparationService`（位于 `BackupRunPreparation.swift`）
+2. `BackupParallelExecutor`
+3. `RemoteIndexSyncService`（位于 `Shared/Services/Backup/`）
+4. `RemoteFormatCompatibilityService`（远端格式兼容性校验）
 
-### `BackupRunPreparationService`
+并对外暴露便捷接口：`reloadRemoteIndex(...)`、`remoteMonthRawData(for:)`、`currentRemoteSnapshotState(since:)`。
 
-职责：
+### `BackupRunPreparationService`（`BackupRunPreparation.swift`）
 
-1. 请求相册权限
+`prepareRun` 顺序：
+
+1. 请求/校验相册权限
 2. 创建并连接远端 client
 3. 保证 `basePath` 存在
-4. 扫描远端 manifest，构建 `RemoteLibrarySnapshot`
-5. 在快照较小时构建 `MonthSeedLookup`
-6. 按月份生成 `MonthWorkItem`
-7. 从本地 hash 索引估算每个月体积
-8. 决定 worker 数和连接池大小
+4. `RemoteFormatCompatibilityService.verify(...)` 检查远端布局是否兼容
+5. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest，写入 `RemoteLibrarySnapshotCache`
+6. 按 `full / scoped / retry` 加载资产并分组到 `monthAssetIDsByMonth`
+7. 从本地 hash 索引读取每个 asset 的 `totalFileSizeBytes`，估算每月体积
+8. 按 “预计字节数 → 数量 → 月份键” 顺序构建 `MonthPlan / MonthWorkItem`
+9. 决定 worker 数
+10. 决定连接池大小
+
+`MonthSeedLookup` 优化（快照较小时）现在由并行执行阶段在装载 manifest 时按需构造，准备阶段不再统一前置。
 
 ### `BackupParallelExecutor`
 
 职责：
 
-1. 创建 `StorageClientPool`
-2. 用 `MonthWorkQueue` 动态调度月份
-3. 每个 worker 逐月加载 `MonthManifestStore`
-4. 分批读取 `PHAsset` 与本地 hash cache
+1. 创建 `StorageClientPool`，并用预连接 client 预热
+2. 用 `MonthWorkQueue`（定义在 `BackupMonthScheduler.swift` 中的 actor）动态分发月份
+3. 每个 worker 逐月 `MonthManifestStore.loadOrCreate(...)`
+4. 分批读取 PHAsset（每批 500）
 5. 调 `AssetProcessor.process(...)` 执行单 asset 上传
 6. 月份结束后 flush manifest
-7. 在 flush 完成后执行 `onMonthUploaded` 月级收尾
+7. flush 完成后执行 `onMonthUploaded` 月级收尾
 
-### `AssetProcessor`
+### `AssetProcessor`（`AssetProcessor.swift` + `+Naming` + `+Upload`）
 
 职责：
 
-1. 规划资产资源（role/slot）
+1. 规划资产资源（role/slot），通过 `BackupAssetResourcePlanner`
 2. 优先复用本地 hash cache
-3. 导出到临时文件并计算 digest
+3. 导出到临时文件并计算 SHA-256 digest
 4. 检查 hash 已存在 / 文件名碰撞
-5. 上传远端资源
+5. 上传远端资源（最大重试 3 次）
 6. 写本地 hash 索引
 7. 写月 manifest
 8. 增量更新共享远端快照缓存
 
-### `MonthManifestStore`
+### `MonthManifestStore`（`Shared/Services/Backup/`）
+
+文件：`MonthManifestStore.swift` + `+Loading.swift` + `+Schema.swift`
 
 职责：
 
@@ -179,43 +246,67 @@
 3. 记录真实远端目录文件集合，检测“文件已上传但 manifest 未 flush”的孤儿文件
 4. 通过临时文件 + move 原子刷新远端 manifest
 
-### `RemoteIndexSyncService`
+### `RemoteIndexSyncService` / `RemoteLibrarySnapshotCache`（`Shared/Services/Backup/`）
 
-职责：
+1. `RemoteIndexSyncService` 扫描远端 `YYYY/MM/.watermelon_manifest.sqlite` 摘要、对比上次 digest、找出 changed/removed months、仅重新下载变化月份的 manifest，并写入 `RemoteLibrarySnapshotCache`
+2. `RemoteLibrarySnapshotCache` 维护内存态完整快照与 `revision`，向 Home 暴露 `currentState(since:)` / `monthRawData(for:)` 等接口
 
-1. 扫描远端 `YYYY/MM/.watermelon_manifest.sqlite` 摘要
-2. 对比上次 digest，找出 changed / removed months
-3. 仅重新下载变化月份的 manifest
-4. 写入 `RemoteLibrarySnapshotCache`
-5. 向 Home 暴露 `currentState(since:)`
+### `RemoteMaintenanceController`（`Watermelon/Services/Backup/`）
 
-## 7. 存储抽象
+用户主动触发的远端月份校验控制器：
 
-统一协议：`RemoteStorageClientProtocol`
+1. 通过 `BackupCoordinator.verifyAllMonths(...)` 跑跨月校验
+2. 维护 `isVerifying / progress / errors`
+3. 校验运行时通过通知让 Home 把 `isSelectable` 关掉，避免与执行态冲突
+
+### 其他执行辅助
+
+1. `BackupMonthScheduler` — `MonthWorkQueue` 等动态调度结构
+2. `BackupRunDriver` — 真正驱动 `runBackup(...)` 的胶水
+3. `BackgroundBackupRunner` — 后台备份任务入口（与 `DependencyContainer.makeForBackgroundTask()` 配合）
+4. `BackupCancellationController` / `BackupEvent` / `BackupEventStream` / `BackupScopeModels` / `StorageClientPool` / `RemoteFileNaming` / `RemoteFormatCompatibility` 均位于 `Shared/Services/Backup/`
+
+## 6. 存储抽象
+
+统一协议：`RemoteStorageClientProtocol`（声明在 `Shared/Services/SMB/SMBClientProtocol.swift`）
 
 核心接口：
 
 1. `connect / disconnect`
-2. `list / metadata / exists`
-3. `upload / download / move / delete / createDirectory`
-4. `setModificationDate`
-5. `storageCapacity`
+2. `storageCapacity`
+3. `list / metadata / exists`
+4. `upload / download / move / copy / delete / createDirectory`
+5. `setModificationDate`
+
+协议扩展默认提供 `shouldSetModificationDate / shouldLimitUploadRetries / directReadURL / disconnectSafely`。
 
 当前实现：
 
-1. `AMSMB2Client`
-2. `WebDAVClient`
-3. `LocalVolumeClient`
+1. `AMSMB2Client`（`Shared/Services/SMB/`）
+2. `WebDAVClient`（`Shared/Services/Storage/`）
+3. `LocalVolumeClient`（`Shared/Services/Storage/`）
+4. `S3Client`（`Shared/Services/Storage/`）— actor，使用纯 Swift 的 SigV4 签名；支持 multipart upload（默认 8 MiB part、4 路并发、上限 10000 part）、server-side copy；`setModificationDate` 是空实现（对象存储无法修改 mtime），但仍然返回 `shouldSetModificationDate = true` 以便和其他客户端共用上传分支
 
 创建入口：
 
-1. `StorageClientFactory.makeClient(profile:password:)`
+1. `StorageClientFactory.makeClient(profile:password:)`（`Shared/Services/Storage/`）
 
-## 8. 数据层
+辅助：
+
+1. `WebDAVErrorClassifier` — WebDAV 错误归一化
+2. `SecurityScopedBookmarkStore` — 外接存储 bookmark 持久化
+3. `SMBSetupService` — SMB 连接 / 凭据准备
+4. `S3SigV4Signer` — 纯 Swift 实现的 AWS SigV4 签名
+5. `S3ProfileVerifier` — 添加 S3 profile 时的 connect + write-probe 校验
+6. `S3ErrorClassifier` — S3 / URLError 到用户面文案 + `isConnectionUnavailable` 谓词的归一化
+
+## 7. 数据层
 
 ### 本地持久化
 
-1. `DatabaseManager` 使用 GRDB，迁移：`v1_initial`
+1. `DatabaseManager` 使用 GRDB；目前注册了两条迁移：
+   - `v1_initial`：建 `server_profiles / sync_state / local_assets / local_asset_resources`
+   - `v2_ms_timestamps`：把 `local_assets.modificationDateNs` 重命名为 `modificationDateMs` 并把已有值除以 1_000_000
 
 本地主要表：
 
@@ -234,6 +325,18 @@
 1. `AppSession` 保存当前激活 profile 与密码
 2. 密码持久化在 Keychain，不进入 SQLite
 
+## 8. 日志
+
+`Shared/Services/Logging/`：
+
+1. `ExecutionLogEntry` — 单条日志数据结构
+2. `ExecutionLogFileStore` — 持久化到磁盘
+3. `ExecutionLogSessionInfo` — 一次执行会话的元信息
+4. `ExecutionLogSessionWriter` — 写入 / 滚动 session 日志
+5. `ExecutionLogPalette` — 渲染颜色
+
+`Watermelon/Home/` 下的 `HomeExecutionLogViewController`、`ExecutionLogHistoryViewController`、`ExecutionLogEntryCell` 是消费端。
+
 ## 9. 更多页 / 设置
 
 入口：
@@ -242,9 +345,45 @@
 
 自定义段落（`WatermelonMoreDataSource`）：
 
-1. 通用：系统语言入口
-2. 远端存储：`管理存储`
-3. 备份：`上传并发` / `允许访问 iCloud 原件` / `后台备份`（Pro） / `画中画进度`（Pro）
-4. 诊断：`执行日志历史`（`ExecutionLogHistoryViewController`）
+1. `通用` → 系统语言入口
+2. `远端存储` → `管理存储`
+3. `备份` → `上传并发` / `允许访问 iCloud 原件` / `后台备份`（Pro）
+4. `画中画进度` → `画中画进度`（Pro），开启后再露出 `画中画提示音`
+5. `诊断` → `执行日志历史`（DEBUG 构建额外露出 `Test Crash`）
 
 再叠加 MoreKit 自带的 `membership / contact / appjun / about` 段落。
+
+## 10. 自动化测试
+
+`WatermelonTests/` 覆盖纯逻辑单元：
+
+1. `EngineTests` / `RemoteIndexEngineTests` — 本地 / 远端索引引擎
+2. `WorkerTests` — `HomeDataProcessingWorker`
+3. `RefreshSchedulerTests` — `HomeRefreshScheduler`
+4. `ScopeControllerTests` / `ScopeNormalizerTests` — 本地图库 scope
+5. `SelectionControllerTests` — 月份选择
+6. `SectionBuilderTests` — 年/月分组
+7. `HeaderSummaryFormatterTests` — header 汇总格式化
+8. `RemoteFileNamingTests` — 远端命名
+9. `S3SigV4SignerTests` — 用 AWS 官方测试向量验证 SigV4 canonical request / signature
+10. `S3ClientTests` — S3 client 的 request 构造（multipart 分片、key 编码、retry 分类）
+11. `TestSupport.swift` — 共享 fixture（确定性日期、样例记录）
+
+未覆盖：`HomeExecutionCoordinator`、`BackupCoordinator`、`RestoreService`、`ProfileReachabilityService` 等需要相册 / 远端 / 网络的链路，仍以真机回归为主。
+
+## 11. macOS Target（`WatermelonMac/`）
+
+定位：当前主要是 **遗留数据迁移工具 + 远端 profile 管理**，不运行 iOS 备份链路。
+
+入口：
+
+1. `WatermelonMacApp.swift` / `RootView.swift` / `AppDelegate.swift` / `MacDependencyContainer.swift`
+
+主要模块：
+
+1. `Services/Legacy/`：旧库扫描、`DHashComputer`、`PerceptualHashCache`、`LegacyMigrationPlanner` / `Executor`、`MediaTimestampReader` 等遗留导入流水线
+2. `UI/Migration/`：遗留导入相关 SwiftUI 视图
+3. `UI/Profiles/`：profile 列表、添加 SMB / WebDAV / S3 / 本地、SMB 发现 / share picker
+4. `UI/Common/`：通用 SwiftUI 组件（密码 prompt、字符串 trim 等）
+
+它共享 `Shared/` 里的存储客户端、Keychain 与领域模型，但不持有 `BackupCoordinator`。

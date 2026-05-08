@@ -2,7 +2,10 @@
 
 ## 1. 本地数据库（`DatabaseManager`）
 
-当前本地数据库由 GRDB 管理，迁移：`v1_initial`。
+`DatabaseManager` 实现位于 `Shared/Data/Database/DatabaseManager.swift`，由 GRDB 管理。当前注册的迁移按顺序：
+
+1. `v1_initial`
+2. `v2_ms_timestamps`
 
 ### `server_profiles`
 
@@ -32,9 +35,9 @@ WHERE storageType = 'smb';
 
 说明：
 
-1. `storageType` 当前取值：`smb` / `webdav` / `externalVolume`
+1. `storageType` 当前取值：`smb` / `webdav` / `s3` / `externalVolume`
 2. SMB 唯一性由 host/port/shareName/basePath/username/domain 决定
-3. WebDAV 和外接存储的类型特定参数放在 `connectionParams`
+3. WebDAV / S3 / 外接存储的类型特定参数放在 `connectionParams`，结构化字段（host / port / shareName / basePath / username）尽量复用通用列
 
 ### `sync_state`
 
@@ -53,15 +56,22 @@ CREATE TABLE sync_state (
 ### `local_assets`
 
 ```sql
+-- v1_initial 建表（modificationDate 列名最初是 modificationDateNs）
 CREATE TABLE local_assets (
   assetLocalIdentifier TEXT NOT NULL,
   assetFingerprint BLOB,
   resourceCount INTEGER NOT NULL DEFAULT 0,
   totalFileSizeBytes INTEGER NOT NULL DEFAULT 0,
-  modificationDateMs INTEGER,
+  modificationDateNs INTEGER,
   updatedAt DATETIME NOT NULL,
   PRIMARY KEY(assetLocalIdentifier)
 );
+
+-- v2_ms_timestamps 重命名并把已有值除以 1_000_000，对齐为毫秒
+ALTER TABLE local_assets RENAME COLUMN modificationDateNs TO modificationDateMs;
+UPDATE local_assets
+SET modificationDateMs = modificationDateMs / 1000000
+WHERE modificationDateMs IS NOT NULL;
 
 CREATE INDEX idx_local_assets_has_fingerprint
 ON local_assets(assetLocalIdentifier)
@@ -72,6 +82,7 @@ WHERE assetFingerprint IS NOT NULL;
 
 1. `assetFingerprint` 可为 `NULL`，表示该资产尚未完成资源级 hash 建索引（比如仅存于 iCloud 的资产）
 2. `modificationDateMs` 用来做体积缓存失效判断，上传 / 体积扫描路径都会复用（Int64 毫秒；窗口 ±2.9 亿年，足够覆盖任何 `PHAsset` 时间戳）
+3. 从老版本升上来的设备会在第一次启动 `v2_ms_timestamps` 自动完成迁移；不需要重新建索引
 
 ### `local_asset_resources`
 
@@ -91,15 +102,40 @@ ON local_asset_resources(contentHash);
 
 ## 2. `connectionParams` 的真实内容
 
-当前代码中的两种 typed payload：
+类型定义位于 `Shared/Domain/StorageProfile.swift`：
 
 ### WebDAV
 
 ```swift
 struct WebDAVConnectionParams: Codable {
-    let endpointURLString: String
+    let scheme: String
 }
 ```
+
+说明：
+
+1. 当前 WebDAV 的完整 endpoint 是从结构化字段拼出来的（`scheme + host + port + shareName 作 path`）
+2. 早期版本曾把整个 `endpointURLString` 落到 `connectionParams` 里；解码器会兜底——遇到老格式时从 `endpointURLString` 反推出 scheme
+3. 仅 `scheme` 会被写回，老字段在升级后随首次保存自动消失
+
+### S3
+
+```swift
+struct S3ConnectionParams: Codable {
+    let scheme: String     // "https" / "http"
+    let region: String     // 用户填的或者从 host 推出来的，如 "us-east-1"
+    let usePathStyle: Bool // path-style vs virtual-host-style
+}
+```
+
+说明：
+
+1. `host` 是 S3 endpoint host（如 `s3.amazonaws.com` / `play.min.io` / 自部署 `minio.lan`）
+2. `port` 0 / 80 / 443 都视为默认端口，不会出现在 display URL 里
+3. `shareName` 复用为 bucket 名
+4. `basePath` 为 bucket 内的 key 前缀（默认 `/`）
+5. `username` 是 access key ID；secret access key 落 Keychain
+6. `usePathStyle = true` 时使用 `scheme://host[:port]/bucket/...`，否则 `scheme://bucket.host[:port]/...`
 
 ### 外接存储
 
@@ -113,10 +149,12 @@ struct ExternalVolumeConnectionParams: Codable {
 说明：
 
 1. SMB 主要信息直接落在 `host / port / shareName / basePath / username / domain`
-2. WebDAV 仍复用通用字段，但 endpoint 通过 `connectionParams` 保存
+2. WebDAV / S3 用结构化字段 + `connectionParams` 里的 scheme（以及 S3 的 region / usePathStyle）一起拼 URL
 3. 外接存储依赖 security-scoped bookmark，不需要密码
 
 ## 3. 本地 hash 索引语义
+
+记录类型在 `Shared/Data/Database/Records.swift`。
 
 ### `local_assets`
 
@@ -136,6 +174,8 @@ struct ExternalVolumeConnectionParams: Codable {
 3. `fileSize` 是资源级文件大小缓存
 
 ## 4. 远端月 manifest（`MonthManifestStore`）
+
+实现位于 `Shared/Services/Backup/`：核心入口在 `MonthManifestStore.swift`，初始化 / seed 在 `+Loading.swift`，schema 与迁移在 `+Schema.swift`。
 
 路径：
 
@@ -220,7 +260,7 @@ ON asset_resources(resourceHash);
 
 ## 7. 内存态远端快照
 
-Home 当前不直接反复扫远端文件系统，而是消费 `RemoteLibrarySnapshotCache` 暴露的状态。
+类型都定义在 `Shared/Domain/RemoteLibraryDomain.swift`。Home 当前不直接反复扫远端文件系统，而是消费 `RemoteLibrarySnapshotCache`（`Shared/Services/Backup/`）暴露的状态。
 
 ### 全量快照
 
@@ -240,18 +280,37 @@ struct RemoteLibrarySnapshotState {
     let isFullSnapshot: Bool
     let monthDeltas: [RemoteLibraryMonthDelta]
 }
+
+struct RemoteLibraryMonthDelta {
+    let month: LibraryMonthKey
+    let resources: [RemoteManifestResource]
+    let assets: [RemoteManifestAsset]
+    let assetResourceLinks: [RemoteAssetResourceLink]
+}
+```
+
+附属 digest（用于轻量摘要日志、不构造 per-asset 数组）：
+
+```swift
+struct RemoteIndexSyncDigest: Sendable {
+    let resourceCount: Int
+    let assetCount: Int
+    let linkCount: Int
+    var totalEntryCount: Int { resourceCount + assetCount + linkCount }
+}
 ```
 
 说明：
 
 1. `revision` 用来让 Home 只消费“上次之后的变化”
 2. `monthDeltas` 是月级增量，不是整库重建
-3. 这部分是内存状态，不写回 SQLite
+3. `RemoteIndexSyncDigest` 是远端同步的廉价摘要，避免每次都把 per-asset 数组拷一份给只想看总数的调用方
+4. 这部分是内存状态，不写回 SQLite
 
 ## 8. Keychain 与会话密码
 
 1. 密码不写入 SQLite
-2. 通过 `KeychainService` 保存
+2. 通过 `KeychainService`（`Shared/Data/Security/KeychainService.swift`）保存
 3. keychain service：`com.zizicici.watermelon.credentials`
-4. `AppSession` 里保留当前连接的会话密码
-5. SMB / WebDAV 需要密码；外接存储不需要
+4. `AppSession`（`Shared/Domain/AppSession.swift`）里保留当前连接的会话密码
+5. SMB / WebDAV / S3（secret access key）需要密码；外接存储不需要
