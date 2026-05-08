@@ -4,16 +4,16 @@ Briefing for coding agents. Loaded by Claude Code via the `CLAUDE.md` symlink an
 
 ## Project
 
-iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compatible / external-volume storage. Single Home screen + More page + first-launch onboarding. Build with `Watermelon.xcodeproj`.
+iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compatible / `SFTP` / external-volume storage. Single Home screen + More page + first-launch onboarding. Build with `Watermelon.xcodeproj`.
 
 `WatermelonMac/` is a separate macOS target for legacy-data migration only — it does **not** run the iOS backup pipeline, has no released build, and shouldn't be pointed at real user data.
 
-`WatermelonTests` (XCTest) covers Home pure-logic units and S3 SigV4. Anything that touches a real photo library or remote is manually regressed.
+`WatermelonTests` (XCTest) covers Home pure-logic units, S3 SigV4, and SFTP credential / error-classifier shapes. Anything that touches a real photo library or remote is manually regressed.
 
 ## Targets
 
 - `Watermelon/` — iOS app (Home UI, BackupCoordinator glue, iOS-only services)
-- `Shared/` — code shared with macOS (DB, Keychain, storage / SMB / S3 clients, `MonthManifestStore`, `RemoteIndexSyncService`, `RemoteLibrarySnapshotCache`, domain models, logging)
+- `Shared/` — code shared with macOS (DB, Keychain, storage / SMB / S3 / SFTP clients, `MonthManifestStore`, `RemoteIndexSyncService`, `RemoteLibrarySnapshotCache`, domain models, logging)
 - `WatermelonMac/` — macOS target (legacy migration, profile management)
 - `WatermelonTests/` — XCTest
 
@@ -34,7 +34,7 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 
 **Home is composed, not monolithic.** `HomeScreenStore` (main-actor) aggregates focused controllers and projects state via seven `HomeChangeKind` cases (`.data` / `.fileSizes` / `.execution` carry month sets; `.selection` / `.connection` / `.connectionProgress` / `.structural` don't). Index mutations run on `HomeDataProcessingWorker`'s serial queue — never call `PHAsset` fetches outside it.
 
-**Storage clients live behind one protocol.** `RemoteStorageClientProtocol` (in `Shared/Services/SMB/SMBClientProtocol.swift`) is implemented by `AMSMB2Client`, `WebDAVClient`, `LocalVolumeClient`, `S3Client`. Construct via `StorageClientFactory.makeClient(profile:password:)`. `ProfileReachabilityService` background-probes saved profiles for offline marking in the destination menu.
+**Storage clients live behind one protocol.** `RemoteStorageClientProtocol` (in `Shared/Services/SMB/SMBClientProtocol.swift`) is implemented by `AMSMB2Client`, `WebDAVClient`, `LocalVolumeClient`, `S3Client`, `SFTPClient`. Construct via `StorageClientFactory.makeClient(profile:password:)`. `ProfileReachabilityService` background-probes saved profiles for offline marking in the destination menu.
 
 ## Invariants Worth Memorising
 

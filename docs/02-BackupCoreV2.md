@@ -94,11 +94,12 @@
 
 默认规则：
 
-1. `SMB / WebDAV = 2`
+1. `SMB / WebDAV / S3 / SFTP = 2`
 2. `externalVolume = 3`
 3. 用户可在设置里手动覆盖 `1...4`
 4. 启用 `允许访问 iCloud 原件` 时，不会直接永远单 worker；只有离线预检查在上传范围 (`upload + sync` 月份) 内产出 `unavailableAssetIDs`（包含 cache-hit 但已被系统回收到 iCloud 的资产）时，才会把本次 upload 强制改为 `1`
 5. 最终还会再按月份数裁剪
+6. SFTP 的每个 worker 都会起一条独立的 SSH 连接 + SFTP subsystem。多 worker = 多 TCP/握手，受服务端 `MaxStartups` / `MaxSessions` 限制；遇到紧配置的 sshd 需要回落到 worker = 1
 
 连接池大小 `connectionPoolSize` 由 `BackupMonthScheduler.resolveConnectionPoolSize(...)` 推导，并保留 worker 数 + 1 左右的余量给 manifest flush 等带外操作。
 

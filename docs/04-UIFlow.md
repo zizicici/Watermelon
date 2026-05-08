@@ -22,10 +22,10 @@ App 启动后直接进入 `HomeViewController`。
 
 右侧连接菜单内容（由 `HomeMenuFactory.buildDestination()` 构建）：
 
-1. `添加存储`：SMB（手动 / Bonjour 发现）、WebDAV、S3、外接存储
+1. `添加存储`：SMB（手动 / Bonjour 发现）、WebDAV、S3、SFTP、外接存储
 2. `管理存储` 入口
 3. 当前已连接 profile：`当前 Profile 设置` + `断开`
-4. 其它已保存 profile 按类型分组（SMB / WebDAV / S3 / 外接存储），并以 `name + 显示 URL` 为副标题
+4. 其它已保存 profile 按类型分组（SMB / WebDAV / S3 / SFTP / 外接存储），并以 `name + 显示 URL` 为副标题
 5. `ProfileReachabilityService` 标记为 `unreachable` 的 profile 副标题前会带 `离线` 标识
 
 ### 左右 overlay

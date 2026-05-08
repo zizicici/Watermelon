@@ -35,9 +35,10 @@ WHERE storageType = 'smb';
 
 说明：
 
-1. `storageType` 当前取值：`smb` / `webdav` / `s3` / `externalVolume`
+1. `storageType` 当前取值：`smb` / `webdav` / `s3` / `sftp` / `externalVolume`
 2. SMB 唯一性由 host/port/shareName/basePath/username/domain 决定
-3. WebDAV / S3 / 外接存储的类型特定参数放在 `connectionParams`，结构化字段（host / port / shareName / basePath / username）尽量复用通用列
+3. WebDAV / S3 / SFTP / 外接存储的类型特定参数放在 `connectionParams`，结构化字段（host / port / shareName / basePath / username）尽量复用通用列
+4. SFTP 唯一性由调用方通过 `(host, port, basePath, username)` 在保存时校验（`AddSFTPStorageViewController.findExistingProfile`）；DB 层没有像 SMB 那样的部分唯一索引
 
 ### `sync_state`
 
@@ -137,6 +138,36 @@ struct S3ConnectionParams: Codable {
 5. `username` 是 access key ID；secret access key 落 Keychain
 6. `usePathStyle = true` 时使用 `scheme://host[:port]/bucket/...`，否则 `scheme://bucket.host[:port]/...`
 
+### SFTP
+
+```swift
+struct SFTPConnectionParams: Codable {
+    enum AuthMethod: String, Codable { case password, privateKey }
+    let authMethod: AuthMethod
+    let hostKeyFingerprintSHA256: String
+}
+```
+
+说明：
+
+1. `host / port / basePath / username` 走结构化列
+2. `authMethod` 仅指示 UI 用哪个分支编辑；真正的凭证 (`SFTPCredentialBlob`，下同) 落 Keychain，不落 DB
+3. `hostKeyFingerprintSHA256` 形如 `SHA256:<base64-no-padding>`，由两阶段 TOFU 在保存时钉住；运行期连接以 `.pin` 模式拒绝任何不一致的服务端
+4. `port == 0` 解释为 22
+
+#### `SFTPCredentialBlob`（保存到 Keychain，不进 DB）
+
+```swift
+enum SFTPCredentialBlob: Codable {
+    case password(String)
+    case privateKey(pem: String, passphrase: String?)
+}
+```
+
+1. `encodedJSONString()` / `decode(from:)` 是 JSON round-trip；写入 Keychain 用 `account = "sftp|host:port|username|basePath"`
+2. 私钥仅支持 OpenSSH ed25519 / RSA；其它类型在握手时抛 `SFTPUnsupportedKeyTypeError`
+3. `passphrase` 为空字符串等价于 `nil`
+
 ### 外接存储
 
 ```swift
@@ -150,7 +181,8 @@ struct ExternalVolumeConnectionParams: Codable {
 
 1. SMB 主要信息直接落在 `host / port / shareName / basePath / username / domain`
 2. WebDAV / S3 用结构化字段 + `connectionParams` 里的 scheme（以及 S3 的 region / usePathStyle）一起拼 URL
-3. 外接存储依赖 security-scoped bookmark，不需要密码
+3. SFTP 的结构化字段为 `host / port / basePath / username`；`shareName` 不使用，`domain` 为 `nil`
+4. 外接存储依赖 security-scoped bookmark，不需要密码
 
 ## 3. 本地 hash 索引语义
 
@@ -314,3 +346,4 @@ struct RemoteIndexSyncDigest: Sendable {
 3. keychain service：`com.zizicici.watermelon.credentials`
 4. `AppSession`（`Shared/Domain/AppSession.swift`）里保留当前连接的会话密码
 5. SMB / WebDAV / S3（secret access key）需要密码；外接存储不需要
+6. SFTP 在 Keychain 里存的是 `SFTPCredentialBlob` 序列化后的 JSON（password 模式存明文密码、privateKey 模式存 PEM 与可选 passphrase 的明文），`AppSession` 里同样保留这个 JSON 串作为"密码"传给 `StorageClientFactory`。`StorageProfile.supportsPasswordPrompt = false`：destination menu 在缺凭证时不会弹通用密码框，只能进编辑页重填

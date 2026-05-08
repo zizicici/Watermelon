@@ -43,12 +43,12 @@
 
 说明：
 
-1. `AppSession` 保存当前激活 profile 和会话内密码。SMB / WebDAV / S3 需要密码（S3 把 secret access key 落 Keychain）；外接存储不需要。
+1. `AppSession` 保存当前激活 profile 和会话内密码。SMB / WebDAV / S3 需要密码（S3 把 secret access key 落 Keychain）；SFTP 把 `SFTPCredentialBlob`（password 或 PEM + 可选 passphrase）的 JSON 落 Keychain，并在 `connectionParams` 里钉住主机指纹（`StorageProfile.supportsPasswordPrompt = false` —— 单字段密码弹窗装不下，凭证缺失只能进编辑页重填）；外接存储不需要。
 2. `LocalHashIndexBuildService` 直接被 `HomeExecutionCoordinator` 用作执行前预检查工具。
 3. `LocalIndexBuildCoordinator` 封装更多页 / 索引 UI 触发的非执行态索引构建，并叠加权限检查与进度通知。
 4. `LocalIndexChangePublisher` 把索引相关变更广播给 Home / 索引页，避免轮询。
 5. `RemoteMaintenanceController` 负责用户主动触发的远端月份校验任务；它在校验期间会把 Home 的 `isSelectable` 拉为 `false`。
-6. `ProfileReachabilityService` 在后台周期性探测已保存 profile（SMB 走 TCP、WebDAV / S3 走 HTTP HEAD、外接存储走 security-scoped bookmark resolve），结果以 `unknown / reachable / unreachable` 形式暴露给 Home，供右侧菜单标记 “离线”。`DependencyContainer` 在初始化时立刻 `start()` 它，并保留 NWPathMonitor 与前台进入通知触发的 force-sweep 能力。
+6. `ProfileReachabilityService` 在后台周期性探测已保存 profile（SMB / SFTP 走 TCP、WebDAV / S3 走 HTTP HEAD、外接存储走 security-scoped bookmark resolve），结果以 `unknown / reachable / unreachable` 形式暴露给 Home，供右侧菜单标记 “离线”。`DependencyContainer` 在初始化时立刻 `start()` 它，并保留 NWPathMonitor 与前台进入通知触发的 force-sweep 能力。
 7. `DependencyContainer.makeForBackgroundTask()` 会构造一份独立的依赖给 `BackgroundBackupRunner` 使用。
 
 ## 3. Home 模块
@@ -286,6 +286,7 @@
 2. `WebDAVClient`（`Shared/Services/Storage/`）
 3. `LocalVolumeClient`（`Shared/Services/Storage/`）
 4. `S3Client`（`Shared/Services/Storage/`）— actor，使用纯 Swift 的 SigV4 签名；支持 multipart upload（默认 8 MiB part、4 路并发、上限 10000 part）、server-side copy；`setModificationDate` 是空实现（对象存储无法修改 mtime），但仍然返回 `shouldSetModificationDate = true` 以便和其他客户端共用上传分支
+5. `SFTPClient`（`Shared/Services/Storage/`）— actor，基于 Citadel 0.12.1（其传递依赖 `swift-nio-ssh` 来自 `Wellz26/swift-nio-ssh` fork）。两阶段 TOFU：`captureHostKeyFingerprint` 在 host-key validation 阶段 abort 取指纹，凭证不会经过未确认的连接；`verifyBasePathWritable` 用钉住的指纹做真正的连接 + 写探针。每个 worker 一个独立 SSH 会话；密钥支持 ed25519 / RSA（其它类型抛 `SFTPUnsupportedKeyTypeError`）。`list` 调用满 32 次后整体重连一次以释放 Citadel 0.12.1 的服务端句柄泄漏。SFTP v3 没有原生 server-side copy，`copy()` 走本地 download + upload。
 
 创建入口：
 
@@ -299,6 +300,7 @@
 4. `S3SigV4Signer` — 纯 Swift 实现的 AWS SigV4 签名
 5. `S3ProfileVerifier` — 添加 S3 profile 时的 connect + write-probe 校验
 6. `S3ErrorClassifier` — S3 / URLError 到用户面文案 + `isConnectionUnavailable` 谓词的归一化
+7. `SFTPErrorClassifier` — Citadel `SFTPError` / `SSHClientError` / `AuthenticationFailed` / `NIOConnectionError` / POSIX domain 到用户面文案的归一化；`SFTPHostKeyMismatchError` 与 `SFTPUnsupportedKeyTypeError` 都走 `LocalizedError` 默认通道。`SFTPClient.verifyBasePathWritable` 在添加 / 编辑 SFTP profile 时做 connect + mkdir + write-probe + delete。
 
 ## 7. 数据层
 
@@ -367,7 +369,9 @@
 8. `RemoteFileNamingTests` — 远端命名
 9. `S3SigV4SignerTests` — 用 AWS 官方测试向量验证 SigV4 canonical request / signature
 10. `S3ClientTests` — S3 client 的 request 构造（multipart 分片、key 编码、retry 分类）
-11. `TestSupport.swift` — 共享 fixture（确定性日期、样例记录）
+11. `SFTPCredentialBlobTests` — `SFTPCredentialBlob` 与 `SFTPConnectionParams` 的 JSON round-trip
+12. `SFTPErrorClassifierTests` — `SFTPErrorClassifier.isConnectionUnavailable` 表驱动覆盖（Citadel / NIO 类型未链接到测试 target，POSIX domain 与本地错误类型为主）
+13. `TestSupport.swift` — 共享 fixture（确定性日期、样例记录）
 
 未覆盖：`HomeExecutionCoordinator`、`BackupCoordinator`、`RestoreService`、`ProfileReachabilityService` 等需要相册 / 远端 / 网络的链路，仍以真机回归为主。
 
@@ -383,7 +387,7 @@
 
 1. `Services/Legacy/`：旧库扫描、`DHashComputer`、`PerceptualHashCache`、`LegacyMigrationPlanner` / `Executor`、`MediaTimestampReader` 等遗留导入流水线
 2. `UI/Migration/`：遗留导入相关 SwiftUI 视图
-3. `UI/Profiles/`：profile 列表、添加 SMB / WebDAV / S3 / 本地、SMB 发现 / share picker
+3. `UI/Profiles/`：profile 列表、添加 SMB / WebDAV / S3 / 本地、SMB 发现 / share picker（macOS 端目前未提供 SFTP 添加界面，只能在 iOS 端创建后通过共享数据库读取）
 4. `UI/Common/`：通用 SwiftUI 组件（密码 prompt、字符串 trim 等）
 
 它共享 `Shared/` 里的存储客户端、Keychain 与领域模型，但不持有 `BackupCoordinator`。

@@ -55,10 +55,11 @@
 
 ## 7. 并发策略仍是“固定默认 + 手动覆盖”
 
-1. 默认并发：`SMB / WebDAV = 2`、`externalVolume = 3`
+1. 默认并发：`SMB / WebDAV / S3 / SFTP = 2`、`externalVolume = 3`
 2. 用户可手动覆盖到 `1...4`
 3. iCloud-only 资产存在时上传会被强制单 worker
 4. 目前没有根据带宽、远端 RTT、失败率动态调节 worker 数
+5. SFTP 多 worker = 多 SSH 会话；遇 sshd `MaxStartups` / `MaxSessions` 紧配置需要回落到 1，目前没有自动探测
 
 ## 8. 下载取消粒度仍是 item 级
 
@@ -71,11 +72,28 @@
 1. `WatermelonMac/` 目前主要承载 “遗留导入 + profile 管理” 功能，并不复用 iOS 备份链路。
 2. 它共享 `Shared/` 里的存储 / Keychain / 领域模型，但没有 `BackupCoordinator`，不能在桌面端做实际备份 / 下载。
 3. 短期内可视为 “数据迁移工具 + 远端配置工具”；如果要把 Mac 端纳入备份运行时，需要新设计触发与进度反馈层。
+4. macOS 端目前没有 SFTP 添加 / 编辑 UI；只能在 iOS 端创建后通过共享数据库读取。
 
-## 10. 建议优先级
+## 10. SFTP 后端的已知限制
+
+1. **依赖**：Citadel `0.12.1`，传递依赖 `swift-nio-ssh` 来自 `Wellz26/swift-nio-ssh` fork（非 Apple 官方 repo），属于供应链层面的事实声明。
+2. **Citadel 0.12.1 目录句柄泄漏**：`listDirectory` 会泄漏服务端 fd。`SFTPClient` 每 32 次 `list` 整体重连一次以释放句柄，重连一次约 200–500 ms。Citadel 升级后应去掉。
+3. **两阶段 TOFU 要双重 SSH 握手**：保存 SFTP profile 时先用空凭证连一次取主机指纹再 abort、用户确认后再用钉住的指纹真正连一次走 `verifyBasePathWritable`。Citadel 没有公开 hook 在 host-key 阶段把通道 hand off 给后续 user-auth；除非 vendor 一份 Citadel/`swift-nio-ssh`，无法消除。一次性保存路径的 1–2s 开销，不在 hot path。
+4. **私钥类型**：仅 OpenSSH ed25519 / RSA。ECDSA 等其它类型在 `makeAuthenticationMethod` 抛 `SFTPUnsupportedKeyTypeError`（用户面文案带类型名）。
+5. **`copy()` 走本地中转**：SFTP v3 没有 server-side copy verb，`SFTPClient.copy` 落本地临时文件再上传；备份热路径不调用，`MonthManifestStore` 的 `.bak` dance 用 `move` + `delete`。
+
+## 11. 既有 ConnectionParams 的 Swift 6 isolation 警告
+
+1. `WatermelonMac` target 配置 `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`；`Shared/` 里没标 `nonisolated` 的纯 value type 会被推断成 MainActor。
+2. `SFTPConnectionParams` / `SFTPCredentialBlob` / `RemotePathBuilder` 已加 `nonisolated`；遗留的 `ExternalVolumeConnectionParams` / `WebDAVConnectionParams` / `S3ConnectionParams` 还没加，目前是 warning（"main actor-isolated conformance ... cannot be used in nonisolated context; this is an error in the Swift 6 language mode"），未来打开 Swift 6 模式会变 error。
+3. 修法是给这三个类型也加 `nonisolated`，与 SFTP 的处理一致；本仓库未跟 SFTP 的改动一起做，避免扩大 PR 范围。
+
+## 12. 建议优先级
 
 1. 优先补 `HomeExecutionCoordinator` / `BackupCoordinator` 的中等粒度集成测试，特别是暂停 / 恢复 / stop / 连接丢失。
 2. 评估为 full run 持久化 pending 集，减少恢复时重扫。
 3. 评估复用 iCloud recovery 结果到上传阶段，降低 iCloud-only 资源的重复 I/O 成本。
 4. 评估按失败率和吞吐量自适应调整 worker 数。
 5. 决定 macOS target 的最终定位（迁移工具 / 完整备份端 / 仅配置端）。
+6. 给遗留 `ExternalVolume / WebDAV / S3 ConnectionParams` 加 `nonisolated`，关掉 macOS build 的 isolation warning。
+7. 关注 Citadel 上游修复目录句柄泄漏，移除 `listReconnectThreshold` 重连。
