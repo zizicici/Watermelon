@@ -1394,6 +1394,12 @@ final class HomeViewController: UIViewController {
                 shouldPopToRootOnSave: shouldPopToRootOnSave,
                 onSaved: onSaved
             )
+        case .sftp:
+            return AddSFTPStorageViewController(
+                dependencies: dependencies,
+                shouldPopToRootOnSave: shouldPopToRootOnSave,
+                onSaved: onSaved
+            )
         }
     }
 

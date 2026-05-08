@@ -70,6 +70,25 @@ final class StorageClientFactory: @unchecked Sendable {
                 secretAccessKey: password,
                 sessionToken: nil
             ))
+        case .sftp:
+            guard let params = profile.sftpParams,
+                  !profile.host.isEmpty,
+                  !params.hostKeyFingerprintSHA256.isEmpty else {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            let credential: SFTPCredentialBlob
+            do {
+                credential = try SFTPCredentialBlob.decode(from: password)
+            } catch {
+                throw RemoteStorageClientError.invalidConfiguration
+            }
+            return SFTPClient(config: SFTPClient.Config(
+                host: profile.host,
+                port: profile.port,
+                username: profile.username,
+                credential: credential,
+                expectedHostKeyFingerprintSHA256: params.hostKeyFingerprintSHA256
+            ))
         }
     }
 }

@@ -481,6 +481,8 @@ final class StorageProfileDetailViewController: UIViewController {
             openExternalEditor()
         case .s3:
             openS3Editor()
+        case .sftp:
+            openSFTPEditor()
         }
     }
 
@@ -527,6 +529,17 @@ final class StorageProfileDetailViewController: UIViewController {
 
     private func openS3Editor() {
         let editor = AddS3StorageViewController(
+            dependencies: dependencies,
+            editingProfile: profile,
+            shouldPopToRootOnSave: false
+        ) { [weak self] _, _ in
+            self?.handleConnectionEdited()
+        }
+        navigationController?.pushViewController(editor, animated: true)
+    }
+
+    private func openSFTPEditor() {
+        let editor = AddSFTPStorageViewController(
             dependencies: dependencies,
             editingProfile: profile,
             shouldPopToRootOnSave: false

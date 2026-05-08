@@ -33,7 +33,7 @@ struct SMBDiscoveryView: View {
                     }
                 } label: {
                     HStack {
-                        Image(systemName: "server.rack")
+                        Image(systemName: StorageType.smb.symbolName)
                             .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(row.name).font(.body)

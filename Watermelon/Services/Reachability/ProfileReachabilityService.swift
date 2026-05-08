@@ -205,6 +205,14 @@ final class ProfileReachabilityService: @unchecked Sendable {
                 endpoint: "",
                 bookmark: profile.externalVolumeParams?.rootBookmarkData
             )
+        case .sftp:
+            return ProbeSignature(
+                storageType: .sftp,
+                host: profile.host,
+                port: profile.port == 0 ? 22 : profile.port,
+                endpoint: "",
+                bookmark: nil
+            )
         }
     }
 
@@ -225,6 +233,10 @@ final class ProfileReachabilityService: @unchecked Sendable {
             return await probeHTTP(url: url)
         case .externalVolume:
             return probeExternal(bookmarkData: externalBookmark)
+        case .sftp:
+            guard !profile.host.isEmpty else { return .unreachable }
+            let port = profile.port == 0 ? 22 : profile.port
+            return await probeTCP(host: profile.host, port: port)
         }
     }
 

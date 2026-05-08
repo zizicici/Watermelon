@@ -14,6 +14,8 @@
 		144234AA2F4EAFF500293274 /* SnapKit in Frameworks */ = {isa = PBXBuildFile; productRef = 144234A92F4EAFF500293274 /* SnapKit */; };
 		14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; };
 		14B0C0A42F4F000100111111 /* AMSMB2 in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 14B0C0A32F4F000100111111 /* AMSMB2 */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		14C2ED952FAD720E0040F2FD /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C2ED942FAD720E0040F2FD /* Citadel */; };
+		14C2ED972FAD72340040F2FD /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C2ED962FAD72340040F2FD /* Citadel */; };
 		14C5C5692F84CEF200939535 /* MarqueeLabel in Frameworks */ = {isa = PBXBuildFile; productRef = 14C5C5682F84CEF200939535 /* MarqueeLabel */; };
 		14D1E0012FA50EF800B21C69 /* MoreKit in Frameworks */ = {isa = PBXBuildFile; productRef = 14D1E0032FA50EF800B21C69 /* MoreKit */; };
 		14FB00032FEA000100000001 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 14FB00022FEA000100000001 /* FirebaseCrashlytics */; };
@@ -116,6 +118,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				14C2ED972FAD72340040F2FD /* Citadel in Frameworks */,
 				224E0653EB5B7EB82D0E3835 /* GRDB in Frameworks */,
 				772FD6D7F2F82EB5F0CE1EE9 /* AMSMB2 in Frameworks */,
 			);
@@ -130,6 +133,7 @@
 				14C5C5692F84CEF200939535 /* MarqueeLabel in Frameworks */,
 				144234A42F4EAFC200293274 /* Kingfisher in Frameworks */,
 				144234A12F4EAFB600293274 /* JXPhotoBrowser in Frameworks */,
+				14C2ED952FAD720E0040F2FD /* Citadel in Frameworks */,
 				14B0C0A12F4F000100111111 /* AMSMB2 in Frameworks */,
 				14D1E0012FA50EF800B21C69 /* MoreKit in Frameworks */,
 				14FB00032FEA000100000001 /* FirebaseCrashlytics in Frameworks */,
@@ -210,6 +214,7 @@
 			packageProductDependencies = (
 				144234A62F4EAFE800293274 /* GRDB */,
 				14B0C0A32F4F000100111111 /* AMSMB2 */,
+				14C2ED962FAD72340040F2FD /* Citadel */,
 			);
 			productName = WatermelonMac;
 			productReference = 141A9F772FA2112100DF249B /* WatermelonMac.app */;
@@ -243,6 +248,7 @@
 				14D1E0032FA50EF800B21C69 /* MoreKit */,
 				14FB00022FEA000100000001 /* FirebaseCrashlytics */,
 				14FB00052FEA000100000001 /* FirebaseAnalyticsWithoutAdIdSupport */,
+				14C2ED942FAD720E0040F2FD /* Citadel */,
 			);
 			productName = PhotoBackup;
 			productReference = 148EF9522F4EABFE0025F409 /* Watermelon.app */;
@@ -317,6 +323,7 @@
 				14C5C5672F84CEF200939535 /* XCRemoteSwiftPackageReference "MarqueeLabel" */,
 				14D1E0022FA50EF800B21C69 /* XCRemoteSwiftPackageReference "MoreKit" */,
 				14FB00012FEA000100000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				14C2ED932FAD720E0040F2FD /* XCRemoteSwiftPackageReference "Citadel" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 148EF9532F4EABFE0025F409 /* Products */;
@@ -786,6 +793,14 @@
 				minimumVersion = 4.0.3;
 			};
 		};
+		14C2ED932FAD720E0040F2FD /* XCRemoteSwiftPackageReference "Citadel" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/orlandos-nl/Citadel";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.12.1;
+			};
+		};
 		14C5C5672F84CEF200939535 /* XCRemoteSwiftPackageReference "MarqueeLabel" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/cbpowell/MarqueeLabel";
@@ -837,6 +852,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 14B0C0A22F4F000100111111 /* XCRemoteSwiftPackageReference "AMSMB2" */;
 			productName = AMSMB2;
+		};
+		14C2ED942FAD720E0040F2FD /* Citadel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 14C2ED932FAD720E0040F2FD /* XCRemoteSwiftPackageReference "Citadel" */;
+			productName = Citadel;
+		};
+		14C2ED962FAD72340040F2FD /* Citadel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 14C2ED932FAD720E0040F2FD /* XCRemoteSwiftPackageReference "Citadel" */;
+			productName = Citadel;
 		};
 		14C5C5682F84CEF200939535 /* MarqueeLabel */ = {
 			isa = XCSwiftPackageProductDependency;

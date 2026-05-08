@@ -23,7 +23,7 @@ enum StorageProfileIcon {
             UIRectFill(rect)
 
             let symbolConfig = UIImage.SymbolConfiguration(pointSize: symbolPointSize, weight: .semibold)
-            guard let symbol = UIImage(systemName: symbolName(for: storageType), withConfiguration: symbolConfig)?
+            guard let symbol = UIImage(systemName: storageType.symbolName, withConfiguration: symbolConfig)?
                 .withTintColor(.white, renderingMode: .alwaysOriginal)
             else { return }
 
@@ -48,19 +48,8 @@ enum StorageProfileIcon {
             return .Material.Orange._500
         case .s3:
             return .Material.Indigo._500
-        }
-    }
-
-    static func symbolName(for storageType: StorageType) -> String {
-        switch storageType {
-        case .smb:
-            return "server.rack"
-        case .webdav:
-            return "network"
-        case .externalVolume:
-            return "externaldrive"
-        case .s3:
-            return "cloud"
+        case .sftp:
+            return .Material.Purple._500
         }
     }
 }

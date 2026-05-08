@@ -17,6 +17,79 @@ struct S3ConnectionParams: Codable {
     }
 }
 
+extension StorageType {
+    var symbolName: String {
+        switch self {
+        case .smb: return "server.rack"
+        case .webdav: return "network"
+        case .s3: return "cloud"
+        case .sftp: return "arrow.up.folder"
+        case .externalVolume: return "externaldrive"
+        }
+    }
+}
+
+nonisolated struct SFTPConnectionParams: Codable {
+    enum AuthMethod: String, Codable {
+        case password
+        case privateKey
+    }
+
+    let authMethod: AuthMethod
+    let hostKeyFingerprintSHA256: String
+}
+
+nonisolated enum SFTPCredentialBlob: Codable, Equatable {
+    case password(String)
+    case privateKey(pem: String, passphrase: String?)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case password
+        case pem
+        case passphrase
+    }
+
+    private enum Kind: String, Codable {
+        case password
+        case privateKey
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .password:
+            self = .password(try container.decode(String.self, forKey: .password))
+        case .privateKey:
+            self = .privateKey(
+                pem: try container.decode(String.self, forKey: .pem),
+                passphrase: try container.decodeIfPresent(String.self, forKey: .passphrase)
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .password(let value):
+            try container.encode(Kind.password, forKey: .kind)
+            try container.encode(value, forKey: .password)
+        case .privateKey(let pem, let passphrase):
+            try container.encode(Kind.privateKey, forKey: .kind)
+            try container.encode(pem, forKey: .pem)
+            try container.encodeIfPresent(passphrase, forKey: .passphrase)
+        }
+    }
+
+    func encodedJSONString() throws -> String {
+        String(decoding: try JSONEncoder().encode(self), as: UTF8.self)
+    }
+
+    static func decode(from string: String) throws -> SFTPCredentialBlob {
+        try JSONDecoder().decode(SFTPCredentialBlob.self, from: Data(string.utf8))
+    }
+}
+
 struct WebDAVConnectionParams: Codable {
     let scheme: String
 
@@ -64,9 +137,19 @@ struct StorageProfile {
 
     var requiresPassword: Bool {
         switch storageType {
-        case .smb, .webdav, .s3:
+        case .smb, .webdav, .s3, .sftp:
             return true
         case .externalVolume:
+            return false
+        }
+    }
+
+    // SFTP credentials are multi-field, so the single-string prompt can't reconstruct them.
+    var supportsPasswordPrompt: Bool {
+        switch storageType {
+        case .smb, .webdav, .s3:
+            return true
+        case .externalVolume, .sftp:
             return false
         }
     }
@@ -80,6 +163,8 @@ struct StorageProfile {
         case .externalVolume:
             return record.name
         case .s3:
+            return "\(record.username)@\(record.name)"
+        case .sftp:
             return "\(record.username)@\(record.name)"
         }
     }
@@ -102,6 +187,8 @@ struct StorageProfile {
             return String(localized: "storage.error.externalFallback")
         case .s3:
             return record.s3DisplayURLString ?? "S3"
+        case .sftp:
+            return record.sftpDisplayURLString ?? "SFTP"
         }
     }
 
@@ -115,6 +202,8 @@ struct StorageProfile {
             return record.name
         case .s3:
             return "\(record.username)@\(record.shareName)\(record.basePath)"
+        case .sftp:
+            return "\(record.username)@\(record.host)\(record.basePath)"
         }
     }
 
@@ -151,6 +240,17 @@ extension ServerProfileRecord {
 
     var s3Params: S3ConnectionParams? {
         decodedConnectionParams(as: S3ConnectionParams.self)
+    }
+
+    var sftpParams: SFTPConnectionParams? {
+        decodedConnectionParams(as: SFTPConnectionParams.self)
+    }
+
+    var sftpDisplayURLString: String? {
+        guard resolvedStorageType == .sftp, !host.isEmpty else { return nil }
+        let portSuffix = port == 0 || port == 22 ? "" : ":\(port)"
+        let path = basePath.isEmpty || basePath == "/" ? "" : basePath
+        return "sftp://\(username)@\(host)\(portSuffix)\(path)"
     }
 
     var s3DisplayURLString: String? {
@@ -226,6 +326,8 @@ extension ServerProfileRecord {
             return false
         case .s3:
             return S3ErrorClassifier.isConnectionUnavailable(error)
+        case .sftp:
+            return SFTPErrorClassifier.isConnectionUnavailable(error)
         }
     }
 
@@ -244,6 +346,9 @@ extension ServerProfileRecord {
         }
         if resolvedStorageType == .s3 {
             return S3ErrorClassifier.describe(error)
+        }
+        if resolvedStorageType == .sftp {
+            return SFTPErrorClassifier.describe(error)
         }
         return error.localizedDescription
     }

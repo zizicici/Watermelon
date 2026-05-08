@@ -24,6 +24,8 @@ enum UserFacingErrorLocalizer {
                 return WebDAVErrorClassifier.describe(error)
             case .s3:
                 return S3ErrorClassifier.describe(error)
+            case .sftp:
+                return SFTPErrorClassifier.describe(error)
             }
         }
 

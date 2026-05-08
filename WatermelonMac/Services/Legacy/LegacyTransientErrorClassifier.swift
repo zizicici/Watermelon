@@ -7,6 +7,9 @@ enum LegacyTransientErrorClassifier {
         if SMBErrorClassifier.isConnectionUnavailable(error) {
             return true
         }
+        if SFTPErrorClassifier.isConnectionUnavailable(error) {
+            return true
+        }
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain {
             switch nsError.code {

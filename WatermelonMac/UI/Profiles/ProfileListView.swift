@@ -48,17 +48,17 @@ struct ProfileListView: View {
                     Button {
                         addSMBSheetVisible = true
                     } label: {
-                        Label("SMB…", systemImage: "server.rack")
+                        Label("SMB…", systemImage: StorageType.smb.symbolName)
                     }
                     Button {
                         addWebDAVSheetVisible = true
                     } label: {
-                        Label("WebDAV…", systemImage: "network")
+                        Label("WebDAV…", systemImage: StorageType.webdav.symbolName)
                     }
                     Button {
                         addS3SheetVisible = true
                     } label: {
-                        Label("S3…", systemImage: "cloud.fill")
+                        Label("S3…", systemImage: StorageType.s3.symbolName)
                     }
                 } label: {
                     Label(String(localized: "profiles.add"), systemImage: "plus")
@@ -149,12 +149,7 @@ private struct ProfileRow: View {
     let profile: ServerProfileRecord
 
     private var icon: String {
-        switch profile.resolvedStorageType {
-        case .smb: return "server.rack"
-        case .webdav: return "network"
-        case .externalVolume: return "externaldrive"
-        case .s3: return "cloud.fill"
-        }
+        profile.resolvedStorageType.symbolName
     }
 
     var body: some View {

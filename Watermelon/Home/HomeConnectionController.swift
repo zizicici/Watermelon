@@ -76,6 +76,11 @@ final class HomeConnectionController {
             return
         }
 
+        guard profile.storageProfile.supportsPasswordPrompt else {
+            onConnectFailed?(profile, RemoteStorageClientError.invalidConfiguration)
+            return
+        }
+
         onNeedsPasswordPrompt?(profile) { [weak self] password in
             try? self?.dependencies.keychainService.save(password: password, account: profile.credentialRef)
             self?.connect(profile: profile, password: password)

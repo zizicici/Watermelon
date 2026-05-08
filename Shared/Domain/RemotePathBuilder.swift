@@ -1,6 +1,7 @@
 import Foundation
 
-enum RemotePathBuilder {
+// `nonisolated` keeps these helpers isolation-neutral — WatermelonMac uses default-MainActor isolation, otherwise actor callers cross actors.
+nonisolated enum RemotePathBuilder {
     static func normalizeRelativePath(_ value: String) -> String {
         value.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
