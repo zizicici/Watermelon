@@ -2,19 +2,25 @@
   "sourceLanguage" : "en",
   "strings" : {
     "" : {
-
+      "localizations" : {}
     },
     ".." : {
-
+      "localizations" : {}
     },
     "·" : {
-
+      "localizations" : {}
     },
     "%@:%lld" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
+            "value" : "%1$@:%2$lld"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
             "value" : "%1$@:%2$lld"
           }
         }
@@ -27,35 +33,104 @@
             "state" : "new",
             "value" : "%1$lld / %2$lld"
           }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld / %2$lld"
+          }
         }
       }
     },
     "backup.error.photoPermissionDenied" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доступ к медиатеке запрещён."
+          }
+        }
+      }
     },
     "backup.error.restoreNoSelection" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не выбрано ни одного элемента для восстановления."
+          }
+        }
+      }
     },
     "backup.manifest.error.downloadedManifestInvalid" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Загруженный манифест месяца %@ несовместим или повреждён и не может быть прочитан."
+          }
+        }
+      }
     },
     "backup.manifest.error.downloadExistingManifest" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось загрузить существующий манифест месяца %@."
+          }
+        }
+      }
     },
     "backup.manifest.error.existingManifestInvalid" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Существующий манифест месяца %@ несовместим или повреждён и не может быть прочитан."
+          }
+        }
+      }
     },
     "backup.manifest.error.missingResourceHash" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отсутствует хеш ресурса для связи с активом."
+          }
+        }
+      }
     },
     "backup.manifest.error.schemaIncompatible" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Схема существующего манифеста месяца несовместима. Отсутствуют столбцы в %1$@: %2$@."
+          }
+        }
+      }
     },
     "backup.remoteIndex.error.missingMonthManifest" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Манифест месяца %1$@ отсутствует."
+          }
+        }
+      }
     },
     "backup.remoteIndex.unchanged" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалённый индекс не изменён. Дайджесты месяцев совпали (месяцев: %1$lld)."
+          }
+        }
+      }
     },
     "common.back" : {
       "extractionState" : "manual",
@@ -112,6 +187,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Voltar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Назад"
           }
         },
         "uk" : {
@@ -197,6 +278,12 @@
             "value" : "Cancelar"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отменить"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -278,6 +365,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escolher"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбрать"
           }
         },
         "uk" : {
@@ -363,6 +456,12 @@
             "value" : "Escolher pasta…"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбрать папку…"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -444,6 +543,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ligar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключить"
           }
         },
         "uk" : {
@@ -529,6 +634,12 @@
             "value" : "Apagar"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалить"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -610,6 +721,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Concluído"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Готово"
           }
         },
         "uk" : {
@@ -695,6 +812,12 @@
             "value" : "Não selecionado"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не выбрано"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -773,6 +896,12 @@
           }
         },
         "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        },
+        "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "OK"
@@ -861,6 +990,12 @@
             "value" : "Tentar de novo"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Повторить"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -942,6 +1077,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Guardar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранить"
           }
         },
         "uk" : {
@@ -1027,6 +1168,12 @@
             "value" : "A guardar…"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранение…"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -1054,28 +1201,63 @@
       }
     },
     "compatibility.error.remoteFormatUnsupported" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта удалённая резервная копия создана более новой версией %@. Обновите приложение в App Store, чтобы продолжить."
+          }
+        }
+      }
     },
     "compatibility.error.remoteFormatUnsupported.versioned" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для этой удалённой резервной копии требуется %1$@ %2$@ или новее. Обновите приложение в App Store."
+          }
+        }
+      }
     },
     "Failed to load profiles" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось загрузить профили"
+          }
+        }
+      }
     },
     "fp:%@" : {
-
+      "localizations" : {}
     },
     "http" : {
-
+      "localizations" : {}
     },
     "https" : {
-
+      "localizations" : {}
     },
     "keychain.error.unexpectedPasswordData" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неожиданные данные пароля в Keychain"
+          }
+        }
+      }
     },
     "keychain.error.unhandledStatus" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ошибка Keychain %d"
+          }
+        }
+      }
     },
     "legacy.connect.failed" : {
       "extractionState" : "manual",
@@ -1132,6 +1314,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não foi possível ligar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось подключиться"
           }
         },
         "uk" : {
@@ -1217,6 +1405,12 @@
             "value" : "Procurar…"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обзор…"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -1298,6 +1492,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escolhe a pasta cujo conteúdo queres importar."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите папку, содержимое которой вы хотите импортировать."
           }
         },
         "uk" : {
@@ -1383,6 +1583,12 @@
             "value" : "Escolher pasta antiga"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбрать папку с устаревшими данными"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -1466,6 +1672,12 @@
             "value" : "Usar esta pasta"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Использовать эту папку"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -1493,7 +1705,7 @@
       }
     },
     "M" : {
-
+      "localizations" : {}
     },
     "menu.about" : {
       "extractionState" : "manual",
@@ -1550,6 +1762,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Acerca de Watermelon"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "О Арбуз Backup"
           }
         },
         "uk" : {
@@ -1635,6 +1853,12 @@
             "value" : "Limpar cache de hash percetual…"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Очистить кеш перцептивных хешей…"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -1716,6 +1940,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld entradas (%@) serão eliminadas. Análises futuras terão de recalcular os hashes das fotos legacy e de destino."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Будет удалено %lld записей (%@). При следующих сканированиях хеши для устаревших и целевых фото придётся вычислять заново."
           }
         },
         "uk" : {
@@ -1801,6 +2031,12 @@
             "value" : "Limpar"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Очистить"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -1882,6 +2118,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Limpar a cache de hash percetual?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Очистить кеш перцептивных хешей?"
           }
         },
         "uk" : {
@@ -1967,6 +2209,12 @@
             "value" : "Mostrar registos de importação"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показать логи импорта"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -2048,6 +2296,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Confirmar importação"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Применить импорт"
           }
         },
         "uk" : {
@@ -2133,6 +2387,12 @@
             "value" : "Analisar (teste)"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сканировать (пробный запуск)"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -2214,6 +2474,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta análise lista os pacotes que seriam importados. Ainda nada é movido nem copiado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Этот пробный запуск перечислит наборы, которые будут импортированы. Никакие данные ещё не перемещаются и не копируются."
           }
         },
         "uk" : {
@@ -2299,6 +2565,12 @@
             "value" : "Escolhe uma pasta antiga e analisa"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите устаревшую папку и нажмите «Сканировать»"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -2380,6 +2652,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quando a origem contém todos os ficheiros de um Asset existente no destino mais funções adicionais (ajustes, alternativos), o Asset incompleto é eliminado e substituído pela versão completa da origem. Desativado: ambos são mantidos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Если в целевом хранилище уже есть ресурс, файлы которого являются подмножеством исходного, удалить его и использовать более полную исходную версию. Выкл.: оставить оба."
           }
         },
         "uk" : {
@@ -2465,6 +2743,12 @@
             "value" : "Substituir duplicados parciais"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Заменять частичные дубликаты"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -2546,6 +2830,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Calcula um hash percetual para as fotos heic/jpg do legacy. Se o destino já contém a mesma foto (em qualquer formato), a cópia legacy é ignorada. A primeira análise descarrega as fotos do destino para indexá-las; análises subsequentes usam a cache local."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вычисляет перцептивный хеш для устаревших фото в форматах heic/jpg. Если в целевом хранилище уже есть то же изображение в любом формате, устаревшая копия пропускается. Первое сканирование загружает целевые фото для индексации; последующие используют локальный кеш."
           }
         },
         "uk" : {
@@ -2631,6 +2921,12 @@
             "value" : "Ignorar fotos percetualmente semelhantes"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пропускать перцептивно похожие фото"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -2712,6 +3008,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Palavra-passe"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пароль"
           }
         },
         "uk" : {
@@ -2797,6 +3099,12 @@
             "value" : "Introduz a palavra-passe para %1$@ (%2$@)."
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введите пароль для %1$@ (%2$@)."
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -2878,6 +3186,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Palavra-passe necessária"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Требуется пароль"
           }
         },
         "uk" : {
@@ -2963,6 +3277,12 @@
             "value" : "Importação concluída"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Импорт завершён"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -3044,6 +3364,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A ligar…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключение…"
           }
         },
         "uk" : {
@@ -3129,6 +3455,12 @@
             "value" : "Falhou"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ошибка"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -3210,6 +3542,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Importado"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Импортировано"
           }
         },
         "uk" : {
@@ -3295,6 +3633,12 @@
             "value" : "A importar"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Импорт"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -3376,6 +3720,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A importar %@…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Импорт %@…"
           }
         },
         "uk" : {
@@ -3461,6 +3811,12 @@
             "value" : "Falhou"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ошибка"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -3542,6 +3898,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Importado"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Импортировано"
           }
         },
         "uk" : {
@@ -3627,6 +3989,12 @@
             "value" : "Ignorado (fp)"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пропущено (fp)"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -3708,6 +4076,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ignorado (hash)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пропущено (хеш)"
           }
         },
         "uk" : {
@@ -3793,6 +4167,12 @@
             "value" : "Enviado"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выгружено"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -3874,6 +4254,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "novo"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "новый"
           }
         },
         "uk" : {
@@ -3959,6 +4345,12 @@
             "value" : "substitui"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "заменяет"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -4040,6 +4432,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ignorado"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "пропуск"
           }
         },
         "uk" : {
@@ -4125,6 +4523,12 @@
             "value" : "Altere o segmento acima para ver outros bundles."
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Переключите сегмент выше, чтобы увидеть другие наборы."
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -4206,6 +4610,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nada para mostrar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нечего показать"
           }
         },
         "uk" : {
@@ -4291,6 +4701,12 @@
             "value" : "%lld bundles · %lld ficheiros · %@"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld наборов · %lld файлов · %@"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -4372,6 +4788,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "+%lld avisos adicionais"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "+%lld предупреждений"
           }
         },
         "uk" : {
@@ -4457,6 +4879,12 @@
             "value" : "O destino tem um Asset mais completo (com funções extras)"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В целевом хранилище есть более полный ресурс (дополнительные роли)"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -4538,6 +4966,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Já no destino — mesma impressão digital"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Уже в целевом хранилище — совпадает отпечаток"
           }
         },
         "uk" : {
@@ -4623,6 +5057,12 @@
             "value" : "O destino já tem a mesma foto noutro formato"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В целевом хранилище уже есть то же изображение в другом формате"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -4704,6 +5144,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Abrange %lld Asset(s) parcial(ais) no destino"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Покроет %lld более старых частичных ресурс. в целевом хранилище"
           }
         },
         "uk" : {
@@ -4789,6 +5235,12 @@
             "value" : "Tudo (%lld)"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Все (%lld)"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -4870,6 +5322,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Já no destino (%lld)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В целевом (%lld)"
           }
         },
         "uk" : {
@@ -4955,6 +5413,12 @@
             "value" : "A importar (%lld)"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "К импорту (%lld)"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -5036,6 +5500,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A analisar…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сканирование…"
           }
         },
         "uk" : {
@@ -5121,6 +5591,12 @@
             "value" : "A ler metadados de ficheiros e a calcular hashes…"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Чтение метаданных файлов и вычисление хешей…"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -5202,6 +5678,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Pasta de dados antigos"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Папка с устаревшими данными"
           }
         },
         "uk" : {
@@ -5287,6 +5769,12 @@
             "value" : "Ignorado — sem indicação de tempo legível"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пропущено — нет читаемой метки времени"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -5368,6 +5856,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Pacotes"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Наборы"
           }
         },
         "uk" : {
@@ -5453,6 +5947,12 @@
             "value" : "Tempo est."
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Оценка времени"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -5534,6 +6034,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ficheiros"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файлы"
           }
         },
         "uk" : {
@@ -5619,6 +6125,12 @@
             "value" : "Meses"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Месяцы"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -5702,6 +6214,12 @@
             "value" : "Total"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Всего"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -5729,25 +6247,74 @@
       }
     },
     "OK" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        }
+      }
     },
     "profile.add.local.backupRoot" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Корневой путь резервных копий"
+          }
+        }
+      }
     },
     "profile.add.local.folder" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Папка"
+          }
+        }
+      }
     },
     "profile.add.local.name" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Имя"
+          }
+        }
+      }
     },
     "profile.add.local.name.placeholder" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Локальная папка"
+          }
+        }
+      }
     },
     "profile.add.local.pickerMessage" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите локальную папку для резервных копий."
+          }
+        }
+      }
     },
     "profile.add.local.title" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить локальную папку"
+          }
+        }
+      }
     },
     "profile.add.s3.accessKeyID" : {
       "localizations" : {
@@ -5800,6 +6367,12 @@
           }
         },
         "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Access Key ID"
@@ -5887,6 +6460,12 @@
             "value" : "Caminho base"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Базовый путь"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -5967,6 +6546,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bucket"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Бакет"
           }
         },
         "uk" : {
@@ -6051,6 +6636,12 @@
             "value" : "URL do endpoint"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL-адрес эндпоинта"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -6131,6 +6722,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "URL do endpoint inválido"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неверный URL-адрес эндпоинта"
           }
         },
         "uk" : {
@@ -6215,6 +6812,12 @@
             "value" : "As credenciais não conseguem concluir o teste de escrita. Verifique as permissões s3:PutObject, s3:GetObject e s3:DeleteObject no caminho de cópia. Motivo: %@"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Учётные данные не прошли проверку записи. Убедитесь, что для пути резервного копирования предоставлены права s3:PutObject, s3:GetObject и s3:DeleteObject. Причина: %@"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -6295,6 +6898,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "URLs em estilo path"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL-адреса в стиле path-style"
           }
         },
         "uk" : {
@@ -6379,6 +6988,12 @@
             "value" : "Necessário para MinIO e servidores S3-compatíveis auto-alojados. AWS S3, Cloudflare R2 e Backblaze B2 usam URLs virtual-hosted."
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Требуется для MinIO и самостоятельно размещённых S3-совместимых серверов. AWS S3, Cloudflare R2 и Backblaze B2 используют URL-адреса виртуального хостинга."
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -6461,6 +7076,12 @@
             "value" : "Região"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Регион"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -6538,6 +7159,12 @@
           }
         },
         "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "ru" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Secret Access Key"
@@ -6625,6 +7252,12 @@
             "value" : "Adicionar armazenamento S3"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить хранилище S3"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -6705,6 +7338,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Testar ligação"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проверить подключение"
           }
         },
         "uk" : {
@@ -6789,6 +7428,12 @@
             "value" : "Ligação bem-sucedida"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключение установлено"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -6871,6 +7516,12 @@
             "value" : "A testar…"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проверка…"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -6898,31 +7549,94 @@
       }
     },
     "profile.add.webdav.basePath" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Корневой путь резервных копий"
+          }
+        }
+      }
     },
     "profile.add.webdav.error.invalidEndpoint" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неверный URL-адрес эндпоинта"
+          }
+        }
+      }
     },
     "profile.add.webdav.mountPath" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Путь WebDAV"
+          }
+        }
+      }
     },
     "profile.add.webdav.port.placeholder" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Порт"
+          }
+        }
+      }
     },
     "profile.add.webdav.scheme" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Протокол"
+          }
+        }
+      }
     },
     "profile.add.webdav.title" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить хранилище WebDAV"
+          }
+        }
+      }
     },
     "profile.add.webdav.verify" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проверить подключение"
+          }
+        }
+      }
     },
     "profile.add.webdav.verify.success" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключение установлено"
+          }
+        }
+      }
     },
     "profile.add.webdav.verifying" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проверка…"
+          }
+        }
+      }
     },
     "profile.rename.menu" : {
       "extractionState" : "manual",
@@ -6979,6 +7693,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mudar nome…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Переименовать…"
           }
         },
         "uk" : {
@@ -7064,6 +7784,12 @@
             "value" : "Mudar nome do perfil"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Переименовать профиль"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -7145,6 +7871,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Adicionar perfil"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить профиль"
           }
         },
         "uk" : {
@@ -7230,6 +7962,12 @@
             "value" : "Pasta local…"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Локальная папка…"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -7311,6 +8049,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Liga-te a um perfil SMB / WebDAV / pasta local para importar dados antigos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключитесь к профилю SMB / WebDAV / локальной папки, чтобы импортировать устаревшие данные."
           }
         },
         "uk" : {
@@ -7396,6 +8140,12 @@
             "value" : "Selecione um perfil"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите профиль"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -7477,6 +8227,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Perfis"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профили"
           }
         },
         "uk" : {
@@ -7561,6 +8317,12 @@
             "value" : "Acesso negado. Verifique as permissões IAM."
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доступ запрещён. Проверьте права IAM."
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -7641,6 +8403,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "O bucket está noutra região. Atualize a definição de região."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Бакет находится в другом регионе. Обновите параметр региона."
           }
         },
         "uk" : {
@@ -7725,6 +8493,12 @@
             "value" : "O relógio do dispositivo está dessincronizado com o servidor. Verifique a hora do sistema."
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Часы устройства отличаются от серверных. Проверьте системное время."
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -7805,6 +8579,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "O objeto excede o limite de tamanho"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Объект превышает допустимый размер"
           }
         },
         "uk" : {
@@ -7889,6 +8669,12 @@
             "value" : "Erro interno do S3. Tente novamente."
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Внутренняя ошибка S3. Повторите попытку."
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -7969,6 +8755,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ID da chave de acesso inválido"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неверный Access Key ID"
           }
         },
         "uk" : {
@@ -8053,6 +8845,12 @@
             "value" : "O bucket não existe"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Бакет не существует"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -8133,6 +8931,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ficheiro não encontrado no bucket"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файл не найден в бакете"
           }
         },
         "uk" : {
@@ -8217,6 +9021,12 @@
             "value" : "Não foi possível ligar ao host"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось подключиться к хосту"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -8297,6 +9107,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Certificado do servidor não fidedigno"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сертификат сервера не является доверенным"
           }
         },
         "uk" : {
@@ -8381,6 +9197,12 @@
             "value" : "Host não encontrado"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Хост не найден"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -8461,6 +9283,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sem ligação de rede"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет подключения к сети"
           }
         },
         "uk" : {
@@ -8545,6 +9373,12 @@
             "value" : "Tempo do pedido esgotado"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Превышено время ожидания запроса"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -8625,6 +9459,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Falha na ligação TLS"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось установить TLS-подключение"
           }
         },
         "uk" : {
@@ -8709,6 +9549,12 @@
             "value" : "%1$@ para %3$@ falhou com HTTP %2$d"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ к %3$@ завершилось ошибкой HTTP %2$d"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -8789,6 +9635,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Assinatura inválida. Verifique a Secret Access Key, a região e o relógio do sistema."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подпись не совпадает. Проверьте Secret Access Key, регион и системные часы."
           }
         },
         "uk" : {
@@ -8873,6 +9725,12 @@
             "value" : "O servidor está a limitar os pedidos. Tente novamente mais tarde."
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер ограничивает частоту запросов. Повторите попытку позже."
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -8900,7 +9758,7 @@
       }
     },
     "SMB…" : {
-
+      "localizations" : {}
     },
     "smb.add.action.connect" : {
       "extractionState" : "manual",
@@ -8957,6 +9815,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ligar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подключить"
           }
         },
         "uk" : {
@@ -9042,6 +9906,12 @@
             "value" : "Seguinte"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Далее"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -9123,6 +9993,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Adicionar SMB — Credenciais"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить SMB — учётные данные"
           }
         },
         "uk" : {
@@ -9208,6 +10084,12 @@
             "value" : "Adicionar SMB — Servidor"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить SMB — сервер"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -9289,6 +10171,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Adicionar SMB — Partilha e caminho"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить SMB — Share и путь"
           }
         },
         "uk" : {
@@ -9374,6 +10262,12 @@
             "value" : "Nenhum servidor SMB encontrado na rede."
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В вашей сети не найдено SMB-серверов."
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -9455,6 +10349,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Falha na pesquisa"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось обнаружить"
           }
         },
         "uk" : {
@@ -9540,6 +10440,12 @@
             "value" : "Introduzir manualmente"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ввести вручную"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -9621,6 +10527,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Atualizar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обновить"
           }
         },
         "uk" : {
@@ -9706,6 +10618,12 @@
             "value" : "Não foi possível resolver o endereço"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось определить адрес"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -9787,6 +10705,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A resolver…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Определение адреса…"
           }
         },
         "uk" : {
@@ -9872,6 +10796,12 @@
             "value" : "Descobrir servidores"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Обнаружить серверы"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -9953,6 +10883,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Porta inválida."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неверный порт."
           }
         },
         "uk" : {
@@ -10038,6 +10974,12 @@
             "value" : "Domínio"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Домен"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -10119,6 +11061,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Deixa em branco para usar a predefinição do servidor (geralmente WORKGROUP)."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Оставьте пустым, чтобы использовать значение сервера по умолчанию (часто WORKGROUP)."
           }
         },
         "uk" : {
@@ -10204,6 +11152,12 @@
             "value" : "Opcional"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Необязательно"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -10285,6 +11239,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Anfitrião"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Хост"
           }
         },
         "uk" : {
@@ -10370,6 +11330,12 @@
             "value" : "Nome"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Имя"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -10451,6 +11417,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Opcional — predefinido é o anfitrião"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Необязательно — по умолчанию равно хосту"
           }
         },
         "uk" : {
@@ -10536,6 +11508,12 @@
             "value" : "Palavra-passe"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пароль"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -10617,6 +11595,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Porta"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Порт"
           }
         },
         "uk" : {
@@ -10702,6 +11686,12 @@
             "value" : "Nome de utilizador"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Имя пользователя"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -10783,6 +11773,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sem subpastas."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Подпапок нет."
           }
         },
         "uk" : {
@@ -10868,6 +11864,12 @@
             "value" : "A carregar diretório…"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Загрузка папки…"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -10949,6 +11951,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escolher caminho"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбор пути"
           }
         },
         "uk" : {
@@ -11034,6 +12042,12 @@
             "value" : "Sem partilhas disponíveis."
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет доступных Share."
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -11115,6 +12129,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A carregar partilhas…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Загрузка Share…"
           }
         },
         "uk" : {
@@ -11200,6 +12220,12 @@
             "value" : "Escolher partilha"
           }
         },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбор Share"
+          }
+        },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
@@ -11227,88 +12253,270 @@
       }
     },
     "storage.client.externalUnavailable" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Внешний накопитель недоступен. Подключите устройство и повторите попытку."
+          }
+        }
+      }
     },
     "storage.client.invalidConfiguration" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неверная конфигурация хранилища."
+          }
+        }
+      }
     },
     "storage.client.notConnected" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сеанс хранилища не подключён."
+          }
+        }
+      }
     },
     "storage.client.unavailable" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Поддержка хранилища недоступна в этой сборке."
+          }
+        }
+      }
     },
     "storage.client.unsupportedType" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неподдерживаемый тип хранилища: %@."
+          }
+        }
+      }
     },
     "storage.error.externalFallback" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Внешний накопитель"
+          }
+        }
+      }
     },
     "storage.error.externalUnavailable" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Внешний накопитель недоступен. Возможно, он отключён. Подключите устройство и повторите попытку."
+          }
+        }
+      }
     },
     "storage.error.smbUnavailable" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SMB-подключение недоступно. Возможно, оно было разорвано или истекло время ожидания. Проверьте сеть и состояние сервера."
+          }
+        }
+      }
     },
     "storage.local.createDestinationFileFailed" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось создать целевой файл по пути %@."
+          }
+        }
+      }
     },
     "Watermelon" : {
-
+      "localizations" : {}
     },
     "WebDAV…" : {
-
+      "localizations" : {}
     },
     "webdav.error.accessDenied" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV отказал в доступе (403). Проверьте права учётной записи и путь эндпоинта, затем повторите попытку. Эндпоинт: %@"
+          }
+        }
+      }
     },
     "webdav.error.authenticationFailed" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось пройти аутентификацию WebDAV. Проверьте имя пользователя и пароль и повторите попытку. Эндпоинт: %@"
+          }
+        }
+      }
     },
     "webdav.error.downloadStalled" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Загрузка WebDAV не продвигалась %lld с."
+          }
+        }
+      }
     },
     "webdav.error.notAService" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эндпоинт ответил, но не похоже, что это WebDAV-сервис. Проверьте URL, порт и путь."
+          }
+        }
+      }
     },
     "webdav.error.parsePropfindResponse" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось разобрать ответ WebDAV PROPFIND."
+          }
+        }
+      }
     },
     "webdav.error.reason.cannotConnect" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось подключиться к серверу. Возможно, порт закрыт или заблокирован."
+          }
+        }
+      }
     },
     "webdav.error.reason.certUntrusted" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сертификат сервера не является доверенным (возможно, самоподписанный)."
+          }
+        }
+      }
     },
     "webdav.error.reason.hostNotFound" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Хост не найден. Проверьте адрес и сеть."
+          }
+        }
+      }
     },
     "webdav.error.reason.noNetwork" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сеть недоступна."
+          }
+        }
+      }
     },
     "webdav.error.reason.timeout" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Превышено время ожидания подключения."
+          }
+        }
+      }
     },
     "webdav.error.reason.tlsFailed" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось выполнить TLS-рукопожатие."
+          }
+        }
+      }
     },
     "webdav.error.requestFailed" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebDAV %@ завершился со статусом %lld: %@"
+          }
+        }
+      }
     },
     "webdav.error.unexpectedDownloadResponseType" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неожиданный тип ответа WebDAV для загрузки."
+          }
+        }
+      }
     },
     "webdav.error.unexpectedResponseType" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неожиданный тип ответа WebDAV."
+          }
+        }
+      }
     },
     "webdav.error.unexpectedUploadResponseType" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неожиданный тип ответа WebDAV для выгрузки."
+          }
+        }
+      }
     },
     "webdav.error.uploadResponseTimeout" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выгрузка WebDAV завершила отправку данных, но сервер не ответил в течение %lld с."
+          }
+        }
+      }
     },
     "webdav.error.uploadStalled" : {
-
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выгрузка WebDAV не продвигалась %lld с."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

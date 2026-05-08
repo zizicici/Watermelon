@@ -311,6 +311,7 @@
 				uk,
 				es,
 				"es-419",
+				ru,
 			);
 			mainGroup = 148EF9492F4EABFE0025F409;
 			minimizedProjectReferenceProxies = 1;

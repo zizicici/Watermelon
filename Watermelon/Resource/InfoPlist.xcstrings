@@ -8,7 +8,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Melon Backup"
           }
         },
         "en" : {
@@ -20,49 +20,55 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Backup Sandía"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Backup Sandía"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Melon Backup"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "スイカ"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "수박 백업"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Backup Melancia"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Backup Melancia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Арбуз Backup"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Кавун Backup"
           }
         },
         "zh-Hans" : {
@@ -92,7 +98,7 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Melon Backup"
           }
         },
         "en" : {
@@ -104,49 +110,55 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Backup Sandía"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Backup Sandía"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Melon Backup"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "スイカ"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "수박 백업"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Backup Melancia"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Backup Melancia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Арбуз Backup"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon"
+            "value" : "Кавун Backup"
           }
         },
         "zh-Hans" : {
@@ -175,79 +187,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon nutzt Ihr lokales Netzwerk, um eine Verbindung zu SMB-Servern herzustellen und Ihre Fotos zu sichern."
+            "value" : "Melon Backup nutzt Ihr lokales Netzwerk, um eine Verbindung zu SMB-Servern herzustellen und Ihre Fotos zu sichern."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon uses your local network to connect to SMB servers and back up your photos."
+            "value" : "Watermelon Backup uses your local network to connect to SMB servers and back up your photos."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon usa tu red local para conectarse a servidores SMB y hacer copias de seguridad de tus fotos."
+            "value" : "Backup Sandía usa tu red local para conectarse a servidores SMB y hacer copias de seguridad de tus fotos."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon usa tu red local para conectarse a servidores SMB y respaldar tus fotos."
+            "value" : "Backup Sandía usa tu red local para conectarse a servidores SMB y respaldar tus fotos."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon utilise votre réseau local pour se connecter aux serveurs SMB et sauvegarder vos photos."
+            "value" : "Melon Backup utilise votre réseau local pour se connecter aux serveurs SMB et sauvegarder vos photos."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon は SMB サーバーに接続して写真をバックアップするためにローカルネットワークを使用します。"
+            "value" : "スイカバックアップは SMB サーバーに接続して写真をバックアップするためにローカルネットワークを使用します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon은(는) SMB 서버에 연결하여 사진을 백업하기 위해 로컬 네트워크를 사용합니다."
+            "value" : "수박 백업은 SMB 서버에 연결하여 사진을 백업하기 위해 로컬 네트워크를 사용합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon usa sua rede local para conectar a servidores SMB e fazer backup das suas fotos."
+            "value" : "O Backup Melancia usa sua rede local para conectar a servidores SMB e fazer backup das suas fotos."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon usa a sua rede local para ligar a servidores SMB e fazer cópia de segurança das suas fotos."
+            "value" : "O Backup Melancia usa a sua rede local para ligar a servidores SMB e fazer cópia de segurança das suas fotos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Арбуз Backup использует локальную сеть для подключения к SMB-серверам и резервного копирования ваших фото."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon використовує вашу локальну мережу для підключення до SMB-серверів та резервного копіювання фотографій."
+            "value" : "Кавун Backup використовує вашу локальну мережу для підключення до SMB-серверів та резервного копіювання фотографій."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜备份 使用本地网络连接 SMB 服务器并备份你的照片。"
+            "value" : "西瓜备份使用本地网络连接 SMB 服务器并备份你的照片。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜備份 使用本機網路連接 SMB 伺服器並備份你的照片。"
+            "value" : "西瓜備份使用本機網路連接 SMB 伺服器並備份你的照片。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "西瓜備份 使用本機網路連接 SMB 伺服器並備份你的相片。"
+            "value" : "西瓜備份使用本機網路連接 SMB 伺服器並備份你的相片。"
           }
         }
       }
@@ -258,61 +276,67 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon schreibt nur dann in deine Fotomediathek, wenn du Fotos oder Videos aus einer Sicherung wiederherstellst, und fügt die ausgewählten Elemente wieder zur Fotos-App hinzu."
+            "value" : "Melon Backup schreibt nur dann in deine Fotomediathek, wenn du Fotos oder Videos aus einer Sicherung wiederherstellst, und fügt die ausgewählten Elemente wieder zur Fotos-App hinzu."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app."
+            "value" : "Watermelon Backup writes to your photo library only when you restore photos or videos from a backup, placing the selected items back into the Photos app."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon solo escribe en tu fototeca cuando restauras fotos o vídeos desde una copia de seguridad, devolviendo los elementos seleccionados a la app Fotos."
+            "value" : "Backup Sandía solo escribe en tu fototeca cuando restauras fotos o vídeos desde una copia de seguridad, devolviendo los elementos seleccionados a la app Fotos."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon solo escribe en tu fototeca cuando restauras fotos o videos desde un respaldo, devolviendo los elementos seleccionados a la app Fotos."
+            "value" : "Backup Sandía solo escribe en tu fototeca cuando restauras fotos o videos desde un respaldo, devolviendo los elementos seleccionados a la app Fotos."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon n'écrit dans votre photothèque que lorsque vous restaurez des photos ou des vidéos depuis une sauvegarde, pour ajouter à nouveau les éléments sélectionnés dans l'app Photos."
+            "value" : "Melon Backup n'écrit dans votre photothèque que lorsque vous restaurez des photos ou des vidéos depuis une sauvegarde, pour ajouter à nouveau les éléments sélectionnés dans l'app Photos."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックアップから写真や動画を復元する場合にのみ、Watermelonは写真ライブラリに書き込み、選択した項目を「写真」Appに戻します。"
+            "value" : "バックアップから写真や動画を復元する場合にのみ、スイカバックアップは写真ライブラリに書き込み、選択した項目を「写真」Appに戻します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon은 백업에서 사진이나 동영상을 복원할 때에만 사진 라이브러리에 기록하여 선택한 항목을 사진 앱에 다시 추가합니다."
+            "value" : "수박 백업은 백업에서 사진이나 동영상을 복원할 때에만 사진 라이브러리에 기록하여 선택한 항목을 사진 앱에 다시 추가합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon só grava na sua biblioteca de fotos quando você restaura fotos ou vídeos a partir de um backup, devolvendo os itens selecionados ao app Fotos."
+            "value" : "O Backup Melancia só grava na sua biblioteca de fotos quando você restaura fotos ou vídeos a partir de um backup, devolvendo os itens selecionados ao app Fotos."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon só escreve na sua biblioteca de fotos quando restaura fotos ou vídeos a partir de uma cópia de segurança, colocando novamente os itens selecionados na app Fotos."
+            "value" : "O Backup Melancia só escreve na sua biblioteca de fotos quando restaura fotos ou vídeos a partir de uma cópia de segurança, colocando novamente os itens selecionados na app Fotos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Арбуз Backup записывает данные в вашу медиатеку только при восстановлении фото или видео из резервной копии — выбранные элементы возвращаются обратно в приложение «Фото»."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon записує до фотобібліотеки лише під час відновлення фотографій або відео з резервної копії, повертаючи обрані елементи до програми «Фото»."
+            "value" : "Кавун Backup записує до фотобібліотеки лише під час відновлення фотографій або відео з резервної копії, повертаючи обрані елементи до програми «Фото»."
           }
         },
         "zh-Hans" : {
@@ -341,61 +365,67 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon liest deine Fotos und Videos, um die Originale auf den von dir eingerichteten SMB-Server, WebDAV-Server oder ein externes Speichergerät zu sichern. Deine Dateien werden niemals auf die Server von Watermelon hochgeladen."
+            "value" : "Melon Backup liest deine Fotos und Videos, um die Originale auf den von dir eingerichteten SMB-Server, WebDAV-Server oder ein externes Speichergerät zu sichern. Deine Dateien werden niemals auf die Server von Melon Backup hochgeladen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon reads your photos and videos to back up the originals to the SMB server, WebDAV server, or external drive you set up. Your files are never uploaded to Watermelon's servers."
+            "value" : "Watermelon Backup reads your photos and videos to back up the originals to the SMB server, WebDAV server, or external drive you set up. Your files are never uploaded to Watermelon Backup's servers."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon lee tus fotos y vídeos para hacer una copia de seguridad de los originales en el servidor SMB, servidor WebDAV o unidad externa que tú configures. Tus archivos nunca se envían a los servidores de Watermelon."
+            "value" : "Backup Sandía lee tus fotos y vídeos para hacer una copia de seguridad de los originales en el servidor SMB, servidor WebDAV o unidad externa que tú configures. Tus archivos nunca se envían a los servidores de Backup Sandía."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon lee tus fotos y videos para respaldar los originales en el servidor SMB, servidor WebDAV o unidad externa que tú configures. Tus archivos nunca se envían a los servidores de Watermelon."
+            "value" : "Backup Sandía lee tus fotos y videos para respaldar los originales en el servidor SMB, servidor WebDAV o unidad externa que tú configures. Tus archivos nunca se envían a los servidores de Backup Sandía."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon lit vos photos et vidéos afin de sauvegarder les originaux sur le serveur SMB, le serveur WebDAV ou le support de stockage externe que vous configurez. Vos fichiers ne sont jamais envoyés aux serveurs de Watermelon."
+            "value" : "Melon Backup lit vos photos et vidéos afin de sauvegarder les originaux sur le serveur SMB, le serveur WebDAV ou le support de stockage externe que vous configurez. Vos fichiers ne sont jamais envoyés aux serveurs de Melon Backup."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelonは、ご自身で設定されたSMBサーバ、WebDAVサーバ、または外付けストレージに写真と動画のオリジナルをバックアップするためにライブラリを読み取ります。ファイルがWatermelonのサーバに送信されることはありません。"
+            "value" : "スイカバックアップは、ご自身で設定されたSMBサーバ、WebDAVサーバ、または外付けストレージに写真と動画のオリジナルをバックアップするためにライブラリを読み取ります。ファイルがスイカバックアップのサーバに送信されることはありません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon은 사용자가 직접 설정한 SMB 서버, WebDAV 서버 또는 외장 저장 장치로 원본 사진과 동영상을 백업하기 위해 라이브러리를 읽습니다. 파일은 Watermelon의 서버로 업로드되지 않습니다."
+            "value" : "수박 백업은 사용자가 직접 설정한 SMB 서버, WebDAV 서버 또는 외장 저장 장치로 원본 사진과 동영상을 백업하기 위해 라이브러리를 읽습니다. 파일은 수박 백업의 서버로 업로드되지 않습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon lê suas fotos e vídeos para fazer backup dos originais no servidor SMB, servidor WebDAV ou unidade externa configurada por você. Seus arquivos nunca são enviados para os servidores do Watermelon."
+            "value" : "O Backup Melancia lê suas fotos e vídeos para fazer backup dos originais no servidor SMB, servidor WebDAV ou unidade externa configurada por você. Seus arquivos nunca são enviados para os servidores do Backup Melancia."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O Watermelon lê as suas fotos e vídeos para fazer cópias de segurança dos originais no servidor SMB, servidor WebDAV ou unidade externa que configurar. Os seus ficheiros nunca são enviados para os servidores do Watermelon."
+            "value" : "O Backup Melancia lê as suas fotos e vídeos para fazer cópias de segurança dos originais no servidor SMB, servidor WebDAV ou unidade externa que configurar. Os seus ficheiros nunca são enviados para os servidores do Backup Melancia."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Арбуз Backup читает ваши фото и видео, чтобы создавать резервные копии оригиналов на настроенном вами SMB-сервере, WebDAV-сервере или внешнем накопителе. Файлы никогда не загружаются на серверы Арбуз Backup."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watermelon читає ваші фотографії та відео, щоб створювати резервні копії оригіналів на SMB-сервері, WebDAV-сервері або зовнішньому накопичувачі, який ви налаштували. Ваші файли ніколи не надсилаються на сервери Watermelon."
+            "value" : "Кавун Backup читає ваші фотографії та відео, щоб створювати резервні копії оригіналів на SMB-сервері, WebDAV-сервері або зовнішньому накопичувачі, який ви налаштували. Ваші файли ніколи не надсилаються на сервери Кавун Backup."
           }
         },
         "zh-Hans" : {
