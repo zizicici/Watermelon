@@ -353,7 +353,7 @@ final class AddSFTPStorageViewController: UIViewController {
             username: draft.username,
             domain: nil,
             credentialRef: draft.credentialRef,
-            backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? true,
+            backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? false,
             createdAt: draft.baseProfile?.createdAt ?? Date(),
             updatedAt: Date()
         )

@@ -292,7 +292,7 @@ final class AddS3StorageViewController: UIViewController {
             username: draft.accessKeyID,
             domain: nil,
             credentialRef: draft.credentialRef,
-            backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? true,
+            backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? false,
             createdAt: draft.baseProfile?.createdAt ?? Date(),
             updatedAt: Date()
         )

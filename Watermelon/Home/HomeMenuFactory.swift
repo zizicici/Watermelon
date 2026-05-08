@@ -133,7 +133,7 @@ struct HomeMenuFactory {
         for type in typeOrder {
             guard let actions = profilesByType[type], !actions.isEmpty else { continue }
             connectionChildren.append(
-                UIMenu(title: typeSectionTitle(for: type), options: .displayInline, children: actions)
+                UIMenu(title: type.sectionHeaderText, options: .displayInline, children: actions)
             )
         }
 
@@ -187,16 +187,6 @@ struct HomeMenuFactory {
         let manageSection = UIMenu(title: "", options: .displayInline, children: [addStorageMenu, manageAction])
         let connectionSection = UIMenu(title: "", options: .displayInline, children: [connectionMenu])
         return UIMenu(children: [manageSection, connectionSection])
-    }
-
-    private func typeSectionTitle(for type: StorageType) -> String {
-        switch type {
-        case .smb: return "SMB"
-        case .webdav: return "WebDAV"
-        case .s3: return "S3"
-        case .sftp: return "SFTP"
-        case .externalVolume: return String(localized: "home.menu.externalStorage")
-        }
     }
 
     func buildCategory(for intent: MonthIntent) -> UIMenu {

@@ -27,6 +27,33 @@ extension StorageType {
         case .externalVolume: return "externaldrive"
         }
     }
+
+    var sectionHeaderText: String {
+        switch self {
+        case .smb: return "SMB"
+        case .webdav: return "WebDAV"
+        case .externalVolume: return String(localized: "home.menu.externalStorage")
+        case .s3: return "S3"
+        case .sftp: return "SFTP"
+        }
+    }
+
+    static let sectionDisplayOrder: [StorageType] = [.smb, .webdav, .externalVolume, .s3, .sftp]
+}
+
+struct StorageProfileSection {
+    let type: StorageType
+    var profiles: [ServerProfileRecord]
+}
+
+extension Sequence where Element == ServerProfileRecord {
+    func groupedByStorageType(excluding skip: Set<StorageType> = []) -> [StorageProfileSection] {
+        StorageType.sectionDisplayOrder.compactMap { type in
+            guard !skip.contains(type) else { return nil }
+            let group = filter { $0.resolvedStorageType == type }
+            return group.isEmpty ? nil : StorageProfileSection(type: type, profiles: group)
+        }
+    }
 }
 
 nonisolated struct SFTPConnectionParams: Codable {

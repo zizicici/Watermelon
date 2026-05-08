@@ -13,6 +13,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         static let workerCount = "workerCount"
         static let iCloudPhotoBackup = "iCloudPhotoBackup"
         static let backgroundBackup = "backgroundBackup"
+        static let backgroundBackupNodes = "backgroundBackupNodes"
         static let language = "language"
         static let diagnosticLogs = "diagnosticLogs"
         static let pipProgress = "pipProgress"
@@ -49,7 +50,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
             ]
         )))
 
-        if dependencies != nil {
+        if let dependencies {
             sections.append(.custom(MoreCustomSection(
                 id: "remoteStorage",
                 header: String(localized: "more.section.remoteStorage"),
@@ -68,12 +69,26 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                         id: ItemID.iCloudPhotoBackup,
                         title: String(localized: "more.item.iCloudAccess"),
                         value: ICloudPhotoBackupMode.getValue().getName()
-                    ),
+                    )
+                ]
+            )))
+            let bgEligible = ((try? dependencies.databaseManager.fetchServerProfiles()) ?? [])
+                .filter { $0.resolvedStorageType != .externalVolume }
+            let bgEnabledCount = bgEligible.filter { $0.backgroundBackupEnabled }.count
+            sections.append(.custom(MoreCustomSection(
+                id: "backgroundBackup",
+                header: String(localized: "more.section.backgroundBackup"),
+                items: [
                     MoreCustomItem(
                         id: ItemID.backgroundBackup,
                         title: String(localized: "more.item.backgroundBackup"),
                         value: BackgroundBackupSetting.getValue().getName(),
                         badge: Self.proBadge
+                    ),
+                    MoreCustomItem(
+                        id: ItemID.backgroundBackupNodes,
+                        title: String(localized: "more.item.backgroundBackup.nodes"),
+                        value: "\(bgEnabledCount)/\(bgEligible.count)"
                     )
                 ]
             )))
@@ -123,6 +138,10 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         return sections
     }
 
+    func additionalReloadNotifications() -> [Notification.Name] {
+        [.BackgroundBackupProfileChanged, .ProfileListChanged]
+    }
+
     func moreViewController(_ controller: MoreViewController, didSelectCustomItem item: MoreCustomItem) {
         MainActor.assumeIsolated {
             switch item.id {
@@ -130,6 +149,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 guard let dependencies else { return }
                 let vc = ManageStorageProfilesViewController(dependencies: dependencies) { [weak self] in
                     self?.onProfilesChanged?()
+                    NotificationCenter.default.post(name: .ProfileListChanged, object: nil)
                 }
                 controller.pushViewController(vc)
             case ItemID.workerCount:
@@ -138,6 +158,10 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.enterSettings(ICloudPhotoBackupMode.self)
             case ItemID.backgroundBackup:
                 controller.enterSettings(BackgroundBackupSetting.self)
+            case ItemID.backgroundBackupNodes:
+                guard let dependencies else { return }
+                let vc = BackgroundBackupNodesViewController(dependencies: dependencies)
+                controller.pushViewController(vc)
             case ItemID.pipProgress:
                 controller.enterSettings(PiPProgressSetting.self)
             case ItemID.pipSound:

@@ -17,4 +17,14 @@ final class AppSession {
         activePassword = nil
         onSessionChanged?(nil)
     }
+
+    func setActiveBackgroundBackupEnabled(_ enabled: Bool, profileID: Int64) {
+        guard activeProfile?.id == profileID else { return }
+        activeProfile?.backgroundBackupEnabled = enabled
+    }
+}
+
+extension Notification.Name {
+    static let BackgroundBackupProfileChanged = Notification.Name("Watermelon.BackgroundBackupProfileChanged")
+    static let ProfileListChanged = Notification.Name("Watermelon.ProfileListChanged")
 }

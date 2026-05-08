@@ -617,8 +617,18 @@ final class StorageProfileDetailViewController: UIViewController {
             )
             return
         }
-        try? dependencies.databaseManager.setBackgroundBackupEnabled(sender.isOn, profileID: profileID)
-        profile.backgroundBackupEnabled = sender.isOn
+        do {
+            try dependencies.databaseManager.setBackgroundBackupEnabled(sender.isOn, profileID: profileID)
+            dependencies.appSession.setActiveBackgroundBackupEnabled(sender.isOn, profileID: profileID)
+            profile.backgroundBackupEnabled = sender.isOn
+            NotificationCenter.default.post(name: .BackgroundBackupProfileChanged, object: nil)
+        } catch {
+            sender.setOn(profile.backgroundBackupEnabled, animated: true)
+            presentAlert(
+                title: String(localized: "common.error"),
+                message: UserFacingErrorLocalizer.message(for: error)
+            )
+        }
     }
 
     private func presentAlert(title: String, message: String) {

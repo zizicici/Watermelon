@@ -6,7 +6,7 @@ final class ManageStorageProfilesViewController: UIViewController {
     private let onProfilesChanged: () -> Void
     private let onConnectRequested: ((ServerProfileRecord) -> Void)?
 
-    private var profiles: [ServerProfileRecord] = []
+    private var sections: [StorageProfileSection] = []
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
 
     init(
@@ -58,13 +58,20 @@ final class ManageStorageProfilesViewController: UIViewController {
     }
 
     private func reloadProfiles() {
-        profiles = (try? dependencies.databaseManager.fetchServerProfiles()) ?? []
+        let all = (try? dependencies.databaseManager.fetchServerProfiles()) ?? []
+        sections = all.groupedByStorageType()
         tableView.reloadData()
-        editButtonItem.isEnabled = profiles.count > 1
+        editButtonItem.isEnabled = sections.contains { $0.profiles.count > 1 }
+    }
+
+    private func profile(at indexPath: IndexPath) -> ServerProfileRecord? {
+        guard sections.indices.contains(indexPath.section),
+              sections[indexPath.section].profiles.indices.contains(indexPath.row) else { return nil }
+        return sections[indexPath.section].profiles[indexPath.row]
     }
 
     private func persistSortOrder() {
-        let ids = profiles.compactMap(\.id)
+        let ids = sections.flatMap { $0.profiles }.compactMap(\.id)
         guard !ids.isEmpty else { return }
         do {
             try dependencies.databaseManager.saveServerProfileSortOrder(profileIDs: ids)
@@ -88,10 +95,8 @@ final class ManageStorageProfilesViewController: UIViewController {
         navigationController?.pushViewController(detail, animated: true)
     }
 
-    private func deleteProfile(at index: Int) {
-        guard index >= 0, index < profiles.count else { return }
-        let profile = profiles[index]
-        guard let id = profile.id else { return }
+    private func deleteProfile(at indexPath: IndexPath) {
+        guard let profile = profile(at: indexPath), let id = profile.id else { return }
 
         // Verify task captures profile/password by value; deleting mid-verify lets it write to a freed id.
         let isActiveProfile = dependencies.appSession.activeProfile?.id == id
@@ -114,10 +119,20 @@ final class ManageStorageProfilesViewController: UIViewController {
                 try? dependencies.databaseManager.setActiveServerProfileID(nil)
                 dependencies.appSession.clear()
             }
-            profiles.remove(at: index)
-            try dependencies.databaseManager.saveServerProfileSortOrder(profileIDs: profiles.compactMap(\.id))
-            tableView.deleteRows(at: [IndexPath(row: index, section: 0)], with: .automatic)
-            editButtonItem.isEnabled = profiles.count > 1
+            sections[indexPath.section].profiles.remove(at: indexPath.row)
+            let sectionEmptied = sections[indexPath.section].profiles.isEmpty
+            if sectionEmptied {
+                sections.remove(at: indexPath.section)
+            }
+            try dependencies.databaseManager.saveServerProfileSortOrder(
+                profileIDs: sections.flatMap { $0.profiles }.compactMap(\.id)
+            )
+            if sectionEmptied {
+                tableView.deleteSections(IndexSet(integer: indexPath.section), with: .automatic)
+            } else {
+                tableView.deleteRows(at: [indexPath], with: .automatic)
+            }
+            editButtonItem.isEnabled = sections.contains { $0.profiles.count > 1 }
             onProfilesChanged()
         } catch {
             presentAlert(
@@ -135,13 +150,21 @@ final class ManageStorageProfilesViewController: UIViewController {
 }
 
 extension ManageStorageProfilesViewController: UITableViewDataSource, UITableViewDelegate {
+    func numberOfSections(in tableView: UITableView) -> Int {
+        sections.count
+    }
+
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        profiles.count
+        sections[section].profiles.count
+    }
+
+    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        sections[section].type.sectionHeaderText
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "profile", for: indexPath)
-        let profile = profiles[indexPath.row]
+        let profile = sections[indexPath.section].profiles[indexPath.row]
 
         var content = cell.defaultContentConfiguration()
         content.text = profile.storageProfile.displayTitle
@@ -155,23 +178,39 @@ extension ManageStorageProfilesViewController: UITableViewDataSource, UITableVie
     }
 
     func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {
-        indexPath.row < profiles.count
+        profile(at: indexPath) != nil
+    }
+
+    func tableView(
+        _ tableView: UITableView,
+        targetIndexPathForMoveFromRowAt sourceIndexPath: IndexPath,
+        toProposedIndexPath proposedDestinationIndexPath: IndexPath
+    ) -> IndexPath {
+        guard sourceIndexPath.section != proposedDestinationIndexPath.section else {
+            return proposedDestinationIndexPath
+        }
+        let lastRow = max(0, sections[sourceIndexPath.section].profiles.count - 1)
+        let row = proposedDestinationIndexPath.section < sourceIndexPath.section ? 0 : lastRow
+        return IndexPath(row: row, section: sourceIndexPath.section)
     }
 
     func tableView(_ tableView: UITableView, moveRowAt sourceIndexPath: IndexPath, to destinationIndexPath: IndexPath) {
-        guard sourceIndexPath.row < profiles.count, destinationIndexPath.row < profiles.count else { return }
-        let moved = profiles.remove(at: sourceIndexPath.row)
-        profiles.insert(moved, at: destinationIndexPath.row)
+        guard sourceIndexPath.section == destinationIndexPath.section,
+              sourceIndexPath.section < sections.count,
+              sourceIndexPath.row < sections[sourceIndexPath.section].profiles.count,
+              destinationIndexPath.row < sections[sourceIndexPath.section].profiles.count else { return }
+        let moved = sections[sourceIndexPath.section].profiles.remove(at: sourceIndexPath.row)
+        sections[sourceIndexPath.section].profiles.insert(moved, at: destinationIndexPath.row)
         persistSortOrder()
     }
 
     func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool {
-        indexPath.row < profiles.count
+        profile(at: indexPath) != nil
     }
 
     func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         let delete = UIContextualAction(style: .destructive, title: String(localized: "common.delete")) { [weak self] _, _, completion in
-            self?.deleteProfile(at: indexPath.row)
+            self?.deleteProfile(at: indexPath)
             completion(true)
         }
         return UISwipeActionsConfiguration(actions: [delete])
@@ -179,9 +218,7 @@ extension ManageStorageProfilesViewController: UITableViewDataSource, UITableVie
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard !tableView.isEditing,
-              indexPath.row < profiles.count
-        else { return }
-        showDetail(for: profiles[indexPath.row])
+        guard !tableView.isEditing, let profile = profile(at: indexPath) else { return }
+        showDetail(for: profile)
     }
 }

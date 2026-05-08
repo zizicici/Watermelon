@@ -1236,79 +1236,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Speicher verwalten"
+            "value" : "Knoten verwalten"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Manage Remote Storage"
+            "value" : "Manage Nodes"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Administrar almacenamiento remoto"
+            "value" : "Administrar nodos"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Administrar almacenamiento remoto"
+            "value" : "Administrar nodos"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gérer le stockage distant"
+            "value" : "Gérer les nœuds"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リモートストレージを管理"
+            "value" : "ノードを管理"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 저장소 관리"
+            "value" : "노드 관리"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gerenciar armazenamento remoto"
+            "value" : "Gerenciar nós"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gerir armazenamento remoto"
+            "value" : "Gerir nós"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Керувати віддаленим сховищем"
+            "value" : "Керувати вузлами"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理远端存储"
+            "value" : "管理节点"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理遠端儲存"
+            "value" : "管理節點"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "管理遠端儲存"
+            "value" : "管理節點"
           }
         }
       }
@@ -15258,79 +15258,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der Remote-Speicher ist nicht verfügbar. Stoppen Sie das Backup sofort."
+            "value" : "Der Knoten ist nicht verfügbar. Stoppen Sie das Backup sofort."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote storage is unavailable. Stop the backup immediately."
+            "value" : "The node is unavailable. Stop the backup immediately."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El almacenamiento remoto no está disponible. Detenga la copia de seguridad de inmediato."
+            "value" : "El nodo no está disponible. Detenga la copia de seguridad de inmediato."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El almacenamiento remoto no está disponible. Detenga la copia de seguridad de inmediato."
+            "value" : "El nodo no está disponible. Detenga la copia de seguridad de inmediato."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le stockage distant est indisponible. Arrêtez immédiatement la sauvegarde."
+            "value" : "Le nœud est indisponible. Arrêtez immédiatement la sauvegarde."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リモートストレージを利用できません。バックアップを直ちに停止します。"
+            "value" : "ノードを利用できません。バックアップを直ちに停止します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 저장소를 사용할 수 없습니다. 백업을 즉시 중지합니다."
+            "value" : "노드를 사용할 수 없습니다. 백업을 즉시 중지합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O armazenamento remoto não está disponível. Pare o backup imediatamente."
+            "value" : "O nó não está disponível. Pare o backup imediatamente."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O armazenamento remoto não está disponível. Pare a cópia imediatamente."
+            "value" : "O nó não está disponível. Pare a cópia imediatamente."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Віддалене сховище недоступне. Негайно зупиніть резервне копіювання."
+            "value" : "Вузол недоступний. Негайно зупиніть резервне копіювання."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "远端存储不可用，立即停止备份。"
+            "value" : "节点不可用，立即停止备份。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "遠端儲存不可用，立即停止備份。"
+            "value" : "節點不可用，立即停止備份。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "遠端儲存不可用，立即停止備份。"
+            "value" : "節點不可用，立即停止備份。"
           }
         }
       }
@@ -15504,79 +15504,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Parallelität #%1$lld: Monat %2$@ wurde vor Abschluss beendet, weil der Remote-Speicher nicht mehr verfügbar war. Das Schreiben des Manifests wurde übersprungen."
+            "value" : "Parallelität #%1$lld: Monat %2$@ wurde vor Abschluss beendet, weil der Knoten nicht mehr verfügbar war. Das Schreiben des Manifests wurde übersprungen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrent #%1$lld: month %2$@ stopped before completion because remote storage became unavailable. Manifest flush skipped."
+            "value" : "Concurrent #%1$lld: month %2$@ stopped before completion because the node became unavailable. Manifest flush skipped."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse porque el almacenamiento remoto dejó de estar disponible. Se omitió el guardado del manifiesto."
+            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse porque el nodo dejó de estar disponible. Se omitió el guardado del manifiesto."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse porque el almacenamiento remoto dejó de estar disponible. Se omitió el guardado del manifiesto."
+            "value" : "Concurrencia #%1$lld: el mes %2$@ se detuvo antes de completarse porque el nodo dejó de estar disponible. Se omitió el guardado del manifiesto."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Simultanéité #%1$lld : le mois %2$@ s’est arrêté avant la fin car le stockage distant est devenu indisponible. L’écriture du manifeste a été ignorée."
+            "value" : "Simultanéité #%1$lld : le mois %2$@ s’est arrêté avant la fin car le nœud est devenu indisponible. L’écriture du manifeste a été ignorée."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "同時実行 #%1$lld: リモートストレージが利用できなくなったため、月 %2$@ は完了前に停止しました。マニフェストの flush はスキップされました。"
+            "value" : "同時実行 #%1$lld: ノードを利用できなくなったため、月 %2$@ は完了前に停止しました。マニフェストの flush はスキップされました。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "동시 실행 #%1$lld: 원격 저장소를 사용할 수 없게 되어 %2$@월 작업이 완료 전에 중단되었습니다. 매니페스트 flush를 건너뜁니다."
+            "value" : "동시 실행 #%1$lld: 노드를 사용할 수 없게 되어 %2$@월 작업이 완료 전에 중단되었습니다. 매니페스트 flush를 건너뜁니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão porque o armazenamento remoto ficou indisponível. O flush do manifesto foi ignorado."
+            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão porque o nó ficou indisponível. O flush do manifesto foi ignorado."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão porque o armazenamento remoto ficou indisponível. O flush do manifesto foi ignorado."
+            "value" : "Concorrência #%1$lld: o mês %2$@ foi interrompido antes da conclusão porque o nó ficou indisponível. O flush do manifesto foi ignorado."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Паралельність #%1$lld: місяць %2$@ зупинено до завершення, оскільки віддалене сховище стало недоступним. Запис маніфесту пропущено."
+            "value" : "Паралельність #%1$lld: місяць %2$@ зупинено до завершення, оскільки вузол став недоступним. Запис маніфесту пропущено."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "并发 #%1$lld：月份 %2$@ 因远端存储不可用而在完成前中止，已跳过 manifest flush。"
+            "value" : "并发 #%1$lld：月份 %2$@ 因节点不可用而在完成前中止，已跳过 manifest flush。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "並行 #%1$lld：月份 %2$@ 因遠端儲存不可用而在完成前中止，已跳過 manifest flush。"
+            "value" : "並行 #%1$lld：月份 %2$@ 因節點不可用而在完成前中止，已跳過 manifest flush。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "並行 #%1$lld：月份 %2$@ 因遠端儲存不可用而在完成前中止，已跳過 manifest flush。"
+            "value" : "並行 #%1$lld：月份 %2$@ 因節點不可用而在完成前中止，已跳過 manifest flush。"
           }
         }
       }
@@ -17718,79 +17718,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Verbinden Sie zuerst den Remote-Speicher"
+            "value" : "Verbinden Sie zuerst einen Knoten"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Connect remote storage first"
+            "value" : "Connect a node first"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conecte primero el almacenamiento remoto"
+            "value" : "Conecte primero un nodo"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conecte primero el almacenamiento remoto"
+            "value" : "Conecte primero un nodo"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Connectez d’abord le stockage distant"
+            "value" : "Connectez d’abord un nœud"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "先にリモートストレージへ接続してください"
+            "value" : "先にノードへ接続してください"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "먼저 원격 저장소에 연결해 주세요"
+            "value" : "먼저 노드에 연결해 주세요"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conecte primeiro o armazenamento remoto"
+            "value" : "Conecte primeiro um nó"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ligue primeiro o armazenamento remoto"
+            "value" : "Ligue primeiro um nó"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Спочатку підключіть віддалене сховище"
+            "value" : "Спочатку підключіть вузол"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请先连接远端存储"
+            "value" : "请先连接节点"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請先連線遠端儲存"
+            "value" : "請先連線節點"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請先連線遠端儲存"
+            "value" : "請先連線節點"
           }
         }
       }
@@ -28148,79 +28148,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Speicher nicht verbunden"
+            "value" : "Kein Knoten verbunden"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote storage not connected"
+            "value" : "No node connected"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Almacenamiento remoto no conectado"
+            "value" : "Sin nodo conectado"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Almacenamiento remoto no conectado"
+            "value" : "Sin nodo conectado"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stockage distant non connecté"
+            "value" : "Aucun nœud connecté"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リモートストレージ未接続"
+            "value" : "ノード未接続"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 저장소에 연결되지 않음"
+            "value" : "노드에 연결되지 않음"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Armazenamento remoto não conectado"
+            "value" : "Nenhum nó conectado"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Armazenamento remoto não ligado"
+            "value" : "Nenhum nó ligado"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Віддалене сховище не під'єднано"
+            "value" : "Жоден вузол не підключено"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未连接远端存储"
+            "value" : "未连接节点"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未連接遠端儲存"
+            "value" : "未連接節點"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未連接遠端儲存"
+            "value" : "未連接節點"
           }
         }
       }
@@ -29050,79 +29050,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Speicher"
+            "value" : "Knoten"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote Storage"
+            "value" : "Node"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Almacenamiento remoto"
+            "value" : "Nodo"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Almacenamiento remoto"
+            "value" : "Nodo"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stockage distant"
+            "value" : "Nœud"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リモートストレージ"
+            "value" : "ノード"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 저장소"
+            "value" : "노드"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Armazenamento remoto"
+            "value" : "Nó"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Armazenamento remoto"
+            "value" : "Nó"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Віддалене сховище"
+            "value" : "Вузол"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "远端存储"
+            "value" : "节点"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "遠端儲存"
+            "value" : "節點"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "遠端儲存"
+            "value" : "節點"
           }
         }
       }
@@ -32330,79 +32330,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Speicher nicht verbunden"
+            "value" : "Kein Knoten verbunden"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote storage not connected"
+            "value" : "No node connected"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Almacenamiento remoto no conectado"
+            "value" : "Sin nodo conectado"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Almacenamiento remoto no conectado"
+            "value" : "Sin nodo conectado"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stockage distant non connecté"
+            "value" : "Aucun nœud connecté"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リモートストレージ未接続"
+            "value" : "ノード未接続"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 저장소에 연결되지 않음"
+            "value" : "노드에 연결되지 않음"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Armazenamento remoto não conectado"
+            "value" : "Nenhum nó conectado"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Armazenamento remoto não ligado"
+            "value" : "Nenhum nó ligado"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Віддалене сховище не під'єднано"
+            "value" : "Жоден вузол не підключено"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未连接远端存储"
+            "value" : "未连接节点"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未連接遠端儲存"
+            "value" : "未連接節點"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未連接遠端儲存"
+            "value" : "未連接節點"
           }
         }
       }
@@ -34785,6 +34785,88 @@
         }
       }
     },
+    "more.item.backgroundBackup.nodes" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Knoten für automatische Sicherung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto-Backup Nodes"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nodos de respaldo automático"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nodos de respaldo automático"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nœuds de sauvegarde automatique"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動バックアップ対象ノード"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "자동 백업 노드"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nós de backup automático"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nós de cópia automática"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вузли автоматичного резервного копіювання"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动备份节点"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動備份節點"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動備份節點"
+          }
+        }
+      }
+    },
     "more.item.diagnosticLogs" : {
       "localizations" : {
         "de" : {
@@ -35359,6 +35441,88 @@
         }
       }
     },
+    "more.section.backgroundBackup" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automatische Sicherung"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto-Backup"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo automático"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Respaldo automático"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarde automatique"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動バックアップ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "자동 백업"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup automático"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópia automática"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Автоматичне резервне копіювання"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动备份"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動備份"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動備份"
+          }
+        }
+      }
+    },
     "more.section.backup" : {
       "localizations" : {
         "de" : {
@@ -35692,79 +35856,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Speicher"
+            "value" : "Knoten"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote Storage"
+            "value" : "Nodes"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Almacenamiento remoto"
+            "value" : "Nodos"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Almacenamiento remoto"
+            "value" : "Nodos"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stockage distant"
+            "value" : "Nœuds"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リモートストレージ"
+            "value" : "ノード"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 저장소"
+            "value" : "노드"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Armazenamento remoto"
+            "value" : "Nós"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Armazenamento remoto"
+            "value" : "Nós"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Віддалене сховище"
+            "value" : "Вузли"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "远端存储"
+            "value" : "节点"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "遠端儲存"
+            "value" : "節點"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "遠端儲存"
+            "value" : "節點"
           }
         }
       }
@@ -44058,79 +44222,79 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote-Übersicht"
+            "value" : "Knoten-Übersicht"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remote Overview"
+            "value" : "Node Overview"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Resumen remoto"
+            "value" : "Resumen del nodo"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Resumen remoto"
+            "value" : "Resumen del nodo"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aperçu distant"
+            "value" : "Aperçu du nœud"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リモートの概要"
+            "value" : "ノードの概要"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "원격 개요"
+            "value" : "노드 개요"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Visão geral remota"
+            "value" : "Visão geral do nó"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Visão geral remota"
+            "value" : "Visão geral do nó"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Огляд віддаленого сховища"
+            "value" : "Огляд вузла"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "远端存储概览"
+            "value" : "节点概览"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "遠端存儲概覽"
+            "value" : "節點概覽"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "遠端存儲概覽"
+            "value" : "節點概覽"
           }
         }
       }
