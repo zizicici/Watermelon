@@ -506,7 +506,7 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
         case .name:
             return nil
         case .server:
-            return nil
+            return String(localized: "auth.webdav.footerServer")
         case .paths:
             return String(localized: "auth.webdav.footerNew")
         case .credentials:

@@ -7545,6 +7545,94 @@
         }
       }
     },
+    "auth.webdav.footerServer" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP wird nur für Server im lokalen Netzwerk unterstützt. Verwende HTTPS für DDNS- oder öffentliche Hostnamen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP is supported only for local network servers. Use HTTPS for DDNS or public hostnames."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP solo es compatible con servidores de la red local. Usa HTTPS para DDNS o nombres de host públicos."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP solo es compatible con servidores de la red local. Usa HTTPS para DDNS o nombres de host públicos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP est pris en charge uniquement pour les serveurs du réseau local. Utilisez HTTPS pour les noms d’hôte DDNS ou publics."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP はローカルネットワーク上のサーバーでのみサポートされます。DDNS や公開ホスト名には HTTPS を使用してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP는 로컬 네트워크 서버에서만 지원됩니다. DDNS 또는 공개 호스트 이름에는 HTTPS를 사용하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP só é compatível com servidores da rede local. Use HTTPS para DDNS ou nomes de host públicos."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP só é compatível com servidores da rede local. Use HTTPS para DDNS ou nomes de host públicos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP поддерживается только для серверов в локальной сети. Для DDNS или общедоступных имён хостов используйте HTTPS."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP підтримується лише для серверів у локальній мережі. Для DDNS або загальнодоступних імен хостів використовуйте HTTPS."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP 仅支持本地局域网服务器。DDNS 或公网域名请使用 HTTPS。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP 僅支援本地區域網路伺服器。DDNS 或公開網域請使用 HTTPS。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HTTP 僅支援本地區域網絡伺服器。DDNS 或公開網域請使用 HTTPS。"
+          }
+        }
+      }
+    },
     "auth.webdav.invalidEndpoint" : {
       "localizations" : {
         "de" : {
