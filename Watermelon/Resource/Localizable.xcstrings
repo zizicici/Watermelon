@@ -4494,85 +4494,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Zuerst wird ein moderner Algorithmensatz versucht, bei Fehlschlag automatisch ein Kompatibilitätssatz.\n\nKEX: curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nHostschlüssel: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nVerschlüsselung: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAuthentifizierung: Passwort, OpenSSH Ed25519/RSA-Privatschlüssel\n\nServer, die nur CBC/3DES oder diffie-hellman-group1 anbieten, werden nicht unterstützt."
+            "value" : "Zuerst wird ein moderner Algorithmensatz versucht, bei Fehlschlag automatisch ein Kompatibilitätssatz.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nHostschlüssel: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nVerschlüsselung: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAuthentifizierung: Passwort, OpenSSH Ed25519/RSA-Privatschlüssel\n\nServer, die nur CBC/3DES oder diffie-hellman-group1 anbieten, werden nicht unterstützt."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tries a modern algorithm set first, then automatically retries a compatibility set.\n\nKEX: curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nHost keys: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCiphers: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAuth: password, OpenSSH Ed25519/RSA private keys\n\nServers offering only CBC/3DES ciphers or diffie-hellman-group1 are not supported."
+            "value" : "Tries a modern algorithm set first, then automatically retries a compatibility set.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nHost keys: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCiphers: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAuth: password, OpenSSH Ed25519/RSA private keys\n\nServers offering only CBC/3DES ciphers or diffie-hellman-group1 are not supported."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Primero se prueba un conjunto de algoritmos moderno y, si falla, se reintenta automáticamente con un conjunto de compatibilidad.\n\nKEX: curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nClaves de host: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifrados: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticación: contraseña, claves privadas OpenSSH Ed25519/RSA\n\nNo se admiten servidores que solo ofrecen CBC/3DES o diffie-hellman-group1."
+            "value" : "Primero se prueba un conjunto de algoritmos moderno y, si falla, se reintenta automáticamente con un conjunto de compatibilidad.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nClaves de host: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifrados: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticación: contraseña, claves privadas OpenSSH Ed25519/RSA\n\nNo se admiten servidores que solo ofrecen CBC/3DES o diffie-hellman-group1."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Primero se prueba un conjunto de algoritmos moderno y, si falla, se reintenta automáticamente con un conjunto de compatibilidad.\n\nKEX: curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nClaves de host: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifrados: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticación: contraseña, claves privadas OpenSSH Ed25519/RSA\n\nNo se admiten servidores que solo ofrecen CBC/3DES o diffie-hellman-group1."
+            "value" : "Primero se prueba un conjunto de algoritmos moderno y, si falla, se reintenta automáticamente con un conjunto de compatibilidad.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nClaves de host: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifrados: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticación: contraseña, claves privadas OpenSSH Ed25519/RSA\n\nNo se admiten servidores que solo ofrecen CBC/3DES o diffie-hellman-group1."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Un ensemble d'algorithmes moderne est tenté en premier, puis un ensemble de compatibilité est réessayé automatiquement en cas d'échec.\n\nKEX : curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nClés d'hôte : ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nChiffrements : aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAuthentification : mot de passe, clés privées OpenSSH Ed25519/RSA\n\nLes serveurs qui ne proposent que CBC/3DES ou diffie-hellman-group1 ne sont pas pris en charge."
+            "value" : "Un ensemble d'algorithmes moderne est tenté en premier, puis un ensemble de compatibilité est réessayé automatiquement en cas d'échec.\n\nKEX : curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nClés d'hôte : ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nChiffrements : aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAuthentification : mot de passe, clés privées OpenSSH Ed25519/RSA\n\nLes serveurs qui ne proposent que CBC/3DES ou diffie-hellman-group1 ne sont pas pris en charge."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "最新のアルゴリズムセットを先に試し、失敗時に互換アルゴリズムセットで自動再試行します。\n\nKEX: curve25519-sha256、ecdh-sha2-nistp256/384/521、diffie-hellman-group14-sha1/sha256\nホスト鍵: ssh-ed25519、ecdsa-sha2-nistp256/384/521、ssh-rsa\n暗号: aes128-gcm@openssh.com、aes256-gcm@openssh.com、aes128-ctr\n認証: パスワード、OpenSSH Ed25519/RSA 秘密鍵\n\nCBC/3DES または diffie-hellman-group1 のみを提供するサーバーには対応していません。"
+            "value" : "最新のアルゴリズムセットを先に試し、失敗時に互換アルゴリズムセットで自動再試行します。\n\nKEX: curve25519-sha256、curve25519-sha256@libssh.org、ecdh-sha2-nistp256/384/521、diffie-hellman-group14-sha1/sha256\nホスト鍵: ssh-ed25519、ecdsa-sha2-nistp256/384/521、ssh-rsa\n暗号: aes128-gcm@openssh.com、aes256-gcm@openssh.com、aes128-ctr\n認証: パスワード、OpenSSH Ed25519/RSA 秘密鍵\n\nCBC/3DES または diffie-hellman-group1 のみを提供するサーバーには対応していません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "먼저 최신 알고리즘 세트로 시도한 뒤, 실패하면 호환성 세트로 자동 재시도합니다.\n\nKEX: curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\n호스트 키: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\n암호화: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\n인증: 비밀번호, OpenSSH Ed25519/RSA 개인 키\n\nCBC/3DES 또는 diffie-hellman-group1만 제공하는 서버는 지원하지 않습니다."
+            "value" : "먼저 최신 알고리즘 세트로 시도한 뒤, 실패하면 호환성 세트로 자동 재시도합니다.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\n호스트 키: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\n암호화: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\n인증: 비밀번호, OpenSSH Ed25519/RSA 개인 키\n\nCBC/3DES 또는 diffie-hellman-group1만 제공하는 서버는 지원하지 않습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tenta primeiro um conjunto de algoritmos moderno e, em caso de falha, repete automaticamente com um conjunto de compatibilidade.\n\nKEX: curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nChaves de host: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifras: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticação: senha, chaves privadas OpenSSH Ed25519/RSA\n\nServidores que oferecem apenas CBC/3DES ou diffie-hellman-group1 não são compatíveis."
+            "value" : "Tenta primeiro um conjunto de algoritmos moderno e, em caso de falha, repete automaticamente com um conjunto de compatibilidade.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nChaves de host: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifras: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticação: senha, chaves privadas OpenSSH Ed25519/RSA\n\nServidores que oferecem apenas CBC/3DES ou diffie-hellman-group1 não são compatíveis."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tenta primeiro um conjunto de algoritmos moderno e, em caso de falha, repete automaticamente com um conjunto de compatibilidade.\n\nKEX: curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nChaves de anfitrião: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifras: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticação: palavra-passe, chaves privadas OpenSSH Ed25519/RSA\n\nServidores que apenas oferecem CBC/3DES ou diffie-hellman-group1 não são suportados."
+            "value" : "Tenta primeiro um conjunto de algoritmos moderno e, em caso de falha, repete automaticamente com um conjunto de compatibilidade.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nChaves de anfitrião: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nCifras: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nAutenticação: palavra-passe, chaves privadas OpenSSH Ed25519/RSA\n\nServidores que apenas oferecem CBC/3DES ou diffie-hellman-group1 não são suportados."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Сначала выполняется попытка с современным набором алгоритмов, затем — автоматический повтор с набором совместимости.\n\nKEX: curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nКлючи хоста: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nШифры: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nАутентификация: пароль, приватные ключи OpenSSH Ed25519/RSA\n\nСерверы, предлагающие только CBC/3DES или diffie-hellman-group1, не поддерживаются."
+            "value" : "Сначала выполняется попытка с современным набором алгоритмов, затем — автоматический повтор с набором совместимости.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nКлючи хоста: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nШифры: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nАутентификация: пароль, приватные ключи OpenSSH Ed25519/RSA\n\nСерверы, предлагающие только CBC/3DES или diffie-hellman-group1, не поддерживаются."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Спочатку виконується спроба з сучасним набором алгоритмів, потім — автоматичний повтор з набором сумісності.\n\nKEX: curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nКлючі хоста: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nШифри: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nАвтентифікація: пароль, приватні ключі OpenSSH Ed25519/RSA\n\nСервери, що пропонують лише CBC/3DES або diffie-hellman-group1, не підтримуються."
+            "value" : "Спочатку виконується спроба з сучасним набором алгоритмів, потім — автоматичний повтор з набором сумісності.\n\nKEX: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha1/sha256\nКлючі хоста: ssh-ed25519, ecdsa-sha2-nistp256/384/521, ssh-rsa\nШифри: aes128-gcm@openssh.com, aes256-gcm@openssh.com, aes128-ctr\nАвтентифікація: пароль, приватні ключі OpenSSH Ed25519/RSA\n\nСервери, що пропонують лише CBC/3DES або diffie-hellman-group1, не підтримуються."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "先尝试现代算法集协商，失败时自动重试兼容算法集。\n\nKEX：curve25519-sha256、ecdh-sha2-nistp256/384/521、diffie-hellman-group14-sha1/sha256\n主机密钥：ssh-ed25519、ecdsa-sha2-nistp256/384/521、ssh-rsa\n加密：aes128-gcm@openssh.com、aes256-gcm@openssh.com、aes128-ctr\n认证：密码、OpenSSH Ed25519/RSA 私钥\n\n仅提供 CBC/3DES 或 diffie-hellman-group1 的服务器不支持。"
+            "value" : "先尝试现代算法集协商，失败时自动重试兼容算法集。\n\nKEX：curve25519-sha256、curve25519-sha256@libssh.org、ecdh-sha2-nistp256/384/521、diffie-hellman-group14-sha1/sha256\n主机密钥：ssh-ed25519、ecdsa-sha2-nistp256/384/521、ssh-rsa\n加密：aes128-gcm@openssh.com、aes256-gcm@openssh.com、aes128-ctr\n认证：密码、OpenSSH Ed25519/RSA 私钥\n\n仅提供 CBC/3DES 或 diffie-hellman-group1 的服务器不支持。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "先嘗試現代演算法集協商，失敗時自動重試相容演算法集。\n\nKEX：curve25519-sha256、ecdh-sha2-nistp256/384/521、diffie-hellman-group14-sha1/sha256\n主機金鑰：ssh-ed25519、ecdsa-sha2-nistp256/384/521、ssh-rsa\n加密：aes128-gcm@openssh.com、aes256-gcm@openssh.com、aes128-ctr\n認證：密碼、OpenSSH Ed25519/RSA 私鑰\n\n僅提供 CBC/3DES 或 diffie-hellman-group1 的伺服器不支援。"
+            "value" : "先嘗試現代演算法集協商，失敗時自動重試相容演算法集。\n\nKEX：curve25519-sha256、curve25519-sha256@libssh.org、ecdh-sha2-nistp256/384/521、diffie-hellman-group14-sha1/sha256\n主機金鑰：ssh-ed25519、ecdsa-sha2-nistp256/384/521、ssh-rsa\n加密：aes128-gcm@openssh.com、aes256-gcm@openssh.com、aes128-ctr\n認證：密碼、OpenSSH Ed25519/RSA 私鑰\n\n僅提供 CBC/3DES 或 diffie-hellman-group1 的伺服器不支援。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "先嘗試現代演算法集協商，失敗時自動重試相容演算法集。\n\nKEX：curve25519-sha256、ecdh-sha2-nistp256/384/521、diffie-hellman-group14-sha1/sha256\n主機金鑰：ssh-ed25519、ecdsa-sha2-nistp256/384/521、ssh-rsa\n加密：aes128-gcm@openssh.com、aes256-gcm@openssh.com、aes128-ctr\n認證：密碼、OpenSSH Ed25519/RSA 私鑰\n\n僅提供 CBC/3DES 或 diffie-hellman-group1 的伺服器不支援。"
+            "value" : "先嘗試現代演算法集協商，失敗時自動重試相容演算法集。\n\nKEX：curve25519-sha256、curve25519-sha256@libssh.org、ecdh-sha2-nistp256/384/521、diffie-hellman-group14-sha1/sha256\n主機金鑰：ssh-ed25519、ecdsa-sha2-nistp256/384/521、ssh-rsa\n加密：aes128-gcm@openssh.com、aes256-gcm@openssh.com、aes128-ctr\n認證：密碼、OpenSSH Ed25519/RSA 私鑰\n\n僅提供 CBC/3DES 或 diffie-hellman-group1 的伺服器不支援。"
           }
         }
       }
