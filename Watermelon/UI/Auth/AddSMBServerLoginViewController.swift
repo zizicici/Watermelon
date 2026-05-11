@@ -311,8 +311,10 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         guard let section = Section(rawValue: section) else { return nil }
         switch section {
-        case .name, .server:
+        case .name:
             return nil
+        case .server:
+            return String(localized: "auth.smb.login.footerServer")
         case .credentials:
             return editingProfile == nil ? String(localized: "auth.smb.login.footerNew") : String(localized: "auth.smb.login.footerEdit")
         }
