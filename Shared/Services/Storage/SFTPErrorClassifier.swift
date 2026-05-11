@@ -2,6 +2,7 @@ import Citadel
 import Foundation
 import NIOCore
 import NIOPosix
+import NIOSSH
 
 enum SFTPErrorClassifier {
     static func describe(_ error: Error) -> String {
@@ -48,6 +49,10 @@ enum SFTPErrorClassifier {
             }
         }
 
+        if error is NIOSSHError {
+            return String(localized: "sftp.error.cannotConnect")
+        }
+
         if isConnectionUnavailable(error) {
             return String(localized: "sftp.error.cannotConnect")
         }
@@ -68,6 +73,7 @@ enum SFTPErrorClassifier {
             }
         }
         if let sftp = error as? SFTPError, case .connectionClosed = sftp { return true }
+        if error is NIOSSHError { return true }
         if error is NIOConnectionError { return true }
         if let channel = error as? ChannelError, case .connectTimeout = channel { return true }
         let nsError = error as NSError

@@ -42,7 +42,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         )
         let port = config.port == 0 ? 22 : config.port
 
-        let ssh = try await SSHClient.connect(
+        let ssh = try await Self.connectSSH(
             host: config.host,
             port: port,
             authenticationMethod: auth,
@@ -351,6 +351,74 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         }
     }
 
+    private enum SSHAlgorithmMode {
+        case modern
+        case compatible
+
+        var algorithms: SSHAlgorithms {
+            switch self {
+            case .modern:
+                return SSHAlgorithms()
+            case .compatible:
+                return .all
+            }
+        }
+    }
+
+    private nonisolated static func connectSSH(
+        host: String,
+        port: Int,
+        authenticationMethod: SSHAuthenticationMethod,
+        hostKeyValidator: SSHHostKeyValidator,
+        reconnect: SSHReconnectMode
+    ) async throws -> SSHClient {
+        var lastError: Error?
+        for mode in [SSHAlgorithmMode.modern, .compatible] {
+            do {
+                return try await SSHClient.connect(
+                    host: host,
+                    port: port,
+                    authenticationMethod: authenticationMethod,
+                    hostKeyValidator: hostKeyValidator,
+                    reconnect: reconnect,
+                    algorithms: mode.algorithms
+                )
+            } catch {
+                lastError = error
+                guard mode == .modern, shouldRetryWithCompatibleAlgorithms(after: error) else {
+                    throw error
+                }
+            }
+        }
+        throw lastError ?? RemoteStorageClientError.unavailable
+    }
+
+    private nonisolated static func shouldRetryWithCompatibleAlgorithms(after error: Error) -> Bool {
+        if error is SFTPHostKeyMismatchError { return false }
+        if error is HostKeyCaptureSentinel { return false }
+        if error is AuthenticationFailed { return false }
+        if let sshClientError = error as? SSHClientError {
+            switch sshClientError {
+            case .allAuthenticationOptionsFailed, .unsupportedPasswordAuthentication,
+                 .unsupportedPrivateKeyAuthentication, .unsupportedHostBasedAuthentication:
+                return false
+            case .channelCreationFailed:
+                return true
+            }
+        }
+        if error is NIOSSHError { return true }
+        if let citadel = error as? CitadelError {
+            switch citadel {
+            case .unauthorized:
+                return false
+            default:
+                return true
+            }
+        }
+        if error is RemoteStorageClientError { return false }
+        return true
+    }
+
     // Run at save time so a broken base path surfaces in the editor instead of at first backup.
     static func verifyBasePathWritable(config: Config, basePath: String) async throws {
         let client = SFTPClient(config: config)
@@ -383,7 +451,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     nonisolated static func captureHostKeyFingerprint(host: String, port: Int) async throws -> String {
         let validator = HostKeyValidator(mode: .captureAndAbort)
         do {
-            _ = try await SSHClient.connect(
+            _ = try await connectSSH(
                 host: host,
                 port: port == 0 ? 22 : port,
                 authenticationMethod: .passwordBased(username: "", password: ""),
