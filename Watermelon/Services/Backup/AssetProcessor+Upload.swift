@@ -18,7 +18,7 @@ struct UploadRetryOutcome {
 extension AssetProcessor {
     func uploadResource(
         prepared: PreparedResource,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
         workerID: Int,
@@ -108,7 +108,7 @@ extension AssetProcessor {
 
     func prepareUpload(
         prepared: PreparedResource,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
         displayName: String,
@@ -126,36 +126,47 @@ extension AssetProcessor {
 
         let existingFileNames = monthStore.existingFileNames()
         let existingCollisionKeys = RemoteFileNaming.collisionKeySet(from: existingFileNames)
-        if existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: targetFileName)) {
-            let existingManifestResource = monthStore.findByFileName(targetFileName)
-            let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: targetFileName)
-            if localFileSize < Self.smallFileThresholdBytes {
-                if let knownRemoteSize, knownRemoteSize != localFileSize {
-                    // Different size means definitely not the same file; avoid remote download+hash.
-                } else {
-                    try cancellationController?.throwIfCancelled()
-                    try Task.checkCancellation()
-                    let remoteHash = try await downloadAndHashRemoteFileForConflictCheck(
-                        profile: profile,
-                        client: client,
-                        monthStore: monthStore,
-                        fileName: targetFileName,
-                        displayName: displayName,
-                        eventStream: eventStream,
-                        cancellationController: cancellationController
-                    )
-                    if let remoteHash, remoteHash == localHash {
-                        skipReason = "name_same_hash"
-                    }
+
+        // .overwritePossible backends (SMB / S3-multipart) need writerID-suffix to keep peer uploads distinct.
+        let baseRemotePath = RemotePathBuilder.absolutePath(
+            basePath: profile.basePath,
+            remoteRelativePath: monthStore.monthRelativePath + "/" + baseFileName
+        )
+        let baseGuarantee = client.atomicCreateGuarantee(forFileSize: localFileSize, remotePath: baseRemotePath)
+        let forceWriterIDSuffix = baseGuarantee == .overwritePossible && monthStore.v2Services?.writerID != nil
+        let baseCollides = existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: baseFileName))
+
+        // Same-name + same-hash = orphan reuse; runs before suffix-rename so crash retries don't bloat remote with ~writerID duplicates.
+        if baseCollides {
+            let existingManifestResource = monthStore.findByFileName(baseFileName)
+            let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: baseFileName)
+            let sizesMatchOrUnknown = knownRemoteSize == nil || knownRemoteSize == localFileSize
+            if sizesMatchOrUnknown {
+                try cancellationController?.throwIfCancelled()
+                try Task.checkCancellation()
+                let remoteHash = try await downloadAndHashRemoteFileForConflictCheck(
+                    profile: profile,
+                    client: client,
+                    monthStore: monthStore,
+                    fileName: baseFileName,
+                    displayName: displayName,
+                    eventStream: eventStream,
+                    cancellationController: cancellationController
+                )
+                if let remoteHash, remoteHash == localHash {
+                    skipReason = "name_same_hash"
                 }
             }
-            if skipReason == nil {
-                targetFileName = RemoteFileNaming.resolveNextAvailableName(
-                    baseName: baseFileName,
-                    collisionKeys: existingCollisionKeys
-                )
-                attemptedFileNames.insert(targetFileName)
-            }
+        }
+
+        if skipReason == nil && (forceWriterIDSuffix || baseCollides) {
+            targetFileName = RemoteFileNaming.resolveNextAvailableName(
+                baseName: baseFileName,
+                collisionKeys: existingCollisionKeys,
+                writerID: monthStore.v2Services?.writerID,
+                forceWriterIDSuffix: forceWriterIDSuffix
+            )
+            attemptedFileNames.insert(targetFileName)
         }
 
         let remoteRelativePath = monthStore.monthRelativePath + "/" + targetFileName
@@ -175,7 +186,7 @@ extension AssetProcessor {
 
     func recordSkippedResource(
         prepared: PreparedResource,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         targetFileName: String
     ) throws {
         let local = prepared.local
@@ -184,7 +195,7 @@ extension AssetProcessor {
         let manifestItem = RemoteManifestResource(
             year: monthStore.year,
             month: monthStore.month,
-            fileName: targetFileName,
+            physicalRemotePath: monthStore.monthRelativePath + "/" + targetFileName,
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
@@ -192,17 +203,15 @@ extension AssetProcessor {
             backedUpAtMs: Date().millisecondsSinceEpoch
         )
 
-        if monthStore.findResourceByHash(localHash) == nil {
-            let inserted = try monthStore.upsertResource(manifestItem)
-            remoteIndexService.upsertCachedResource(inserted)
-        }
+        let inserted = try monthStore.upsertResource(manifestItem)
+        optimisticWriter.appendResource(inserted)
 
         monthStore.markRemoteFile(name: targetFileName, size: localFileSize)
     }
 
     func performUploadWithRetry(
         prepared: PreparedResource,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
         uploadPreparation: inout UploadPreparation,
@@ -271,16 +280,69 @@ extension AssetProcessor {
                 } else {
                     onProgress = nil
                 }
+                let createResult: AtomicCreateResult
                 do {
-                    try await client.upload(
+                    createResult = try await client.atomicCreate(
                         localURL: prepared.tempFileURL,
                         remotePath: uploadPreparation.remoteAbsolutePath,
                         respectTaskCancellation: true,
                         onProgress: onProgress
                     )
+                    onProgress?(1.0)
                 } catch {
                     assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
                     throw error
+                }
+                if case .alreadyExists = createResult {
+                    var occupiedNames = monthStore.existingFileNames()
+                    occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
+                    occupiedNames.insert(uploadPreparation.targetFileName)
+                    let previousFileName = uploadPreparation.targetFileName
+                    uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
+                        baseName: uploadPreparation.baseFileName,
+                        occupiedNames: occupiedNames,
+                        writerID: monthStore.v2Services?.writerID
+                    )
+                    uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
+                    let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
+                    uploadPreparation.remoteAbsolutePath = RemotePathBuilder.absolutePath(
+                        basePath: profile.basePath,
+                        remoteRelativePath: retryRelativePath
+                    )
+                    assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
+                    print("[BackupUpload] atomicCreate already-exists RETRY: asset=\(displayName), resource=\(local.originalFilename), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
+                    continue
+                }
+                if case .bestEffortRetry = createResult {
+                    // SMB exists+upload TOCTOU: a peer racing on the same filename could
+                    // have left their bytes there. Size + content hash both checked.
+                    let raceDetected = await Self.detectRemoteContentRace(
+                        client: client,
+                        remotePath: uploadPreparation.remoteAbsolutePath,
+                        expectedSize: prepared.fileSize,
+                        expectedHash: prepared.contentHash,
+                        cancellationController: cancellationController
+                    )
+                    if raceDetected {
+                        var occupiedNames = monthStore.existingFileNames()
+                        occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
+                        occupiedNames.insert(uploadPreparation.targetFileName)
+                        let previousFileName = uploadPreparation.targetFileName
+                        uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
+                            baseName: uploadPreparation.baseFileName,
+                            occupiedNames: occupiedNames,
+                            writerID: monthStore.v2Services?.writerID
+                        )
+                        uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
+                        let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
+                        uploadPreparation.remoteAbsolutePath = RemotePathBuilder.absolutePath(
+                            basePath: profile.basePath,
+                            remoteRelativePath: retryRelativePath
+                        )
+                        assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
+                        print("[BackupUpload] bestEffort race RETRY: asset=\(displayName), resource=\(local.originalFilename), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
+                        continue
+                    }
                 }
                 assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
                 try cancellationController?.throwIfCancelled()
@@ -318,7 +380,8 @@ extension AssetProcessor {
                     let previousFileName = uploadPreparation.targetFileName
                     uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
                         baseName: uploadPreparation.baseFileName,
-                        occupiedNames: occupiedNames
+                        occupiedNames: occupiedNames,
+                        writerID: monthStore.v2Services?.writerID
                     )
                     uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
                     let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
@@ -357,12 +420,23 @@ extension AssetProcessor {
             }
         }
 
+        // All retries used by collision-rename → lastError stays nil, surface a real reason.
+        if lastError == nil {
+            lastError = NSError(
+                domain: "AssetProcessor.Upload",
+                code: -120,
+                userInfo: [NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                    String(localized: "backup.upload.error.collisionExhausted"),
+                    maxRetry
+                )]
+            )
+        }
         return UploadRetryOutcome(fileName: nil, lastError: lastError)
     }
 
     func recordUploadedResource(
         prepared: PreparedResource,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         targetFileName: String
     ) throws {
         let local = prepared.local
@@ -372,7 +446,7 @@ extension AssetProcessor {
         let manifestItem = RemoteManifestResource(
             year: monthStore.year,
             month: monthStore.month,
-            fileName: targetFileName,
+            physicalRemotePath: monthStore.monthRelativePath + "/" + targetFileName,
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
@@ -381,13 +455,13 @@ extension AssetProcessor {
         )
         let inserted = try monthStore.upsertResource(manifestItem)
         monthStore.markRemoteFile(name: targetFileName, size: localFileSize)
-        remoteIndexService.upsertCachedResource(inserted)
+        optimisticWriter.appendResource(inserted)
     }
 
     func downloadAndHashRemoteFile(
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         fileName: String,
         cancellationController: BackupCancellationController?
     ) async throws -> Data {
@@ -410,7 +484,7 @@ extension AssetProcessor {
     func downloadAndHashRemoteFileForConflictCheck(
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         fileName: String,
         displayName: String,
         eventStream: BackupEventStream,
@@ -447,6 +521,38 @@ extension AssetProcessor {
                 level: .warning
             )
             return nil
+        }
+    }
+
+    /// Returns true if remote bytes ≠ what we uploaded. Size mismatch fast-paths;
+    /// same-size triggers a content-hash check. Inability to verify (metadata /
+    /// download / hash error, or remote missing) returns true — the alternative is
+    /// binding our hash record to bytes another writer wrote.
+    static func detectRemoteContentRace(
+        client: RemoteStorageClientProtocol,
+        remotePath: String,
+        expectedSize: Int64,
+        expectedHash: Data,
+        cancellationController: BackupCancellationController?
+    ) async -> Bool {
+        let entry: RemoteStorageEntry?
+        do {
+            entry = try await client.metadata(path: remotePath)
+        } catch {
+            return true
+        }
+        guard let entry, !entry.isDirectory else { return true }
+        if entry.size != expectedSize { return true }
+        // Same size — could still be different content. Hash to confirm.
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("upload-verify-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        do {
+            try await client.download(remotePath: remotePath, localURL: tempURL)
+            let actualHash = try Self.contentHash(of: tempURL, cancellationController: cancellationController)
+            return actualHash != expectedHash
+        } catch {
+            return true
         }
     }
 

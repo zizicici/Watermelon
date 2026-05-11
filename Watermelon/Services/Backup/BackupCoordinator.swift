@@ -9,6 +9,7 @@ final class BackupCoordinator: Sendable {
         photoLibraryService: PhotoLibraryService,
         storageClientFactory: StorageClientFactory,
         hashIndexRepository: ContentHashIndexRepository,
+        databaseManager: DatabaseManager,
         remoteIndexService: RemoteIndexSyncService? = nil,
         assetProcessor: AssetProcessor? = nil
     ) {
@@ -24,7 +25,8 @@ final class BackupCoordinator: Sendable {
             photoLibraryService: photoLibraryService,
             storageClientFactory: storageClientFactory,
             hashIndexRepository: hashIndexRepository,
-            remoteIndexService: remoteIndexService
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
         )
         parallelExecutor = BackupParallelExecutor(
             hashIndexRepository: hashIndexRepository,
@@ -92,7 +94,9 @@ final class BackupCoordinator: Sendable {
                 try await self.preparationService.verifyMonth(
                     client: client,
                     basePath: profile.basePath,
-                    month: month
+                    month: month,
+                    profile: profile,
+                    password: password
                 )
                 let current = index + 1
                 await MainActor.run { onProgress(RemoteSyncProgress(current: current, total: total)) }
@@ -114,5 +118,23 @@ final class BackupCoordinator: Sendable {
 
     func currentRemoteSnapshotState(since revision: UInt64?) -> RemoteLibrarySnapshotState {
         remoteIndexService.currentState(since: revision)
+    }
+
+    func backedUpAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
+        // Per-month is load-bearing: a flat set would let writer A's commit silently
+        // mark writer B's pending fp as "committed" when both share content (re-imported
+        // photo across months), and resume planner would skip B's asset. Subtracts V2
+        // optimistic-cache entries per-month so mid-batch failures still re-upload.
+        // Type forces the per-month boundary at every call site.
+        remoteIndexService.committedAssetFingerprintsByMonth()
+    }
+
+    /// Resume planner needs the physical-presence overlay populated for ALL
+    /// committed months — without this, unloaded months read as healthy and
+    /// partially-missing assets get skipped from repair.
+    func refreshPhysicalPresenceForResume(profile: ServerProfileRecord, password: String) async throws {
+        try await preparationService.withConnectedClient(profile: profile, password: password) { client in
+            try await self.remoteIndexService.refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath)
+        }
     }
 }

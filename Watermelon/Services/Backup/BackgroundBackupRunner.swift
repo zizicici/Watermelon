@@ -12,7 +12,7 @@ import MoreKit
 final class BackgroundBackupRunner {
     static let taskIdentifier = "com.zizicici.watermelon.background-backup"
 
-    private static let flushInterval = 10
+    private static let flushInterval = BackupV2Constants.batchFlushInterval
     private static let recentMonthCount = 2
     private static let profileCooldownHours = 18
     private static let profileCooldownInterval: TimeInterval = TimeInterval(profileCooldownHours) * 60 * 60
@@ -98,6 +98,11 @@ final class BackgroundBackupRunner {
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter
     ) async -> ProfileRunResult {
+        // BG runner reuses one RemoteIndexSyncService across profiles. Full reset
+        // (cache + overlay + inflight + active-profile-key) — without this, profile
+        // A's resources mixed with profile B's physically-missing overlay produced
+        // garbage in committedAssetFingerprintsByMonth.
+        await assetProcessor.remoteIndexService.resetForProfileSwitch()
         await writer.appendLog(
             String(format: String(localized: "backup.auto.log.profileStart"), profile.name),
             level: .info
@@ -142,8 +147,76 @@ final class BackgroundBackupRunner {
             )
             return .failed
         }
+        let metadataClient: any RemoteStorageClientProtocol
+        do {
+            let raw = try storageClientFactory.makeClient(profile: profile, password: password)
+            try await raw.connect()
+            // serialOnly backends — wrap to serialize concurrent metadata writes.
+            metadataClient = wrapIfSerial(raw)
+        } catch {
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                level: .error
+            )
+            await client.disconnectSafely()
+            return .failed
+        }
 
-        let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
+        let v2Services: BackupV2RuntimeServices
+        do {
+            v2Services = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+        } catch BackupV2RuntimeBuildError.requiresForegroundMigration {
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileNeedsForegroundMigration"), profile.name),
+                level: .warning
+            )
+            await metadataClient.disconnectSafely()
+            await client.disconnectSafely()
+            return .skipped
+        } catch BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) {
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileFormatUnsupported"), profile.name, minAppVersion ?? "?"),
+                level: .error
+            )
+            await metadataClient.disconnectSafely()
+            await client.disconnectSafely()
+            return .failed
+        } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
+            // BG can't resolve identity drift; surface the specific error to the log.
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileRepoIdentityMismatch"), profile.name),
+                level: .error
+            )
+            await metadataClient.disconnectSafely()
+            await client.disconnectSafely()
+            return .failed
+        } catch BackupV2RuntimeBuildError.repoFormatRegression {
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileRepoFormatRegression"), profile.name),
+                level: .error
+            )
+            await metadataClient.disconnectSafely()
+            await client.disconnectSafely()
+            return .failed
+        } catch {
+            // Don't degrade to V1 — a V1 manifest into a V2 repo creates dual-format divergence.
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                level: .warning
+            )
+            await metadataClient.disconnectSafely()
+            await client.disconnectSafely()
+            return .skipped
+        }
+
+        let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer, v2Services: v2Services)
+        await v2Services.shutdown()
         await client.disconnectSafely()
         if Task.isCancelled {
             return .cancelled
@@ -193,7 +266,8 @@ final class BackgroundBackupRunner {
         profile: ServerProfileRecord,
         monthAssetIDs: [LibraryMonthKey: [String]],
         sortedMonths: [LibraryMonthKey],
-        writer: ExecutionLogSessionWriter
+        writer: ExecutionLogSessionWriter,
+        v2Services: BackupV2RuntimeServices
     ) async -> Bool {
 
         let eventStream = BackupEventStream()
@@ -226,13 +300,14 @@ final class BackgroundBackupRunner {
                 level: .info
             )
 
-            let monthStore: MonthManifestStore
+            let monthStore: any BackupMonthStore
             do {
-                monthStore = try await MonthManifestStore.loadOrCreate(
+                monthStore = try await V2MonthSession.loadOrCreate(
                     client: client,
                     basePath: profile.basePath,
                     year: monthKey.year,
                     month: monthKey.month,
+                    v2Services: v2Services,
                     stepLogger: { message in
                         eventStream.emitLog(message, level: .error)
                     }
@@ -246,6 +321,11 @@ final class BackgroundBackupRunner {
                 )
                 continue
             }
+
+            assetProcessor.remoteIndexService.markPhysicallyMissingV2(
+                month: monthKey,
+                hashes: monthStore.physicallyMissingHashesSnapshot()
+            )
 
             let fetchBatchSize = 500
             for batchStart in stride(from: 0, to: assetIDs.count, by: fetchBatchSize) {
@@ -298,19 +378,22 @@ final class BackgroundBackupRunner {
                             eventStream: eventStream,
                             cancellationController: nil
                         )
+                    } catch is CancellationError {
+                        // Stop the asset loop immediately on cancel — relying on the next
+                        // iteration's Task.isCancelled check would still process 1-2 more
+                        // assets before noticing. FG executor was already aligned this way.
+                        break
                     } catch {
-                        if !(error is CancellationError) {
-                            anyMonthFailed = true
-                            monthHasAssetFailures = true
-                            let displayName = BackupAssetResourcePlanner.assetDisplayName(
-                                asset: asset,
-                                selectedResources: resources
-                            )
-                            await writer.appendLog(
-                                String(format: String(localized: "backup.auto.log.assetFailed"), displayName, profile.userFacingStorageErrorMessage(error)),
-                                level: .error
-                            )
-                        }
+                        anyMonthFailed = true
+                        monthHasAssetFailures = true
+                        let displayName = BackupAssetResourcePlanner.assetDisplayName(
+                            asset: asset,
+                            selectedResources: resources
+                        )
+                        await writer.appendLog(
+                            String(format: String(localized: "backup.auto.log.assetFailed"), displayName, profile.userFacingStorageErrorMessage(error)),
+                            level: .error
+                        )
                         continue
                     }
 
@@ -318,16 +401,31 @@ final class BackgroundBackupRunner {
                         anyMonthFailed = true
                         monthHasAssetFailures = true
                     }
-                    guard result.status == .success else { continue }
+                    // Cached-reuse `.skipped` also writes asset rows; only `.failed` skips the batch counter.
+                    guard result.status != .failed else { continue }
                     uploadsSinceFlush += 1
                     if uploadsSinceFlush >= Self.flushInterval {
                         do {
-                            try await monthStore.flushToRemote(ignoreCancellation: true)
-                        } catch {
-                            await writer.appendErrorLog(
-                                String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
-                                unless: error
+                            let delta = try await monthStore.flushToRemote(ignoreCancellation: true)
+                            assetProcessor.remoteIndexService.markCommittedV2(
+                                month: monthKey,
+                                fingerprints: delta.committedV2AssetFingerprints
+                                    .union(delta.committedV2TombstoneFingerprints)
                             )
+                        } catch {
+                            let isCancel = error is CancellationError
+                                || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
+                            if isCancel {
+                                // Background run is wrapped by Task.isCancelled at higher level;
+                                // don't log this as a hard flush failure.
+                            } else {
+                                // Commit may be durable even on snapshot-write failure.
+                                assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
+                                await writer.appendErrorLog(
+                                    String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
+                                    unless: error
+                                )
+                            }
                         }
                         uploadsSinceFlush = 0
                     }
@@ -336,9 +434,18 @@ final class BackgroundBackupRunner {
 
             var monthFlushFailureReason: String?
             do {
-                try await monthStore.flushToRemote(ignoreCancellation: true)
+                let delta = try await monthStore.flushToRemote(ignoreCancellation: true)
+                assetProcessor.remoteIndexService.markCommittedV2(
+                    month: monthKey,
+                    fingerprints: delta.committedV2AssetFingerprints
+                        .union(delta.committedV2TombstoneFingerprints)
+                )
             } catch {
-                if !(error is CancellationError) {
+                let isCancel = error is CancellationError
+                    || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
+                if !isCancel {
+                    // Commit may be durable even on snapshot-write failure.
+                    assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                     let reason = profile.userFacingStorageErrorMessage(error)
                     monthFlushFailureReason = reason
                     await writer.appendLog(

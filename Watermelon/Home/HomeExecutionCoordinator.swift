@@ -741,7 +741,10 @@ final class HomeExecutionCoordinator {
                 appendWarningLog(reason)
                 refreshTerminalStatus(notifyState: false)
                 notifyStateChanged()
-                return .success
+                // Mirror the session-side failure to the executor so the run reports
+                // the right outcome — returning .success here would tell the executor
+                // "month is done, move on" while Home shows it as failed.
+                return .failed(reason)
             }
             session.completeDownloadMonth(month)
             appendInfoLog(String(format: String(localized: "home.execution.log.downloadDone"), phaseLabel, month.displayText))

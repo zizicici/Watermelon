@@ -12673,6 +12673,182 @@
         }
       }
     },
+    "backup.auto.log.profileFormatInspectFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %1$@: Remote-Format-Inspektion fehlgeschlagen, dieser Lauf wird übersprungen: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile %1$@: remote format inspection failed, skipping this run: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@: la inspección del formato remoto falló; omitiendo esta ejecución: %2$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@: la inspección del formato remoto falló; omitiendo esta ejecución: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %1$@ : échec de l'inspection du format distant, exécution ignorée : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイル %1$@: リモート形式の検査に失敗、今回はスキップします:%2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로파일 %1$@: 원격 포맷 점검 실패, 이번 실행을 건너뜁니다: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@: falha ao inspecionar o formato remoto, ignorando esta execução: %2$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@: falha ao inspecionar o formato remoto, a ignorar esta execução: %2$@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профиль %1$@: проверка формата удалённого хранилища не удалась, запуск пропущен: %2$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профіль %1$@: перевірка формату віддаленого сховища не вдалася, запуск пропущено: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置 %1$@：远端格式探测失败，跳过本次运行：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定檔 %1$@:遠端格式偵測失敗,本次執行跳過:%2$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定檔 %1$@:遠端格式偵測失敗,本次執行跳過:%2$@"
+          }
+        }
+      }
+    },
+    "backup.auto.log.profileFormatUnsupported" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %1$@: Remote-Format wird nicht unterstützt (mindestens App-Version %2$@ erforderlich)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile %1$@: remote format unsupported (requires app version %2$@+)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@: formato remoto no compatible (requiere la versión %2$@ o superior)"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@: formato remoto no compatible (requiere la versión %2$@ o superior)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %1$@ : format distant non pris en charge (version d'app %2$@ ou ultérieure requise)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイル %1$@: リモート形式が非対応(アプリ %2$@ 以上が必要)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로파일 %1$@: 원격 포맷 미지원(앱 %2$@ 이상 필요)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@: formato remoto não suportado (requer app %2$@+)"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@: formato remoto não suportado (requer app %2$@+)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профиль %1$@: формат удалённого хранилища не поддерживается (требуется приложение %2$@+)"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профіль %1$@: формат віддаленого сховища не підтримується (потрібна версія застосунку %2$@+)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置 %1$@：远端格式不支持（需 App %2$@ 及以上版本)"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定檔 %1$@:遠端格式不支援(需 App %2$@ 或以上版本)"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定檔 %1$@:遠端格式不支援(需 App %2$@ 或以上版本)"
+          }
+        }
+      }
+    },
     "backup.auto.log.profileMissingPassword" : {
       "localizations" : {
         "de" : {
@@ -12761,6 +12937,94 @@
         }
       }
     },
+    "backup.auto.log.profileNeedsForegroundMigration" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %@: Remote-Format benötigt manuelle Migration im Vordergrund"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile %@: remote format needs foreground migration"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: el formato remoto requiere migración manual en primer plano"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: el formato remoto requiere migración manual en primer plano"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %@ : le format distant nécessite une migration manuelle au premier plan"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイル %@: リモート形式の移行はフォアグラウンドで実行が必要"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로파일 %@: 원격 포맷 마이그레이션은 포그라운드에서 실행 필요"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: o formato remoto precisa de migração em primeiro plano"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: o formato remoto necessita de migração em primeiro plano"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профиль %@: миграция удалённого формата должна выполняться в активном приложении"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профіль %@: міграція віддаленого формату має виконуватися в активному застосунку"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置 %@：远端格式迁移需在前台运行 App"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定檔 %@:遠端格式遷移需在前景執行 App"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定檔 %@:遠端格式遷移需在前景執行 App"
+          }
+        }
+      }
+    },
     "backup.auto.log.profilePasswordReadFailed" : {
       "localizations" : {
         "de" : {
@@ -12845,6 +13109,182 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "跳過設定檔 %1$@：密碼暫不可用（%2$@）"
+          }
+        }
+      }
+    },
+    "backup.auto.log.profileRepoFormatRegression" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %@: V2-Markierung fehlt, lokaler Status meldet aber bereits migriert. Schreibvorgang wird verweigert — Remote-Speicher wurde möglicherweise geleert oder die Synchronisierung verzögert sich."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile %@: V2 marker is gone but local state says we already migrated. Refusing to write — remote may have been wiped or cloud sync is delayed."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: el marcador V2 ha desaparecido, pero el estado local indica que ya se migró. Se rechaza la escritura: el remoto pudo ser borrado o la sincronización en la nube está retrasada."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: el marcador V2 ha desaparecido, pero el estado local indica que ya se migró. Se rechaza la escritura: el remoto pudo ser borrado o la sincronización en la nube está retrasada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %@ : le marqueur V2 a disparu alors que l'état local indique une migration déjà effectuée. L'écriture est refusée — le distant a peut-être été effacé ou la synchronisation cloud est en retard."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイル %@: V2 マーカーが消失していますが、ローカル状態では移行済みです。書き込みを拒否しました — リモートが消去されたか、クラウド同期が遅延している可能性があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로파일 %@: V2 마커가 사라졌지만 로컬 상태는 이미 마이그레이션됐다고 표시합니다. 쓰기를 거부합니다 — 원격이 비워졌거나 클라우드 동기화가 지연되었을 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: o marcador V2 sumiu, mas o estado local indica que já foi migrado. Escrita recusada — o remoto pode ter sido apagado ou a sincronização na nuvem está atrasada."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: o marcador V2 desapareceu, mas o estado local indica que já foi migrado. Escrita recusada — o remoto pode ter sido apagado ou a sincronização na nuvem está atrasada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профиль %@: метка V2 исчезла, но локальное состояние сообщает о выполненной миграции. Запись отклонена — возможно, удалённое хранилище было очищено или облачная синхронизация задержана."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профіль %@: позначка V2 зникла, але локальний стан повідомляє про вже виконану міграцію. Запис відхилено — віддалене сховище могло бути очищене, або хмарна синхронізація затрималася."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置 %@：V2 标识已消失，但本地状态显示已迁移。拒绝写入 — 远端可能被清空或云同步延迟。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定檔 %@:V2 標識已消失,但本機狀態顯示已遷移。拒絕寫入 — 遠端可能被清空或雲端同步延遲。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定檔 %@:V2 標識已消失,但本機狀態顯示已遷移。拒絕寫入 — 遠端可能被清空或雲端同步延遲。"
+          }
+        }
+      }
+    },
+    "backup.auto.log.profileRepoIdentityMismatch" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %@: Repository-ID stimmt nicht überein. Profil zeigt vermutlich auf einen anderen Speicher oder der Remote-Speicher wurde geleert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile %@: repository identity mismatch. Profile may point to a different remote, or the remote was wiped."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: la identidad del repositorio no coincide. Es posible que el perfil apunte a otro remoto o que el remoto se haya borrado."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: la identidad del repositorio no coincide. Es posible que el perfil apunte a otro remoto o que el remoto se haya borrado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %@ : identité du dépôt incohérente. Le profil pointe peut-être sur un autre emplacement, ou le distant a été effacé."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイル %@: リポジトリの識別情報が一致しません。プロファイルが別のリモートを指しているか、リモートが消去された可能性があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로파일 %@: 저장소 식별자가 일치하지 않습니다. 프로파일이 다른 원격을 가리키거나 원격이 비워졌을 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: identidade do repositório divergente. O perfil pode apontar para outro remoto, ou o remoto foi apagado."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %@: identidade do repositório divergente. O perfil pode apontar para outro remoto, ou o remoto foi apagado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профиль %@: идентификатор репозитория не совпадает. Возможно, профиль указывает на другое удалённое хранилище, либо оно было очищено."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профіль %@: ідентифікатор репозиторію не збігається. Можливо, профіль вказує на інше віддалене сховище, або сховище було очищене."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置 %@：仓库标识不匹配。配置可能指向另一个远端，或远端已被清空。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定檔 %@:倉庫識別不相符。設定檔可能指向另一個遠端,或遠端已被清空。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定檔 %@:倉庫識別不相符。設定檔可能指向另一個遠端,或遠端已被清空。"
           }
         }
       }
@@ -18393,6 +18833,270 @@
         }
       }
     },
+    "backup.repo.bootstrapped" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote initialisiert (V2-Format)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote initialized (V2 format)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositorio remoto inicializado (formato V2)"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositorio remoto inicializado (formato V2)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dépôt distant initialisé (format V2)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートを初期化(V2形式)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 저장소 초기화(V2 포맷)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositório remoto inicializado (formato V2)"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositório remoto inicializado (formato V2)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалённый репозиторий инициализирован (формат V2)"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Віддалене сховище ініціалізовано (формат V2)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已初始化远端仓库（V2 格式）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已初始化遠端儲存庫（V2 格式）"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已初始化遠端儲存庫（V2 格式）"
+          }
+        }
+      }
+    },
+    "backup.repo.migrationCompleted" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote-Format-Migration abgeschlossen (%lld Monate verarbeitet)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote format migration completed (%lld months processed)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Migración del formato remoto completada (%lld meses procesados)"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Migración del formato remoto completada (%lld meses procesados)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Migration du format distant terminée (%lld mois traités)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモート形式の移行が完了(%lld か月分を処理)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 포맷 마이그레이션 완료(%lld개월 처리됨)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Migração do formato remoto concluída (%lld meses processados)"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Migração do formato remoto concluída (%lld meses processados)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Миграция удалённого формата завершена (обработано месяцев: %lld)"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Міграцію віддаленого формату завершено (оброблено місяців: %lld)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端格式迁移完成（已处理 %lld 个月）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端格式遷移完成（已處理 %lld 個月）"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "遠端格式遷移完成（已處理 %lld 個月）"
+          }
+        }
+      }
+    },
+    "backup.repo.migrationStarted" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Migration des Remote-Formats wird gestartet…"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starting remote format migration…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciando migración del formato remoto…"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciando migración del formato remoto…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Démarrage de la migration du format distant…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモート形式の移行を開始しています…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 포맷 마이그레이션 시작 중…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciando migração do formato remoto…"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A iniciar migração do formato remoto…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Начинается миграция удалённого формата…"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Розпочинається міграція віддаленого формату…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始远端格式迁移…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始遠端格式遷移…"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始遠端格式遷移…"
+          }
+        }
+      }
+    },
     "backup.scheduler.stageTimingFinal" : {
       "localizations" : {
         "de" : {
@@ -20417,6 +21121,94 @@
         }
       }
     },
+    "backup.upload.error.collisionExhausted" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dateiname wurde %d-mal hintereinander von einem anderen Gerät belegt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filename was claimed by another device %d times in a row"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otro dispositivo reclamó el mismo nombre de archivo %d veces seguidas"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otro dispositivo reclamó el mismo nombre de archivo %d veces seguidas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le nom de fichier a été pris par un autre appareil %d fois de suite"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同じファイル名が他のデバイスに%d回連続で取られました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "같은 파일 이름이 다른 기기에 %d회 연속으로 점유되었습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O nome de arquivo foi reivindicado por outro dispositivo %d vezes seguidas"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O nome do ficheiro foi reclamado por outro dispositivo %d vezes seguidas"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Имя файла %d раз подряд было занято другим устройством"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ім’я файлу %d разів поспіль було зайнято іншим пристроєм"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件名连续 %d 次被其他设备占用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "檔名連續 %d 次被其他裝置佔用"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "檔名連續 %d 次被其他裝置佔用"
+          }
+        }
+      }
+    },
     "common.cancel" : {
       "localizations" : {
         "de" : {
@@ -21469,6 +22261,358 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此遠端備份需要 %1$@ %2$@ 或更新版本。請前往 App Store 更新。"
+          }
+        }
+      }
+    },
+    "compatibility.error.damagedV2Repo" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repository ist beschädigt: Identitätsdateien (repo.json/version.json) fehlen, aber das Verzeichnis enthält noch Commit-/Snapshot-Daten. Manuelle Wiederherstellung erforderlich, um Datenverlust zu vermeiden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repository damaged: identity files (repo.json/version.json) are gone but commit/snapshot data is still present. Manual recovery required to avoid orphaning existing data."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositorio dañado: faltan los archivos de identidad (repo.json/version.json) pero los datos de commit/snapshot siguen presentes. Se requiere recuperación manual para no orfanizar los datos existentes."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositorio dañado: faltan los archivos de identidad (repo.json/version.json) pero los datos de commit/snapshot siguen presentes. Se requiere recuperación manual para no orfanizar los datos existentes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dépôt endommagé : les fichiers d'identité (repo.json/version.json) ont disparu alors que les données de commit/snapshot sont encore présentes. Une récupération manuelle est requise pour ne pas orphaniser les données existantes."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リポジトリが破損しています: 識別ファイル (repo.json/version.json) は失われていますが、commit/snapshot データはまだ残っています。既存データを孤立させないために手動での復旧が必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장소가 손상됐습니다: 식별 파일 (repo.json/version.json) 은 사라졌지만 commit/snapshot 데이터는 아직 남아 있습니다. 기존 데이터를 고립시키지 않으려면 수동 복구가 필요합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositório danificado: os arquivos de identidade (repo.json/version.json) sumiram, mas os dados de commit/snapshot ainda estão presentes. Recuperação manual necessária para não orfanizar os dados existentes."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositório danificado: os ficheiros de identidade (repo.json/version.json) desapareceram, mas os dados de commit/snapshot ainda estão presentes. Recuperação manual necessária para não orfanizar os dados existentes."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Репозиторий повреждён: файлы идентификации (repo.json/version.json) исчезли, но данные commit/snapshot ещё на месте. Требуется ручное восстановление, чтобы не сделать существующие данные сиротскими."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Репозиторій пошкоджений: файли ідентифікації (repo.json/version.json) зникли, але дані commit/snapshot ще присутні. Потрібне ручне відновлення, щоб не залишити існуючі дані сиротами."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仓库已损坏：身份文件 (repo.json/version.json) 丢失，但 commit/snapshot 数据仍然存在。需要手动恢复以避免孤立现有数据。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "倉庫已損壞:身份檔案 (repo.json/version.json) 遺失,但 commit/snapshot 資料仍然存在。需要手動復原以避免孤立既有資料。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "倉庫已損壞:身份檔案 (repo.json/version.json) 遺失,但 commit/snapshot 資料仍然存在。需要手動復原以避免孤立既有資料。"
+          }
+        }
+      }
+    },
+    "compatibility.error.repoFormatRegression" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sicherung pausiert: Die V2-Markierung fehlt, der lokale Status meldet aber, dass dieses Repository bereits migriert wurde. Der Remote-Speicher wurde möglicherweise geleert oder die Cloud-Synchronisierung verzögert sich."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup paused: V2 marker is gone but local state says this repository was already migrated. The remote may have been wiped or cloud sync is delayed."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copia de seguridad en pausa: el marcador V2 ha desaparecido, pero el estado local indica que este repositorio ya se migró. El remoto pudo ser borrado o la sincronización en la nube está retrasada."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copia de seguridad en pausa: el marcador V2 ha desaparecido, pero el estado local indica que este repositorio ya se migró. El remoto pudo ser borrado o la sincronización en la nube está retrasada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sauvegarde suspendue : le marqueur V2 a disparu alors que l'état local indique que ce dépôt a déjà été migré. Le distant a peut-être été effacé ou la synchronisation cloud est en retard."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "バックアップを一時停止しました: V2 マーカーが消失していますが、ローカル状態ではこのリポジトリは移行済みです。リモートが消去されたか、クラウド同期が遅延している可能性があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "백업이 일시 중지됐습니다: V2 마커가 사라졌지만 로컬 상태는 이 저장소가 이미 마이그레이션됐다고 표시합니다. 원격이 비워졌거나 클라우드 동기화가 지연되었을 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup em pausa: o marcador V2 sumiu, mas o estado local indica que este repositório já foi migrado. O remoto pode ter sido apagado ou a sincronização na nuvem está atrasada."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cópia de segurança em pausa: o marcador V2 desapareceu, mas o estado local indica que este repositório já foi migrado. O remoto pode ter sido apagado ou a sincronização na nuvem está atrasada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Резервное копирование приостановлено: метка V2 исчезла, но локальное состояние сообщает, что этот репозиторий уже мигрирован. Возможно, удалённое хранилище было очищено или облачная синхронизация задержана."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Резервне копіювання призупинено: позначка V2 зникла, але локальний стан повідомляє, що цей репозиторій уже мігрований. Віддалене сховище могло бути очищене, або хмарна синхронізація затрималася."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备份已暂停：V2 标识已消失，但本地状态显示该仓库已迁移。远端可能被清空或云同步延迟。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份已暫停:V2 標識已消失,但本機狀態顯示該倉庫已遷移。遠端可能被清空或雲端同步延遲。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "備份已暫停:V2 標識已消失,但本機狀態顯示該倉庫已遷移。遠端可能被清空或雲端同步延遲。"
+          }
+        }
+      }
+    },
+    "compatibility.error.repoIdentityMismatch" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repository-ID stimmt nicht überein. Das Profil verweist möglicherweise auf einen anderen Speicherort, oder der Remote-Speicher wurde geleert. Sicherungen pausieren, bis dies aufgelöst ist."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repository identity mismatch. The profile may point to a different remote, or the remote was wiped. Backups are paused until this is resolved."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La identidad del repositorio no coincide. Es posible que el perfil apunte a otra ubicación remota o que el remoto se haya borrado. Las copias de seguridad se pausan hasta resolverlo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La identidad del repositorio no coincide. Es posible que el perfil apunte a otra ubicación remota o que el remoto se haya borrado. Las copias de seguridad se pausan hasta resolverlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Identité du dépôt incohérente. Le profil pointe peut-être sur un autre emplacement, ou le distant a été effacé. Les sauvegardes sont suspendues jusqu'à résolution."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リポジトリの識別情報が一致しません。プロファイルが別のリモートを指しているか、リモートが消去された可能性があります。解消されるまでバックアップは一時停止されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장소 식별자가 일치하지 않습니다. 프로파일이 다른 원격을 가리키거나 원격이 비워졌을 수 있습니다. 해결될 때까지 백업이 일시 중지됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Identidade do repositório divergente. O perfil pode apontar para outro remoto, ou o remoto foi apagado. Os backups ficam pausados até a resolução."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Identidade do repositório divergente. O perfil pode apontar para outro remoto, ou o remoto foi apagado. As cópias de segurança ficam em pausa até à resolução."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Идентификатор репозитория не совпадает. Возможно, профиль указывает на другое удалённое хранилище, либо оно было очищено. Резервное копирование приостановлено до решения."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ідентифікатор репозиторію не збігається. Можливо, профіль вказує на інше віддалене сховище, або сховище було очищене. Резервне копіювання призупинено до вирішення."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仓库标识不匹配。配置可能指向了另一个远端，或远端已被清空。备份已暂停，直到解决。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "倉庫識別不相符。設定檔可能指向另一個遠端,或遠端已被清空。備份已暫停,直到解決。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "倉庫識別不相符。設定檔可能指向另一個遠端,或遠端已被清空。備份已暫停,直到解決。"
+          }
+        }
+      }
+    },
+    "compatibility.error.requiresForegroundMigration" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eine Repository-Migration ist erforderlich. Bitte die App im Vordergrund öffnen, um sie abzuschließen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repository migration required. Please open the app in the foreground to complete it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se requiere migrar el repositorio. Abre la app en primer plano para completarla."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se requiere migrar el repositorio. Abre la app en primer plano para completarla."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Migration du dépôt requise. Veuillez ouvrir l'app au premier plan pour la terminer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リポジトリの移行が必要です。完了するにはアプリをフォアグラウンドで開いてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장소 마이그레이션이 필요합니다. 완료하려면 앱을 전면에서 열어 주세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Migração do repositório necessária. Abra o app em primeiro plano para concluir."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Migração do repositório necessária. Abra a aplicação em primeiro plano para concluir."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Требуется миграция репозитория. Откройте приложение в активном режиме, чтобы её завершить."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Потрібна міграція репозиторію. Відкрийте застосунок у активному режимі, щоб завершити її."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要进行仓库迁移。请在前台打开应用以完成迁移。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要進行倉庫遷移。請在前景開啟 App 以完成遷移。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要進行倉庫遷移。請在前景開啟 App 以完成遷移。"
           }
         }
       }
@@ -23264,12 +24408,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Резервное копирование %lld месяца"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -23280,6 +24418,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "Резервное копирование %lld месяцев"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Резервное копирование %lld месяца"
                 }
               },
               "other" : {
@@ -23460,12 +24604,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Дополнить %lld месяц"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -23476,6 +24614,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "Дополнить %lld месяцев"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Дополнить %lld месяц"
                 }
               },
               "other" : {
@@ -23656,12 +24800,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Загрузить %lld месяц"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -23672,6 +24810,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "Загрузить %lld месяцев"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Загрузить %lld месяц"
                 }
               },
               "other" : {
@@ -24028,12 +25172,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld элемент будет перемещён в «Недавно удалённые»."
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -24044,6 +25182,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld элементов будут перемещены в «Недавно удалённые»."
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld элемент будет перемещён в «Недавно удалённые»."
                 }
               },
               "other" : {
@@ -25368,12 +26512,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld элемент будет удалён."
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -25384,6 +26522,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld элементов будут удалены."
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld элемент будет удалён."
                 }
               },
               "other" : {
@@ -26268,12 +27412,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld ресурс с ошибкой"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -26284,6 +27422,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld ресурсов с ошибками"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld ресурс с ошибкой"
                 }
               },
               "other" : {
@@ -26992,12 +28136,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld ресурс не удалось прочитать"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -27008,6 +28146,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld ресурсов не удалось прочитать"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld ресурс не удалось прочитать"
                 }
               },
               "other" : {
@@ -29652,12 +30796,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld ресурс не загружен на устройство"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -29668,6 +30806,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld ресурсов не загружены на устройство"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld ресурс не загружен на устройство"
                 }
               },
               "other" : {
@@ -43664,12 +44808,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -43677,6 +44815,12 @@
                 }
               },
               "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld"
+                }
+              },
+              "one" : {
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld"

@@ -1,18 +1,22 @@
 import Foundation
 import GRDB
 
-final class DatabaseManager {
+// DatabaseQueue is internally serialized; everything else here is set once in init.
+final class DatabaseManager: @unchecked Sendable {
     let dbQueue: DatabaseQueue
 
     init(databaseURL: URL? = nil) throws {
         let url = databaseURL ?? Self.defaultDatabaseURL()
         try Self.prepareDatabaseLocation(at: url)
         dbQueue = try DatabaseQueue(path: url.path)
-        try migrator.migrate(dbQueue)
+        try Self.makeMigrator().migrate(dbQueue)
         Self.enableBackgroundAccessForDatabaseFiles(at: url)
     }
 
-    private var migrator: DatabaseMigrator {
+    /// All schema migrations the app ships, in order. Exposed as a static factory so
+    /// migration tests can replay the same migrator step-by-step (`migrate(_:upTo:)`)
+    /// without duplicating the SQL.
+    static func makeMigrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1_initial") { db in
             try db.create(table: ServerProfileRecord.databaseTableName) { table in
@@ -83,6 +87,20 @@ final class DatabaseManager {
                 WHERE modificationDateMs IS NOT NULL
                 """
             )
+        }
+
+        migrator.registerMigration("v3_repo_state") { db in
+            try db.execute(sql: "ALTER TABLE \(ServerProfileRecord.databaseTableName) ADD COLUMN writerID TEXT")
+
+            try db.create(table: RepoStateRecord.databaseTableName) { table in
+                table.column("profileID", .integer).notNull()
+                table.column("repoID", .text).notNull()
+                table.column("writerID", .text).notNull()
+                table.column("lastClock", .integer).notNull().defaults(to: 0)
+                table.column("lastSeq", .integer).notNull().defaults(to: 0)
+                table.column("migrationCompleted", .integer).notNull().defaults(to: 0)
+                table.primaryKey(["profileID", "repoID"])
+            }
         }
 
         return migrator
@@ -167,6 +185,10 @@ final class DatabaseManager {
 
     func deleteServerProfile(id: Int64) throws {
         try write { db in
+            try db.execute(
+                sql: "DELETE FROM \(RepoStateRecord.databaseTableName) WHERE profileID = ?",
+                arguments: [id]
+            )
             _ = try ServerProfileRecord.deleteOne(db, key: id)
         }
     }

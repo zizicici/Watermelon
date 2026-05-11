@@ -11,6 +11,7 @@ final class AssetProcessor: Sendable {
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
     let remoteIndexService: RemoteIndexSyncService
+    let optimisticWriter: OptimisticAssetWriter
 
     init(
         photoLibraryService: PhotoLibraryService,
@@ -20,6 +21,7 @@ final class AssetProcessor: Sendable {
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
         self.remoteIndexService = remoteIndexService
+        self.optimisticWriter = remoteIndexService.makeOptimisticAssetWriter()
     }
 
     static func monthKey(for date: Date?) -> LibraryMonthKey {
@@ -237,6 +239,12 @@ final class AssetProcessor: Sendable {
             }
 
             if uploadResult.status != .failed {
+                // The link records THIS asset's original filename — not the on-remote
+                // filename, which may have a collision-rename suffix (~widB-1) when a
+                // peer wrote a different content under the same preferred name. Restore
+                // surfaces link.logicalName as PHAssetResourceCreationOptions.originalFilename,
+                // so it must reflect what the user named the file, not where it landed.
+                let originalLogicalName = prepared.local.preferredRemoteFileName
                 links.append(
                     RemoteAssetResourceLink(
                         year: context.monthStore.year,
@@ -244,7 +252,8 @@ final class AssetProcessor: Sendable {
                         assetFingerprint: assetFingerprint,
                         resourceHash: prepared.contentHash,
                         role: prepared.local.resourceRole,
-                        slot: prepared.local.resourceSlot
+                        slot: prepared.local.resourceSlot,
+                        logicalName: originalLogicalName
                     )
                 )
             }
@@ -305,7 +314,13 @@ final class AssetProcessor: Sendable {
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
         try context.monthStore.upsertAsset(manifestAsset, links: links)
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
-        remoteIndexService.upsertCachedAsset(manifestAsset, links: links)
+        // V2: cache write is optimistic — flag as uncommitted so resume doesn't skip assets
+        // whose physical file uploaded but V2 commit failed mid-batch. Cleared on flushV2 success.
+        optimisticWriter.appendAsset(
+            manifestAsset,
+            links: links,
+            markUncommitted: context.monthStore.v2Services != nil
+        )
 
         let snapshotWriteStart = CFAbsoluteTimeGetCurrent()
         try hashIndexRepository.upsertAssetHashSnapshot(
@@ -402,14 +417,36 @@ final class AssetProcessor: Sendable {
             )
         }
 
+        // Compute THIS asset's preferred filename per resource, not the existing
+        // remote resource's logicalName — the latter belongs to whichever asset
+        // first uploaded that hash, and may carry a collision-rename suffix.
+        // Restore surfaces link.logicalName as PHAssetResourceCreationOptions.originalFilename,
+        // so it must reflect what the user named the file. Mirrors the full-upload path.
+        let preferredAssetNameStem = Self.preferredAssetNameStem(
+            asset: context.asset,
+            selectedResources: context.selectedResources
+        )
+        let logicalNamesByRoleSlot: [AssetResourceRoleSlot: String] = Dictionary(
+            uniqueKeysWithValues: context.selectedResources.map { selected in
+                let key = AssetResourceRoleSlot(role: selected.role, slot: selected.slot)
+                let name = Self.preferredRemoteFileName(
+                    preferredAssetNameStem: preferredAssetNameStem,
+                    selected: selected
+                )
+                return (key, name)
+            }
+        )
         let links = roleSlotHashes.map { item in
-            RemoteAssetResourceLink(
+            let key = AssetResourceRoleSlot(role: item.role, slot: item.slot)
+            let logical = logicalNamesByRoleSlot[key] ?? ""
+            return RemoteAssetResourceLink(
                 year: context.monthStore.year,
                 month: context.monthStore.month,
                 assetFingerprint: cachedFingerprint,
                 resourceHash: item.contentHash,
                 role: item.role,
-                slot: item.slot
+                slot: item.slot,
+                logicalName: logical
             )
         }
 
@@ -435,7 +472,14 @@ final class AssetProcessor: Sendable {
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
         try context.monthStore.upsertAsset(manifestAsset, links: links)
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
-        remoteIndexService.upsertCachedAsset(manifestAsset, links: links)
+        // Same uncommitted gate as the full-upload path — without this, a pause/resume
+        // between cached-reuse and the next flushV2 would let the resume planner skip
+        // an asset whose fingerprint is in the cache but not yet in any V2 commit.
+        optimisticWriter.appendAsset(
+            manifestAsset,
+            links: links,
+            markUncommitted: context.monthStore.v2Services != nil
+        )
 
         let dbStart = CFAbsoluteTimeGetCurrent()
         try hashIndexRepository.upsertAssetFingerprint(

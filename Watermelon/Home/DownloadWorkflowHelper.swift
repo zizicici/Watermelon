@@ -19,13 +19,15 @@ final class DownloadWorkflowHelper {
     }
 
     /// Downloads remote-only items via RestoreService and writes hash index per item.
-    /// `isIncomplete` items are filtered out (would 404) and reported via `skippedIncompleteCount`.
+    /// Filters on `isRestorable` (classifier `allowsRestore`) — `partiallyMissing`
+    /// can still restore the primary content, so the broader `isIncomplete` flag
+    /// would over-skip otherwise-recoverable items.
     func downloadItems(
         _ remoteItems: [RemoteAlbumItem],
         context: Context,
         onItemRestored: @MainActor @escaping (String) async -> Void
     ) async -> DownloadMonthResult {
-        let toRestore = remoteItems.filter { !$0.isIncomplete }
+        let toRestore = remoteItems.filter(\.isRestorable)
         let skippedIncompleteCount = remoteItems.count - toRestore.count
 
         guard !toRestore.isEmpty else {

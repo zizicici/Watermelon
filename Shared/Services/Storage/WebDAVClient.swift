@@ -1,6 +1,7 @@
 import Foundation
 
 final actor WebDAVClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     static let errorDomain = "WebDAVClient"
 
     struct Config {
@@ -690,6 +691,65 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 throw CancellationError()
             }
             throw error
+        }
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        // RFC 7232 compliance varies across WebDAV servers — we always send
+        // `If-None-Match: *` but a non-compliant peer could ignore it and let
+        // the upload overwrite. Report `.overwritePossible` so the gate stages
+        // via UUID + verify rather than trusting the conditional end-to-end.
+        .overwritePossible
+    }
+
+    func atomicCreate(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws -> AtomicCreateResult {
+        try requireConnected()
+        await drainPendingCancelledUploadCleanup()
+        if respectTaskCancellation { try Task.checkCancellation() }
+
+        let targetURL = try remoteURL(forRemotePath: remotePath)
+        var request = makeRequest(url: targetURL, method: "PUT")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue("*", forHTTPHeaderField: "If-None-Match")
+        do {
+            let (_, response) = try await sendUpload(request, fromFile: localURL, onProgress: onProgress)
+            if response.statusCode == 412 {
+                return .alreadyExists
+            }
+            guard (200 ... 299).contains(response.statusCode) else {
+                throw Self.statusError(response.statusCode, method: "PUT", url: request.url)
+            }
+            if respectTaskCancellation { try Task.checkCancellation() }
+            // 200/201/204 on .overwritePossible backends does NOT prove If-None-Match
+            // was honored — some Nextcloud versions and self-implemented WebDAV servers
+            // silently overwrite. Return .bestEffortRetry so callers (MetadataCreateGate,
+            // CommitLogWriter, ensureVersionJSON) activate their post-write verify path.
+            return .bestEffortRetry
+        } catch let storageError as RemoteStorageClientError {
+            if case .underlying(let inner) = storageError,
+               (inner as NSError).domain == WebDAVClient.errorDomain,
+               (inner as NSError).code == 412 {
+                return .alreadyExists
+            }
+            if Self.shouldCleanupPartialUpload(storageError) {
+                enqueueCancelledUploadCleanup(for: remotePath)
+            }
+            throw storageError
+        } catch {
+            if Self.shouldCleanupPartialUpload(error) {
+                enqueueCancelledUploadCleanup(for: remotePath)
+            }
+            if Self.isCancellationError(error) {
+                throw CancellationError()
+            }
+            // Generic transport errors stay errors — surface the actual failure to the caller
+            // instead of degrading to `.bestEffortRetry`, which would mask non-conflict faults.
+            throw RemoteStorageClientError.underlying(error)
         }
     }
 

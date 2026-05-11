@@ -74,11 +74,9 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
         let summary: HomeMonthSummary?
     }
 
-    /// Applies the same drop rules as `HomeAlbumMatching.buildRemoteItems`: an asset is
-    /// included only when at least one of its links points at a resource present in
-    /// `delta.resources`. Bytes are summed over those resolvable resources (deduped by
-    /// hash) rather than `asset.totalFileSizeBytes`. This matters in the partial-flush
-    /// window where assets + links have landed but resources have not.
+    /// Classifier-gated — backed-up count matches what verify/restore filter (partial /
+    /// metadata-only / mismatch excluded). Physical-presence overlay is pre-folded into
+    /// `resourceSizeByHash`, so the classifier predicate sees both layers.
     private static func resolveMonth(
         _ month: LibraryMonthKey,
         from delta: RemoteLibraryMonthDelta
@@ -89,21 +87,11 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
 
         var resourceSizeByHash: [Data: Int64] = [:]
         resourceSizeByHash.reserveCapacity(delta.resources.count)
-        for resource in delta.resources {
+        for resource in delta.resources where !delta.physicallyMissingHashes.contains(resource.contentHash) {
             resourceSizeByHash[resource.contentHash] = resource.fileSize
         }
 
-        // Per-asset: collect link roles and the dedup'd set of resolvable resource hashes.
-        // Same hash referenced by multiple role/slot pairs still contributes one resource
-        // upstream (buildRemoteItems uses seenHashes), so dedup here to match.
-        var rolesByAssetID: [String: [Int]] = [:]
-        var resolvableHashesByAssetID: [String: Set<Data>] = [:]
-        rolesByAssetID.reserveCapacity(delta.assets.count)
-        resolvableHashesByAssetID.reserveCapacity(delta.assets.count)
-        for link in delta.assetResourceLinks where resourceSizeByHash[link.resourceHash] != nil {
-            rolesByAssetID[link.assetID, default: []].append(link.role)
-            resolvableHashesByAssetID[link.assetID, default: []].insert(link.resourceHash)
-        }
+        let linksByAssetID: [String: [RemoteAssetResourceLink]] = Dictionary(grouping: delta.assetResourceLinks, by: \.assetID)
 
         var fingerprints = Set<Data>()
         fingerprints.reserveCapacity(delta.assets.count)
@@ -112,13 +100,17 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
         var videoCount = 0
         var reachableHashes = Set<Data>()
         for asset in delta.assets {
-            let roles = rolesByAssetID[asset.id] ?? []
-            guard !roles.isEmpty else { continue }
+            let links = linksByAssetID[asset.id] ?? []
+            let state = RemoteAssetIntegrityClassifier.classify(
+                assetFingerprint: asset.assetFingerprint,
+                links: links,
+                isResourceAvailable: { resourceSizeByHash[$0] != nil }
+            )
+            guard state.isHealthy else { continue }
             fingerprints.insert(asset.assetFingerprint)
             assetCount += 1
-            if let hashes = resolvableHashesByAssetID[asset.id] {
-                reachableHashes.formUnion(hashes)
-            }
+            for link in links { reachableHashes.insert(link.resourceHash) }
+            let roles = links.map(\.role)
             let hasPairedVideo = roles.contains { ResourceTypeCode.isPairedVideo($0) }
             let hasPhotoLike = roles.contains { ResourceTypeCode.isPhotoLike($0) }
             let hasVideo = roles.contains { ResourceTypeCode.isVideoLike($0) }

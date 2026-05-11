@@ -3,7 +3,9 @@ import os.log
 
 private let syncLog = Logger(subsystem: "com.zizicici.watermelon", category: "SyncTiming")
 
-final class RemoteIndexSyncService: Sendable {
+// `uncommittedV2FingerprintsByMonth` is mutable but only mutated under `uncommittedLock`;
+// other state is either `let` or wrapped in actors. Hence `@unchecked Sendable`.
+final class RemoteIndexSyncService: @unchecked Sendable {
     private actor SyncGate {
         private var isLocked = false
         private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -60,50 +62,80 @@ final class RemoteIndexSyncService: Sendable {
         }
     }
 
-    private let snapshotCache: RemoteLibrarySnapshotCache
+    private let committedView: RepoCommittedView
+    private let inflightTracker: OptimisticInflightTracker
     private let syncGate = SyncGate()
     private let state = MutableState()
 
     init(
         snapshotCache: RemoteLibrarySnapshotCache = RemoteLibrarySnapshotCache()
     ) {
-        self.snapshotCache = snapshotCache
+        self.committedView = RepoCommittedView(cache: snapshotCache)
+        self.inflightTracker = OptimisticInflightTracker()
+    }
+
+    init(
+        committedView: RepoCommittedView,
+        inflightTracker: OptimisticInflightTracker
+    ) {
+        self.committedView = committedView
+        self.inflightTracker = inflightTracker
     }
 
     func syncIndex(
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream? = nil,
-        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
+        preMaterialized: RepoMaterializer.MaterializeOutput? = nil
     ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
                 client: client,
                 profile: profile,
                 eventStream: eventStream,
-                onSyncProgress: onSyncProgress
+                onSyncProgress: onSyncProgress,
+                preMaterialized: preMaterialized
             )
         }
     }
 
-    /// Materialize a flat-array `RemoteLibrarySnapshot` from the current cache. O(N) in
-    /// cached entries; call only when a caller actually needs the flat arrays (the
-    /// `MonthSeedLookup` in `BackupRunPreparation` is the only current use).
+    /// O(N) flat-array projection — call only when callers actually need the flat arrays.
     func fullSnapshot() -> RemoteLibrarySnapshot {
-        snapshotCache.current()
+        committedView.current()
     }
 
     private func syncIndexUnlocked(
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream?,
-        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
+        preMaterialized: RepoMaterializer.MaterializeOutput? = nil
     ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
         let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: Self.remoteProfileKey(profile))
         if shouldResetSnapshot {
-            snapshotCache.reset()
+            committedView.reset()
+            // Tied to snapshotCache identity: a profile switch invalidates whatever
+            // uncommitted-V2 fingerprints belonged to the previous profile. Without
+            // this, V1 path leaves stale entries that later make
+            // `committedAssetFingerprintsByMonth` no-op on optional-chain subtraction
+            // (cache no longer has the month, so byMonth[month]?.subtract(...) misses).
+            resetUncommittedV2()
+        }
+
+        // Single format gate — sync read path otherwise misses damagedV2 and
+        // future-format repos (no separate isV2Repo probe).
+        let inspection = try await RemoteFormatCompatibilityService()
+            .inspectRemoteFormat(client: client, profile: profile)
+        switch inspection {
+        case .unsupported(let minAppVersion):
+            throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
+        case .v2:
+            return try await syncIndexV2(client: client, profile: profile, eventStream: eventStream, onSyncProgress: onSyncProgress, syncStart: syncStart, preMaterialized: preMaterialized)
+        case .v1, .fresh:
+            break
         }
 
         let scanStart = CFAbsoluteTimeGetCurrent()
@@ -135,8 +167,8 @@ final class RemoteIndexSyncService: Sendable {
         onSyncProgress?(RemoteSyncProgress(current: 0, total: totalMonthsToProcess))
 
         if changedMonths.isEmpty, removedMonths.isEmpty {
-            snapshotCache.markSynced(Date())
-            let digest = snapshotCache.counts()
+            committedView.markSynced(Date())
+            let digest = committedView.counts()
             let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
             syncLog.info("[SyncTiming] No changes. Total: \(Self.ms(totalElapsed))s")
             eventStream?.emitLog(
@@ -175,7 +207,7 @@ final class RemoteIndexSyncService: Sendable {
 
             let processStart = CFAbsoluteTimeGetCurrent()
             let snapshot = store.unsortedSnapshot()
-            if snapshotCache.replaceMonth(
+            if committedView.replaceMonth(
                 month,
                 resources: snapshot.resources,
                 assets: snapshot.assets,
@@ -192,24 +224,78 @@ final class RemoteIndexSyncService: Sendable {
         }
 
         for month in removedMonths.sorted() {
-            if snapshotCache.removeMonth(month) {
+            if committedView.removeMonth(month) {
                 appliedRemovedMonths += 1
             }
             processedMonthCount += 1
             onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
         }
 
-        // Keep the scan-time digests even for months rewritten by
-        // loadManifestDirect: the stale cache costs one extra download per
-        // upgraded month next sync, while refreshing post-flush would race
-        // with concurrent remote writers and silently drop their updates.
+        // Keep scan-time digests even when loadManifestDirect rewrote the manifest:
+        // refreshing post-flush would race with concurrent writers and drop their updates.
         await state.updateRemoteManifestDigests(remoteDigests)
 
-        snapshotCache.markSynced(Date())
-        let digest = snapshotCache.counts()
+        committedView.markSynced(Date())
+        let digest = committedView.counts()
         let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
         syncLog.info("[SyncTiming] Sync complete. Total: \(Self.ms(totalElapsed))s, changed: \(appliedChangedMonths), removed: \(appliedRemovedMonths)")
 
+        return digest
+    }
+
+
+    private func syncIndexV2(
+        client: RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        eventStream: BackupEventStream?,
+        onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
+        syncStart: CFAbsoluteTime,
+        preMaterialized: RepoMaterializer.MaterializeOutput? = nil
+    ) async throws -> RemoteIndexSyncDigest {
+        // Reuse builder's materialize output to avoid running it twice in prepareRun.
+        let output: RepoMaterializer.MaterializeOutput
+        if let preMaterialized {
+            output = preMaterialized
+        } else {
+            let bootstrap = RepoBootstrap(client: client, basePath: profile.basePath)
+            // Absent repo.json on a V2 repo is broken identity state — surface, not silently
+            // disable repoID filtering (would let foreign commits leak into cache).
+            let expectedRepoID: String
+            switch try await bootstrap.loadRepoIDStrict() {
+            case .absent:
+                throw NSError(
+                    domain: "RemoteIndexSyncService",
+                    code: -50,
+                    userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json — backup-flow can repair, sync cannot"]
+                )
+            case .found(let id):
+                expectedRepoID = id
+            }
+            let materializer = RepoMaterializer(client: client, basePath: profile.basePath)
+            output = try await materializer.materialize(expectedRepoID: expectedRepoID)
+        }
+        // After fresh materialize, all assets in the cache are committed.
+        resetUncommittedV2()
+        // Snapshot overlay before load-clear; on refresh failure stale > empty (empty makes resume skip real-missing).
+        let priorOverlay = committedView.physicallyMissingSnapshot()
+        committedView.loadFromMaterialize(output)
+        do {
+            try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
+        } catch {
+            for (month, hashes) in priorOverlay {
+                committedView.markPhysicallyMissing(month: month, hashes: hashes)
+            }
+            syncLog.info("[SyncTiming] overlay refresh skipped: \(error.localizedDescription)")
+        }
+        committedView.markSynced(Date())
+        onSyncProgress?(RemoteSyncProgress(current: output.state.months.count, total: output.state.months.count))
+        let digest = committedView.counts()
+        let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
+        syncLog.info("[SyncTiming] V2 materialize: \(Self.ms(totalElapsed))s (\(output.state.months.count) months)")
+        eventStream?.emitLog(
+            String.localizedStringWithFormat(String(localized: "backup.remoteIndex.unchanged"), output.state.months.count),
+            level: .debug
+        )
         return digest
     }
 
@@ -219,6 +305,27 @@ final class RemoteIndexSyncService: Sendable {
         basePath: String,
         month: LibraryMonthKey
     ) async throws {
+        // V1-only path. If a V2 repo lost metadata and inspection misclassified it
+        // as V1, this would write V1 manifest state into `committedView` and pollute
+        // the V2 cache. metadata() must fail-closed — `try?` would swallow a transient
+        // permission/network error as "not V2" and let V1 logic run on a V2 repo.
+        let versionPath = RepoLayout.versionFilePath(base: basePath)
+        let versionMeta: RemoteStorageEntry?
+        do {
+            versionMeta = try await client.metadata(path: versionPath)
+        } catch {
+            if Self.isNotFoundError(error) {
+                versionMeta = nil
+            } else {
+                throw error
+            }
+        }
+        if let meta = versionMeta, !meta.isDirectory {
+            throw NSError(domain: "RemoteIndexSyncService", code: -60, userInfo: [
+                NSLocalizedDescriptionKey:
+                    "verifyMonth(V1) refused: \(versionPath) exists — repo is V2; use RepoVerifyMonthService"
+            ])
+        }
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
         let manifestPath = RemotePathBuilder.absolutePath(
             basePath: basePath,
@@ -227,7 +334,7 @@ final class RemoteIndexSyncService: Sendable {
         // Pre-check distinguishes "manifest gone" (drop stale cache entry) from "download failed" (error); `loadManifestDirect` collapses both into nil.
         guard let metadata = try await client.metadata(path: manifestPath),
               !metadata.isDirectory else {
-            _ = snapshotCache.removeMonth(month)
+            _ = committedView.removeMonth(month)
             return
         }
 
@@ -273,7 +380,7 @@ final class RemoteIndexSyncService: Sendable {
             try await store.flushToRemote()
         }
         let snapshot = store.unsortedSnapshot()
-        _ = snapshotCache.replaceMonth(
+        _ = committedView.replaceMonth(
             month,
             resources: snapshot.resources,
             assets: snapshot.assets,
@@ -283,31 +390,119 @@ final class RemoteIndexSyncService: Sendable {
     }
 
     func remoteMonthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
-        snapshotCache.monthSummaries()
+        committedView.monthSummaries()
     }
 
     func healthDigest() -> RemoteHealthDigest {
-        snapshotCache.healthDigest()
+        committedView.healthDigest()
     }
 
     func allKnownMonths() -> Set<LibraryMonthKey> {
-        snapshotCache.allKnownMonths()
+        committedView.allKnownMonths()
     }
 
     func remoteMonthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
-        snapshotCache.monthRawData(for: month)
+        committedView.monthRawData(for: month)
     }
 
     func currentState(since revision: UInt64?) -> RemoteLibrarySnapshotState {
-        snapshotCache.state(since: revision)
+        committedView.state(since: revision)
     }
 
-    func upsertCachedResource(_ item: RemoteManifestResource) {
-        snapshotCache.upsertResource(item)
+    /// Production callers must go through `OptimisticAssetWriter` so optimistic
+    /// upsert + inflight marking can't drift out of sync.
+    func makeOptimisticAssetWriter() -> OptimisticAssetWriter {
+        OptimisticAssetWriter(service: self)
     }
 
-    func upsertCachedAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]? = nil) {
-        snapshotCache.upsertAsset(asset, links: links)
+    fileprivate func _optimisticUpsertResource(_ item: RemoteManifestResource) {
+        committedView.applyOptimisticUpsert(resource: item)
+    }
+
+    fileprivate func _optimisticUpsertAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]?) {
+        committedView.applyOptimisticUpsert(asset: asset, links: links)
+    }
+
+    fileprivate func _markUncommitted(month: LibraryMonthKey, fingerprints: Set<Data>) {
+        inflightTracker.markUncommittedAssets(month: month, fingerprints: fingerprints)
+    }
+
+    /// Recovers inflight-tracker state from `V2MonthSession.FlushError.snapshotWriteFailed`.
+    /// Caller pattern: `catch { remoteIndexService.recordCommittedFromError(month:, error); throw error }`.
+    /// No-op for other error types.
+    func recordCommittedFromFlushError(month: LibraryMonthKey, _ error: Error) {
+        if case let V2MonthSession.FlushError.snapshotWriteFailed(assets, tombstones, _) = error {
+            markCommittedV2(month: month, fingerprints: assets.union(tombstones))
+        }
+    }
+
+    func markCommittedV2(month: LibraryMonthKey, fingerprints: Set<Data>) {
+        inflightTracker.markCommitted(month: month, fingerprints: fingerprints)
+    }
+
+    /// Reset uncommitted tracking — used after a fresh V2 materialize or session boundary.
+    func resetUncommittedV2() {
+        inflightTracker.reset()
+    }
+
+    /// Full wipe for cross-profile reuse. BG runner shares one service across profiles;
+    /// without clearing cache + overlay, profile A's resources mix with profile B's
+    /// missing-overlay and committedAssetFingerprintsByMonth returns garbage.
+    func resetForProfileSwitch() async {
+        inflightTracker.reset()
+        committedView.reset()
+        await state.reset()
+    }
+
+    /// Returns committed fingerprints grouped by month. Cache + per-month uncommitted
+    /// subtraction. Resume planner uses per-asset month to dedup correctly.
+    /// Phantom / partially-missing / metadata-only assets are excluded — the resume
+    /// planner would otherwise skip a local asset whose fingerprint is "in cache" but
+    /// whose remote resources are gone, leaving a real gap unfilled.
+    func committedAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
+        let snapshot = committedView.current()
+        var linksByMonthFP: [LibraryMonthKey: [Data: [RemoteAssetResourceLink]]] = [:]
+        for link in snapshot.assetResourceLinks {
+            let month = LibraryMonthKey(year: link.year, month: link.month)
+            linksByMonthFP[month, default: [:]][link.assetFingerprint, default: []].append(link)
+        }
+        var resourceHashesByMonth: [LibraryMonthKey: Set<Data>] = [:]
+        for resource in snapshot.resources {
+            let month = LibraryMonthKey(year: resource.year, month: resource.month)
+            resourceHashesByMonth[month, default: []].insert(resource.contentHash)
+        }
+        var byMonth = PerMonth<Set<Data>>()
+        // Snapshot already carries an atomic overlay map — re-querying per asset both
+        // duplicates lock acquires and risks reading a different generation of the overlay
+        // than the cache snapshot above.
+        let missingByMonth = snapshot.physicallyMissingHashesByMonth
+        for asset in snapshot.assets {
+            let month = LibraryMonthKey(year: asset.year, month: asset.month)
+            let links = linksByMonthFP[month]?[asset.assetFingerprint] ?? []
+            // Subtract physically-missing — commit log keeps the row, but the
+            // file is gone, so resume planner must NOT skip the repair.
+            let availableHashes = (resourceHashesByMonth[month] ?? [])
+                .subtracting(missingByMonth[month] ?? [])
+            let state = RemoteAssetIntegrityClassifier.classify(
+                assetFingerprint: asset.assetFingerprint,
+                links: links,
+                isResourceAvailable: { availableHashes.contains($0) }
+            )
+            if state.isHealthy {
+                byMonth.insert(asset.assetFingerprint, for: month)
+            }
+        }
+        // Subtract inflight: assets/tombstones we wrote optimistically but
+        // haven't confirmed via commit log fold yet. Resume planner needs the
+        // pure-committed view; UI layers see committed + inflight via the cache.
+        inflightTracker.readUncommittedAssets { uncommittedAssets in
+            for month in uncommittedAssets.months {
+                if let fps = uncommittedAssets[month] {
+                    byMonth.subtract(fps, from: month)
+                }
+            }
+        }
+        return byMonth
     }
 
     func replaceCachedMonth(
@@ -316,7 +511,109 @@ final class RemoteIndexSyncService: Sendable {
         assets: [RemoteManifestAsset],
         links: [RemoteAssetResourceLink]
     ) {
-        _ = snapshotCache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links)
+        _ = committedView.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links)
+    }
+
+    /// V2-only physical-presence overlay; subtracted in committed view.
+    func markPhysicallyMissingV2(month: LibraryMonthKey, hashes: Set<Data>) {
+        committedView.markPhysicallyMissing(month: month, hashes: hashes)
+    }
+
+    func physicallyMissingHashesForTest(month: LibraryMonthKey) -> Set<Data> {
+        committedView.physicallyMissingHashes(for: month)
+    }
+
+    /// Populate the missing-hash overlay for every committed month. Per-month
+    /// best-effort: a single transient list failure logs + skips that month, leaving
+    /// its overlay untouched (next sync re-attempts). Throwing the whole refresh on
+    /// one failed month would wipe overlay state worse than a stale partial.
+    /// Fan-out respects `client.concurrencyMode`: `.serialOnly` (SMB/SFTP) get
+    /// sequential probes regardless of `concurrencyCap`.
+    func refreshPhysicalPresenceOverlay(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        fallback: [LibraryMonthKey: Set<Data>] = [:],
+        concurrencyCap: Int = 4
+    ) async throws {
+        let snapshot = committedView.current()
+        var resourcesByMonth: [LibraryMonthKey: [RemoteManifestResource]] = [:]
+        for resource in snapshot.resources {
+            let month = LibraryMonthKey(year: resource.year, month: resource.month)
+            resourcesByMonth[month, default: []].append(resource)
+        }
+        let effectiveCap = client.concurrencyMode == .serialOnly ? 1 : concurrencyCap
+        var iterator = resourcesByMonth.makeIterator()
+        await withTaskGroup(of: (LibraryMonthKey, Result<Set<Data>, Error>).self) { group in
+            for _ in 0..<effectiveCap {
+                guard let (month, resources) = iterator.next() else { break }
+                group.addTask { [self] in
+                    do {
+                        let (m, missing) = try await probeMonthForMissing(client: client, basePath: basePath, month: month, resources: resources)
+                        return (m, .success(missing))
+                    } catch {
+                        return (month, .failure(error))
+                    }
+                }
+            }
+            while let (month, result) = await group.next() {
+                switch result {
+                case .success(let missing):
+                    committedView.markPhysicallyMissing(month: month, hashes: missing)
+                case .failure(let error):
+                    if let stale = fallback[month] {
+                        committedView.markPhysicallyMissing(month: month, hashes: stale)
+                    } else {
+                        // Cold start: no prior overlay. Mark all hashes missing rather than fail open —
+                        // resume planner re-verifies, worst case re-uploads. Silently treating as healthy
+                        // would skip legit repairs on first sync.
+                        let allHashes = Set(resourcesByMonth[month]?.map(\.contentHash) ?? [])
+                        committedView.markPhysicallyMissing(month: month, hashes: allHashes)
+                    }
+                    syncLog.info("[SyncTiming] probe failed for \(month.text): \(error.localizedDescription)")
+                }
+                if let (nextMonth, nextResources) = iterator.next() {
+                    group.addTask { [self] in
+                        do {
+                            let (m, missing) = try await probeMonthForMissing(client: client, basePath: basePath, month: nextMonth, resources: nextResources)
+                            return (m, .success(missing))
+                        } catch {
+                            return (nextMonth, .failure(error))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func probeMonthForMissing(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        month: LibraryMonthKey,
+        resources: [RemoteManifestResource]
+    ) async throws -> (LibraryMonthKey, Set<Data>) {
+        let monthRel = String(format: "%04d/%02d", month.year, month.month)
+        let monthAbs = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRel)
+        let entries = try await client.list(path: monthAbs)
+        let presentKeys = Set(entries
+            .filter { !$0.isDirectory }
+            .map { RemoteFileNaming.collisionKey(for: $0.name) })
+        var resourcesByHash: [Data: [RemoteManifestResource]] = [:]
+        for resource in resources {
+            resourcesByHash[resource.contentHash, default: []].append(resource)
+        }
+        var missing: Set<Data> = []
+        for (hash, group) in resourcesByHash {
+            let anyPresent = group.contains { resource in
+                let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
+                return presentKeys.contains(RemoteFileNaming.collisionKey(for: leaf))
+            }
+            if !anyPresent { missing.insert(hash) }
+        }
+        return (month, missing)
+    }
+
+    private static func isNotFoundError(_ error: Error) -> Bool {
+        isStorageNotFoundError(error)
     }
 
     private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {
@@ -396,5 +693,37 @@ final class RemoteIndexSyncService: Sendable {
 
     private static func ms(_ seconds: CFAbsoluteTime) -> String {
         String(format: "%.3f", seconds)
+    }
+}
+
+/// Sole production entry point for optimistic-cache writes that must keep
+/// inflight tracking in sync. `RemoteIndexSyncService.markCommittedV2` clears
+/// the inflight side at flush success — separate concern, kept on the service.
+struct OptimisticAssetWriter: Sendable {
+    fileprivate let service: RemoteIndexSyncService
+
+    /// Optimistic cache write + (V2 only) inflight marking, atomic from the
+    /// caller's view. `markUncommitted: false` is the phantom/test-asset path
+    /// where we want classifier subtraction, not inflight subtraction.
+    func appendAsset(
+        _ asset: RemoteManifestAsset,
+        links: [RemoteAssetResourceLink]?,
+        markUncommitted: Bool
+    ) {
+        service._optimisticUpsertAsset(asset, links: links)
+        if markUncommitted {
+            let month = LibraryMonthKey(year: asset.year, month: asset.month)
+            service._markUncommitted(month: month, fingerprints: [asset.assetFingerprint])
+        }
+    }
+
+    func appendResource(_ resource: RemoteManifestResource) {
+        service._optimisticUpsertResource(resource)
+    }
+
+    /// For tests / non-asset paths that need to seed inflight state directly.
+    /// Production AssetProcessor path goes through `appendAsset(markUncommitted: true)`.
+    func markUncommitted(month: LibraryMonthKey, fingerprints: Set<Data>) {
+        service._markUncommitted(month: month, fingerprints: fingerprints)
     }
 }

@@ -69,6 +69,11 @@ enum TestFixtures {
 
     // MARK: - RemoteIndex builders
 
+    /// Use for any test that exercises the classifier — fake fingerprints trip `.fingerprintMismatch`.
+    static func computedFingerprint(for resourceRoleSlotHashes: [(role: Int, slot: Int, contentHash: Data)]) -> Data {
+        BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: resourceRoleSlotHashes)
+    }
+
     static func remoteAsset(
         year: Int,
         month: Int,
@@ -97,10 +102,11 @@ enum TestFixtures {
         resourceType: Int = ResourceTypeCode.photo,
         fileName: String? = nil
     ) -> RemoteManifestResource {
-        RemoteManifestResource(
+        let leaf = fileName ?? contentHash.hexString
+        return RemoteManifestResource(
             year: year,
             month: month,
-            fileName: fileName ?? contentHash.hexString,
+            physicalRemotePath: String(format: "%04d/%02d/%@", year, month, leaf),
             contentHash: contentHash,
             fileSize: fileSize,
             resourceType: resourceType,
@@ -115,7 +121,8 @@ enum TestFixtures {
         assetFingerprint: Data,
         resourceHash: Data,
         role: Int = ResourceTypeCode.photo,
-        slot: Int = 0
+        slot: Int = 0,
+        logicalName: String = ""
     ) -> RemoteAssetResourceLink {
         RemoteAssetResourceLink(
             year: year,
@@ -123,7 +130,8 @@ enum TestFixtures {
             assetFingerprint: assetFingerprint,
             resourceHash: resourceHash,
             role: role,
-            slot: slot
+            slot: slot,
+            logicalName: logicalName
         )
     }
 
@@ -151,5 +159,128 @@ enum TestFixtures {
             isFullSnapshot: isFullSnapshot,
             monthDeltas: deltas
         )
+    }
+
+    // MARK: - V2 repo / migration test fixtures
+
+    /// 32-byte filler used as opaque fingerprint/hash bytes; the byte value carries no
+    /// semantics, it just makes the value visually distinguishable in failure logs.
+    static func fingerprint(_ byte: UInt8) -> Data {
+        Data(repeating: byte, count: 32)
+    }
+
+    static func makeServerProfile(
+        id: Int64? = nil,
+        name: String = "Test",
+        storageType: StorageType = .smb,
+        host: String = "h",
+        port: Int = 445,
+        shareName: String = "s",
+        basePath: String = "/p",
+        username: String = "u",
+        domain: String? = nil,
+        writerID: String? = nil,
+        backgroundBackupEnabled: Bool = false
+    ) -> ServerProfileRecord {
+        ServerProfileRecord(
+            id: id,
+            name: name,
+            storageType: storageType.rawValue,
+            connectionParams: nil,
+            sortOrder: 0,
+            host: host,
+            port: port,
+            shareName: shareName,
+            basePath: basePath,
+            username: username,
+            domain: domain,
+            credentialRef: "ref",
+            backgroundBackupEnabled: backgroundBackupEnabled,
+            createdAt: Date(),
+            updatedAt: Date(),
+            writerID: writerID
+        )
+    }
+
+    @discardableResult
+    static func insertServerProfile(
+        in databaseManager: DatabaseManager,
+        writerID: String? = nil,
+        basePath: String = "/p",
+        storageType: StorageType = .smb
+    ) throws -> Int64 {
+        var profile = makeServerProfile(storageType: storageType, basePath: basePath, writerID: writerID)
+        try databaseManager.write { db in try profile.save(db) }
+        guard let id = profile.id else {
+            throw NSError(domain: "TestFixtures", code: -1, userInfo: [NSLocalizedDescriptionKey: "save did not assign id"])
+        }
+        return id
+    }
+
+    static func makeCommitHeader(
+        repoID: String,
+        writerID: String,
+        seq: UInt64,
+        runID: String,
+        month: LibraryMonthKey,
+        clockMin: UInt64? = nil,
+        clockMax: UInt64? = nil
+    ) -> CommitHeader {
+        CommitHeader(
+            version: CommitHeader.currentVersion,
+            repoID: repoID,
+            writerID: writerID,
+            seq: seq,
+            runID: runID,
+            scope: CommitHeader.monthScope(month),
+            clockMin: clockMin ?? seq,
+            clockMax: clockMax ?? seq,
+            bodyKind: CommitHeader.bodyKindPlain
+        )
+    }
+
+    static func injectRepoJSON(
+        _ client: InMemoryRemoteStorageClient,
+        basePath: String,
+        repoID: String,
+        writerID: String = "test"
+    ) async throws {
+        let body: [String: Any] = [
+            "v": 1,
+            "repo_id": repoID,
+            "created_at_ms": 0,
+            "created_by_writer": writerID
+        ]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), data: data)
+    }
+
+    static func injectVersionJSON(
+        _ client: InMemoryRemoteStorageClient,
+        basePath: String,
+        formatVersion: Int = RepoLayout.formatVersion,
+        minAppVersion: String = "2.0.0",
+        writerID: String = "test"
+    ) async throws {
+        let body: [String: Any] = [
+            "format_version": formatVersion,
+            "min_app_version": minAppVersion,
+            "created_at_ms": 0,
+            "created_by_writer": writerID
+        ]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        await client.injectFile(path: RepoLayout.versionFilePath(base: basePath), data: data)
+    }
+
+    /// V1 manifests live at `<basePath>/<year>/<month>/.watermelon_manifest.sqlite`.
+    /// Content doesn't matter for inspect/scan — only file presence.
+    static func injectV1ManifestSentinel(
+        _ client: InMemoryRemoteStorageClient,
+        basePath: String,
+        year: Int,
+        month: Int
+    ) async {
+        let path = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", year, month)
+        await client.injectFile(path: path, data: Data([0x01]))
     }
 }

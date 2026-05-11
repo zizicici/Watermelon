@@ -22,11 +22,13 @@
 1. full backup 或其恢复流程，仍需要重新遍历图库并重新计算 pending 集。
 2. 大图库下，开始执行和恢复执行都会有明显前置耗时。
 
-## 4. manifest flush 仍存在强杀窗口
+## 4. 强杀窗口（V2 cutover 后缩小到 batch 粒度，未消除）
 
-1. manifest 主要在“月份完成”与“任务收尾”时 flush。
-2. 如果应用在 flush 前被系统强杀，最近一批增量仍可能没写回远端 manifest。
-3. `MonthManifestStore.loadSeeded(...)` 已通过列出真实远端目录来规避重名碰撞，但不能消除未 flush 元数据丢失本身。
+V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1→V2 migration 流程，详见 `docs/06-RepoV2.md`）。Stage 1 设计目标：把强杀窗口从「月级 flush」缩小到「10-asset batch」，**不消除**。
+
+1. V1 路径（cutover 前）：manifest 在「月份完成」与「任务收尾」时 flush；强杀前一批未 flush 元数据丢失（月级窗口）。
+2. V2 路径（cutover 后）：前台与后台均每 10 个成功上传 flush 一次 commit + snapshot；强杀最多丢未 commit 的 batch（最多 9 个 asset 元数据；物理文件已上传成 orphan）。
+3. 真消除强杀窗口：留 Stage 2 — per-asset commit 或本地 `resource_intents` pending state。
 
 ## 5. 首页状态机复杂度依然不低
 
@@ -59,7 +61,7 @@
 2. 用户可手动覆盖到 `1...4`
 3. iCloud-only 资产存在时上传会被强制单 worker
 4. 目前没有根据带宽、远端 RTT、失败率动态调节 worker 数
-5. SFTP 多 worker = 多 SSH 会话；遇 sshd `MaxStartups` / `MaxSessions` 紧配置需要回落到 1，目前没有自动探测
+5. SFTP 多 worker = 多 SSH 会话；V2 cutover 后每个 profile 还会额外开一条专用的 metadata SSH 连接（`BackupV2RuntimeServices.metadataClient`，commit/snapshot/liveness 写入用），因此实际并发连接数 = `worker_count + 1`。遇 sshd `MaxStartups` / `MaxSessions` 紧配置需要回落到 1，目前没有自动探测
 
 ## 8. 下载取消粒度仍是 item 级
 
@@ -88,7 +90,20 @@
 2. `SFTPConnectionParams` / `SFTPCredentialBlob` / `RemotePathBuilder` 已加 `nonisolated`；遗留的 `ExternalVolumeConnectionParams` / `WebDAVConnectionParams` / `S3ConnectionParams` 还没加，目前是 warning（"main actor-isolated conformance ... cannot be used in nonisolated context; this is an error in the Swift 6 language mode"），未来打开 Swift 6 模式会变 error。
 3. 修法是给这三个类型也加 `nonisolated`，与 SFTP 的处理一致；本仓库未跟 SFTP 的改动一起做，避免扩大 PR 范围。
 
-## 12. 建议优先级
+## 12. V2 batch-flush + uncommitted-cache 机制保留(直到 Stage 2 compaction)
+
+V2 cutover 后,`MonthManifestStore` 的 V2 路径在 Iter 7 已迁出到 `V2MonthSession`(in-memory,无 sqlite)。但「optimistic-cache + deferred V2 commit」的复杂度仍在:
+
+- 每 10 个成功上传才 flush 一次 commit + snapshot(`BackupV2Constants.batchFlushInterval`)
+- AssetProcessor 把刚 upsert 的 fingerprint 标记为 `markUncommittedV2`,resume planner 用 `committedAssetFingerprints()` 减去这部分
+- `flushToRemote` 返回 `FlushDelta`,callers 调 `markCommittedV2(asset ∪ tombstone)` 把已 commit 的从 uncommitted 集合清掉
+- 这套机制天生 race-prone,review 第 3-6 轮发现的 bug 大部分集中在「漏 mark / 漏清 / 漏 union 」这条链上(R1.4 / R1.5 / 5R.8 / 6R.8)
+
+**真消除方案** = per-asset commit(plan §11 / Stage 2):每个 asset 写一个微 commit,无 batch / 无 pending / 无 cache 标记。代价是 commit 文件数量 10×,需要先建 compaction 基础设施(把多个微 commit 合并成一个)才能 ship。
+
+**当前决定:保留现状直到 Stage 2 compaction 落地。** 锁定语义靠 `WatermelonTests/V2FlushTests.swift`(round-trip flush + tombstone delta)。
+
+## 13. 建议优先级
 
 1. 优先补 `HomeExecutionCoordinator` / `BackupCoordinator` 的中等粒度集成测试，特别是暂停 / 恢复 / stop / 连接丢失。
 2. 评估为 full run 持久化 pending 集，减少恢复时重扫。

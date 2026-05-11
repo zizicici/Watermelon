@@ -5,6 +5,8 @@ import AMSMB2
 #endif
 
 final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
+
     private let config: SMBServerConfig
 
     #if canImport(AMSMB2)
@@ -39,6 +41,10 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func shouldSetModificationDate() -> Bool {
         true
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        .overwritePossible
     }
 
     func connect() async throws {

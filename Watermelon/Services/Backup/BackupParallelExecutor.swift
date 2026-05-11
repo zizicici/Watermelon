@@ -38,6 +38,8 @@ private actor BackupThermalThrottle {
 }
 
 struct BackupParallelExecutor: Sendable {
+    static let flushInterval = BackupV2Constants.batchFlushInterval
+
     private let hashIndexRepository: ContentHashIndexRepository
     private let assetProcessor: AssetProcessor
     private let remoteIndexService: RemoteIndexSyncService
@@ -63,6 +65,7 @@ struct BackupParallelExecutor: Sendable {
         guard preparedRun.totalAssetCount > 0 else {
             let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
             eventStream.emit(.finished(result))
+            await preparedRun.v2Services?.shutdown()
             await preparedRun.initialClient.disconnectSafely()
             return result
         }
@@ -104,17 +107,17 @@ struct BackupParallelExecutor: Sendable {
                 let monthQueue = MonthWorkQueue(months: preparedRun.monthPlans)
 
                 for workerID in 0 ..< preparedRun.workerCount {
-                    group.addTask {
+                    group.addTask { [v2Services = preparedRun.v2Services] in
                         try await runParallelMonthWorker(
                             workerID: workerID,
                             monthQueue: monthQueue,
                             profile: profile,
                             iCloudPhotoBackupMode: iCloudPhotoBackupMode,
-                            snapshotSeedLookup: preparedRun.snapshotSeedLookup,
                             eventStream: eventStream,
                             aggregator: aggregator,
                             clientPool: clientPool,
-                            onMonthUploaded: onMonthUploaded
+                            onMonthUploaded: onMonthUploaded,
+                            v2Services: v2Services
                         )
                     }
                 }
@@ -124,6 +127,7 @@ struct BackupParallelExecutor: Sendable {
                 }
             }
         } catch {
+            await preparedRun.v2Services?.shutdown()
             await clientPool.shutdown()
             if profile.isConnectionUnavailableError(error) {
                 eventStream.emitLog(String(localized: "backup.parallel.remoteUnavailable"), level: .error)
@@ -139,6 +143,7 @@ struct BackupParallelExecutor: Sendable {
             throw error
         }
 
+        await preparedRun.v2Services?.shutdown()
         await clientPool.shutdown()
 
         if let finalStageTimingSummary = await aggregator.finalTimingSummary() {
@@ -161,11 +166,11 @@ struct BackupParallelExecutor: Sendable {
         monthQueue: MonthWorkQueue,
         profile: ServerProfileRecord,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
-        snapshotSeedLookup: MonthSeedLookup?,
         eventStream: BackupEventStream,
         aggregator: ParallelBackupProgressAggregator,
         clientPool: StorageClientPool,
-        onMonthUploaded: BackupMonthFinalizer? = nil
+        onMonthUploaded: BackupMonthFinalizer? = nil,
+        v2Services: BackupV2RuntimeServices? = nil
     ) async throws -> WorkerRunState {
         var workerState = WorkerRunState()
         let client: any RemoteStorageClientProtocol
@@ -191,18 +196,30 @@ struct BackupParallelExecutor: Sendable {
                 }
 
                 let monthKey = monthPlan.month
-                let monthStore: MonthManifestStore
+                let monthStore: any BackupMonthStore
                 do {
-                    monthStore = try await MonthManifestStore.loadOrCreate(
-                        client: client,
-                        basePath: profile.basePath,
-                        year: monthKey.year,
-                        month: monthKey.month,
-                        seed: snapshotSeedLookup?.seed(for: monthKey),
-                        stepLogger: { message in
-                            eventStream.emitLog(message, level: .error)
-                        }
-                    )
+                    if let v2Services {
+                        monthStore = try await V2MonthSession.loadOrCreate(
+                            client: client,
+                            basePath: profile.basePath,
+                            year: monthKey.year,
+                            month: monthKey.month,
+                            v2Services: v2Services,
+                            stepLogger: { message in
+                                eventStream.emitLog(message, level: .error)
+                            }
+                        )
+                    } else {
+                        monthStore = try await MonthManifestStore.loadOrCreate(
+                            client: client,
+                            basePath: profile.basePath,
+                            year: monthKey.year,
+                            month: monthKey.month,
+                            stepLogger: { message in
+                                eventStream.emitLog(message, level: .error)
+                            }
+                        )
+                    }
                 } catch {
                     if error is CancellationError {
                         workerState.paused = true
@@ -228,6 +245,10 @@ struct BackupParallelExecutor: Sendable {
                     assets: loadedSnapshot.assets,
                     links: loadedSnapshot.links
                 )
+                remoteIndexService.markPhysicallyMissingV2(
+                    month: monthKey,
+                    hashes: monthStore.physicallyMissingHashesSnapshot()
+                )
 
                 eventStream.emitLog(
                     String.localizedStringWithFormat(
@@ -250,6 +271,7 @@ struct BackupParallelExecutor: Sendable {
                 let fetchBatchSize = 500
                 var missingAssetCount = 0
                 var hasLoggedLocalHashCacheWarning = false
+                var uploadsSinceFlush = 0
 
                 var skippedMonthShortCircuit = false
                 if monthAlreadyFullyBackedUp(
@@ -379,6 +401,49 @@ struct BackupParallelExecutor: Sendable {
                             if let timingSummary = progressState.timingSummary {
                                 eventStream.emitLog(timingSummary, level: .debug)
                             }
+
+                            // Cached-reuse `.skipped` also writes asset rows; only `.failed`
+                            // skips the batch counter.
+                            if result.status != .failed {
+                                uploadsSinceFlush += 1
+                                if uploadsSinceFlush >= Self.flushInterval {
+                                    do {
+                                        let delta = try await monthStore.flushToRemote(ignoreCancellation: false)
+                                        // Tombstones clear uncommittedV2 the same as commits do.
+                                        remoteIndexService.markCommittedV2(
+                                            month: monthKey,
+                                            fingerprints: delta.committedV2AssetFingerprints
+                                                .union(delta.committedV2TombstoneFingerprints)
+                                        )
+                                    } catch is CancellationError {
+                                        workerState.paused = true
+                                        break
+                                    } catch {
+                                        // FlushError wraps the underlying — peel CancellationError out
+                                        // so a user-stop mid snapshot write doesn't get retried as a generic
+                                        // flush failure.
+                                        if let cancel = (error as? V2MonthSession.FlushError)?.cancellationCause {
+                                            _ = cancel
+                                            workerState.paused = true
+                                            break
+                                        }
+                                        // Commit may be durable even on snapshot-write failure;
+                                        // reconcile inflight tracker so resume planner doesn't double-count.
+                                        remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
+                                        // Non-fatal — end-of-month flush will retry.
+                                        eventStream.emitLog(
+                                            String.localizedStringWithFormat(
+                                                String(localized: "backup.parallel.flushManifestFailed"),
+                                                workerID + 1,
+                                                monthKey.text,
+                                                profile.userFacingStorageErrorMessage(error)
+                                            ),
+                                            level: .warning
+                                        )
+                                    }
+                                    uploadsSinceFlush = 0
+                                }
+                            }
                         } catch {
                             if error is CancellationError {
                                 workerState.paused = true
@@ -468,7 +533,12 @@ struct BackupParallelExecutor: Sendable {
                     )
                 } else {
                     do {
-                        try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
+                        let delta = try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
+                        remoteIndexService.markCommittedV2(
+                            month: monthKey,
+                            fingerprints: delta.committedV2AssetFingerprints
+                                .union(delta.committedV2TombstoneFingerprints)
+                        )
                         if shouldFinishMonth {
                             eventStream.emit(.monthChanged(MonthChangeEvent(
                                 year: monthKey.year,
@@ -488,6 +558,14 @@ struct BackupParallelExecutor: Sendable {
                                             message
                                         ),
                                         level: .error
+                                    )
+                                    // Mark fatal so the month-loop throws at end. Without this the
+                                    // worker silently completes and finished event reports success
+                                    // while Home/onMonthUploaded already knows the month failed.
+                                    monthFatalError = NSError(
+                                        domain: "BackupParallelExecutor",
+                                        code: -201,
+                                        userInfo: [NSLocalizedDescriptionKey: "onMonthUploaded failed: \(message)"]
                                     )
                                 case .cancelled:
                                     workerState.paused = true
@@ -530,6 +608,16 @@ struct BackupParallelExecutor: Sendable {
                             }
                         }
                     } catch {
+                        // Peel CancellationError out of the FlushError envelope so user-stop
+                        // mid snapshot-write doesn't get logged as a hard flush failure.
+                        if let cancel = (error as? V2MonthSession.FlushError)?.cancellationCause {
+                            _ = cancel
+                            workerState.paused = true
+                            break
+                        }
+                        // Commit may be durable even on snapshot-write failure;
+                        // reconcile inflight tracker so resume planner doesn't double-count.
+                        remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                         eventStream.emitErrorLog(
                             String.localizedStringWithFormat(
                                 String(localized: "backup.parallel.flushManifestFailed"),
@@ -565,10 +653,10 @@ struct BackupParallelExecutor: Sendable {
 
     private func monthAlreadyFullyBackedUp(
         monthAssetIDs: [String],
-        monthStore: MonthManifestStore
+        monthStore: any BackupMonthStore
     ) -> Bool {
         guard !monthAssetIDs.isEmpty else { return true }
-        guard !monthStore.assetsByFingerprint.isEmpty else { return false }
+        guard monthStore.hasAnyAsset else { return false }
 
         guard let cachedHashes = try? hashIndexRepository.fetchAssetHashCaches(
             assetIDs: Set(monthAssetIDs)

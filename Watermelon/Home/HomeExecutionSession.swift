@@ -286,7 +286,13 @@ struct HomeExecutionSession {
         for key in monthPlans.keys {
             monthPlans[key]?.apply(.completed)
         }
-        phase = monthPlans.values.contains(where: \.isFailed) ? .failed(String(localized: "home.execution.partialFailed")) : .completed
+        // Global phase folds from per-month outcome predicates. `hasUserVisibleFailure`
+        // (≠ `isFailed`) includes `.partiallyFailed` so a "some months failed" run
+        // can never report a top-level `.completed`. The reduce is the contract; if
+        // a new MonthPlan.Phase shows up, it must opt into the predicate explicitly
+        // rather than silently landing on the wrong global phase.
+        let hasFailure = monthPlans.values.contains(where: \.hasUserVisibleFailure)
+        phase = hasFailure ? .failed(String(localized: "home.execution.partialFailed")) : .completed
     }
 
     mutating func markLocalIndexPreflightCompleted() {

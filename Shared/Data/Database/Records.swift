@@ -27,6 +27,7 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
     var backgroundBackupEnabled: Bool = false
     var createdAt: Date
     var updatedAt: Date
+    var writerID: String?
 
     var resolvedStorageType: StorageType {
         StorageType(rawValue: storageType) ?? .smb
@@ -35,6 +36,17 @@ struct ServerProfileRecord: Codable, FetchableRecord, MutablePersistableRecord, 
     mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID
     }
+}
+
+struct RepoStateRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+    static let databaseTableName = "repo_state"
+
+    var profileID: Int64
+    var repoID: String
+    var writerID: String
+    var lastClock: Int64
+    var lastSeq: Int64
+    var migrationCompleted: Int
 }
 
 struct SyncStateRecord: Codable, FetchableRecord, MutablePersistableRecord {

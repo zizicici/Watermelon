@@ -7,18 +7,19 @@ final class RemoteIndexEngineTests: XCTestCase {
 
     private func makeEngine() -> HomeRemoteIndexEngine { HomeRemoteIndexEngine() }
 
-    /// Single-asset, single-resource, single-link delta classified as a plain photo.
-    private func resolvablePhotoDelta(
+    /// Photo delta with canonical fingerprint; `discriminator` only varies the hash to avoid collisions.
+    private func resolvablePhoto(
         _ key: LibraryMonthKey,
-        fingerprint: Data,
+        discriminator: Data,
         resourceSize: Int64 = 100
-    ) -> RemoteLibraryMonthDelta {
-        let hash = Data([0xA0]) + fingerprint
-        return TestFixtures.remoteMonthDelta(
+    ) -> (delta: RemoteLibraryMonthDelta, fingerprint: Data) {
+        let hash = Data([0xA0]) + discriminator
+        let fp = TestFixtures.computedFingerprint(for: [(ResourceTypeCode.photo, 0, hash)])
+        let delta = TestFixtures.remoteMonthDelta(
             key,
             assets: [TestFixtures.remoteAsset(
                 year: key.year, month: key.month,
-                fingerprint: fingerprint, totalFileSizeBytes: resourceSize
+                fingerprint: fp, totalFileSizeBytes: resourceSize
             )],
             resources: [TestFixtures.remoteResource(
                 year: key.year, month: key.month,
@@ -26,84 +27,83 @@ final class RemoteIndexEngineTests: XCTestCase {
             )],
             links: [TestFixtures.remoteLink(
                 year: key.year, month: key.month,
-                assetFingerprint: fingerprint, resourceHash: hash
+                assetFingerprint: fp, resourceHash: hash
             )]
         )
+        return (delta, fp)
     }
 
     // MARK: - apply / state
 
     func testApply_fullSnapshot_clearsAndReplaces() {
         let engine = makeEngine()
-        let fpA = Data([0x01])
+        let janA = resolvablePhoto(key202401, discriminator: Data([0x01]))
         _ = engine.apply(
             state: TestFixtures.remoteSnapshotState(
                 revision: 1, isFullSnapshot: true,
-                deltas: [resolvablePhotoDelta(key202401, fingerprint: fpA)]
+                deltas: [janA.delta]
             ),
             hasActiveConnection: true
         )
-        XCTAssertEqual(engine.fingerprints(for: key202401), [fpA])
+        XCTAssertEqual(engine.fingerprints(for: key202401), [janA.fingerprint])
 
-        let fpB = Data([0x02])
+        let febB = resolvablePhoto(key202402, discriminator: Data([0x02]))
         let delta = engine.apply(
             state: TestFixtures.remoteSnapshotState(
                 revision: 2, isFullSnapshot: true,
-                deltas: [resolvablePhotoDelta(key202402, fingerprint: fpB)]
+                deltas: [febB.delta]
             ),
             hasActiveConnection: true
         )
         XCTAssertTrue(delta.changedMonths.contains(key202401), "old months are wiped on fullSnapshot")
         XCTAssertTrue(delta.changedMonths.contains(key202402))
         XCTAssertTrue(engine.fingerprints(for: key202401).isEmpty)
-        XCTAssertEqual(engine.fingerprints(for: key202402), [fpB])
+        XCTAssertEqual(engine.fingerprints(for: key202402), [febB.fingerprint])
     }
 
     func testApply_partialSnapshot_replacesOnlyDeltaMonths() {
         let engine = makeEngine()
-        let fpA = Data([0x10])
-        let fpB = Data([0x20])
+        let janA = resolvablePhoto(key202401, discriminator: Data([0x10]))
+        let febB = resolvablePhoto(key202402, discriminator: Data([0x20]))
         _ = engine.apply(
             state: TestFixtures.remoteSnapshotState(
                 revision: 1, isFullSnapshot: true,
-                deltas: [
-                    resolvablePhotoDelta(key202401, fingerprint: fpA),
-                    resolvablePhotoDelta(key202402, fingerprint: fpB)
-                ]
+                deltas: [janA.delta, febB.delta]
             ),
             hasActiveConnection: true
         )
 
-        let fpC = Data([0x30])
+        let janC = resolvablePhoto(key202401, discriminator: Data([0x30]))
         let delta = engine.apply(
             state: TestFixtures.remoteSnapshotState(
                 revision: 2, isFullSnapshot: false,
-                deltas: [resolvablePhotoDelta(key202401, fingerprint: fpC)]
+                deltas: [janC.delta]
             ),
             hasActiveConnection: true
         )
         XCTAssertEqual(delta.changedMonths, [key202401])
-        XCTAssertEqual(engine.fingerprints(for: key202401), [fpC])
-        XCTAssertEqual(engine.fingerprints(for: key202402), [fpB], "Feb stays untouched on partial")
+        XCTAssertEqual(engine.fingerprints(for: key202401), [janC.fingerprint])
+        XCTAssertEqual(engine.fingerprints(for: key202402), [febB.fingerprint], "Feb stays untouched on partial")
     }
 
     func testApply_revisionUnchanged_partialNoOp() {
         // Same-revision partials early-return; same-revision FULL snapshots still apply.
         let engine = makeEngine()
-        let fpA = Data([0x40])
+        let janA = resolvablePhoto(key202401, discriminator: Data([0x40]))
         _ = engine.apply(
             state: TestFixtures.remoteSnapshotState(
                 revision: 5, isFullSnapshot: true,
-                deltas: [resolvablePhotoDelta(key202401, fingerprint: fpA)]
+                deltas: [janA.delta]
             ),
             hasActiveConnection: true
         )
         XCTAssertEqual(engine.snapshotRevision, 5)
 
+        let febOther = resolvablePhoto(key202402, discriminator: Data([0x99]))
         let delta = engine.apply(
             state: TestFixtures.remoteSnapshotState(
                 revision: 5, isFullSnapshot: false,
-                deltas: [resolvablePhotoDelta(key202402, fingerprint: Data([0x99]))]
+                deltas: [febOther.delta]
             ),
             hasActiveConnection: true
         )
@@ -113,11 +113,11 @@ final class RemoteIndexEngineTests: XCTestCase {
 
     func testApply_disconnect_clearsAllState() {
         let engine = makeEngine()
-        let fpA = Data([0x50])
+        let janA = resolvablePhoto(key202401, discriminator: Data([0x50]))
         _ = engine.apply(
             state: TestFixtures.remoteSnapshotState(
                 revision: 1, isFullSnapshot: true,
-                deltas: [resolvablePhotoDelta(key202401, fingerprint: fpA)]
+                deltas: [janA.delta]
             ),
             hasActiveConnection: true
         )
@@ -164,10 +164,47 @@ final class RemoteIndexEngineTests: XCTestCase {
         XCTAssertNil(engine.summary(for: key202401))
     }
 
+    /// Partially-missing assets used to count as backed-up because "any link resolves"
+    /// gated inclusion. Classifier gating excludes them — UI's backed-up count must match
+    /// what restore can actually deliver.
+    func testApply_partiallyMissingAsset_excludedFromBackedUp() {
+        let engine = makeEngine()
+        let photoHash = Data([0xB0])
+        let videoHash = Data([0xB1])
+        let fp = TestFixtures.computedFingerprint(for: [
+            (ResourceTypeCode.photo, 0, photoHash),
+            (ResourceTypeCode.pairedVideo, 1, videoHash)
+        ])
+        let delta = TestFixtures.remoteMonthDelta(
+            key202401,
+            assets: [TestFixtures.remoteAsset(year: 2024, month: 1, fingerprint: fp, totalFileSizeBytes: 200)],
+            resources: [
+                TestFixtures.remoteResource(year: 2024, month: 1, contentHash: photoHash, fileSize: 80),
+                TestFixtures.remoteResource(year: 2024, month: 1, contentHash: videoHash, fileSize: 120)
+            ],
+            links: [
+                TestFixtures.remoteLink(year: 2024, month: 1, assetFingerprint: fp, resourceHash: photoHash, role: ResourceTypeCode.photo, slot: 0),
+                TestFixtures.remoteLink(year: 2024, month: 1, assetFingerprint: fp, resourceHash: videoHash, role: ResourceTypeCode.pairedVideo, slot: 1)
+            ]
+        )
+        let withMissing = RemoteLibraryMonthDelta(
+            month: delta.month, resources: delta.resources, assets: delta.assets,
+            assetResourceLinks: delta.assetResourceLinks,
+            physicallyMissingHashes: [videoHash]
+        )
+        _ = engine.apply(
+            state: TestFixtures.remoteSnapshotState(revision: 1, isFullSnapshot: true, deltas: [withMissing]),
+            hasActiveConnection: true
+        )
+        XCTAssertTrue(engine.fingerprints(for: key202401).isEmpty,
+                      "partiallyMissing classifier state → excluded from backed-up count")
+        XCTAssertNil(engine.summary(for: key202401))
+    }
+
     func testApply_videoOnly_classifiedAsVideo() {
         let engine = makeEngine()
-        let fp = Data([0x80])
         let videoHash = Data([0x81])
+        let fp = TestFixtures.computedFingerprint(for: [(ResourceTypeCode.video, 0, videoHash)])
         let delta = TestFixtures.remoteMonthDelta(
             key202401,
             assets: [TestFixtures.remoteAsset(year: 2024, month: 1, fingerprint: fp, totalFileSizeBytes: 500)],
@@ -194,9 +231,12 @@ final class RemoteIndexEngineTests: XCTestCase {
     func testApply_pairedVideoPlusPhotoLike_classifiedAsPhoto() {
         // livePhoto folds into photoCount — HomeRemoteIndexEngine has no livePhoto bucket.
         let engine = makeEngine()
-        let fp = Data([0x70])
         let photoHash = Data([0x71])
         let videoHash = Data([0x72])
+        let fp = TestFixtures.computedFingerprint(for: [
+            (ResourceTypeCode.photo, 0, photoHash),
+            (ResourceTypeCode.pairedVideo, 1, videoHash)
+        ])
         let delta = TestFixtures.remoteMonthDelta(
             key202401,
             assets: [TestFixtures.remoteAsset(

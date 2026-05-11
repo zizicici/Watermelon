@@ -364,7 +364,8 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 let remoteItems = HomeAlbumMatching.buildRemoteItems(
                     assets: delta.assets,
                     resources: delta.resources,
-                    links: delta.assetResourceLinks
+                    links: delta.assetResourceLinks,
+                    physicallyMissingHashesByMonth: [month: delta.physicallyMissingHashes]
                 )
                 let localIDs = self.localIndex.localAssetIDs(for: month)
                 cont.resume(returning: RemoteOnlyQueryResult(

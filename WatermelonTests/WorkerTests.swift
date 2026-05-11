@@ -84,8 +84,8 @@ final class WorkerTests: XCTestCase {
         // so `monthRow.remote` doesn't leak stale data to UI after disconnect.
         let worker = makeWorker()
         let key = LibraryMonthKey(year: 2024, month: 1)
-        let fp = Data([0xAA])
         let hash = Data([0xBB])
+        let fp = TestFixtures.computedFingerprint(for: [(ResourceTypeCode.photo, 0, hash)])
         let delta = TestFixtures.remoteMonthDelta(
             key,
             assets: [TestFixtures.remoteAsset(year: 2024, month: 1, fingerprint: fp)],

@@ -57,7 +57,7 @@ final class LegacyMigrationPlanner {
                 let linksByAsset = Dictionary(grouping: snapshot.links, by: \.assetFingerprint)
 
                 ownedDirsByKey[spec.monthDirAbsolutePath.lowercased()] = Set(
-                    snapshot.resources.map { RemoteFileNaming.collisionKey(for: $0.fileName) }
+                    snapshot.resources.map { RemoteFileNaming.collisionKey(for: $0.logicalName) }
                 )
 
                 for asset in snapshot.assets {
@@ -182,7 +182,7 @@ final class LegacyMigrationPlanner {
         client: any RemoteStorageClientProtocol
     ) async throws -> Set<Data> {
         let imageResources = store.unsortedSnapshot().resources.filter { resource in
-            let ext = (resource.fileName as NSString).pathExtension.lowercased()
+            let ext = (resource.logicalName as NSString).pathExtension.lowercased()
             return LegacyMediaExtensions.perceptualHashExtensions.contains(ext)
         }
         let cached = PerceptualHashCache.shared.lookupAll(
@@ -196,10 +196,10 @@ final class LegacyMigrationPlanner {
                 result.insert(dhash)
                 continue
             }
-            let ext = (resource.fileName as NSString).pathExtension.lowercased()
+            let ext = (resource.logicalName as NSString).pathExtension.lowercased()
             let absolutePath = RemotePathBuilder.absolutePath(
                 basePath: store.basePath,
-                remoteRelativePath: resource.remoteRelativePath
+                remoteRelativePath: resource.physicalRemotePath
             )
             do {
                 let dhash = try await withLocalReadURL(
@@ -321,13 +321,13 @@ final class LegacyMigrationPlanner {
             guard let resource = resourcesByHash[link.resourceHash] else { return nil }
             let remotePath = RemotePathBuilder.absolutePath(
                 basePath: spec.basePath,
-                remoteRelativePath: resource.remoteRelativePath
+                remoteRelativePath: resource.physicalRemotePath
             )
             components.append(LegacyResourceComponent(
                 role: link.role,
                 slot: link.slot,
                 remotePath: remotePath,
-                originalFilename: resource.fileName,
+                originalFilename: resource.logicalName,
                 fileSize: resource.fileSize,
                 contentHash: resource.contentHash,
                 dhash: nil   // manifest-driven bundles aren't subject to perceptual dedup

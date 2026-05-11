@@ -144,7 +144,13 @@ struct MonthPlan {
     var isTerminal: Bool { phase == .completed || phase == .failed || phase == .partiallyFailed }
     var isFullyCompleted: Bool { phase == .completed }
     var isDone: Bool { phase == .completed || phase == .partiallyFailed }
+    /// `isFailed` is the strict-terminal-failure check; the broader
+    /// `hasUserVisibleFailure` includes `.partiallyFailed` so global phase
+    /// roll-up doesn't display "completed" while individual months show a
+    /// failure badge. Use the latter wherever the UI semantic is "did
+    /// anything go wrong"; reserve `isFailed` for "the whole month bombed".
     var isFailed: Bool { phase == .failed }
+    var hasUserVisibleFailure: Bool { phase == .failed || phase == .partiallyFailed }
     var isActive: Bool { phase == .uploading || phase == .downloading }
     var intent: MonthIntent? {
         switch (needsUpload, needsDownload) {

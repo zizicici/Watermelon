@@ -47,22 +47,22 @@ final class MonthManifestStore {
     var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
     var assetLinksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
 
-    // Indexes derived from assetLinksByFingerprint. Maintained incrementally on upsertAsset
-    // and applyDeletions; rebuilt wholesale on reloadCache. Without these, the legacy-import
-    // finders below would scan all assets and rebuild link Sets per call → O(N²) per month
-    // when the manifest fills up.
+    // Derived from assetLinksByFingerprint; without them, legacy-import finders below
+    // are O(N²) per month on a full manifest.
     private var linkKeySetByFingerprint: [Data: Set<LinkKey>] = [:]
     private var assetsByResourceHash: [Data: Set<Data>] = [:]
 
     var remoteFilesByName: [String: RemoteFileMetadata] = [:]
     var existingFileNameSet: Set<String> = []
-    /// Lazily-built fold of `existingFileNameSet` through `RemoteFileNaming.collisionKey`.
-    /// Built on first read, incrementally updated on insert, invalidated on removal.
-    /// Without this cache, processBundle re-folds the entire set per bundle → O(N²) per month.
+    /// Cached fold of `existingFileNameSet` through `collisionKey`; without it,
+    /// processBundle re-folds the entire set per bundle → O(N²) per month.
     private var collisionKeysCache: Set<String>?
     private(set) var dirty: Bool = false
 
     let stepLogger: MonthManifestStepLogger?
+
+    /// V1 stores never carry V2 services; V2 mode uses `V2MonthSession` instead.
+    var v2Services: BackupV2RuntimeServices? { nil }
 
     init(
         client: RemoteStorageClientProtocol,
@@ -268,7 +268,7 @@ final class MonthManifestStore {
                     backedUpAtMs = excluded.backedUpAtMs
                 """,
                 arguments: [
-                    item.fileName,
+                    item.logicalName,
                     item.contentHash,
                     item.fileSize,
                     item.resourceType,
@@ -278,14 +278,14 @@ final class MonthManifestStore {
             )
         }
 
-        if let old = itemsByFileName[item.fileName], old.contentHash != item.contentHash {
+        if let old = itemsByFileName[item.logicalName], old.contentHash != item.contentHash {
             itemsByHash[old.contentHash] = nil
         }
 
-        itemsByFileName[item.fileName] = item
-        itemsByHash[item.contentHash] = item.fileName
-        existingFileNameSet.insert(item.fileName)
-        collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: item.fileName))
+        itemsByFileName[item.logicalName] = item
+        itemsByHash[item.contentHash] = item.logicalName
+        existingFileNameSet.insert(item.logicalName)
+        collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: item.logicalName))
         dirty = true
 
         return item
@@ -385,6 +385,24 @@ final class MonthManifestStore {
         dirty = true
     }
 
+    func overlaySeedCrypto(_ resources: [RemoteManifestResource]) {
+        for source in resources where source.crypto != nil {
+            guard let existing = itemsByFileName[source.logicalName],
+                  existing.crypto != source.crypto else { continue }
+            itemsByFileName[source.logicalName] = RemoteManifestResource(
+                year: existing.year,
+                month: existing.month,
+                physicalRemotePath: existing.physicalRemotePath,
+                contentHash: existing.contentHash,
+                fileSize: existing.fileSize,
+                resourceType: existing.resourceType,
+                creationDateMs: existing.creationDateMs,
+                backedUpAtMs: existing.backedUpAtMs,
+                crypto: source.crypto
+            )
+        }
+    }
+
     func markRemoteFile(name: String, size: Int64) {
         remoteFilesByName[name] = RemoteFileMetadata(size: size)
         existingFileNameSet.insert(name)
@@ -408,11 +426,11 @@ final class MonthManifestStore {
         let removedOrphanLinkCount: Int
     }
 
-    /// Also integrally deletes any asset left fully-orphan or metadata-only (role 7) after the
-    /// resource removal. Throws → manifest unchanged.
+    /// Also integrally deletes any asset left fully-orphan or whose remaining links are
+    /// all metadata-only (edit-history without a primary resource). Throws → manifest unchanged.
     func cleanupMissingResources(missingHashes: Set<Data>) throws -> CleanupMissingResourcesResult {
         let actualMissing = missingHashes.intersection(itemsByHash.keys)
-        let metadataOnlyRoles: Set<Int> = [ResourceTypeCode.adjustmentData]
+        let metadataOnlyRoles = ResourceTypeCode.metadataOnlyRoles
 
         // Iterate assetsByFingerprint.keys to cover phantom assets (no link entries).
         var assetsToRemove: Set<Data> = []
@@ -439,7 +457,7 @@ final class MonthManifestStore {
 
     func reconcileWithRemoteListing(_ remoteFileNames: Set<String>) async throws -> CleanupMissingResourcesResult {
         let missing = itemsByFileName.values
-            .filter { !remoteFileNames.contains($0.fileName) }
+            .filter { !remoteFileNames.contains($0.logicalName) }
             .map(\.contentHash)
         let result = try cleanupMissingResources(missingHashes: Set(missing))
         if dirty {
@@ -577,9 +595,18 @@ final class MonthManifestStore {
         }
     }
 
+    struct FlushDelta: Sendable {
+        let didFlush: Bool
+        /// Asset fingerprints transitioned from "uploaded but uncommitted" to "V2 committed".
+        let committedV2AssetFingerprints: Set<Data>
+        let committedV2TombstoneFingerprints: Set<Data>
+
+        static let none = FlushDelta(didFlush: false, committedV2AssetFingerprints: [], committedV2TombstoneFingerprints: [])
+    }
+
     @discardableResult
-    func flushToRemote(ignoreCancellation: Bool = false) async throws -> Bool {
-        guard dirty else { return false }
+    func flushToRemote(ignoreCancellation: Bool = false) async throws -> FlushDelta {
+        guard dirty else { return .none }
         if !ignoreCancellation {
             try Task.checkCancellation()
         }
@@ -651,7 +678,7 @@ final class MonthManifestStore {
             try Task.checkCancellation()
         }
         dirty = false
-        return true
+        return FlushDelta(didFlush: true, committedV2AssetFingerprints: [], committedV2TombstoneFingerprints: [])
     }
 
     private func moveReplacingExistingManifest(
@@ -723,25 +750,19 @@ final class MonthManifestStore {
 }
 
 extension MonthManifestStore {
-    /// Catches four failure modes: phantom (no links), broken link (resource gone),
-    /// fingerprint-vs-link-set divergence, and metadata-only (only `adjustmentData`
-    /// remaining). Latter two are invisible to a pure phantom/missing-resource check.
+    /// Thin shim over the canonical classifier. Predates the classifier extraction;
+    /// kept so V1 callsites don't have to change shape. New code should call
+    /// `RemoteAssetIntegrityClassifier.classify(...)` directly to consume the typed
+    /// state instead of a coarse boolean.
     static func isAssetIncomplete(
         links: [RemoteAssetResourceLink],
         isResourceAvailable: (Data) -> Bool,
         assetFingerprint: Data
     ) -> Bool {
-        if links.isEmpty { return true }
-        if links.contains(where: { !isResourceAvailable($0.resourceHash) }) {
-            return true
-        }
-        let recomputed = BackupAssetResourcePlanner.assetFingerprint(
-            resourceRoleSlotHashes: links.map {
-                (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
-            }
-        )
-        if recomputed != assetFingerprint { return true }
-        let metadataOnlyRoles: Set<Int> = [ResourceTypeCode.adjustmentData]
-        return !links.contains { !metadataOnlyRoles.contains($0.role) }
+        !RemoteAssetIntegrityClassifier.classify(
+            assetFingerprint: assetFingerprint,
+            links: links,
+            isResourceAvailable: isResourceAvailable
+        ).isHealthy
     }
 }

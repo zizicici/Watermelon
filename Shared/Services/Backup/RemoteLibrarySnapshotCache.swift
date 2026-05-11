@@ -138,7 +138,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     /// Snapshots per-month dicts under the lock (cheap COW reference copy), then
     /// runs the SHA-256 fingerprint recompute outside the lock so writers aren't
     /// stalled by the (potentially large) incomplete-asset scan.
-    func healthDigest() -> RemoteHealthDigest {
+    func healthDigest(physicallyMissingByMonth: [LibraryMonthKey: Set<Data>] = [:]) -> RemoteHealthDigest {
         let snapshot: HealthSnapshot = lock.withLock {
             HealthSnapshot(
                 assetsByMonth: assetsByMonth,
@@ -156,7 +156,11 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
 
         var incompleteFlat: [IncompleteAssetEntry] = []
         for month in snapshot.assetsByMonth.keys {
-            incompleteFlat.append(contentsOf: Self.computeIncompleteForMonth(month, snapshot: snapshot))
+            incompleteFlat.append(contentsOf: Self.computeIncompleteForMonth(
+                month,
+                snapshot: snapshot,
+                physicallyMissing: physicallyMissingByMonth[month] ?? []
+            ))
         }
         return RemoteHealthDigest(
             totalAssets: assetCount,
@@ -298,18 +302,20 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     /// Runs against an immutable snapshot, no lock needed.
     private static func computeIncompleteForMonth(
         _ month: LibraryMonthKey,
-        snapshot: HealthSnapshot
+        snapshot: HealthSnapshot,
+        physicallyMissing: Set<Data>
     ) -> [IncompleteAssetEntry] {
         let monthAssets = snapshot.assetsByMonth[month] ?? [:]
         guard !monthAssets.isEmpty else { return [] }
         let monthLinks = snapshot.linksByMonth[month] ?? [:]
-        let resourceHashes = snapshot.resourceHashesByMonth[month] ?? []
+        let resourceHashes = (snapshot.resourceHashesByMonth[month] ?? [])
+            .subtracting(physicallyMissing)
         let monthResources = snapshot.resourcesByMonth[month] ?? [:]
 
         var fileNameByHash: [Data: String] = [:]
         fileNameByHash.reserveCapacity(monthResources.count)
         for resource in monthResources.values {
-            fileNameByHash[resource.contentHash] = resource.fileName
+            fileNameByHash[resource.contentHash] = resource.logicalName
         }
 
         var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
@@ -364,7 +370,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         assetResourceLinks: [RemoteAssetResourceLink]
     ) -> Bool {
         lock.withLock {
-            let nextResources = Self.dedupedByKey(resources, key: \.id, scope: "resource", month: month) { $0.fileName }
+            let nextResources = Self.dedupedByKey(resources, key: \.id, scope: "resource", month: month) { $0.logicalName }
             let nextAssets = Self.dedupedByKey(assets, key: \.id, scope: "asset", month: month) { $0.assetFingerprintHex }
             let nextLinks = Self.dedupedByKey(
                 assetResourceLinks,
@@ -579,6 +585,13 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
+    /// External signal: months whose effective read-model changed even though
+    /// cache state (resources/assets/links) is the same. Used by RepoCommittedView
+    /// when the physical-presence overlay flips.
+    func markMonthsChanged(_ months: Set<LibraryMonthKey>) {
+        lock.withLock { bumpRevisionLocked(months) }
+    }
+
     func monthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
         lock.withLock {
             monthStatsCache.map { (month, stats) in
@@ -609,19 +622,26 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     func monthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
         lock.withLock {
             let monthAssets = assetsByMonth[month] ?? [:]
-            guard !monthAssets.isEmpty else { return nil }
+            let monthResources = resourcesByMonth[month] ?? [:]
+            let monthLinks = linksByMonth[month] ?? [:]
+            // Residue: resource-only / link-only months without any asset row. Returning
+            // nil hid them from Home/restore debug; emit an empty-assets delta so verify
+            // and ops tools can spot the anomaly.
+            if monthAssets.isEmpty && monthResources.isEmpty && monthLinks.isEmpty {
+                return nil
+            }
             return RemoteLibraryMonthDelta(
                 month: month,
-                resources: Array((resourcesByMonth[month] ?? [:]).values),
+                resources: Array(monthResources.values),
                 assets: Array(monthAssets.values),
-                assetResourceLinks: Array((linksByMonth[month] ?? [:]).values)
+                assetResourceLinks: Array(monthLinks.values)
             )
         }
     }
 
     func fileNames(for month: LibraryMonthKey) -> Set<String> {
         lock.withLock {
-            Set((resourcesByMonth[month] ?? [:]).values.map(\.fileName))
+            Set((resourcesByMonth[month] ?? [:]).values.map(\.logicalName))
         }
     }
 
@@ -666,7 +686,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             if lhs.creationDateMs != rhs.creationDateMs {
                 return (lhs.creationDateMs ?? lhs.backedUpAtMs) < (rhs.creationDateMs ?? rhs.backedUpAtMs)
             }
-            return lhs.fileName < rhs.fileName
+            return lhs.logicalName < rhs.logicalName
         }
     }
 
@@ -705,7 +725,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             if result[k] != nil {
                 let descr = describe(element)
                 snapshotCacheLog.error("[RemoteLibrarySnapshotCache] duplicate \(scope, privacy: .public) month=\(month.text, privacy: .public) entry=\(descr, privacy: .public)")
-                assertionFailure("Duplicate \(scope) key in replaceMonth — SQL invariant broken")
+                assertionFailure("replaceMonth invariant violated: duplicate \(scope) key in \(month.text) — upstream produced a path/key collision (\(descr))")
                 continue
             }
             result[k] = element

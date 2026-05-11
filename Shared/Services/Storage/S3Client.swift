@@ -1,6 +1,7 @@
 import Foundation
 
 final actor S3Client: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     static let errorDomain = S3ErrorClassifier.errorDomain
 
     struct Config: Sendable {
@@ -422,6 +423,85 @@ final actor S3Client: RemoteStorageClientProtocol {
         defer { try? handle.close() }
         try handle.seek(toOffset: UInt64(offset))
         return try handle.read(upToCount: Int(length)) ?? Data()
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        // S3 single-part PUT supports `If-None-Match: *` (server-enforced exclusive
+        // create). Multipart upload completion historically does NOT honor it across
+        // all S3-compatible vendors, so we conservatively report `.overwritePossible`
+        // even where AWS itself supports conditional CompleteMultipartUpload.
+        // Repo metadata (commit/snapshot files) is always small enough to take the
+        // single-part path; large files = asset uploads where collision-rename
+        // already prevents path conflicts in normal operation.
+        if size > Self.multipartThreshold {
+            return .overwritePossible
+        }
+        return .exclusive
+    }
+
+    func atomicCreate(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws -> AtomicCreateResult {
+        let key = key(forPath: remotePath)
+        if key.isEmpty {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        let size = try fileSize(at: localURL)
+        if respectTaskCancellation { try Task.checkCancellation() }
+
+        if size > Self.multipartThreshold {
+            // AWS only honors If-None-Match on CompleteMultipartUpload; large objects
+            // fall back to exists+upload — there IS a TOCTOU race window. Callers MUST
+            // ensure path uniqueness (MetadataCreateGate staging path or AssetProcessor
+            // forceWriterIDSuffix) so a peer can't write the same key concurrently.
+            // `.bestEffortRetry` signals that verification is the caller's responsibility.
+            if try await exists(path: remotePath) {
+                return .alreadyExists
+            }
+            try await multipartUpload(localURL: localURL, key: key, size: size, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+            return .bestEffortRetry
+        }
+
+        if size > Self.singlePartMaxSize {
+            throw Self.internalError("File exceeds 5 GiB single-part limit")
+        }
+        let url = try makeURL(key: key, query: [])
+        let request = signedRequest(
+            method: "PUT",
+            url: url,
+            additionalHeaders: [
+                "Content-Type": "application/octet-stream",
+                "If-None-Match": "*"
+            ],
+            bodyHash: .unsigned
+        )
+        do {
+            _ = try await performTransfer(request, fromFile: localURL)
+            return .created
+        } catch {
+            if Self.isPreconditionFailed(error) {
+                return .alreadyExists
+            }
+            throw error
+        }
+    }
+
+    nonisolated private static func isPreconditionFailed(_ error: Error) -> Bool {
+        if let storage = error as? RemoteStorageClientError, case .underlying(let inner) = storage {
+            return isPreconditionFailed(inner)
+        }
+        let ns = error as NSError
+        if ns.domain == errorDomain {
+            if ns.code == 412 { return true }
+            if let serverCode = ns.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String,
+               serverCode == "PreconditionFailed" {
+                return true
+            }
+        }
+        return false
     }
 
     func setModificationDate(_: Date, forPath _: String) async throws {}

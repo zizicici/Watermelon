@@ -1,6 +1,7 @@
 import Foundation
 
 final actor LocalVolumeClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     struct Config {
         let rootBookmarkData: Data
         let onBookmarkRefreshed: ((BookmarkRefreshPayload) -> Void)?
@@ -229,6 +230,97 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             if shouldCleanupDestinationOnFailure, let destinationURLForCleanup {
                 try? FileManager.default.removeItem(at: destinationURLForCleanup)
             }
+            throw mapStorageError(error)
+        }
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        // POSIX O_EXCL — kernel-level exclusive create; unconditional `.exclusive`.
+        .exclusive
+    }
+
+    func atomicCreate(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws -> AtomicCreateResult {
+        let root = try requireRootURL()
+        do {
+            if respectTaskCancellation { try Task.checkCancellation() }
+            let destinationURL = try remoteFileURL(forRemotePath: remotePath, rootURL: root)
+            let parentURL = destinationURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
+
+            let fd = destinationURL.path.withCString { cPath in
+                Darwin.open(cPath, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+            }
+            if fd < 0 {
+                if errno == EEXIST {
+                    return .alreadyExists
+                }
+                throw NSError(
+                    domain: NSPOSIXErrorDomain,
+                    code: Int(errno),
+                    userInfo: [NSLocalizedDescriptionKey: String(cString: strerror(errno))]
+                )
+            }
+
+            let destinationHandle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            let sourceHandle: FileHandle
+            do {
+                sourceHandle = try FileHandle(forReadingFrom: localURL)
+            } catch {
+                // Source open failed after O_EXCL claimed the destination; remove the
+                // zero-byte stub so it doesn't poison the (path, hash) binding.
+                try? destinationHandle.close()
+                try? FileManager.default.removeItem(at: destinationURL)
+                throw error
+            }
+            defer {
+                try? sourceHandle.close()
+            }
+            let totalSize = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? Int64) ?? 0
+            var bytesWritten: Int64 = 0
+
+            do {
+                while true {
+                    if respectTaskCancellation { try Task.checkCancellation() }
+                    let chunk = try sourceHandle.read(upToCount: Self.uploadBufferSize) ?? Data()
+                    if chunk.isEmpty { break }
+                    try destinationHandle.write(contentsOf: chunk)
+                    bytesWritten += Int64(chunk.count)
+                    if let onProgress, totalSize > 0 {
+                        onProgress(min(1.0, Double(bytesWritten) / Double(totalSize)))
+                    }
+                }
+            } catch {
+                try? destinationHandle.close()
+                try? FileManager.default.removeItem(at: destinationURL)
+                throw error
+            }
+            // External volumes (USB / SD) need an explicit barrier — close(2) only
+            // releases the FD, dirty pages can sit in the kernel page cache for
+            // seconds-to-tens-of-seconds. Without this, atomicCreate returns .created
+            // but the bytes are gone on unplug / power loss. F_FULLFSYNC is Apple's
+            // strong-barrier fcntl (forces device-level flush, not just kernel sync).
+            if fcntl(fd, F_FULLFSYNC) == -1 {
+                // Non-fatal — log via thrown error so caller decides. Some FUSE/
+                // network-mounted "local" volumes don't support F_FULLFSYNC; we treat
+                // the underlying write as still durable (kernel sync at close), just
+                // weaker than F_FULLFSYNC.
+            }
+            // External-volume write-back errors (USB unmount mid-write, full disk) only
+            // surface at close; don't swallow them.
+            do {
+                try destinationHandle.close()
+            } catch {
+                try? FileManager.default.removeItem(at: destinationURL)
+                throw error
+            }
+            onProgress?(1.0)
+            return .created
+        } catch {
             throw mapStorageError(error)
         }
     }

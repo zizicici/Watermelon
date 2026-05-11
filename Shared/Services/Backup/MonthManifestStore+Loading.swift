@@ -5,6 +5,9 @@ import os.log
 private let manifestLoadLog = Logger(subsystem: "com.zizicici.watermelon", category: "MonthManifestStore")
 
 extension MonthManifestStore {
+    /// V1-only entry point: V2-mode workers go through `V2MonthSession.loadOrCreate` instead.
+    /// `seed` is used by legacy import (LegacyMigrationExecutor) — when provided, skips
+    /// the remote manifest download and seeds the local sqlite directly.
     static func loadOrCreate(
         client: RemoteStorageClientProtocol,
         basePath: String,
@@ -138,12 +141,21 @@ extension MonthManifestStore {
         let dbQueue = try DatabaseQueue(path: localURL.path)
         try Self.migrate(dbQueue)
 
-        // List actual remote directory to detect orphaned files (uploaded but
-        // not recorded in manifest due to crash / force-kill). Without this,
-        // prepareUpload misses disk-level collisions and upload fails with
-        // STATUS_OBJECT_NAME_COLLISION.
+        // Fresh months don't exist on backends like SMB/WebDAV/SFTP until createDirectory.
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
+        do {
+            try await client.createDirectory(path: monthAbsolutePath)
+        } catch {
+            stepLogger?(String.localizedStringWithFormat(
+                String(localized: "backup.manifest.diagnostic.createMonthDirFailed"),
+                monthRelativePath,
+                error.localizedDescription
+            ))
+            throw error
+        }
+        // List actual remote directory to detect orphaned files (uploaded but
+        // not recorded in manifest due to crash / force-kill).
         let entries: [RemoteStorageEntry]
         do {
             entries = try await client.list(path: monthAbsolutePath)
@@ -170,6 +182,9 @@ extension MonthManifestStore {
         )
         try store.seedDatabase(seed)
         try store.reloadCache()
+        // V1 sqlite schema doesn't persist crypto — overlay it back so the next snapshot
+        // round-trip preserves Stage-2 metadata. Skipped when crypto is nil (the common case).
+        store.overlaySeedCrypto(seed.resources)
 
         _ = try await store.reconcileWithRemoteListing(Set(remoteFilesByName.keys))
 
@@ -206,6 +221,11 @@ extension MonthManifestStore {
     /// Use when the caller has already confirmed the manifest exists (e.g., via scanManifestDigests).
     /// Pass `pushSchemaUpgrade: false` when reading a manifest you don't own (e.g. legacy-import
     /// scanning a backup folder) so a schema migration doesn't trigger flushToRemote on the source.
+    ///
+    /// Returns nil ONLY when the manifest is confirmed absent (metadata not found).
+    /// Transient transport / permission errors throw — V1MigrationService.runPhase1
+    /// would otherwise treat them as "no manifest", skip the month, phase3 deletes the
+    /// real V1 manifests on remote → silent data loss.
     static func loadManifestDirect(
         client: RemoteStorageClientProtocol,
         basePath: String,
@@ -222,16 +242,19 @@ extension MonthManifestStore {
             )
         }()
 
+        // metadata() distinguishes "not found" (legitimate nil) from transport failures
+        // that download() would otherwise mask.
+        guard try await client.metadata(path: absPath) != nil else {
+            return nil
+        }
+
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
         do {
             try await client.download(remotePath: absPath, localURL: localURL)
         } catch {
             try? FileManager.default.removeItem(at: localURL)
-            if error is CancellationError || Task.isCancelled {
-                throw CancellationError()
-            }
-            return nil
+            throw error
         }
 
         let prepared: PreparedManifestQueue
@@ -308,7 +331,7 @@ extension MonthManifestStore {
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
-                        resource.fileName,
+                        resource.logicalName,
                         resource.contentHash,
                         resource.fileSize,
                         resource.resourceType,
@@ -382,19 +405,21 @@ extension MonthManifestStore {
         var resourcesByHash: [Data: String] = [:]
         resourcesByHash.reserveCapacity(resourceRows.count)
 
+        let monthRel = String(format: "%04d/%02d", year, month)
         for row in resourceRows {
+            let leaf: String = row["fileName"]
             let item = RemoteManifestResource(
                 year: year,
                 month: month,
-                fileName: row["fileName"],
+                physicalRemotePath: monthRel + "/" + leaf,
                 contentHash: row["contentHash"],
                 fileSize: row["fileSize"],
                 resourceType: Int(row["resourceType"] as Int64),
                 creationDateMs: row["creationDateMs"],
                 backedUpAtMs: row["backedUpAtMs"]
             )
-            resourcesByName[item.fileName] = item
-            resourcesByHash[item.contentHash] = item.fileName
+            resourcesByName[item.logicalName] = item
+            resourcesByHash[item.contentHash] = item.logicalName
         }
 
         let assetRows = try dbQueue.read { db in
@@ -439,13 +464,15 @@ extension MonthManifestStore {
         linksByFingerprint.reserveCapacity(assetsByFingerprint.count)
 
         for row in linkRows {
+            let resourceHash: Data = row["resourceHash"]
             let link = RemoteAssetResourceLink(
                 year: year,
                 month: month,
                 assetFingerprint: row["assetFingerprint"],
-                resourceHash: row["resourceHash"],
+                resourceHash: resourceHash,
                 role: Int(row["role"] as Int64),
-                slot: Int(row["slot"] as Int64)
+                slot: Int(row["slot"] as Int64),
+                logicalName: resourcesByHash[resourceHash] ?? ""
             )
             linksByFingerprint[link.assetFingerprint, default: []].append(link)
         }

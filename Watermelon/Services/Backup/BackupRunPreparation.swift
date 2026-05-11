@@ -3,33 +3,34 @@ import Photos
 
 struct BackupPreparedRun: Sendable {
     let initialClient: any RemoteStorageClientProtocol
-    let snapshotSeedLookup: MonthSeedLookup?
     let monthPlans: [MonthWorkItem]
     let workerCount: Int
     let connectionPoolSize: Int
     let totalAssetCount: Int
     let makeClient: @Sendable () throws -> any RemoteStorageClientProtocol
+    let v2Services: BackupV2RuntimeServices?
 }
 
 struct BackupRunPreparationService: Sendable {
-    private static let monthSeedLookupEntryThreshold = 120_000
-
     private let photoLibraryService: PhotoLibraryService
     private let storageClientFactory: StorageClientFactory
     private let hashIndexRepository: ContentHashIndexRepository
     private let remoteIndexService: RemoteIndexSyncService
+    private let databaseManager: DatabaseManager
     private let formatCompatibilityService = RemoteFormatCompatibilityService()
 
     init(
         photoLibraryService: PhotoLibraryService,
         storageClientFactory: StorageClientFactory,
         hashIndexRepository: ContentHashIndexRepository,
-        remoteIndexService: RemoteIndexSyncService
+        remoteIndexService: RemoteIndexSyncService,
+        databaseManager: DatabaseManager
     ) {
         self.photoLibraryService = photoLibraryService
         self.storageClientFactory = storageClientFactory
         self.hashIndexRepository = hashIndexRepository
         self.remoteIndexService = remoteIndexService
+        self.databaseManager = databaseManager
     }
 
     func prepareRun(
@@ -53,18 +54,24 @@ struct BackupRunPreparationService: Sendable {
             let client = try makeStorageClient(profile: profile, password: password)
             try await client.connect()
 
+            var v2ServicesForCleanup: BackupV2RuntimeServices?
             do {
-                try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-                try await formatCompatibilityService.verify(client: client, profile: profile)
-                var snapshotSeedLookup: MonthSeedLookup?
+                // basePath creation moved into BackupV2RuntimeBuilder so background runner
+                // benefits too; explicit call here is now redundant.
+                let v2Services = try await prepareV2Runtime(client: client, profile: profile, password: password, eventStream: eventStream)
+                v2ServicesForCleanup = v2Services
 
                 do {
+                    // Peek so a syncIndex throw doesn't waste the cold-start materialize.
+                    // Consume only after success.
+                    let preMaterialized = await v2Services?.initialMaterializeOutput.peek()
                     let digest = try await remoteIndexService.syncIndex(
                         client: client,
                         profile: profile,
-                        eventStream: eventStream
+                        eventStream: eventStream,
+                        preMaterialized: preMaterialized
                     )
-                    snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
+                    _ = await v2Services?.initialMaterializeOutput.consume()
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.log.remoteIndexSynced"),
@@ -75,6 +82,13 @@ struct BackupRunPreparationService: Sendable {
                     )
                 } catch {
                     if profile.isConnectionUnavailableError(error) {
+                        throw error
+                    }
+                    // damagedV2Repo / repoFormatRegression / repoIdentityMismatch
+                    // are fatal — continuing would write into a half-initialized
+                    // repo. BackupV2RuntimeBuilder would re-throw later anyway,
+                    // but only after we've spun up worker pools.
+                    if error is BackupCompatibilityError {
                         throw error
                     }
                     eventStream.emitLog(
@@ -144,16 +158,19 @@ struct BackupRunPreparationService: Sendable {
 
                 return BackupPreparedRun(
                     initialClient: client,
-                    snapshotSeedLookup: snapshotSeedLookup,
                     monthPlans: monthPlans,
                     workerCount: workerCount,
                     connectionPoolSize: connectionPoolSize,
                     totalAssetCount: totalAssetCount,
                     makeClient: { [storageClientFactory, profile, password] in
                         try storageClientFactory.makeClient(profile: profile, password: password)
-                    }
+                    },
+                    v2Services: v2Services
                 )
             } catch {
+                if let v2 = v2ServicesForCleanup {
+                    await v2.shutdown()
+                }
                 await client.disconnectSafely()
                 throw error
             }
@@ -192,7 +209,6 @@ struct BackupRunPreparationService: Sendable {
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteIndexSyncDigest {
         try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-        try await formatCompatibilityService.verify(client: client, profile: profile)
         let digest = try await remoteIndexService.syncIndex(
             client: client,
             profile: profile,
@@ -216,20 +232,131 @@ struct BackupRunPreparationService: Sendable {
         month: LibraryMonthKey
     ) async throws {
         try await withConnectedClient(profile: profile, password: password) { client in
-            try await self.verifyMonth(client: client, basePath: profile.basePath, month: month)
+            // Profile + password let verify build a V2 runtime (dedicated metadata client + tombstones).
+            try await self.verifyMonth(client: client, basePath: profile.basePath, month: month, profile: profile, password: password)
         }
     }
 
     func verifyMonth(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        month: LibraryMonthKey
+        month: LibraryMonthKey,
+        profile: ServerProfileRecord? = nil,
+        password: String? = nil
     ) async throws {
-        try await remoteIndexService.verifyMonth(
-            client: client,
-            basePath: basePath,
-            month: month
-        )
+        // Inspect drives routing AND format gating — separate version.json probe
+        // would re-open the damagedV2-vs-V1 TOCTOU window.
+        let inspection: RemoteFormatInspection
+        if let profile {
+            inspection = try await RemoteFormatCompatibilityService()
+                .inspectRemoteFormat(client: client, profile: profile)
+        } else {
+            // Profile-less paths can't run damagedV2 detection.
+            let versionPath = RepoLayout.versionFilePath(base: basePath)
+            inspection = try await client.metadata(path: versionPath) != nil
+                ? .v2(formatVersion: RepoLayout.formatVersion)
+                : .v1
+        }
+        switch inspection {
+        case .unsupported(let minAppVersion):
+            throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
+        case .v2:
+            _ = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
+        case .v1:
+            try await remoteIndexService.verifyMonth(
+                client: client,
+                basePath: basePath,
+                month: month
+            )
+        case .fresh:
+            break
+        }
+    }
+
+    @discardableResult
+    func verifyMonthV2(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        month: LibraryMonthKey,
+        profile: ServerProfileRecord? = nil,
+        password: String? = nil
+    ) async throws -> VerifyMonthReport {
+        // RepoID from remote up-front lets the verifier filter foreign-id commits;
+        // absent on a V2 repo is broken identity state — verify must not run.
+        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
+        let expectedRepoID: String
+        switch try await bootstrap.loadRepoIDStrict() {
+        case .absent:
+            throw NSError(
+                domain: "BackupRunPreparation",
+                code: -51,
+                userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json — run a backup to repair before verifying"]
+            )
+        case .found(let id):
+            expectedRepoID = id
+        }
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: expectedRepoID)
+        let report = try await verifier.verify(month: month)
+        if !report.cleanupCandidates.isEmpty, let profile, let password {
+            let raw = try storageClientFactory.makeClient(profile: profile, password: password)
+            try await raw.connect()
+            // serialOnly backends (SMB / SFTP) need wrap to keep workers + cleanup
+            // commits from interleaving on the same connection.
+            let metadataClient = wrapIfSerial(raw)
+            let v2: BackupV2RuntimeServices
+            do {
+                v2 = try await BackupV2RuntimeBuilder.build(
+                    client: client,
+                    metadataClient: metadataClient,
+                    profile: profile,
+                    databaseManager: databaseManager,
+                    allowMigration: false
+                )
+            } catch BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) {
+                await metadataClient.disconnectSafely()
+                throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
+            } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
+                await metadataClient.disconnectSafely()
+                throw BackupCompatibilityError.repoIdentityMismatch
+            } catch BackupV2RuntimeBuildError.requiresForegroundMigration {
+                await metadataClient.disconnectSafely()
+                throw BackupCompatibilityError.requiresForegroundMigration
+            } catch BackupV2RuntimeBuildError.repoFormatRegression {
+                await metadataClient.disconnectSafely()
+                throw BackupCompatibilityError.repoFormatRegression
+            } catch {
+                await metadataClient.disconnectSafely()
+                throw error
+            }
+            do {
+                try await verifier.applyTombstones(
+                    month: month,
+                    cleanupItems: report.cleanupCandidates,
+                    services: v2
+                )
+                // Drop tombstoned assets from the local cache before attempting the remote
+                // re-sync — if the sync fails (transient transport / 401), the UI would
+                // otherwise keep showing the just-deleted assets until the next manual
+                // refresh. Resources stay because other assets may share them.
+                if let monthData = remoteIndexService.remoteMonthRawData(for: month) {
+                    let tombstoned = Set(report.cleanupCandidates.map(\.assetFingerprint))
+                    let remainingAssets = monthData.assets.filter { !tombstoned.contains($0.assetFingerprint) }
+                    let remainingLinks = monthData.assetResourceLinks.filter { !tombstoned.contains($0.assetFingerprint) }
+                    remoteIndexService.replaceCachedMonth(
+                        month,
+                        resources: monthData.resources,
+                        assets: remainingAssets,
+                        links: remainingLinks
+                    )
+                }
+                _ = try? await remoteIndexService.syncIndex(client: client, profile: profile)
+                await v2.shutdown()
+            } catch {
+                await v2.shutdown()
+                throw error
+            }
+        }
+        return report
     }
 
     func withConnectedClient<T>(
@@ -312,21 +439,62 @@ struct BackupRunPreparationService: Sendable {
         return estimatedBytesByMonth
     }
 
-    private func makeMonthSeedLookup(
-        from digest: RemoteIndexSyncDigest,
+    private func prepareV2Runtime(
+        client: any RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        password: String,
         eventStream: BackupEventStream
-    ) -> MonthSeedLookup? {
-        // Gate BEFORE materializing the flat-array snapshot — at 100K+ libraries the snapshot
-        // itself is ~60-70 MB transient, and we're about to throw it away anyway.
-        if digest.totalEntryCount > Self.monthSeedLookupEntryThreshold {
-            eventStream.emitLog(
-                String.localizedStringWithFormat(String(localized: "backup.log.remoteSnapshotLarge"), digest.totalEntryCount),
-                level: .warning
+    ) async throws -> BackupV2RuntimeServices? {
+        // Dedicated metadata connection so commits/snapshots/liveness don't contend with worker uploads.
+        let raw = try storageClientFactory.makeClient(profile: profile, password: password)
+        try await raw.connect()
+        // serialOnly backends (SMB / SFTP) — wrap so concurrent workers writing
+        // commits/snapshots can't violate the single-connection contract.
+        let metadataClient = wrapIfSerial(raw)
+        do {
+            return try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                format: formatCompatibilityService,
+                allowMigration: true,
+                onMigrationStart: {
+                    eventStream.emitLog(String(localized: "backup.repo.migrationStarted"), level: .info)
+                },
+                onMigrationComplete: { processed in
+                    eventStream.emitLog(String.localizedStringWithFormat(String(localized: "backup.repo.migrationCompleted"), processed), level: .info)
+                },
+                onBootstrap: {
+                    eventStream.emitLog(String(localized: "backup.repo.bootstrapped"), level: .info)
+                }
             )
-            return nil
+        } catch BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) {
+            await metadataClient.disconnectSafely()
+            throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
+        } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
+            await metadataClient.disconnectSafely()
+            throw BackupCompatibilityError.repoIdentityMismatch
+        } catch BackupV2RuntimeBuildError.requiresForegroundMigration {
+            await metadataClient.disconnectSafely()
+            throw BackupCompatibilityError.requiresForegroundMigration
+        } catch BackupV2RuntimeBuildError.repoFormatRegression {
+            await metadataClient.disconnectSafely()
+            throw BackupCompatibilityError.repoFormatRegression
+        } catch BackupV2RuntimeBuildError.profileMissingID {
+            await metadataClient.disconnectSafely()
+            // Fail-closed: profile with no id means we can't bind to a repo state row.
+            // Fallback to V1 path would write V1 manifests on a V2 repo (dual-format
+            // corruption); surface as a generic error instead.
+            throw NSError(
+                domain: "BackupRunPreparation",
+                code: -90,
+                userInfo: [NSLocalizedDescriptionKey: "profile missing id — cannot prepare V2 runtime"]
+            )
+        } catch {
+            await metadataClient.disconnectSafely()
+            throw error
         }
-
-        let lookup = MonthSeedLookup(snapshot: remoteIndexService.fullSnapshot())
-        return lookup.isEmpty ? nil : lookup
     }
+
 }

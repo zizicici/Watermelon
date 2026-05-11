@@ -139,15 +139,22 @@ enum State {
         set { session.failedCountByMonth = newValue }
     }
 
+    private let backupCoordinator: BackupCoordinator
+
     init(
         backupCoordinator: BackupCoordinator,
         appSession: AppSession,
         databaseManager: DatabaseManager,
-        photoLibraryService: PhotoLibraryService
+        photoLibraryService: PhotoLibraryService,
+        hashIndexRepository: ContentHashIndexRepository
     ) {
         self.appSession = appSession
         self.databaseManager = databaseManager
-        self.resumePlanner = BackupResumePlanner(photoLibraryService: photoLibraryService)
+        self.backupCoordinator = backupCoordinator
+        self.resumePlanner = BackupResumePlanner(
+            photoLibraryService: photoLibraryService,
+            hashIndexRepository: hashIndexRepository
+        )
         self.runDriver = BackupRunDriver(backupCoordinator: backupCoordinator)
     }
 
@@ -156,7 +163,8 @@ enum State {
             backupCoordinator: dependencies.backupCoordinator,
             appSession: dependencies.appSession,
             databaseManager: dependencies.databaseManager,
-            photoLibraryService: dependencies.photoLibraryService
+            photoLibraryService: dependencies.photoLibraryService,
+            hashIndexRepository: dependencies.hashIndexRepository
         )
     }
 
@@ -573,9 +581,16 @@ enum State {
         resumePreparationTask = Task { [weak self] in
             guard let self else { return }
             do {
+                // Authoritative probe before planning — unknown != healthy.
+                try await self.backupCoordinator.refreshPhysicalPresenceForResume(
+                    profile: connection.profile,
+                    password: connection.password
+                )
+                try Task.checkCancellation()
                 let resumePlan = try await self.resumePlanner.makePlan(
                     pausedMode: resumeContext.pausedMode,
-                    completedAssetIDs: self.completedAssetIDsForResume
+                    completedAssetIDs: self.completedAssetIDsForResume,
+                    alreadyBackedUpFingerprintsByMonth: self.backupCoordinator.backedUpAssetFingerprintsByMonth()
                 )
                 try Task.checkCancellation()
 

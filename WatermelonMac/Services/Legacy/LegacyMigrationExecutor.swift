@@ -263,6 +263,7 @@ final class LegacyMigrationExecutor {
                 case .alreadyInPlace, .skippedHashExists:
                     resourcesAlreadyInPlace += 1
                 }
+                let logicalLeaf = monthStore.findResourceByHash(component.contentHash)?.logicalName ?? component.originalFilename ?? ""
                 resourceLinks.append(
                     RemoteAssetResourceLink(
                         year: monthStore.year,
@@ -270,7 +271,8 @@ final class LegacyMigrationExecutor {
                         assetFingerprint: bundle.assetFingerprint,
                         resourceHash: component.contentHash,
                         role: component.role,
-                        slot: component.slot
+                        slot: component.slot,
+                        logicalName: logicalLeaf
                     )
                 )
             } catch is CancellationError {
@@ -368,7 +370,7 @@ final class LegacyMigrationExecutor {
         let resource = RemoteManifestResource(
             year: monthStore.year,
             month: monthStore.month,
-            fileName: targetFileName,
+            physicalRemotePath: monthRelativePath + "/" + targetFileName,
             contentHash: component.contentHash,
             fileSize: component.fileSize,
             resourceType: component.role,
