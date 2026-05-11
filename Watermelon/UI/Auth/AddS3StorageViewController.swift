@@ -121,7 +121,8 @@ final class AddS3StorageViewController: UIViewController {
 
         view.addSubview(tableView)
         tableView.snp.makeConstraints { make in
-            make.edges.equalTo(view.safeAreaLayoutGuide)
+            make.top.equalToSuperview()
+            make.leading.trailing.bottom.equalTo(view.safeAreaLayoutGuide)
         }
     }
 

@@ -6,7 +6,6 @@ final class AddSFTPStorageViewController: UIViewController {
         case name
         case server
         case credentials
-        case compatibility
     }
 
     private let dependencies: DependencyContainer
@@ -128,11 +127,11 @@ final class AddSFTPStorageViewController: UIViewController {
         tableView.register(SettingsTextFieldCell.self, forCellReuseIdentifier: SettingsTextFieldCell.reuseIdentifier)
         tableView.register(SFTPAuthMethodCell.self, forCellReuseIdentifier: SFTPAuthMethodCell.reuseIdentifier)
         tableView.register(SFTPPrivateKeyCell.self, forCellReuseIdentifier: SFTPPrivateKeyCell.reuseIdentifier)
-        tableView.register(SFTPCompatibilityCell.self, forCellReuseIdentifier: SFTPCompatibilityCell.reuseIdentifier)
 
         view.addSubview(tableView)
         tableView.snp.makeConstraints { make in
-            make.edges.equalTo(view.safeAreaLayoutGuide)
+            make.top.equalToSuperview()
+            make.leading.trailing.bottom.equalTo(view.safeAreaLayoutGuide)
         }
     }
 
@@ -516,7 +515,6 @@ extension AddSFTPStorageViewController: UITableViewDataSource, UITableViewDelega
         case .name: return 1
         case .server: return 3
         case .credentials: return credentialsRowCount()
-        case .compatibility: return 1
         }
     }
 
@@ -526,7 +524,16 @@ extension AddSFTPStorageViewController: UITableViewDataSource, UITableViewDelega
         case .name: return String(localized: "auth.section.name")
         case .server: return String(localized: "auth.section.server")
         case .credentials: return String(localized: "auth.section.auth")
-        case .compatibility: return String(localized: "auth.sftp.compatibility.title")
+        }
+    }
+
+    func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        guard let section = Section(rawValue: section) else { return nil }
+        switch section {
+        case .name, .server:
+            return nil
+        case .credentials:
+            return String(localized: "auth.sftp.footerCompatibility")
         }
     }
 
@@ -547,13 +554,6 @@ extension AddSFTPStorageViewController: UITableViewDataSource, UITableViewDelega
             return serverCell(in: tableView, at: indexPath)
         case .credentials:
             return credentialsCell(in: tableView, at: indexPath)
-        case .compatibility:
-            guard let cell = tableView.dequeueReusableCell(
-                withIdentifier: SFTPCompatibilityCell.reuseIdentifier,
-                for: indexPath
-            ) as? SFTPCompatibilityCell else { return UITableViewCell() }
-            cell.configure(text: String(localized: "auth.sftp.compatibility.body"))
-            return cell
         }
     }
 
@@ -756,45 +756,6 @@ private final class SFTPAuthMethodCell: UITableViewCell {
     @objc
     private func valueChanged() {
         onValueChanged?(segmentedControl.selectedSegmentIndex)
-    }
-}
-
-private final class SFTPCompatibilityCell: UITableViewCell {
-    static let reuseIdentifier = "SFTPCompatibilityCell"
-
-    private let bodyLabel = UILabel()
-
-    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
-        super.init(style: style, reuseIdentifier: reuseIdentifier)
-        selectionStyle = .none
-
-        var background: UIBackgroundConfiguration
-        if #available(iOS 18.0, *) {
-            background = .listCell()
-        } else {
-            background = .listGroupedCell()
-        }
-        background.backgroundColor = .secondarySystemGroupedBackground
-        backgroundConfiguration = background
-
-        bodyLabel.font = .preferredFont(forTextStyle: .footnote)
-        bodyLabel.adjustsFontForContentSizeCategory = true
-        bodyLabel.textColor = .secondaryLabel
-        bodyLabel.numberOfLines = 0
-
-        contentView.addSubview(bodyLabel)
-        bodyLabel.snp.makeConstraints { make in
-            make.edges.equalToSuperview().inset(UIEdgeInsets(top: 12, left: 16, bottom: 12, right: 16))
-        }
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func configure(text: String) {
-        bodyLabel.text = text
     }
 }
 
