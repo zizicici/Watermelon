@@ -38,57 +38,68 @@ final class RestoreService {
         let storageClient = try storageClientFactory.makeClient(profile: profile, password: password)
 
         try await storageClient.connect()
-        defer {
-            Task { await storageClient.disconnect() }
-        }
 
-        var results: [RestoredItem] = []
-        var failureCount = 0
-        var firstFailure: Error?
-        for (index, item) in items.enumerated() {
-            try Task.checkCancellation()
-            let creationDate = item.instances
-                .compactMap(\.creationDateMs)
-                .min()
-                .map { Date(millisecondsSinceEpoch: $0) }
-            let group = RestoreGroup(creationDate: creationDate, instances: item.instances)
-            var restoredItem: RestoredItem?
-            // Per-item try/catch: one bad asset (hash mismatch, schema corruption) must not
-            // abort restoring the remaining N-1. Cancellation propagates. Connection-unavailable
-            // aborts the batch — running the remaining N-1 against a dead connection just turns
-            // every item into a "per-item failure" instead of surfacing the real cause.
-            do {
-                if let asset = try await restoreGroup(group, profile: profile, storageClient: storageClient) {
-                    let restored = RestoredItem(identity: item.identity, asset: asset)
-                    results.append(restored)
-                    restoredItem = restored
+        // disconnect must finish before return — credential session quota.
+        do {
+            var results: [RestoredItem] = []
+            var failureCount = 0
+            var firstFailure: Error?
+            for (index, item) in items.enumerated() {
+                try Task.checkCancellation()
+                let creationDate = item.instances
+                    .compactMap(\.creationDateMs)
+                    .min()
+                    .map { Date(millisecondsSinceEpoch: $0) }
+                let group = RestoreGroup(creationDate: creationDate, instances: item.instances)
+                var restoredItem: RestoredItem?
+                // Per-item try/catch: one bad asset (hash mismatch, schema corruption) must not
+                // abort restoring the remaining N-1. Cancellation propagates. Connection-unavailable
+                // aborts the batch — running the remaining N-1 against a dead connection just turns
+                // every item into a "per-item failure" instead of surfacing the real cause.
+                do {
+                    if let asset = try await restoreGroup(group, profile: profile, storageClient: storageClient) {
+                        let restored = RestoredItem(identity: item.identity, asset: asset)
+                        results.append(restored)
+                        restoredItem = restored
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    if profile.isConnectionUnavailableError(error) {
+                        throw error
+                    }
+                    failureCount += 1
+                    if firstFailure == nil { firstFailure = error }
+                    print("[RestoreService] item \(index + 1)/\(items.count) failed: \(error.localizedDescription)")
                 }
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                if profile.isConnectionUnavailableError(error) {
-                    throw error
+                // Callback throw (e.g. hash-index DB write) shouldn't strand the imported
+                // asset or mask other per-item failures; treat as per-item, propagate cancel.
+                do {
+                    try await onItemCompleted(index + 1, items.count, restoredItem)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    failureCount += 1
+                    if firstFailure == nil { firstFailure = error }
+                    print("[RestoreService] onItemCompleted \(index + 1)/\(items.count) failed: \(error.localizedDescription)")
                 }
-                failureCount += 1
-                if firstFailure == nil { firstFailure = error }
-                print("[RestoreService] item \(index + 1)/\(items.count) failed: \(error.localizedDescription)")
             }
-            try await onItemCompleted(index + 1, items.count, restoredItem)
+            if failureCount > 0 {
+                throw NSError(
+                    domain: "RestoreService",
+                    code: -3,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "\(failureCount) of \(items.count) item(s) failed to restore",
+                        NSUnderlyingErrorKey: firstFailure as Any
+                    ]
+                )
+            }
+            await storageClient.disconnectSafely()
+            return results
+        } catch {
+            await storageClient.disconnectSafely()
+            throw error
         }
-        if failureCount > 0 {
-            // Surface partial-failure to caller. Individual failures already went through
-            // onItemCompleted; this throw drives DownloadWorkflowHelper to report .failed
-            // instead of treating the batch as success.
-            throw NSError(
-                domain: "RestoreService",
-                code: -3,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "\(failureCount) of \(items.count) item(s) failed to restore",
-                    NSUnderlyingErrorKey: firstFailure as Any
-                ]
-            )
-        }
-        return results
     }
 
     private func restoreGroup(
@@ -110,7 +121,9 @@ final class RestoreService {
 
         for instance in group.instances {
             try Task.checkCancellation()
-            if let cachedURL = downloadedURLsByHash[instance.resourceHash] {
+            // Empty hash = legacy entry; can't safely dedup by hash key (all empty hashes
+            // collide), so each instance gets its own download.
+            if !instance.resourceHash.isEmpty, let cachedURL = downloadedURLsByHash[instance.resourceHash] {
                 downloaded.append((instance, cachedURL))
                 continue
             }
@@ -140,7 +153,9 @@ final class RestoreService {
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? -1
             let fileExists = FileManager.default.fileExists(atPath: tempURL.path)
             print("[RestoreService]   downloaded: \(instance.fileName) → \(tempURL.lastPathComponent), exists=\(fileExists), localSize=\(fileSize), expectedSize=\(instance.fileSize)")
-            downloadedURLsByHash[instance.resourceHash] = tempURL
+            if !instance.resourceHash.isEmpty {
+                downloadedURLsByHash[instance.resourceHash] = tempURL
+            }
             downloaded.append((instance, tempURL))
         }
 
@@ -237,6 +252,10 @@ final class RestoreService {
         }
         if expectedSize > 0 && actualSize != expectedSize {
             return "size: expected \(expectedSize) got \(actualSize)"
+        }
+        // Legacy entry with no size/hash: reject 0-byte download — otherwise it'd accept anything.
+        if expectedSize <= 0 && expectedHash.isEmpty && actualSize == 0 {
+            return "legacy entry without size/hash; downloaded 0 bytes"
         }
         guard !expectedHash.isEmpty else { return nil }
         do {

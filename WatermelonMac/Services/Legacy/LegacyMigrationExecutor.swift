@@ -51,6 +51,8 @@ final class LegacyMigrationExecutor {
         emit(.started(totals: totals))
 
         try await ensureBasePathExists()
+        // V1 manifest is invisible to V2 — refuse to strand files on a V2 remote.
+        try await ensureNotV2()
 
         for plan in report.plans {
             try Task.checkCancellation()
@@ -386,5 +388,30 @@ final class LegacyMigrationExecutor {
     private func ensureBasePathExists() async throws {
         let normalized = RemotePathBuilder.normalizePath(profile.basePath)
         try await client.createDirectory(path: normalized)
+    }
+
+    private func ensureNotV2() async throws {
+        let versionPath = RepoLayout.versionFilePath(base: profile.basePath)
+        let metadata: RemoteStorageEntry?
+        do {
+            metadata = try await client.metadata(path: versionPath)
+        } catch {
+            // Fail-closed: any metadata error (permission, transport) is opaque about V2
+            // presence; refuse rather than write V1 onto an unknown remote.
+            throw NSError(
+                domain: "LegacyMigrationExecutor",
+                code: -101,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Cannot determine remote format (\(error.localizedDescription)); refusing legacy import."]
+            )
+        }
+        if let metadata, !metadata.isDirectory {
+            throw NSError(
+                domain: "LegacyMigrationExecutor",
+                code: -100,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Remote is V2; legacy importer would write V1 manifest invisible to iOS clients. Use the iOS app to import."]
+            )
+        }
     }
 }

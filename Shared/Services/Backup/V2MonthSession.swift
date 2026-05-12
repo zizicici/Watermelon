@@ -15,13 +15,17 @@ final class V2MonthSession: BackupMonthStore {
     enum FlushError: Error {
         case snapshotWriteFailed(committedAssets: Set<Data>, committedTombstones: Set<Data>, underlying: Error)
 
-        /// Returns the inner CancellationError when the failure is just propagated
-        /// user-cancel — wrapping `error` lets `catch is CancellationError` clauses
-        /// in executors see through the FlushError envelope and exit promptly.
+        /// Peels SnapshotWriter.finalizationFailed which wraps CancellationError.
         var cancellationCause: CancellationError? {
             switch self {
             case .snapshotWriteFailed(_, _, let underlying):
-                return underlying as? CancellationError
+                if let cancel = underlying as? CancellationError { return cancel }
+                if let write = underlying as? SnapshotWriter.WriteError,
+                   case .finalizationFailed(let inner) = write,
+                   let cancel = inner as? CancellationError {
+                    return cancel
+                }
+                return nil
             }
         }
     }
@@ -50,6 +54,9 @@ final class V2MonthSession: BackupMonthStore {
     private var linksByFingerprint: [Data: [RemoteAssetResourceLink]]
     /// All known physical paths per content hash. `findResourceByHash` returns lex-min.
     private var pathsByHash: [Data: Set<String>]
+    /// Reverse leaf-name index: linear scan was N² per month under prepareUpload.
+    private var resourcesByLeafName: [String: RemoteManifestResource] = [:]
+    private var collisionKeysCache: Set<String>?
     /// Session-scoped physical-missing set used for upsert/flush validation.
     /// Workers push it into `RepoCommittedView.physicallyMissingByMonth` for
     /// cache-wide consumers (Home/download/health/resume).
@@ -78,6 +85,9 @@ final class V2MonthSession: BackupMonthStore {
     private let observedClockAtLoad: UInt64
 
     private(set) var dirty: Bool = false
+
+    /// Pinned when commit landed but snapshot write failed; drives standalone retry on next flush.
+    private var pendingSnapshotRetrySeq: UInt64?
 
     var hasAnyAsset: Bool { !assetsByFingerprint.isEmpty }
 
@@ -133,6 +143,9 @@ final class V2MonthSession: BackupMonthStore {
             )
             resourcesByPath[row.physicalRemotePath] = resource
             pathsByHash[row.contentHash, default: []].insert(row.physicalRemotePath)
+            // Last-write-wins matches upsertResource policy; collision-rename keeps leafs unique.
+            let leaf = (row.physicalRemotePath as NSString).lastPathComponent
+            resourcesByLeafName[leaf] = resource
             if !isPresent {
                 physicallyMissingHashes.insert(row.contentHash)
             }
@@ -229,7 +242,7 @@ final class V2MonthSession: BackupMonthStore {
             entries: entries, year: year, month: month
         )
 
-        return V2MonthSession(
+        let session = V2MonthSession(
             client: client,
             basePath: basePath,
             year: year,
@@ -241,6 +254,21 @@ final class V2MonthSession: BackupMonthStore {
             remoteFilesByName: remoteFilesByName,
             stepLogger: stepLogger
         )
+        // All snapshots corrupt → next flush writes fresh baseline.
+        if output.corruptedSnapshotMonths.contains(monthKey) {
+            let ourMaxSeq = materializedCovered.rangesByWriter[v2Services.writerID]?
+                .map(\.high).max() ?? 0
+            if ourMaxSeq > 0 {
+                session.requestSnapshotRebaseline(at: ourMaxSeq)
+            }
+        }
+        return session
+    }
+
+    /// Force next flush to emit a fresh snapshot baseline even without new ops.
+    func requestSnapshotRebaseline(at seq: UInt64) {
+        pendingSnapshotRetrySeq = seq
+        dirty = true
     }
 
     // MARK: - Read
@@ -277,15 +305,19 @@ final class V2MonthSession: BackupMonthStore {
     }
 
     func findByFileName(_ logicalName: String) -> RemoteManifestResource? {
-        let suffix = "/" + logicalName
-        for (path, resource) in resourcesByPath where path.hasSuffix(suffix) || path == logicalName {
-            return resource
-        }
-        return nil
+        assert(!logicalName.contains("/"), "findByFileName takes a leaf, got: \(logicalName)")
+        return resourcesByLeafName[logicalName]
     }
 
     func existingFileNames() -> Set<String> {
         existingFileNameSet
+    }
+
+    func existingCollisionKeys() -> Set<String> {
+        if let cache = collisionKeysCache { return cache }
+        let built = RemoteFileNaming.collisionKeySet(from: existingFileNameSet)
+        collisionKeysCache = built
+        return built
     }
 
     func remoteFileSize(named logicalName: String) -> Int64? {
@@ -319,7 +351,12 @@ final class V2MonthSession: BackupMonthStore {
         }
         resourcesByPath[resource.physicalRemotePath] = resource
         pathsByHash[resource.contentHash, default: []].insert(resource.physicalRemotePath)
-        existingFileNameSet.insert(resource.logicalName)
+        let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
+        resourcesByLeafName[leaf] = resource
+        if !existingFileNameSet.contains(resource.logicalName) {
+            existingFileNameSet.insert(resource.logicalName)
+            collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: resource.logicalName))
+        }
         // We just wrote this hash to remote → it's no longer missing. Removing
         // from the set re-enables findResourceByHash for the new content.
         physicallyMissingHashes.remove(resource.contentHash)
@@ -348,7 +385,7 @@ final class V2MonthSession: BackupMonthStore {
                 throw NSError(
                     domain: "V2MonthSession",
                     code: -12,
-                    userInfo: [NSLocalizedDescriptionKey: "asset link references hash whose physical file is missing — upload first"]
+                    userInfo: [NSLocalizedDescriptionKey: String(localized: "backup.manifest.error.missingResourceHash")]
                 )
             }
         }
@@ -375,7 +412,10 @@ final class V2MonthSession: BackupMonthStore {
 
     func markRemoteFile(name: String, size: Int64) {
         remoteFilesByName[name] = MonthManifestStore.RemoteFileMetadata(size: size)
-        existingFileNameSet.insert(name)
+        if !existingFileNameSet.contains(name) {
+            existingFileNameSet.insert(name)
+            collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: name))
+        }
     }
 
     // MARK: - Flush
@@ -389,8 +429,23 @@ final class V2MonthSession: BackupMonthStore {
 
         let monthKey = LibraryMonthKey(year: year, month: month)
         let opCount = pendingV2AssetFingerprints.count + pendingV2TombstoneFingerprints.count
-        guard opCount > 0 else {
-            dirty = false
+        if opCount == 0 {
+            // dirty + no ops = stranded snapshot retry from a prior failure.
+            if let retrySeq = pendingSnapshotRetrySeq, let services = v2Services {
+                do {
+                    try await writeSnapshot(services: services, month: monthKey, currentSeq: retrySeq, ignoreCancellation: ignoreCancellation)
+                    pendingSnapshotRetrySeq = nil
+                    dirty = false
+                } catch {
+                    throw FlushError.snapshotWriteFailed(
+                        committedAssets: [],
+                        committedTombstones: [],
+                        underlying: error
+                    )
+                }
+            } else {
+                dirty = false
+            }
             return .none
         }
 
@@ -544,13 +599,10 @@ final class V2MonthSession: BackupMonthStore {
 
         do {
             try await writeSnapshot(services: services, month: monthKey, currentSeq: lastSeq, ignoreCancellation: ignoreCancellation)
+            pendingSnapshotRetrySeq = nil
         } catch {
-            // Re-flag dirty so end-of-month flush retries the snapshot for the
-            // current state. Without this, the session goes dormant on a transient
-            // snapshot write failure and the snapshot for this lamport range is
-            // permanently missing — materialize falls back to commit replay, which
-            // works but is slower on every subsequent read.
             dirty = true
+            pendingSnapshotRetrySeq = lastSeq
             throw FlushError.snapshotWriteFailed(
                 committedAssets: committedAssets,
                 committedTombstones: committedTombstones,
@@ -589,7 +641,8 @@ final class V2MonthSession: BackupMonthStore {
             covered: covered
         )
         let parts = RepoSnapshotBuilder.build(header: header, state: snapshotState)
-        let lamportNow = await services.lamport.value()
+        // Tick: retry needs a fresh filename, else alreadyExists loops forever.
+        let lamportRange = try await services.lamport.tickRange(count: 1)
         _ = try await services.snapshotWriter.write(
             header: header,
             assets: parts.assets,
@@ -597,7 +650,7 @@ final class V2MonthSession: BackupMonthStore {
             assetResources: parts.assetResources,
             deletedKeys: parts.deletedKeys,
             month: month,
-            lamport: lamportNow,
+            lamport: lamportRange.high,
             runID: services.runID,
             respectTaskCancellation: !ignoreCancellation
         )

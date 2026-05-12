@@ -350,7 +350,7 @@ extension ServerProfileRecord {
         case .smb:
             return SMBErrorClassifier.isConnectionUnavailable(error)
         case .webdav:
-            return false
+            return WebDAVErrorClassifier.isConnectionUnavailable(error)
         case .s3:
             return S3ErrorClassifier.isConnectionUnavailable(error)
         case .sftp:

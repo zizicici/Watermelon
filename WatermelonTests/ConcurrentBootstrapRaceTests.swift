@@ -27,8 +27,8 @@ final class ConcurrentBootstrapRaceTests: XCTestCase {
         let suggestedA = "id-from-A"
         let suggestedB = "id-from-B"
 
-        let resolvedA = try await writerA.ensureRepoJSON(repoID: suggestedA, writerID: "A")
-        let resolvedB = try await writerB.ensureRepoJSON(repoID: suggestedB, writerID: "B")
+        let resolvedA = try await writerA.ensureRepoJSON(repoID: suggestedA, writerID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        let resolvedB = try await writerB.ensureRepoJSON(repoID: suggestedB, writerID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 
         XCTAssertEqual(resolvedA, suggestedA, "first writer wins")
         XCTAssertEqual(resolvedB, suggestedA, "second writer reads existing id")
@@ -47,8 +47,8 @@ final class ConcurrentBootstrapRaceTests: XCTestCase {
         let suggestedA = "id-from-A"
         let suggestedB = "id-from-B"
 
-        let resolvedA = try await writerA.ensureRepoJSON(repoID: suggestedA, writerID: "A")
-        let resolvedB = try await writerB.ensureRepoJSON(repoID: suggestedB, writerID: "B")
+        let resolvedA = try await writerA.ensureRepoJSON(repoID: suggestedA, writerID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        let resolvedB = try await writerB.ensureRepoJSON(repoID: suggestedB, writerID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 
         // First writer's bestEffortRetry → reads back → finds its own id (since no race here).
         XCTAssertEqual(resolvedA, suggestedA)
@@ -66,7 +66,7 @@ final class ConcurrentBootstrapRaceTests: XCTestCase {
         await client.setAtomicCreateMode(.alwaysAlreadyExists)
         let writer = RepoBootstrap(client: client, basePath: basePath)
         do {
-            _ = try await writer.ensureRepoJSON(repoID: "x", writerID: "A")
+            _ = try await writer.ensureRepoJSON(repoID: "x", writerID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
             XCTFail("expected throw — alreadyExists + .absent is inconsistent")
         } catch is RepoBootstrap.BootstrapError {
             // expected
@@ -84,8 +84,8 @@ final class ConcurrentBootstrapRaceTests: XCTestCase {
         let writerA = RepoBootstrap(client: client, basePath: basePath)
         let writerB = RepoBootstrap(client: client, basePath: basePath)
 
-        async let resolvedA = writerA.ensureRepoJSON(repoID: "id-A", writerID: "A")
-        async let resolvedB = writerB.ensureRepoJSON(repoID: "id-B", writerID: "B")
+        async let resolvedA = writerA.ensureRepoJSON(repoID: "id-A", writerID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        async let resolvedB = writerB.ensureRepoJSON(repoID: "id-B", writerID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
         let (a, b) = try await (resolvedA, resolvedB)
 
         XCTAssertEqual(a, b, "both concurrent writers must converge on the same id")
@@ -101,14 +101,14 @@ final class ConcurrentBootstrapRaceTests: XCTestCase {
 
         // Writer A bootstraps first.
         let resolvedA = try await RepoBootstrap(client: client, basePath: basePath)
-            .ensureRepoJSON(repoID: "id-A", writerID: "A")
+            .ensureRepoJSON(repoID: "id-A", writerID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 
         // Now plant a writer B claim BY HAND with an earlier created_at_ms.
         // This simulates a clock-skewed device whose claim ts pre-dates A's.
         // Without adopt-not-elect, B's ensureRepoJSON would write its own
         // repoID and lex-min would flip canonical to B.
         let resolvedB = try await RepoBootstrap(client: client, basePath: basePath)
-            .ensureRepoJSON(repoID: "id-B", writerID: "B")
+            .ensureRepoJSON(repoID: "id-B", writerID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
         XCTAssertEqual(resolvedB, resolvedA,
                        "B must adopt A's canonical; B's own repoID must be ignored")
     }
@@ -122,16 +122,16 @@ final class ConcurrentBootstrapRaceTests: XCTestCase {
         let writerA = RepoBootstrap(client: client, basePath: basePath)
         let writerB = RepoBootstrap(client: client, basePath: basePath)
 
-        async let resolvedA = writerA.ensureRepoJSON(repoID: "id-A", writerID: "A")
-        async let resolvedB = writerB.ensureRepoJSON(repoID: "id-B", writerID: "B")
+        async let resolvedA = writerA.ensureRepoJSON(repoID: "id-A", writerID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        async let resolvedB = writerB.ensureRepoJSON(repoID: "id-B", writerID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
         let (a, b) = try await (resolvedA, resolvedB)
         XCTAssertEqual(a, b, "writer-unique claims must converge even on bestEffort backend")
 
         // Re-runs see the same canonical — no late overwrite can flip it.
         let reA = try await RepoBootstrap(client: client, basePath: basePath)
-            .ensureRepoJSON(repoID: "id-A", writerID: "A")
+            .ensureRepoJSON(repoID: "id-A", writerID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
         let reB = try await RepoBootstrap(client: client, basePath: basePath)
-            .ensureRepoJSON(repoID: "id-B", writerID: "B")
+            .ensureRepoJSON(repoID: "id-B", writerID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
         XCTAssertEqual(reA, a, "writer A's re-run must read back the same canonical")
         XCTAssertEqual(reB, a, "writer B's re-run must read back the same canonical")
     }

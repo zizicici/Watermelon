@@ -497,7 +497,6 @@ extension MonthManifestStore {
         for entry in entries where !entry.isDirectory && entry.name != Self.manifestFileName {
             if let existing = result[entry.name] {
                 manifestLoadLog.error("[MonthManifestStore] duplicate remote entry month=\(year)-\(month) name=\(entry.name, privacy: .public) existingSize=\(existing.size) duplicateSize=\(entry.size)")
-                assertionFailure("Duplicate remote file name in client.list result")
                 continue
             }
             result[entry.name] = RemoteFileMetadata(size: entry.size)

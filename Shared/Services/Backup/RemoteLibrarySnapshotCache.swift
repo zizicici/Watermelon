@@ -23,6 +23,8 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
 
     private var revision: UInt64 = 0
     private var monthLastChangedRevision: [LibraryMonthKey: UInt64] = [:]
+    /// Pre-reset baseRevision → full snapshot. Multi-consumer-safe (a one-shot flag wasn't).
+    private var lastResetRevision: UInt64 = 0
 
     private struct MonthStats {
         var assetCount: Int
@@ -35,9 +37,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     private var resourceHashesByMonth: [LibraryMonthKey: Set<Data>] = [:]
     private var resourceBytesByMonth: [LibraryMonthKey: Int64] = [:]
     private var lastSyncedAt: Date?
-    /// Forces the next state(since:) to full snapshot — post-reset revision can collide
-    /// with the engine's old snapshotRevision and silently produce an empty delta.
-    private var freshlyReset: Bool = false
 
     private struct ChangeKind {
         let resources: Bool
@@ -119,9 +118,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             resourceHashesByMonth.removeAll()
             resourceBytesByMonth.removeAll()
             lastSyncedAt = nil
-            revision = 0
+            revision &+= 1
+            lastResetRevision = revision
             monthLastChangedRevision.removeAll()
-            freshlyReset = true
         }
     }
 
@@ -150,9 +149,39 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             )
         }
 
-        let assetCount = snapshot.assetsByMonth.values.reduce(0) { $0 + $1.count }
-        let resourceCount = snapshot.resourcesByMonth.values.reduce(0) { $0 + $1.count }
-        let totalBytes = snapshot.resourceBytesByMonth.values.reduce(Int64(0), +)
+        // Totals subtract overlay so they line up with incompleteAssets.
+        var assetCount = 0
+        for (month, monthAssets) in snapshot.assetsByMonth {
+            let missing = physicallyMissingByMonth[month] ?? []
+            if missing.isEmpty {
+                assetCount += monthAssets.count
+                continue
+            }
+            let monthLinks = snapshot.linksByMonth[month] ?? [:]
+            let monthResources = snapshot.resourcesByMonth[month] ?? [:]
+            let allHashes = Set(monthResources.values.map(\.contentHash))
+            var linksByFP: [Data: [RemoteAssetResourceLink]] = [:]
+            for (_, link) in monthLinks {
+                linksByFP[link.assetFingerprint, default: []].append(link)
+            }
+            for asset in monthAssets.values {
+                let state = RemoteAssetIntegrityClassifier.classify(
+                    assetFingerprint: asset.assetFingerprint,
+                    links: linksByFP[asset.assetFingerprint] ?? [],
+                    isResourceAvailable: { allHashes.contains($0) && !missing.contains($0) }
+                )
+                if state.isHealthy { assetCount += 1 }
+            }
+        }
+        var resourceCount = 0
+        var totalBytes: Int64 = 0
+        for (month, resources) in snapshot.resourcesByMonth {
+            let missing = physicallyMissingByMonth[month] ?? []
+            for resource in resources.values where !missing.contains(resource.contentHash) {
+                resourceCount += 1
+                totalBytes += resource.fileSize
+            }
+        }
 
         var incompleteFlat: [IncompleteAssetEntry] = []
         for month in snapshot.assetsByMonth.keys {
@@ -521,12 +550,12 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     }
 
     private func changedMonthsLocked(since baseRevision: UInt64?) -> (Bool, Set<LibraryMonthKey>) {
-        if freshlyReset {
-            freshlyReset = false
+        guard let baseRevision else {
             return (true, allKnownMonthsLocked())
         }
 
-        guard let baseRevision else {
+        // monthLastChangedRevision was wiped by reset; delta path would leak stale months.
+        if baseRevision < lastResetRevision {
             return (true, allKnownMonthsLocked())
         }
 
@@ -592,12 +621,85 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         lock.withLock { bumpRevisionLocked(months) }
     }
 
-    func monthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
+    /// Pass V2 missing overlay to subtract phantom assets from stats; V1 callers pass empty.
+    func monthSummaries(
+        physicallyMissingByMonth: [LibraryMonthKey: Set<Data>] = [:]
+    ) -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
         lock.withLock {
-            monthStatsCache.map { (month, stats) in
-                (month: month, assetCount: stats.assetCount, photoCount: stats.photoCount, videoCount: stats.videoCount, totalSizeBytes: stats.totalSizeBytes)
+            if physicallyMissingByMonth.isEmpty {
+                return monthStatsCache.map { (month, stats) in
+                    (month: month, assetCount: stats.assetCount, photoCount: stats.photoCount, videoCount: stats.videoCount, totalSizeBytes: stats.totalSizeBytes)
+                }
+            }
+            return monthStatsCache.compactMap { (month, stats) -> (month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)? in
+                let missing = physicallyMissingByMonth[month] ?? []
+                if missing.isEmpty {
+                    return (month: month, assetCount: stats.assetCount, photoCount: stats.photoCount, videoCount: stats.videoCount, totalSizeBytes: stats.totalSizeBytes)
+                }
+                guard let adjusted = computeMonthStatsAdjustedLocked(for: month, missing: missing) else { return nil }
+                return (month: month, assetCount: adjusted.assetCount, photoCount: adjusted.photoCount, videoCount: adjusted.videoCount, totalSizeBytes: adjusted.totalSizeBytes)
             }
         }
+    }
+
+    /// Routes through the shared classifier so stats line up with Home / restore.
+    private func computeMonthStatsAdjustedLocked(for month: LibraryMonthKey, missing: Set<Data>) -> MonthStats? {
+        guard let monthAssets = assetsByMonth[month], !monthAssets.isEmpty else { return nil }
+        let monthLinks = linksByMonth[month] ?? [:]
+        let monthResources = resourcesByMonth[month] ?? [:]
+
+        var sizeByHash: [Data: Int64] = [:]
+        sizeByHash.reserveCapacity(monthResources.count)
+        for resource in monthResources.values {
+            sizeByHash[resource.contentHash] = resource.fileSize
+        }
+        let allHashes = Set(monthResources.values.map(\.contentHash))
+
+        var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
+        for (_, link) in monthLinks {
+            linksByFingerprint[link.assetFingerprint, default: []].append(link)
+        }
+
+        var assetCount = 0
+        var photoCount = 0
+        var videoCount = 0
+        var sizeAccum: Int64 = 0
+        for asset in monthAssets.values {
+            let links = linksByFingerprint[asset.assetFingerprint] ?? []
+            let state = RemoteAssetIntegrityClassifier.classify(
+                assetFingerprint: asset.assetFingerprint,
+                links: links,
+                isResourceAvailable: { hash in
+                    allHashes.contains(hash) && !missing.contains(hash)
+                }
+            )
+            switch state {
+            case .healthy:
+                // Strict predicate aligned with HomeRemoteIndexEngine.
+                assetCount += 1
+                let roles = links.map(\.role)
+                let hasPairedVideo = roles.contains { ResourceTypeCode.isPairedVideo($0) }
+                let hasPhotoLike = roles.contains { ResourceTypeCode.isPhotoLike($0) }
+                let hasVideo = roles.contains { ResourceTypeCode.isVideoLike($0) }
+                if hasPairedVideo, hasPhotoLike {
+                    photoCount += 1
+                } else if hasVideo {
+                    videoCount += 1
+                } else {
+                    photoCount += 1
+                }
+                var seenHashes: Set<Data> = []
+                for link in links where !missing.contains(link.resourceHash) {
+                    if seenHashes.insert(link.resourceHash).inserted {
+                        sizeAccum += sizeByHash[link.resourceHash] ?? 0
+                    }
+                }
+            case .partiallyMissing, .metadataOnlyLeft, .fullyMissing, .phantom, .fingerprintMismatch:
+                continue
+            }
+        }
+        guard assetCount > 0 else { return nil }
+        return MonthStats(assetCount: assetCount, photoCount: photoCount, videoCount: videoCount, totalSizeBytes: sizeAccum)
     }
 
     /// Includes resource-only and link-only residue months that `monthSummaries()`
@@ -710,7 +812,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
-    // Callers' SQL PK should make duplicates unreachable; defensive first-seen + assert.
+    // Defensive first-seen drop: buggy NAS listings shouldn't crash Debug.
     private static func dedupedByKey<Element, Key: Hashable>(
         _ elements: [Element],
         key: (Element) -> Key,
@@ -725,7 +827,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             if result[k] != nil {
                 let descr = describe(element)
                 snapshotCacheLog.error("[RemoteLibrarySnapshotCache] duplicate \(scope, privacy: .public) month=\(month.text, privacy: .public) entry=\(descr, privacy: .public)")
-                assertionFailure("replaceMonth invariant violated: duplicate \(scope) key in \(month.text) — upstream produced a path/key collision (\(descr))")
                 continue
             }
             result[k] = element

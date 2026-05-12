@@ -196,6 +196,50 @@ struct BackupParallelExecutor: Sendable {
                 }
 
                 let monthKey = monthPlan.month
+                let monthAssetIDs = monthPlan.assetLocalIdentifiers
+
+                // Pre-materialize fast-path: sync-time committed view already filtered through
+                // the classifier (partial/phantom/metadata-only/missing excluded). When every
+                // local asset's fingerprint is in there, the month is done — skip the heavy
+                // materializeMonth + LIST that loadOrCreate would run.
+                if v2Services != nil,
+                   monthAlreadyFullyBackedUpFast(
+                       monthAssetIDs: monthAssetIDs,
+                       committedFingerprints: remoteIndexService.committedAssetFingerprintsByMonth()[monthKey] ?? []
+                   ) {
+                    let progressState = await aggregator.recordMonthSkipped(count: monthAssetIDs.count)
+                    eventStream.emit(.monthChanged(MonthChangeEvent(
+                        year: monthKey.year,
+                        month: monthKey.month,
+                        action: .started
+                    )))
+                    eventStream.emit(.progress(BackupProgress(
+                        succeeded: progressState.state.succeeded,
+                        failed: progressState.state.failed,
+                        skipped: progressState.state.skipped,
+                        total: progressState.state.total,
+                        message: String.localizedStringWithFormat(
+                            String(localized: "backup.parallel.monthPreCovered"),
+                            workerID + 1,
+                            monthKey.text,
+                            monthAssetIDs.count
+                        ),
+                        logMessage: nil,
+                        logLevel: .info,
+                        itemEvent: nil,
+                        transferState: nil
+                    )))
+                    if let timingSummary = progressState.timingSummary {
+                        eventStream.emitLog(timingSummary, level: .debug)
+                    }
+                    eventStream.emit(.monthChanged(MonthChangeEvent(
+                        year: monthKey.year,
+                        month: monthKey.month,
+                        action: .completed
+                    )))
+                    continue
+                }
+
                 let monthStore: any BackupMonthStore
                 do {
                     if let v2Services {
@@ -267,7 +311,6 @@ struct BackupParallelExecutor: Sendable {
                 )))
 
                 var monthFatalError: Error?
-                let monthAssetIDs = monthPlan.assetLocalIdentifiers
                 let fetchBatchSize = 500
                 var missingAssetCount = 0
                 var hasLoggedLocalHashCacheWarning = false
@@ -415,22 +458,19 @@ struct BackupParallelExecutor: Sendable {
                                             fingerprints: delta.committedV2AssetFingerprints
                                                 .union(delta.committedV2TombstoneFingerprints)
                                         )
-                                    } catch is CancellationError {
-                                        workerState.paused = true
-                                        break
                                     } catch {
-                                        // FlushError wraps the underlying — peel CancellationError out
-                                        // so a user-stop mid snapshot write doesn't get retried as a generic
-                                        // flush failure.
-                                        if let cancel = (error as? V2MonthSession.FlushError)?.cancellationCause {
-                                            _ = cancel
+                                        // Record-committed even on cancel: commit may be durable.
+                                        remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
+                                        if error is CancellationError
+                                            || (error as? V2MonthSession.FlushError)?.cancellationCause != nil {
                                             workerState.paused = true
                                             break
                                         }
-                                        // Commit may be durable even on snapshot-write failure;
-                                        // reconcile inflight tracker so resume planner doesn't double-count.
-                                        remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
-                                        // Non-fatal — end-of-month flush will retry.
+                                        // Connection-loss: don't keep burning per-asset processing cycles
+                                        // before the next per-asset handler notices.
+                                        if profile.isConnectionUnavailableError(error) {
+                                            throw error
+                                        }
                                         eventStream.emitLog(
                                             String.localizedStringWithFormat(
                                                 String(localized: "backup.parallel.flushManifestFailed"),
@@ -540,15 +580,17 @@ struct BackupParallelExecutor: Sendable {
                                 .union(delta.committedV2TombstoneFingerprints)
                         )
                         if shouldFinishMonth {
-                            eventStream.emit(.monthChanged(MonthChangeEvent(
-                                year: monthKey.year,
-                                month: monthKey.month,
-                                action: .completed
-                            )))
+                            let emitCompleted: () -> Void = {
+                                eventStream.emit(.monthChanged(MonthChangeEvent(
+                                    year: monthKey.year,
+                                    month: monthKey.month,
+                                    action: .completed
+                                )))
+                            }
                             if let onMonthUploaded {
                                 switch await onMonthUploaded(monthKey) {
                                 case .success:
-                                    break
+                                    emitCompleted()
                                 case .failed(let message):
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(
@@ -581,6 +623,8 @@ struct BackupParallelExecutor: Sendable {
                                 if workerState.paused {
                                     break
                                 }
+                            } else {
+                                emitCompleted()
                             }
                         } else {
                             if monthFatalError != nil {
@@ -608,16 +652,13 @@ struct BackupParallelExecutor: Sendable {
                             }
                         }
                     } catch {
-                        // Peel CancellationError out of the FlushError envelope so user-stop
-                        // mid snapshot-write doesn't get logged as a hard flush failure.
+                        // Record-committed before cancel peel: commit may be durable even on cancel.
+                        remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                         if let cancel = (error as? V2MonthSession.FlushError)?.cancellationCause {
                             _ = cancel
                             workerState.paused = true
                             break
                         }
-                        // Commit may be durable even on snapshot-write failure;
-                        // reconcile inflight tracker so resume planner doesn't double-count.
-                        remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                         eventStream.emitErrorLog(
                             String.localizedStringWithFormat(
                                 String(localized: "backup.parallel.flushManifestFailed"),
@@ -649,6 +690,33 @@ struct BackupParallelExecutor: Sendable {
             await clientPool.release(client, reusable: clientReusable)
             throw error
         }
+    }
+
+    /// Pre-materialize variant: same predicate but uses sync-time committed fingerprints
+    /// (already filtered through the classifier) instead of monthStore. Lets the executor
+    /// skip loadOrCreate / materializeMonth for already-done months.
+    private func monthAlreadyFullyBackedUpFast(
+        monthAssetIDs: [String],
+        committedFingerprints: Set<Data>
+    ) -> Bool {
+        guard !monthAssetIDs.isEmpty else { return true }
+        guard !committedFingerprints.isEmpty else { return false }
+        guard let cachedHashes = try? hashIndexRepository.fetchAssetHashCaches(
+            assetIDs: Set(monthAssetIDs)
+        ) else { return false }
+        guard cachedHashes.count == monthAssetIDs.count else { return false }
+        let fetchResult = PHAsset.fetchAssets(
+            withLocalIdentifiers: monthAssetIDs,
+            options: nil
+        )
+        guard fetchResult.count == monthAssetIDs.count else { return false }
+        for index in 0 ..< fetchResult.count {
+            let asset = fetchResult.object(at: index)
+            guard let cache = cachedHashes[asset.localIdentifier] else { return false }
+            if let modDate = asset.modificationDate, modDate > cache.updatedAt { return false }
+            if !committedFingerprints.contains(cache.assetFingerprint) { return false }
+        }
+        return true
     }
 
     private func monthAlreadyFullyBackedUp(

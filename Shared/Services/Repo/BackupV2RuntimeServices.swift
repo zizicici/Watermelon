@@ -35,6 +35,8 @@ struct BackupV2RuntimeServices: Sendable {
     /// Dedicated connection for V2 metadata writes — sharing with worker uploads would
     /// serialize them at the wire, breaking the pool's "1 worker = 1 connection" invariant.
     let metadataClient: any RemoteStorageClientProtocol
+    /// false when metadataClient is borrowed; shutdown skips the disconnect.
+    let ownsMetadataClient: Bool
     /// Cold-start materialize output, consumed once by `prepareRun` to avoid running
     /// materialize twice. Nil on the V1-migration path (phase1 already advanced state).
     let initialMaterializeOutput: InitialMaterializeOutputBox
@@ -48,11 +50,13 @@ struct BackupV2RuntimeServices: Sendable {
         // Race clean shutdown vs deadline: SMB/SFTP socket hangs don't honor Swift cancellation.
         let latch = ShutdownLatch()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            Task { [liveness, sweepTask, metadataClient] in
+            Task { [liveness, sweepTask, metadataClient, ownsMetadataClient] in
                 await liveness.stopAndWait()
                 sweepTask?.cancel()
                 _ = await sweepTask?.value
-                await metadataClient.disconnectSafely()
+                if ownsMetadataClient {
+                    await metadataClient.disconnectSafely()
+                }
                 await latch.resumeOnce(cont)
             }
             Task {

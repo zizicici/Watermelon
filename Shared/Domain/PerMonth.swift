@@ -91,9 +91,7 @@ extension PerMonth where Value == Set<Data> {
     }
 
     /// Subtract from the per-month set; no-op when the month isn't tracked.
-    /// Empties the entry's value rather than removing the key by default,
-    /// because absence-of-key vs empty-set is meaningless for fingerprints.
-    /// Use `remove(_:)` if you also want to drop the key.
+    /// Prunes the entry on empty (struct-level asymmetry doc explains).
     mutating func subtract(_ fingerprints: Set<Data>, from month: LibraryMonthKey) {
         guard byMonth[month] != nil else { return }
         byMonth[month]?.subtract(fingerprints)

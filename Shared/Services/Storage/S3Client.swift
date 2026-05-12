@@ -464,10 +464,6 @@ final actor S3Client: RemoteStorageClientProtocol {
             try await multipartUpload(localURL: localURL, key: key, size: size, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
             return .bestEffortRetry
         }
-
-        if size > Self.singlePartMaxSize {
-            throw Self.internalError("File exceeds 5 GiB single-part limit")
-        }
         let url = try makeURL(key: key, query: [])
         let request = signedRequest(
             method: "PUT",

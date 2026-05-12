@@ -17,6 +17,8 @@ enum BackupV2RuntimeBuilder {
     static func build(
         client: any RemoteStorageClientProtocol,
         metadataClient: any RemoteStorageClientProtocol,
+        ownsMetadataClient: Bool = true,
+        runMaintenanceTasks: Bool = true,
         profile: ServerProfileRecord,
         databaseManager: DatabaseManager,
         format: RemoteFormatCompatibilityService = RemoteFormatCompatibilityService(),
@@ -72,12 +74,12 @@ enum BackupV2RuntimeBuilder {
             }
             // Canonical repoID before phase 1 — otherwise a peer racing on repo.json
             // leaves us writing phase-1 commits stamped with our local (foreign-to-remote) id.
-            let localRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
-                ?? UUID().uuidString.lowercased()
-            resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: localRepoID, writerID: writerID)
-            if resolvedRepoID != localRepoID,
-               try await identity.findRepoStateByProfile(profileID: profileID)?.repoID == localRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: localRepoID, remote: resolvedRepoID)
+            let storedRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
+            let suggestedRepoID = storedRepoID ?? UUID().uuidString.lowercased()
+            resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggestedRepoID, writerID: writerID)
+            // Mismatch only when DB had a binding; freshly-generated UUID has nothing to mismatch.
+            if let storedRepoID, resolvedRepoID != storedRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: resolvedRepoID)
             }
             let state = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: resolvedRepoID, writerID: writerID)
             let migration = V1MigrationService(
@@ -148,23 +150,22 @@ enum BackupV2RuntimeBuilder {
             writerID: writerID,
             isLocalVolume: profile.resolvedStorageType == .externalVolume
         )
-        await liveness.start()
-
-        // listOtherActiveWriters infrastructure errors throw; per-entry parse / download
-        // failures are tolerated inside the function. The handle is stored in
-        // services so shutdown awaits before disconnecting metadataClient.
+        // verify-cleanup borrows caller's client — skip maintenance to avoid concurrent ops.
         var sweepTask: Task<Void, Never>? = nil
-        if let otherActive = try? await liveness.listOtherActiveWriters() {
-            var activeWriters = Set(otherActive)
-            activeWriters.insert(writerID)
-            sweepTask = Task(priority: .utility) { [activeWriters] in
-                _ = await OrphanMetadataCleanup.sweep(
-                    client: metadataClient,
-                    directories: OrphanMetadataCleanup.standardSweepDirectories(basePath: profile.basePath),
-                    activeWriters: activeWriters,
-                    ageThresholdSeconds: 3600,
-                    now: Date()
-                )
+        if runMaintenanceTasks {
+            await liveness.start()
+            if let otherActive = try? await liveness.listOtherActiveWriters() {
+                var activeWriters = Set(otherActive)
+                activeWriters.insert(writerID)
+                sweepTask = Task(priority: .utility) { [activeWriters] in
+                    _ = await OrphanMetadataCleanup.sweep(
+                        client: metadataClient,
+                        directories: OrphanMetadataCleanup.standardSweepDirectories(basePath: profile.basePath),
+                        activeWriters: activeWriters,
+                        ageThresholdSeconds: 3600,
+                        now: Date()
+                    )
+                }
             }
         }
 
@@ -181,6 +182,7 @@ enum BackupV2RuntimeBuilder {
             snapshotWriter: snapshotWriter,
             liveness: liveness,
             metadataClient: metadataClient,
+            ownsMetadataClient: ownsMetadataClient,
             initialMaterializeOutput: InitialMaterializeOutputBox(initialMaterialize),
             sweepTask: sweepTask
         )

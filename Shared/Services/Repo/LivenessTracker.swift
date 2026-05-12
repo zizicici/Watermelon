@@ -75,10 +75,13 @@ actor LivenessTracker {
             do {
                 try await client.move(from: stagingPath, to: remotePath)
             } catch {
-                // Backends without atomic overwrite-move (S3 copy+delete). Both steps
-                // failing would leave own liveness gone — surface so next tick retries.
-                try? await client.delete(path: remotePath)
-                try await client.move(from: stagingPath, to: remotePath)
+                // S3 copy+delete: skip fallback if staging already gone — otherwise we'd
+                // delete our own liveness and peers would treat us as inactive.
+                let stagingStillExists = (try? await client.metadata(path: stagingPath))?.isDirectory == false
+                if stagingStillExists {
+                    try? await client.delete(path: remotePath)
+                    try await client.move(from: stagingPath, to: remotePath)
+                }
             }
         } catch {
             try? await client.delete(path: stagingPath)

@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let localVolumeLog = Logger(subsystem: "com.zizicici.watermelon", category: "LocalVolumeClient")
 
 final actor LocalVolumeClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
@@ -305,10 +308,9 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             // but the bytes are gone on unplug / power loss. F_FULLFSYNC is Apple's
             // strong-barrier fcntl (forces device-level flush, not just kernel sync).
             if fcntl(fd, F_FULLFSYNC) == -1 {
-                // Non-fatal — log via thrown error so caller decides. Some FUSE/
-                // network-mounted "local" volumes don't support F_FULLFSYNC; we treat
-                // the underlying write as still durable (kernel sync at close), just
-                // weaker than F_FULLFSYNC.
+                // Some FUSE / network-mounted "local" volumes don't support F_FULLFSYNC;
+                // weaker than the device-barrier we wanted but kernel sync at close still runs.
+                localVolumeLog.warning("F_FULLFSYNC unsupported on \(destinationURL.path, privacy: .public) errno=\(errno)")
             }
             // External-volume write-back errors (USB unmount mid-write, full disk) only
             // surface at close; don't swallow them.

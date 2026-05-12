@@ -124,8 +124,7 @@ extension AssetProcessor {
         var skipReason: String?
         var attemptedFileNames: Set<String> = [targetFileName]
 
-        let existingFileNames = monthStore.existingFileNames()
-        let existingCollisionKeys = RemoteFileNaming.collisionKeySet(from: existingFileNames)
+        let existingCollisionKeys = monthStore.existingCollisionKeys()
 
         // .overwritePossible backends (SMB / S3-multipart) need writerID-suffix to keep peer uploads distinct.
         let baseRemotePath = RemotePathBuilder.absolutePath(
@@ -136,10 +135,20 @@ extension AssetProcessor {
         let forceWriterIDSuffix = baseGuarantee == .overwritePossible && monthStore.v2Services?.writerID != nil
         let baseCollides = existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: baseFileName))
 
-        // Same-name + same-hash = orphan reuse; runs before suffix-rename so crash retries don't bloat remote with ~writerID duplicates.
-        if baseCollides {
-            let existingManifestResource = monthStore.findByFileName(baseFileName)
-            let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: baseFileName)
+        // Same-name + same-hash = orphan reuse; runs before suffix-rename so crash retries
+        // don't bloat remote with ~writerID duplicates. Big collisions skip the dedup.
+        let precheckMaxBytes: Int64 = 64 * 1024 * 1024
+        // Force-suffix backends: also probe ~wid6 name so crash-retry reuses the bytes.
+        var probeCandidate: String? = baseCollides ? baseFileName : nil
+        if probeCandidate == nil, forceWriterIDSuffix, let writerID = monthStore.v2Services?.writerID {
+            let candidate = RemoteFileNaming.writerIDSuffixedName(baseName: baseFileName, writerID: writerID)
+            if existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: candidate)) {
+                probeCandidate = candidate
+            }
+        }
+        if let candidate = probeCandidate, localFileSize <= precheckMaxBytes {
+            let existingManifestResource = monthStore.findByFileName(candidate)
+            let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: candidate)
             let sizesMatchOrUnknown = knownRemoteSize == nil || knownRemoteSize == localFileSize
             if sizesMatchOrUnknown {
                 try cancellationController?.throwIfCancelled()
@@ -148,13 +157,14 @@ extension AssetProcessor {
                     profile: profile,
                     client: client,
                     monthStore: monthStore,
-                    fileName: baseFileName,
+                    fileName: candidate,
                     displayName: displayName,
                     eventStream: eventStream,
                     cancellationController: cancellationController
                 )
                 if let remoteHash, remoteHash == localHash {
                     skipReason = "name_same_hash"
+                    targetFileName = candidate
                 }
             }
         }
@@ -314,15 +324,32 @@ extension AssetProcessor {
                     continue
                 }
                 if case .bestEffortRetry = createResult {
+                    // Path-unique → bytes can only be ours, skip race detection.
+                    // V2: stem ends with `~<wid6>` or `~<wid6>-<N>` (resolveWithWriterIDSuffix).
+                    // V1: single-writer-per-profile by design + collision-rename already
+                    //     ensured uniqueness at prepareUpload, so V1 paths are unique too.
+                    let pathIsWriterUnique: Bool
+                    if let writerID = monthStore.v2Services?.writerID {
+                        pathIsWriterUnique = Self.filenameMatchesWriterIDSuffix(
+                            uploadPreparation.targetFileName, writerID: writerID
+                        )
+                    } else {
+                        pathIsWriterUnique = true
+                    }
                     // SMB exists+upload TOCTOU: a peer racing on the same filename could
                     // have left their bytes there. Size + content hash both checked.
-                    let raceDetected = await Self.detectRemoteContentRace(
-                        client: client,
-                        remotePath: uploadPreparation.remoteAbsolutePath,
-                        expectedSize: prepared.fileSize,
-                        expectedHash: prepared.contentHash,
-                        cancellationController: cancellationController
-                    )
+                    let raceDetected: Bool
+                    if pathIsWriterUnique {
+                        raceDetected = false
+                    } else {
+                        raceDetected = await Self.detectRemoteContentRace(
+                            client: client,
+                            remotePath: uploadPreparation.remoteAbsolutePath,
+                            expectedSize: prepared.fileSize,
+                            expectedHash: prepared.contentHash,
+                            cancellationController: cancellationController
+                        )
+                    }
                     if raceDetected {
                         var occupiedNames = monthStore.existingFileNames()
                         occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
@@ -525,6 +552,21 @@ extension AssetProcessor {
     }
 
     /// Returns true if remote bytes ≠ what we uploaded. Size mismatch fast-paths;
+    /// Strict stem-suffix match for writer-unique filenames: `<stem>~<wid6>` or
+    /// `<stem>~<wid6>-<digits>` or `<stem>~<wid6>-<hex8>` (UUID escape from
+    /// resolveWithWriterIDSuffix). substring match would false-positive on user
+    /// filenames that coincidentally contain `~xxxxxx`.
+    static func filenameMatchesWriterIDSuffix(_ filename: String, writerID: String) -> Bool {
+        let wid6 = RepoLayout.writerIDShort(writerID)
+        let stem = (filename as NSString).deletingPathExtension
+        let marker = "~\(wid6)"
+        if stem.hasSuffix(marker) { return true }
+        guard let range = stem.range(of: marker + "-", options: .backwards) else { return false }
+        let tail = stem[range.upperBound...]
+        guard !tail.isEmpty else { return false }
+        return tail.allSatisfy { c in c.isHexDigit || c.isNumber }
+    }
+
     /// same-size triggers a content-hash check. Inability to verify (metadata /
     /// download / hash error, or remote missing) returns true — the alternative is
     /// binding our hash record to bytes another writer wrote.

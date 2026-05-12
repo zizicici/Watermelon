@@ -206,6 +206,15 @@ enum RemoteFileNaming {
         Set(fileNames.map(collisionKey(for:)))
     }
 
+    /// Canonical writerID-suffixed name (no numeric tiebreaker); used by orphan-reuse probe.
+    static func writerIDSuffixedName(baseName: String, writerID: String) -> String {
+        let nsName = baseName as NSString
+        let ext = nsName.pathExtension
+        let stem = nsName.deletingPathExtension
+        let wid6 = RepoLayout.writerIDShort(writerID)
+        return ext.isEmpty ? "\(stem)~\(wid6)" : "\(stem)~\(wid6).\(ext)"
+    }
+
     static func collisionKey(for fileName: String) -> String {
         fileName.precomposedStringWithCanonicalMapping
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))

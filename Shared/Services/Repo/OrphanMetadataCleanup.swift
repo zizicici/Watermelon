@@ -65,15 +65,20 @@ enum OrphanMetadataCleanup {
     ) async -> Int {
         var deleted = 0
         for dir in directories {
+            if Task.isCancelled { return deleted }
             let entries: [RemoteStorageEntry]
             do {
                 entries = try await client.list(path: dir.path)
             } catch {
+                // Persistent permission / transport errors used to be silently swallowed,
+                // leaving orphans accumulating across runs. Log so ops can spot it.
+                cleanupLog.warning("sweep list failed: \(dir.path, privacy: .public) \(String(describing: error), privacy: .public)")
                 continue
             }
             var stagingsSeen = 0
             var stagingsWithoutMtime = 0
             for entry in entries {
+                if Task.isCancelled { return deleted }
                 guard !entry.isDirectory else { continue }
                 guard let range = entry.name.range(of: ".staging-") else { continue }
                 stagingsSeen += 1

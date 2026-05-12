@@ -57,7 +57,11 @@ final class BackupResumePlanner {
         backedUpFingerprintsByMonth: PerMonth<Set<Data>>
     ) throws -> Set<String> {
         var pending = assetIDs.subtracting(completedAssetIDs)
-        guard !backedUpFingerprintsByMonth.isEmpty, let hashIndexRepository else { return pending }
+        if backedUpFingerprintsByMonth.isEmpty { return pending }
+        guard let hashIndexRepository else {
+            assertionFailure("BackupResumePlanner: hashIndexRepository is nil but backedUpFingerprintsByMonth is non-empty; resume will re-enqueue everything.")
+            return pending
+        }
         let records = try hashIndexRepository.fetchAssetFingerprintRecords(assetIDs: pending)
         let assetDates = Self.assetDates(forAssetIDs: Array(records.keys))
         for (id, record) in records {
@@ -135,6 +139,9 @@ final class BackupResumePlanner {
                 }
             }
             var pending = Set(pendingIDs)
+            if !backedUpFingerprintsByMonth.isEmpty && hashIndexRepository == nil {
+                assertionFailure("BackupResumePlanner: hashIndexRepository is nil but backedUpFingerprintsByMonth is non-empty; full-run will re-enqueue everything.")
+            }
             if !backedUpFingerprintsByMonth.isEmpty, let repository = hashIndexRepository {
                 let records = try repository.fetchAssetFingerprintRecords(assetIDs: pending)
                 let dates = Self.assetDates(forAssetIDs: Array(records.keys))

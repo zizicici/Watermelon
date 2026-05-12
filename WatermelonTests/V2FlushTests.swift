@@ -695,6 +695,7 @@ final class V2FlushTests: XCTestCase {
             snapshotWriter: snapshotWriter,
             liveness: liveness,
             metadataClient: client,
+            ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),
             sweepTask: nil
         )

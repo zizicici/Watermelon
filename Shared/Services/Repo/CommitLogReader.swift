@@ -60,8 +60,13 @@ actor CommitLogReader {
     }
 
     static func parse(text: String) throws -> CommitFile {
-        // Mid-stream blank lines are corruption; only the writer's trailing \n is benign.
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // Mid-stream blank lines are corruption; only writer's trailing \n is benign.
+        // Strip per-line \r — some WebDAV gateways inject CRLF; bare \r corrupts SHA.
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { sub -> String in
+            var s = String(sub)
+            if s.hasSuffix("\r") { s.removeLast() }
+            return s
+        }
         while let last = lines.last, last.isEmpty { lines.removeLast() }
         guard !lines.isEmpty else {
             throw ReadError.missingHeader

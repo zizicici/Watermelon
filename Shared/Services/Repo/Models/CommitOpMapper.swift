@@ -47,7 +47,10 @@ enum CommitOpMapper {
                     "lamportWatermark": basis.lamportWatermark
                 ]
                 if !basis.perWriterMaxSeq.isEmpty {
-                    basisDict["perWriterMaxSeq"] = basis.perWriterMaxSeq.mapValues { Int64(bitPattern: $0) }
+                    // Raw UInt64 so wire shape matches header.seq / clockMin / clockMax;
+                    // Int64(bitPattern:) made values > Int63.max look negative and the
+                    // decoder's requireUInt64 rejects negatives.
+                    basisDict["perWriterMaxSeq"] = basis.perWriterMaxSeq
                 }
                 dict["observedBasis"] = basisDict
             }

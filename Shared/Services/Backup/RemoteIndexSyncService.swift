@@ -8,29 +8,53 @@ private let syncLog = Logger(subsystem: "com.zizicici.watermelon", category: "Sy
 final class RemoteIndexSyncService: @unchecked Sendable {
     private actor SyncGate {
         private var isLocked = false
-        private var waiters: [CheckedContinuation<Void, Never>] = []
+        private var waiters: [(UUID, CheckedContinuation<Void, Error>)] = []
+        private var preCancelledIDs: Set<UUID> = []
 
-        private func acquire() async {
-            if !isLocked {
-                isLocked = true
+        private func registerWaiter(id: UUID, continuation: CheckedContinuation<Void, Error>) {
+            if preCancelledIDs.remove(id) != nil {
+                continuation.resume(throwing: CancellationError())
                 return
             }
-            await withCheckedContinuation { continuation in
-                waiters.append(continuation)
+            if !isLocked {
+                isLocked = true
+                continuation.resume(returning: ())
+                return
+            }
+            waiters.append((id, continuation))
+        }
+
+        private func cancelWaiter(id: UUID) {
+            if let idx = waiters.firstIndex(where: { $0.0 == id }) {
+                let (_, cont) = waiters.remove(at: idx)
+                cont.resume(throwing: CancellationError())
+            } else {
+                preCancelledIDs.insert(id)
+            }
+        }
+
+        private func acquire() async throws {
+            let id = UUID()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                    Task { await self.registerWaiter(id: id, continuation: cont) }
+                }
+            } onCancel: {
+                Task { await self.cancelWaiter(id: id) }
             }
         }
 
         private func release() {
             if !waiters.isEmpty {
                 let next = waiters.removeFirst()
-                next.resume()
+                next.1.resume(returning: ())
             } else {
                 isLocked = false
             }
         }
 
         func withLock<T>(_ operation: () async throws -> T) async throws -> T {
-            await acquire()
+            try await acquire()
             defer { release() }
             try Task.checkCancellation()
             return try await operation()
@@ -281,6 +305,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         committedView.loadFromMaterialize(output)
         do {
             try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
+        } catch is CancellationError {
+            // Don't mask cancel as success.
+            for (month, hashes) in priorOverlay {
+                committedView.markPhysicallyMissing(month: month, hashes: hashes)
+            }
+            throw CancellationError()
         } catch {
             for (month, hashes) in priorOverlay {
                 committedView.markPhysicallyMissing(month: month, hashes: hashes)
@@ -364,11 +394,15 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             remoteRelativePath: monthRelativePath
         )
         let entries = try await client.list(path: monthAbsolutePath)
-        let remoteFileNames = Set(entries
+        // Fold-compare: NAS may return listing in different case than manifest stored.
+        let remoteFileNames = entries
             .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
-            .map(\.name))
-        let listingMissing = store.existingFileNames().subtracting(remoteFileNames)
-        let listingResult = try store.reconcileMonth(missingFileNames: listingMissing)
+            .map(\.name)
+        let remoteCollisionKeys = RemoteFileNaming.collisionKeySet(from: Set(remoteFileNames))
+        let listingMissing = store.existingFileNames().filter { name in
+            !remoteCollisionKeys.contains(RemoteFileNaming.collisionKey(for: name))
+        }
+        let listingResult = try store.reconcileMonth(missingFileNames: Set(listingMissing))
 
         let touched = internalResult.removedResourceCount + internalResult.removedAssetCount
             + internalResult.removedOrphanLinkCount
@@ -535,6 +569,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         fallback: [LibraryMonthKey: Set<Data>] = [:],
         concurrencyCap: Int = 4
     ) async throws {
+        try Task.checkCancellation()
         let snapshot = committedView.current()
         var resourcesByMonth: [LibraryMonthKey: [RemoteManifestResource]] = [:]
         for resource in snapshot.resources {
@@ -543,19 +578,23 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
         let effectiveCap = client.concurrencyMode == .serialOnly ? 1 : concurrencyCap
         var iterator = resourcesByMonth.makeIterator()
-        await withTaskGroup(of: (LibraryMonthKey, Result<Set<Data>, Error>).self) { group in
+        try await withThrowingTaskGroup(of: (LibraryMonthKey, Result<Set<Data>, Error>).self) { group in
             for _ in 0..<effectiveCap {
                 guard let (month, resources) = iterator.next() else { break }
                 group.addTask { [self] in
+                    try Task.checkCancellation()
                     do {
                         let (m, missing) = try await probeMonthForMissing(client: client, basePath: basePath, month: month, resources: resources)
                         return (m, .success(missing))
+                    } catch is CancellationError {
+                        throw CancellationError()
                     } catch {
                         return (month, .failure(error))
                     }
                 }
             }
-            while let (month, result) = await group.next() {
+            while let (month, result) = try await group.next() {
+                try Task.checkCancellation()
                 switch result {
                 case .success(let missing):
                     committedView.markPhysicallyMissing(month: month, hashes: missing)
@@ -573,9 +612,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 }
                 if let (nextMonth, nextResources) = iterator.next() {
                     group.addTask { [self] in
+                        try Task.checkCancellation()
                         do {
                             let (m, missing) = try await probeMonthForMissing(client: client, basePath: basePath, month: nextMonth, resources: nextResources)
                             return (m, .success(missing))
+                        } catch is CancellationError {
+                            throw CancellationError()
                         } catch {
                             return (nextMonth, .failure(error))
                         }
@@ -591,9 +633,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         month: LibraryMonthKey,
         resources: [RemoteManifestResource]
     ) async throws -> (LibraryMonthKey, Set<Data>) {
+        try Task.checkCancellation()
         let monthRel = String(format: "%04d/%02d", month.year, month.month)
         let monthAbs = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRel)
         let entries = try await client.list(path: monthAbs)
+        try Task.checkCancellation()
         let presentKeys = Set(entries
             .filter { !$0.isDirectory }
             .map { RemoteFileNaming.collisionKey(for: $0.name) })

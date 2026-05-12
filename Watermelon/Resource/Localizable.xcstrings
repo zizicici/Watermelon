@@ -22446,85 +22446,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Repository-ID stimmt nicht überein. Das Profil verweist möglicherweise auf einen anderen Speicherort, oder der Remote-Speicher wurde geleert. Sicherungen pausieren, bis dies aufgelöst ist."
+            "value" : "Repository-ID stimmt nicht überein. Das Profil verweist wahrscheinlich auf einen anderen Remote, oder der Remote wurde geleert. Entferne das Profil und füge es erneut hinzu, um es an den aktuellen Remote zu binden."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Repository identity mismatch. The profile may point to a different remote, or the remote was wiped. Backups are paused until this is resolved."
+            "value" : "Repository identity mismatch. The profile likely points to a different remote, or the remote was wiped. Remove and re-add the profile to bind it to the current remote."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La identidad del repositorio no coincide. Es posible que el perfil apunte a otra ubicación remota o que el remoto se haya borrado. Las copias de seguridad se pausan hasta resolverlo."
+            "value" : "La identidad del repositorio no coincide. El perfil probablemente apunta a otro remoto o el remoto fue borrado. Elimina y vuelve a añadir el perfil para vincularlo al remoto actual."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La identidad del repositorio no coincide. Es posible que el perfil apunte a otra ubicación remota o que el remoto se haya borrado. Las copias de seguridad se pausan hasta resolverlo."
+            "value" : "La identidad del repositorio no coincide. El perfil probablemente apunta a otro remoto o el remoto fue borrado. Elimina y vuelve a añadir el perfil para vincularlo al remoto actual."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Identité du dépôt incohérente. Le profil pointe peut-être sur un autre emplacement, ou le distant a été effacé. Les sauvegardes sont suspendues jusqu'à résolution."
+            "value" : "Identité du dépôt incohérente. Le profil pointe vraisemblablement vers un autre distant, ou le distant a été effacé. Supprimez et ajoutez à nouveau le profil pour le lier au distant actuel."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リポジトリの識別情報が一致しません。プロファイルが別のリモートを指しているか、リモートが消去された可能性があります。解消されるまでバックアップは一時停止されます。"
+            "value" : "リポジトリの識別情報が一致しません。プロファイルが別のリモートを指しているか、リモートが消去された可能性が高いです。プロファイルを削除して再追加し、現在のリモートに紐付け直してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "저장소 식별자가 일치하지 않습니다. 프로파일이 다른 원격을 가리키거나 원격이 비워졌을 수 있습니다. 해결될 때까지 백업이 일시 중지됩니다."
+            "value" : "저장소 식별자가 일치하지 않습니다. 프로파일이 다른 원격을 가리키거나 원격이 비워졌을 가능성이 높습니다. 프로파일을 삭제 후 다시 추가하여 현재 원격에 연결하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Identidade do repositório divergente. O perfil pode apontar para outro remoto, ou o remoto foi apagado. Os backups ficam pausados até a resolução."
+            "value" : "Identidade do repositório divergente. O perfil provavelmente aponta para outro remoto, ou o remoto foi apagado. Remova e adicione novamente o perfil para vinculá-lo ao remoto atual."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Identidade do repositório divergente. O perfil pode apontar para outro remoto, ou o remoto foi apagado. As cópias de segurança ficam em pausa até à resolução."
+            "value" : "Identidade do repositório divergente. O perfil provavelmente aponta para outro remoto, ou o remoto foi apagado. Remova e adicione novamente o perfil para o associar ao remoto atual."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Идентификатор репозитория не совпадает. Возможно, профиль указывает на другое удалённое хранилище, либо оно было очищено. Резервное копирование приостановлено до решения."
+            "value" : "Идентификатор репозитория не совпадает. Профиль, вероятно, указывает на другое удалённое хранилище, либо оно было очищено. Удалите профиль и добавьте его заново, чтобы привязать к текущему хранилищу."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ідентифікатор репозиторію не збігається. Можливо, профіль вказує на інше віддалене сховище, або сховище було очищене. Резервне копіювання призупинено до вирішення."
+            "value" : "Ідентифікатор репозиторію не збігається. Профіль, ймовірно, вказує на інше віддалене сховище, або сховище було очищене. Видаліть і знову додайте профіль, щоб прив'язати до поточного сховища."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "仓库标识不匹配。配置可能指向了另一个远端，或远端已被清空。备份已暂停，直到解决。"
+            "value" : "仓库标识不匹配。配置可能指向了另一个远端，或远端已被清空。请移除并重新添加该配置以绑定到当前远端。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "倉庫識別不相符。設定檔可能指向另一個遠端,或遠端已被清空。備份已暫停,直到解決。"
+            "value" : "倉庫識別不相符。設定檔可能指向另一個遠端,或遠端已被清空。請移除並重新加入該設定檔以綁定當前遠端。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "倉庫識別不相符。設定檔可能指向另一個遠端,或遠端已被清空。備份已暫停,直到解決。"
+            "value" : "倉庫識別不相符。設定檔可能指向另一個遠端,或遠端已被清空。請移除並重新加入該設定檔以綁定當前遠端。"
           }
         }
       }

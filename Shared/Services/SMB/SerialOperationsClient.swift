@@ -125,7 +125,8 @@ final class SerialOperationsClient: RemoteStorageClientProtocol, @unchecked Send
         try await queue.run { try await self.underlying.connect() }
     }
     func disconnect() async {
-        try? await queue.run { await self.underlying.disconnect() }
+        // Force-teardown bypasses the queue; queuing behind a hung op defeats the purpose.
+        await underlying.disconnect()
     }
     func verifyWriteAccess() async throws {
         try await queue.run { try await self.underlying.verifyWriteAccess() }

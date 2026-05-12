@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let bootstrapLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoBootstrap")
 
 /// Identity = writer-unique claim file at `.watermelon/identity/<wid>.json`.
 /// Canonical repoID = lex-min `(created_at_ms, writerID)` over all claims.
@@ -64,8 +67,13 @@ actor RepoBootstrap {
 
         let canonical = try await canonicalRepoIDFromClaims() ?? suggested
 
-        // repo.json is a best-effort read-cache; claims/ is authoritative.
-        try? await writeRepoJSONCache(canonical: canonical, writerID: writerID, createdAtMs: createdAtMs)
+        // repo.json is a read-cache; claims/ is authoritative. Log so a silent fail
+        // doesn't surface later as "V2 repo missing repo.json".
+        do {
+            try await writeRepoJSONCache(canonical: canonical, writerID: writerID, createdAtMs: createdAtMs)
+        } catch {
+            bootstrapLog.warning("[RepoBootstrap] repo.json cache write failed: \(error.localizedDescription, privacy: .public)")
+        }
         return canonical
     }
 
@@ -271,18 +279,25 @@ actor RepoBootstrap {
             if isNotFoundError(error) { return nil }
             throw error
         }
-        let data = try Data(contentsOf: temp)
-        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = dict["repo_id"] as? String, !id.isEmpty,
-              let wid = dict["writer_id"] as? String, !wid.isEmpty,
-              let ts = (dict["created_at_ms"] as? Int64) ?? (dict["created_at_ms"] as? Int).map(Int64.init) else {
-            throw BootstrapError.ioFailure(NSError(
-                domain: "RepoBootstrap",
-                code: 6,
-                userInfo: [NSLocalizedDescriptionKey: "identity claim \(entryName) malformed; refusing to elect canonical from partial set"]
-            ))
+        let data = (try? Data(contentsOf: temp)) ?? Data()
+        let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        // Filename must be a `<writerID>.json` shape; payload's writer_id must match —
+        // otherwise a stray .json with a forged older timestamp could win election.
+        let expectedWriterID = entryName.hasSuffix(".json") ? String(entryName.dropLast(5)) : entryName
+        if let dict = parsed,
+           let id = dict["repo_id"] as? String, !id.isEmpty,
+           let wid = dict["writer_id"] as? String, !wid.isEmpty, wid == expectedWriterID,
+           RepoLayout.isValidWriterID(wid),
+           let ts = (dict["created_at_ms"] as? Int64) ?? (dict["created_at_ms"] as? Int).map(Int64.init) {
+            return IdentityClaim(repoID: id, writerID: wid, createdAtMs: ts)
         }
-        return IdentityClaim(repoID: id, writerID: wid, createdAtMs: ts)
+        // Quarantine suffix is `.bad.<ts>` (no `.json`) so the next election doesn't
+        // re-scan the file, fail-parse again, and re-quarantine in a loop.
+        bootstrapLog.error("[RepoBootstrap] malformed identity claim \(entryName, privacy: .public); quarantining")
+        let quarantineName = entryName + ".bad.\(Int64(Date().timeIntervalSince1970 * 1000))"
+        let quarantinePath = RepoLayout.normalize(joining: [dir, quarantineName])
+        try? await client.move(from: path, to: quarantinePath)
+        return nil
     }
 
     private func downloadWithRetry(remotePath: String, localURL: URL, attempts: Int) async throws {

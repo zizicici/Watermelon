@@ -88,24 +88,20 @@ final class SnapshotRowMapperTests: XCTestCase {
         }
     }
 
-    func testHeaderRejectsMissingRepoID() {
-        // Missing repoID would have silently bypassed the materializer's identity filter,
-        // letting foreign commits fold into our cache.
+    func testHeaderAcceptsMissingRepoIDAsLegacy() throws {
+        // Legacy snapshots (pre-Iter4) don't carry repoID; decoder yields empty string
+        // and materializer accepts (foreign-id filter then no-ops on empty).
         let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","covered":{}}"#
-        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
-            guard case SnapshotWireError.missingField("repoID") = err else {
-                XCTFail("expected .missingField, got \(err)"); return
-            }
-        }
+        let row = try SnapshotRowMapper.decodeLine(raw)
+        guard case .header(let header) = row else { XCTFail("expected header"); return }
+        XCTAssertEqual(header.repoID, "")
     }
 
-    func testHeaderRejectsEmptyRepoID() {
+    func testHeaderAcceptsEmptyRepoIDAsLegacy() throws {
         let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"","covered":{}}"#
-        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
-            guard case SnapshotWireError.malformed = err else {
-                XCTFail("expected .malformed, got \(err)"); return
-            }
-        }
+        let row = try SnapshotRowMapper.decodeLine(raw)
+        guard case .header(let header) = row else { XCTFail("expected header"); return }
+        XCTAssertEqual(header.repoID, "")
     }
 
     func testHeaderRejectsEmptyWriterID() {

@@ -22,6 +22,8 @@ protocol BackupMonthStore: AnyObject {
     func findByFileName(_ logicalName: String) -> RemoteManifestResource?
 
     func existingFileNames() -> Set<String>
+    /// Cached folded-key set; called per upload, recomputing each time would be N² per month.
+    func existingCollisionKeys() -> Set<String>
     func remoteFileSize(named logicalName: String) -> Int64?
 
     func upsertAsset(

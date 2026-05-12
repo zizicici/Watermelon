@@ -34,6 +34,18 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     private var hasActiveConnection = false
     private var needsRemoteBootstrap = false
 
+    /// Main-thread reads see this snapshot; processingQueue writes after engine mutations.
+    private let publishedLock = NSLock()
+    private struct PublishedSnapshot {
+        var monthRows: [LibraryMonthKey: HomeMonthRow] = [:]
+        var localAssetIDs: [LibraryMonthKey: Set<String>] = [:]
+        var matchedCounts: [LibraryMonthKey: Int] = [:]
+        var localMonths: [LibraryMonthKey] = []
+        var loadedScope: HomeLocalLibraryScope?
+        var hasActiveConnection: Bool = false
+    }
+    private var published: PublishedSnapshot = PublishedSnapshot()
+
     init(
         photoLibraryService: PhotoLibraryService,
         contentHashIndexRepository: ContentHashIndexRepository,
@@ -122,7 +134,9 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 processingQueue.async {
                     self.trackedFetchResults.removeAll()
                     self.loadedScope = nil
-                    continuation.resume(returning: self.localIndex.clearIfNeeded())
+                    let cleared = self.localIndex.clearIfNeeded()
+                    self.publishSnapshotOnProcessingQueue()
+                    continuation.resume(returning: cleared)
                 }
             }
             return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: false)
@@ -140,6 +154,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                     remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
                 )
                 self.loadedScope = scope
+                self.publishSnapshotOnProcessingQueue()
                 continuation.resume(returning: changed)
             }
         }
@@ -204,6 +219,9 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
                 let elapsed = CFAbsoluteTimeGetCurrent() - start
                 dataLog.info("[HomeData] refreshLocalIndex: assets=\(existingIDs.count + insertedCount), inserted=\(insertedCount), months=\(changedMonths.count), \(String(format: "%.3f", elapsed))s")
+                if !changedMonths.isEmpty {
+                    self.publishSnapshotOnProcessingQueue()
+                }
                 continuation.resume(returning: changedMonths)
             }
         }
@@ -246,19 +264,22 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
                 let elapsed = CFAbsoluteTimeGetCurrent() - start
                 dataLog.info("[HomeData] processingQueue: months=\(changedMonths.count), remoteChanged=\(remoteDelta.changedMonths.count), \(String(format: "%.3f", elapsed))s")
+                if !changedMonths.isEmpty || connectionFlipped {
+                    self.publishSnapshotOnProcessingQueue()
+                }
                 continuation.resume(returning: changedMonths)
             }
         }
     }
 
+    /// PHChange is only valid in the delegate's sync scope; extract pure values before async apply.
     func handlePhotoLibraryChange(
         _ change: PHChange,
         completion: @escaping (Set<LibraryMonthKey>) -> Void
     ) {
-        processingQueue.async {
-            var collectionChanges: [LibraryChangePayload.CollectionChange] = []
-            collectionChanges.reserveCapacity(self.trackedFetchResults.count)
-
+        let extraction: (scope: HomeLocalLibraryScope?, changes: [LibraryChangePayload.CollectionChange]) = processingQueue.sync {
+            var result: [LibraryChangePayload.CollectionChange] = []
+            result.reserveCapacity(self.trackedFetchResults.count)
             for index in self.trackedFetchResults.indices {
                 let fetchResult = self.trackedFetchResults[index]
                 guard let details = change.changeDetails(for: fetchResult) else { continue }
@@ -295,18 +316,23 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                     )
                 }
 
-                collectionChanges.append(entry)
+                result.append(entry)
                 self.trackedFetchResults[index] = nextFetchResult
             }
+            return (scope: self.loadedScope, changes: result)
+        }
+        guard !extraction.changes.isEmpty else { return }
 
-            guard !collectionChanges.isEmpty else { return }
+        processingQueue.async {
+            // Scope-changed between extract and apply: drop payload (collectionIndex no longer matches).
+            guard self.loadedScope == extraction.scope else { return }
             let changedMonths = self.localIndex.applyChange(
-                LibraryChangePayload(collectionChanges: collectionChanges),
+                LibraryChangePayload(collectionChanges: extraction.changes),
                 fingerprintsForIDs: self.fetchFingerprintsForIDs,
                 remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
             )
             guard !changedMonths.isEmpty else { return }
-
+            self.publishSnapshotOnProcessingQueue()
             DispatchQueue.main.async {
                 completion(changedMonths)
             }
@@ -314,19 +340,13 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     }
 
     func monthRow(for month: LibraryMonthKey) -> HomeMonthRow {
-        processingQueue.sync { monthRowLocked(for: month) }
+        publishedLock.withLock {
+            published.monthRows[month] ?? HomeMonthRow(month: month, local: nil, remote: nil)
+        }
     }
 
     func allMonthRows() -> [LibraryMonthKey: HomeMonthRow] {
-        processingQueue.sync {
-            let allMonths = localIndex.allMonths.union(remoteIndex.allMonths)
-            var result: [LibraryMonthKey: HomeMonthRow] = [:]
-            result.reserveCapacity(allMonths.count)
-            for month in allMonths {
-                result[month] = monthRowLocked(for: month)
-            }
-            return result
-        }
+        publishedLock.withLock { published.monthRows }
     }
 
     // No hasActiveConnection guard: the remote engine drops its state on disconnect,
@@ -340,9 +360,36 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     }
 
     func localAssetIDs(for month: LibraryMonthKey, expectedScope: HomeLocalLibraryScope) -> Set<String> {
-        processingQueue.sync {
-            guard loadedScope == expectedScope else { return [] }
-            return localIndex.localAssetIDs(for: month)
+        publishedLock.withLock {
+            guard published.loadedScope == expectedScope else { return [] }
+            return published.localAssetIDs[month] ?? []
+        }
+    }
+
+    /// Call from processingQueue after any write that touched localIndex / remoteIndex / loadedScope.
+    private func publishSnapshotOnProcessingQueue() {
+        let allMonths = localIndex.allMonths.union(remoteIndex.allMonths)
+        var rows: [LibraryMonthKey: HomeMonthRow] = [:]
+        var ids: [LibraryMonthKey: Set<String>] = [:]
+        var matched: [LibraryMonthKey: Int] = [:]
+        rows.reserveCapacity(allMonths.count)
+        ids.reserveCapacity(allMonths.count)
+        matched.reserveCapacity(allMonths.count)
+        for month in allMonths {
+            rows[month] = monthRowLocked(for: month)
+            ids[month] = localIndex.localAssetIDs(for: month)
+            matched[month] = localIndex.localMonthSummary(for: month)?.backedUpCount ?? 0
+        }
+        let localMonths = localIndex.localMonthAssetCounts().map(\.month)
+        let snapshotScope = self.loadedScope
+        let snapshotConnected = self.hasActiveConnection
+        publishedLock.withLock {
+            published.monthRows = rows
+            published.localAssetIDs = ids
+            published.matchedCounts = matched
+            published.localMonths = localMonths
+            published.loadedScope = snapshotScope
+            published.hasActiveConnection = snapshotConnected
         }
     }
 
@@ -391,16 +438,14 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         // Only fingerprint-matched assets count here. Assets with matching content hashes but
         // no fingerprint (hash preflight without a subsequent upload) show as unbacked until
         // AssetProcessor or writeHashIndex stamps a fingerprint onto them.
-        processingQueue.sync {
-            guard hasActiveConnection else { return 0 }
-            return localIndex.localMonthSummary(for: month)?.backedUpCount ?? 0
+        publishedLock.withLock {
+            guard published.hasActiveConnection else { return 0 }
+            return published.matchedCounts[month] ?? 0
         }
     }
 
     func localMonthsForFileSizeScan() -> [LibraryMonthKey] {
-        processingQueue.sync {
-            localIndex.localMonthAssetCounts().map(\.month)
-        }
+        publishedLock.withLock { published.localMonths }
     }
 
     struct FileSizeScanSample {
@@ -436,6 +481,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 let stable = self.loadedScope == sampledScope
                 if stable {
                     self.localIndex.setMonthFileSize(total, for: month)
+                    self.publishSnapshotOnProcessingQueue()
                 }
                 cont.resume(returning: stable)
             }
@@ -507,13 +553,17 @@ extension HomeDataProcessingWorker {
                 remoteFingerprintsForMonth: { _ in [] }
             )
             self.loadedScope = scope
+            self.publishSnapshotOnProcessingQueue()
         }
     }
 
     /// Flip the recorded `loadedScope` without touching `localIndex`. Models the race
     /// condition between an in-flight scan and a `reload(...)` landing.
     func _testForceLoadedScope(_ scope: HomeLocalLibraryScope?) {
-        processingQueue.sync { self.loadedScope = scope }
+        processingQueue.sync {
+            self.loadedScope = scope
+            self.publishSnapshotOnProcessingQueue()
+        }
     }
 
     func _testMonthFileSize(for month: LibraryMonthKey) -> Int64? {

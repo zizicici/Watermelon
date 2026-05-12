@@ -85,7 +85,9 @@ final class RepoCommittedView: @unchecked Sendable {
         )
     }
     func monthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
-        cache.monthSummaries()
+        missingLock.lock()
+        defer { missingLock.unlock() }
+        return cache.monthSummaries(physicallyMissingByMonth: physicallyMissingSnapshotMapLocked())
     }
     func healthDigest() -> RemoteHealthDigest {
         missingLock.lock()
@@ -180,7 +182,8 @@ final class RepoCommittedView: @unchecked Sendable {
 
     /// Wholesale per-month replace, used by V1 sync (which has its own per-month
     /// download flow rather than a materialize) and by verify-tombstone cleanup
-    /// (which removes a subset of assets and rewrites the rest).
+    /// (which removes a subset of assets and rewrites the rest). Overlay is preserved —
+    /// tombstone cleanup doesn't touch physical files.
     @discardableResult
     func replaceMonth(
         _ month: LibraryMonthKey,
@@ -190,7 +193,6 @@ final class RepoCommittedView: @unchecked Sendable {
     ) -> Bool {
         missingLock.lock()
         defer { missingLock.unlock() }
-        physicallyMissingByMonth.remove(month)
         return cache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: assetResourceLinks)
     }
 

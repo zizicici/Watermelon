@@ -81,6 +81,7 @@ struct BackupRunPreparationService: Sendable {
                         level: .info
                     )
                 } catch {
+                    if error is CancellationError { throw error }
                     if profile.isConnectionUnavailableError(error) {
                         throw error
                     }
@@ -298,34 +299,30 @@ struct BackupRunPreparationService: Sendable {
         let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: expectedRepoID)
         let report = try await verifier.verify(month: month)
         if !report.cleanupCandidates.isEmpty, let profile, let password {
-            let raw = try storageClientFactory.makeClient(profile: profile, password: password)
-            try await raw.connect()
-            // serialOnly backends (SMB / SFTP) need wrap to keep workers + cleanup
-            // commits from interleaving on the same connection.
-            let metadataClient = wrapIfSerial(raw)
+            // Verify cleanup is sequential; reuse caller's client (no maintenance tasks).
+            _ = password
+            let metadataClient = wrapIfSerial(client)
             let v2: BackupV2RuntimeServices
             do {
                 v2 = try await BackupV2RuntimeBuilder.build(
                     client: client,
                     metadataClient: metadataClient,
+                    ownsMetadataClient: false,
+                    runMaintenanceTasks: false,
                     profile: profile,
                     databaseManager: databaseManager,
+                    format: formatCompatibilityService,
                     allowMigration: false
                 )
             } catch BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) {
-                await metadataClient.disconnectSafely()
                 throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
             } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
-                await metadataClient.disconnectSafely()
                 throw BackupCompatibilityError.repoIdentityMismatch
             } catch BackupV2RuntimeBuildError.requiresForegroundMigration {
-                await metadataClient.disconnectSafely()
                 throw BackupCompatibilityError.requiresForegroundMigration
             } catch BackupV2RuntimeBuildError.repoFormatRegression {
-                await metadataClient.disconnectSafely()
                 throw BackupCompatibilityError.repoFormatRegression
             } catch {
-                await metadataClient.disconnectSafely()
                 throw error
             }
             do {

@@ -149,7 +149,32 @@ actor V1MigrationService {
                 clockMax: clockRange.high,
                 bodyKind: CommitHeader.bodyKindPlain
             )
-            _ = try await commitWriter.write(header: header, ops: ops, month: monthKey, respectTaskCancellation: false)
+            // Mirror flushV2 / applyTombstones retry: a peer's commit may have advanced
+            // the writer-scoped path; bump seq and retry rather than aborting migration.
+            var migrationAttempt = 0
+            let migrationMaxRetries = 4
+            var migrationHeader = header
+            while true {
+                do {
+                    _ = try await commitWriter.write(header: migrationHeader, ops: ops, month: monthKey, respectTaskCancellation: false)
+                    break
+                } catch CommitLogWriter.WriteError.alreadyExists {
+                    migrationAttempt += 1
+                    if migrationAttempt >= migrationMaxRetries { throw CommitLogWriter.WriteError.alreadyExists }
+                    let nextSeq = try await allocator.allocate()
+                    migrationHeader = CommitHeader(
+                        version: migrationHeader.version,
+                        repoID: migrationHeader.repoID,
+                        writerID: migrationHeader.writerID,
+                        seq: nextSeq,
+                        runID: migrationHeader.runID,
+                        scope: migrationHeader.scope,
+                        clockMin: migrationHeader.clockMin,
+                        clockMax: migrationHeader.clockMax,
+                        bodyKind: migrationHeader.bodyKind
+                    )
+                }
+            }
 
             // Snapshot via builder so covered-range invariants match V2 flush.
             var state = RepoMonthState.empty

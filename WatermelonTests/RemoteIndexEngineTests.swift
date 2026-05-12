@@ -132,7 +132,10 @@ final class RemoteIndexEngineTests: XCTestCase {
         XCTAssertEqual(delta.changedMonths, [key202401], "every previously-known month is reported as changed")
         XCTAssertTrue(engine.fingerprints(for: key202401).isEmpty)
         XCTAssertNil(engine.summary(for: key202401))
-        XCTAssertEqual(engine.snapshotRevision, 2, "revision is still recorded across disconnect")
+        // After disconnect, snapshotRevision is dropped to nil so that a reconnect with
+        // the same cache revision will go through the full-snapshot path instead of an
+        // empty-delta early-return (see HomeRemoteIndexEngine.apply guard).
+        XCTAssertNil(engine.snapshotRevision, "revision cleared on disconnect to force a full apply on reconnect")
     }
 
     // MARK: - resolveMonth dropping rules

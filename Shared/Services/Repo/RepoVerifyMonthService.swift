@@ -153,7 +153,9 @@ actor RepoVerifyMonthService {
             switch item.kind {
             case .phantomAsset, .metadataOnlyLeft: reason = .manifestOrphan
             case .allResourcesGone: reason = .verifyFailed
-            case .partiallyMissing, .fingerprintMismatch: reason = .verifyFailed
+            case .partiallyMissing, .fingerprintMismatch:
+                assertionFailure("allowsCleanup must filter \(item.kind)")
+                continue
             }
             ops.append(CommitOp(
                 opSeq: index,

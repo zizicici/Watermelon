@@ -283,6 +283,7 @@ final class BackgroundBackupRunner {
                 }
             }
         }
+        defer { eventStream.finish() }
 
         let iCloudMode = ICloudPhotoBackupMode.getValue()
         var uploadsSinceFlush = 0
@@ -294,6 +295,19 @@ final class BackgroundBackupRunner {
             guard let assetIDs = monthAssetIDs[monthKey], !assetIDs.isEmpty else { continue }
 
             var monthHasAssetFailures = false
+
+            // Fast-path: skip loadOrCreate if every asset is already in the sync-time
+            // committed view. BG is electricity-sensitive — a typical incremental run has
+            // 90%+ already-done months, so avoiding the materialize matters here even
+            // more than the foreground.
+            let committedSet = assetProcessor.remoteIndexService.committedAssetFingerprintsByMonth()[monthKey] ?? []
+            if monthAlreadyFullyBackedUpFast(assetIDs: assetIDs, committedFingerprints: committedSet) {
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.monthEnd"), monthKey.displayText),
+                    level: .info
+                )
+                continue
+            }
 
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.monthStart"), monthKey.displayText, assetIDs.count),
@@ -413,14 +427,11 @@ final class BackgroundBackupRunner {
                                     .union(delta.committedV2TombstoneFingerprints)
                             )
                         } catch {
+                            // Record-committed even on cancel: commit may be durable.
+                            assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                             let isCancel = error is CancellationError
                                 || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
-                            if isCancel {
-                                // Background run is wrapped by Task.isCancelled at higher level;
-                                // don't log this as a hard flush failure.
-                            } else {
-                                // Commit may be durable even on snapshot-write failure.
-                                assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
+                            if !isCancel {
                                 await writer.appendErrorLog(
                                     String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
                                     unless: error
@@ -441,11 +452,11 @@ final class BackgroundBackupRunner {
                         .union(delta.committedV2TombstoneFingerprints)
                 )
             } catch {
+                // Record-committed before cancel peel: commit may be durable even on cancel.
+                assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                 let isCancel = error is CancellationError
                     || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
                 if !isCancel {
-                    // Commit may be durable even on snapshot-write failure.
-                    assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                     let reason = profile.userFacingStorageErrorMessage(error)
                     monthFlushFailureReason = reason
                     await writer.appendLog(
@@ -455,7 +466,9 @@ final class BackgroundBackupRunner {
                 }
             }
             uploadsSinceFlush = 0
-            if let monthFlushFailureReason {
+            if Task.isCancelled {
+                // Suppress per-month log; outer profile loop reports .cancelled.
+            } else if let monthFlushFailureReason {
                 anyMonthFailed = true
                 await writer.appendLog(
                     String(format: String(localized: "backup.auto.log.monthFailed"), monthKey.displayText, monthFlushFailureReason),
@@ -477,6 +490,29 @@ final class BackgroundBackupRunner {
         eventStream.finish()
         await drainTask.value
         return anyMonthFailed
+    }
+
+    /// Same predicate as BackupParallelExecutor — sync-time committed fingerprints
+    /// already exclude phantom/partial/metadata-only/missing, so monthStore isn't needed.
+    private func monthAlreadyFullyBackedUpFast(
+        assetIDs: [String],
+        committedFingerprints: Set<Data>
+    ) -> Bool {
+        guard !assetIDs.isEmpty else { return true }
+        guard !committedFingerprints.isEmpty else { return false }
+        guard let cachedHashes = try? hashIndexRepository.fetchAssetHashCaches(
+            assetIDs: Set(assetIDs)
+        ) else { return false }
+        guard cachedHashes.count == assetIDs.count else { return false }
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: assetIDs, options: nil)
+        guard fetchResult.count == assetIDs.count else { return false }
+        for index in 0 ..< fetchResult.count {
+            let asset = fetchResult.object(at: index)
+            guard let cache = cachedHashes[asset.localIdentifier] else { return false }
+            if let modDate = asset.modificationDate, modDate > cache.updatedAt { return false }
+            if !committedFingerprints.contains(cache.assetFingerprint) { return false }
+        }
+        return true
     }
 
     // MARK: - Wi-Fi Check

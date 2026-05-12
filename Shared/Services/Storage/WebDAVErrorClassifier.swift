@@ -1,6 +1,33 @@
 import Foundation
 
 enum WebDAVErrorClassifier {
+    static func isConnectionUnavailable(_ error: Error) -> Bool {
+        if let storage = error as? RemoteStorageClientError, case .underlying(let inner) = storage {
+            return isConnectionUnavailable(inner)
+        }
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain {
+            switch ns.code {
+            case NSURLErrorNotConnectedToInternet,
+                 NSURLErrorNetworkConnectionLost,
+                 NSURLErrorTimedOut,
+                 NSURLErrorCannotConnectToHost,
+                 NSURLErrorCannotFindHost,
+                 NSURLErrorDNSLookupFailed,
+                 NSURLErrorSecureConnectionFailed,
+                 NSURLErrorInternationalRoamingOff,
+                 NSURLErrorDataNotAllowed:
+                return true
+            default:
+                break
+            }
+        }
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isConnectionUnavailable(underlying)
+        }
+        return false
+    }
+
     static func describe(_ error: Error) -> String {
         if let remote = classifyRemote(error) {
             return remote

@@ -38,7 +38,8 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
                 changedMonths.formUnion(remoteFingerprintsByMonth.keys)
                 clearRemoteState()
             }
-            snapshotRevision = state.revision
+            // nil: reconnect with the same cache revision still goes through full-snapshot.
+            snapshotRevision = nil
             return HomeRemoteDelta(changedMonths: changedMonths)
         }
 

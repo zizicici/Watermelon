@@ -30,17 +30,10 @@ final class OptimisticInflightTracker: @unchecked Sendable {
         }
     }
 
-    /// Returns a snapshot copy — convenience for callers that need a free-standing
-    /// value. Hot paths (resume planner, Home sync) should prefer `readUncommittedAssets`
-    /// to avoid the full PerMonth + Set<Data> copy under the lock.
-    func uncommittedAssets() -> PerMonth<Set<Data>> {
-        lock.withLock { assetFingerprintsByMonth }
-    }
-
-    /// Executes `block` under the lock with direct access — no copy. Block must NOT
-    /// escape the snapshot; that's the price for skipping the dict/set deep copy.
+    /// Snapshot under lock then run block outside; re-entry can't deadlock.
     func readUncommittedAssets<T>(_ block: (PerMonth<Set<Data>>) -> T) -> T {
-        lock.withLock { block(assetFingerprintsByMonth) }
+        let snapshot = lock.withLock { assetFingerprintsByMonth }
+        return block(snapshot)
     }
 
     func reset() {
