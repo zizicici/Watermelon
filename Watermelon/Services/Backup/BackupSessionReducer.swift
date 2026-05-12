@@ -35,6 +35,8 @@ struct BackupSessionState {
     var lastPausedRunMode: BackupRunMode?
     var lastPausedDisplayRunMode: BackupRunMode?
     var isStartCommandInFlight = false
+    /// Persisted at `prepareForStart` so resume sees the requested config even when pause lands before startRun executes.
+    var pendingRunConfiguration: BackupRunConfigurationOverride?
     var backupScopeSelection = BackupScopeSelection(
         selectedAssetIDs: nil,
         selectedAssetCount: 0,
@@ -90,7 +92,11 @@ struct BackupSessionState {
         statusText = String(localized: "backup.session.missingConnection")
     }
 
-    mutating func prepareForStart(mode: BackupRunMode) -> BackupSessionStartContext {
+    mutating func prepareForStart(
+        mode: BackupRunMode,
+        configuration: BackupRunConfigurationOverride
+    ) -> BackupSessionStartContext {
+        pendingRunConfiguration = configuration
         let context = BackupSessionStartContext(previousState: state, previousStatusText: statusText)
 
         currentRunMode = mode

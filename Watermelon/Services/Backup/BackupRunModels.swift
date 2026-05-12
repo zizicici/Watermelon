@@ -32,6 +32,8 @@ enum BackupTerminationIntent: Sendable {
 
 enum BackupMonthFinalizationResult: Sendable {
     case success
+    /// Upload OK, inline download skipped items; the upload run must not treat this as fatal.
+    case downloadIncomplete(String)
     case failed(String)
     case cancelled
 }

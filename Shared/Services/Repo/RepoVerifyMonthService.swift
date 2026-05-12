@@ -91,13 +91,14 @@ actor RepoVerifyMonthService {
         }
     }
 
+    @discardableResult
     func applyTombstones(
         month: LibraryMonthKey,
         cleanupItems: [VerifyMonthReportItem],
         services: BackupV2RuntimeServices
-    ) async throws {
+    ) async throws -> Set<Data> {
         let eligible = cleanupItems.filter { $0.allowsCleanup }
-        guard !eligible.isEmpty else { return }
+        guard !eligible.isEmpty else { return [] }
 
         // Re-materialize at apply time and re-classify each candidate. A concurrent
         // backup may have healed an asset between verify and apply; without this
@@ -142,7 +143,7 @@ actor RepoVerifyMonthService {
                 stillEligible.append(item)
             }
         }
-        guard !stillEligible.isEmpty else { return }
+        guard !stillEligible.isEmpty else { return [] }
 
         let clockRange = try await services.lamport.tickRange(count: stillEligible.count)
         var clockCursor = clockRange.low
@@ -187,7 +188,7 @@ actor RepoVerifyMonthService {
             )
             do {
                 _ = try await services.commitWriter.write(header: header, ops: ops, month: month, respectTaskCancellation: false)
-                return
+                return Set(stillEligible.map(\.assetFingerprint))
             } catch CommitLogWriter.WriteError.alreadyExists {
                 attempt += 1
                 if attempt >= maxRetries { throw CommitLogWriter.WriteError.alreadyExists }

@@ -6,8 +6,9 @@ actor StorageClientPool {
     private var createdConnections = 0
     private var idleClients: [any RemoteStorageClientProtocol] = []
     private var waiters: [(UUID, CheckedContinuation<any RemoteStorageClientProtocol, Error>)] = []
-    /// Cancel-arrived-before-register IDs; capped — cancel-after-release orphans never clear.
+    /// Cancel-arrived-before-register IDs; FIFO-evicted so live markers aren't dropped early.
     private var preCancelledWaiterIDs: Set<UUID> = []
+    private var preCancelledOrder: [UUID] = []
     private static let preCancelledIDsCap = 256
     private var isShutdown = false
 
@@ -29,11 +30,7 @@ actor StorageClientPool {
             return
         }
         createdConnections += 1
-        if let waiter = popNextWaiter() {
-            waiter.resume(returning: client)
-        } else {
-            idleClients.append(client)
-        }
+        handReusableClientToLiveWaiter(client)
     }
 
     func acquire() async throws -> any RemoteStorageClientProtocol {
@@ -46,9 +43,16 @@ actor StorageClientPool {
             do {
                 let client = try makeClient()
                 try await client.connect()
+                // shutdown may have run during connect; surrender rather than hand a live client to a dead pool.
+                if isShutdown {
+                    createdConnections = max(createdConnections - 1, 0)
+                    await client.disconnect()
+                    throw CancellationError()
+                }
                 return client
             } catch {
-                createdConnections = max(createdConnections - 1, 0)
+                // Hand slot to any waiter queued during our connect-await; otherwise they'd strand.
+                await passSlotToLiveWaiter()
                 throw error
             }
         }
@@ -63,7 +67,7 @@ actor StorageClientPool {
     }
 
     private func registerWaiter(id: UUID, continuation: CheckedContinuation<any RemoteStorageClientProtocol, Error>) {
-        if isShutdown || preCancelledWaiterIDs.remove(id) != nil {
+        if isShutdown || consumePreCancelled(id) {
             continuation.resume(throwing: CancellationError())
             return
         }
@@ -74,6 +78,11 @@ actor StorageClientPool {
             return
         }
         waiters.append((id, continuation))
+        // A non-reusable release between acquire's slot check and our enqueue would never wake us; claim the freed slot.
+        if createdConnections < maxConnections {
+            createdConnections += 1
+            Task { await self.passSlotToLiveWaiter() }
+        }
     }
 
     private func cancelWaiter(id: UUID) {
@@ -81,16 +90,34 @@ actor StorageClientPool {
             let (_, continuation) = waiters.remove(at: idx)
             continuation.resume(throwing: CancellationError())
         } else {
-            if preCancelledWaiterIDs.count >= Self.preCancelledIDsCap {
-                preCancelledWaiterIDs.removeFirst()
-            }
-            preCancelledWaiterIDs.insert(id)
+            recordPreCancelled(id)
         }
     }
 
-    private func popNextWaiter() -> CheckedContinuation<any RemoteStorageClientProtocol, Error>? {
+    private func recordPreCancelled(_ id: UUID) {
+        if preCancelledWaiterIDs.contains(id) { return }
+        if preCancelledWaiterIDs.count >= Self.preCancelledIDsCap {
+            if let oldest = preCancelledOrder.first {
+                preCancelledOrder.removeFirst()
+                preCancelledWaiterIDs.remove(oldest)
+            }
+        }
+        preCancelledWaiterIDs.insert(id)
+        preCancelledOrder.append(id)
+    }
+
+    private func consumePreCancelled(_ id: UUID) -> Bool {
+        guard preCancelledWaiterIDs.remove(id) != nil else { return false }
+        if let idx = preCancelledOrder.firstIndex(of: id) {
+            preCancelledOrder.remove(at: idx)
+        }
+        return true
+    }
+
+    private func popNextWaiter() -> (UUID, CheckedContinuation<any RemoteStorageClientProtocol, Error>)? {
         guard !waiters.isEmpty else { return nil }
-        return waiters.removeFirst().1
+        let entry = waiters.removeFirst()
+        return (entry.0, entry.1)
     }
 
     func release(_ client: any RemoteStorageClientProtocol, reusable: Bool) async {
@@ -100,11 +127,7 @@ actor StorageClientPool {
             return
         }
         if reusable {
-            if let waiter = popNextWaiter() {
-                waiter.resume(returning: client)
-            } else {
-                idleClients.append(client)
-            }
+            handReusableClientToLiveWaiter(client)
             return
         }
 
@@ -112,18 +135,56 @@ actor StorageClientPool {
         // directly" to the waiter — preventing a concurrent acquire from seeing 4/5 during
         // our disconnect-await, creating its own client, and us also creating a replacement.
         await client.disconnect()
-        if let waiter = popNextWaiter() {
+        await passSlotToLiveWaiter()
+    }
+
+    private func handReusableClientToLiveWaiter(_ client: any RemoteStorageClientProtocol) {
+        while let (waiterID, waiter) = popNextWaiter() {
+            if consumePreCancelled(waiterID) {
+                waiter.resume(throwing: CancellationError())
+                continue
+            }
+            waiter.resume(returning: client)
+            return
+        }
+        idleClients.append(client)
+    }
+
+    /// Drives a fresh connect for the next live waiter; retries past pre-cancelled or connect-failing waiters so they don't starve.
+    private func passSlotToLiveWaiter() async {
+        while let (waiterID, waiter) = popNextWaiter() {
+            if consumePreCancelled(waiterID) {
+                waiter.resume(throwing: CancellationError())
+                continue
+            }
             do {
                 let replacement = try makeClient()
                 try await replacement.connect()
+                // Popped waiter is no longer in `pendingWaiters`; shutdown won't cancel it for us.
+                if isShutdown {
+                    await replacement.disconnect()
+                    waiter.resume(throwing: CancellationError())
+                    return
+                }
+                if consumePreCancelled(waiterID) {
+                    // Cancel arrived during connect; recycle the live replacement for the next waiter.
+                    waiter.resume(throwing: CancellationError())
+                    handReusableClientToLiveWaiter(replacement)
+                    return
+                }
                 waiter.resume(returning: replacement)
+                return
             } catch {
-                createdConnections = max(createdConnections - 1, 0)
+                if consumePreCancelled(waiterID) {
+                    // Caller cancelled mid-connect; surface cancel rather than the connect error.
+                    waiter.resume(throwing: CancellationError())
+                    continue
+                }
                 waiter.resume(throwing: error)
+                continue
             }
-        } else {
-            createdConnections = max(createdConnections - 1, 0)
         }
+        createdConnections = max(createdConnections - 1, 0)
     }
 
     func shutdown() async {
@@ -133,6 +194,7 @@ actor StorageClientPool {
         let pendingWaiters = waiters
         waiters.removeAll()
         preCancelledWaiterIDs.removeAll()
+        preCancelledOrder.removeAll()
         createdConnections = 0
 
         for (_, waiter) in pendingWaiters {

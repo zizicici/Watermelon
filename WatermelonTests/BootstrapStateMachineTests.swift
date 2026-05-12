@@ -127,19 +127,31 @@ final class BootstrapStateMachineTests: XCTestCase {
         XCTAssertEqual(outcome, .fresh)
     }
 
-    /// Migration-in-progress marker forces .v1 even when version.json exists —
-    /// V1MigrationService writes version.json in phase2 but the marker is
-    /// removed only after phase3. A phase1 crash leaves both → must resume V1.
-    func testMigrationInProgressMarker_forcesV1EvenWithVersionJSON() async throws {
+    /// Marker with V1 data means phase3 crashed before migration cleanup completed.
+    func testMigrationInProgressMarker_withV1Manifests_forcesV1() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         // Plant a migration marker.
         let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: "A")
         await client.injectFile(path: markerPath, contents: #"{"v":1,"writer_id":"A","started_at_ms":0}"#)
+        // Phase3 cleanup has not finished.
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
 
         let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
-        XCTAssertEqual(outcome, .v1, "marker present → resume V1 even with version.json")
+        XCTAssertEqual(outcome, .v1, "marker + V1 manifests → resume V1")
+    }
+
+    /// Marker without V1 data must not strand a healthy V2 repo in migration mode.
+    func testStaleMigrationMarker_noV1Manifests_returnsV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: "A")
+        await client.injectFile(path: markerPath, contents: #"{"v":1,"writer_id":"A","started_at_ms":0}"#)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion), "stale marker without V1 manifests → V2")
     }
 
     func testTransientListErrorPropagates() async throws {

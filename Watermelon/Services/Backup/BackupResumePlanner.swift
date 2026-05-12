@@ -14,17 +14,18 @@ final class BackupResumePlanner {
         self.hashIndexRepository = hashIndexRepository
     }
 
+    /// Nil = V1 path (use `completedAssetIDs`). Non-nil = V2: defer to committed-fp presence since a pre-flush pause can leave reducer-completed but uncommitted assets.
     func makePlan(
         pausedMode: BackupRunMode,
         completedAssetIDs: Set<String>,
-        alreadyBackedUpFingerprintsByMonth: PerMonth<Set<Data>> = PerMonth<Set<Data>>()
+        committedAssetFingerprintsByMonth: PerMonth<Set<Data>>? = nil
     ) async throws -> BackupResumePlan {
         switch pausedMode {
         case .retry(let assetIDs):
             let pending = try filterPending(
                 assetIDs: assetIDs,
                 completedAssetIDs: completedAssetIDs,
-                backedUpFingerprintsByMonth: alreadyBackedUpFingerprintsByMonth
+                committedView: committedAssetFingerprintsByMonth
             )
             return BackupResumePlan(
                 resumedExecutionMode: pending.isEmpty ? nil : .retry(assetIDs: pending)
@@ -34,7 +35,7 @@ final class BackupResumePlanner {
             let pending = try filterPending(
                 assetIDs: assetIDs,
                 completedAssetIDs: completedAssetIDs,
-                backedUpFingerprintsByMonth: alreadyBackedUpFingerprintsByMonth
+                committedView: committedAssetFingerprintsByMonth
             )
             return BackupResumePlan(
                 resumedExecutionMode: pending.isEmpty ? nil : .scoped(assetIDs: pending)
@@ -43,7 +44,7 @@ final class BackupResumePlanner {
         case .full:
             let pendingAssetIDs = try await computePendingAssetIDsForFullRun(
                 excluding: completedAssetIDs,
-                backedUpFingerprintsByMonth: alreadyBackedUpFingerprintsByMonth
+                committedView: committedAssetFingerprintsByMonth
             )
             return BackupResumePlan(
                 resumedExecutionMode: pendingAssetIDs.isEmpty ? nil : .scoped(assetIDs: pendingAssetIDs)
@@ -54,27 +55,24 @@ final class BackupResumePlanner {
     private func filterPending(
         assetIDs: Set<String>,
         completedAssetIDs: Set<String>,
-        backedUpFingerprintsByMonth: PerMonth<Set<Data>>
+        committedView: PerMonth<Set<Data>>?
     ) throws -> Set<String> {
-        var pending = assetIDs.subtracting(completedAssetIDs)
-        if backedUpFingerprintsByMonth.isEmpty { return pending }
-        guard let hashIndexRepository else {
-            assertionFailure("BackupResumePlanner: hashIndexRepository is nil but backedUpFingerprintsByMonth is non-empty; resume will re-enqueue everything.")
-            return pending
+        guard let committedView else {
+            return assetIDs.subtracting(completedAssetIDs)
         }
+        guard let hashIndexRepository else {
+            assertionFailure("BackupResumePlanner: committedView present but hashIndexRepository is nil; V2 dedup would no-op")
+            return assetIDs.subtracting(completedAssetIDs)
+        }
+        var pending = assetIDs
         let records = try hashIndexRepository.fetchAssetFingerprintRecords(assetIDs: pending)
         let assetDates = Self.assetDates(forAssetIDs: Array(records.keys))
         for (id, record) in records {
-            // Match writer-side: assets with no creationDate land in 1970-01 (see
-            // `LibraryMonthKey.from(date:)`). Falling through here would skip
-            // dedup and resume those assets unconditionally each time.
+            // Assets with no creationDate land in 1970-01 (writer side: LibraryMonthKey.from(date:)).
             guard let dates = assetDates[id] else { continue }
             let month = Self.libraryMonth(from: dates.creation)
-            // Per-month dedup: skip ONLY if the asset's own month already has this fingerprint
-            // committed. Cross-month fingerprint matches don't justify skipping — each month
-            // owns its physical files even when the content is identical.
-            guard backedUpFingerprintsByMonth.contains(record.fingerprint, in: month) else { continue }
-            // A user edit since the cache → fingerprint is stale; fall through to preflight.
+            // Per-month dedup: each month owns its physical files even when content is identical.
+            guard committedView.contains(record.fingerprint, in: month) else { continue }
             if let modDate = dates.modification, modDate > record.updatedAt { continue }
             pending.remove(id)
         }
@@ -82,10 +80,7 @@ final class BackupResumePlanner {
     }
 
     private static func libraryMonth(from date: Date?) -> LibraryMonthKey {
-        // Must match the writer side (BackupMonthScheduler / cache) which uses
-        // `LibraryMonthKey.from(date:)` (Gregorian). Calendar.current would yield
-        //令和8 (Japanese imperial) or 2569 (Buddhist) for 2026, breaking the
-        // per-month dedup lookup entirely on those locales.
+        // Must match writer side; `Calendar.current` yields locale-specific eras.
         LibraryMonthKey.from(date: date)
     }
 
@@ -111,7 +106,7 @@ final class BackupResumePlanner {
 
     private func computePendingAssetIDsForFullRun(
         excluding completedAssetIDs: Set<String>,
-        backedUpFingerprintsByMonth: PerMonth<Set<Data>>
+        committedView: PerMonth<Set<Data>>?
     ) async throws -> Set<String> {
         let status = photoLibraryService.authorizationStatus()
         let authorized: Bool
@@ -129,26 +124,28 @@ final class BackupResumePlanner {
         let hashIndexRepository = self.hashIndexRepository
         return try await Task.detached(priority: .userInitiated) {
             let assets = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
+            let v2Mode = committedView != nil
+            let canDedupByHash = v2Mode && hashIndexRepository != nil
             var pendingIDs: [String] = []
-            pendingIDs.reserveCapacity(max(assets.count - completedAssetIDs.count, 0))
+            pendingIDs.reserveCapacity(max(assets.count - (canDedupByHash ? 0 : completedAssetIDs.count), 0))
             for index in 0 ..< assets.count {
                 try Task.checkCancellation()
                 let assetID = assets.object(at: index).localIdentifier
-                if !completedAssetIDs.contains(assetID) {
+                if canDedupByHash || !completedAssetIDs.contains(assetID) {
                     pendingIDs.append(assetID)
                 }
             }
             var pending = Set(pendingIDs)
-            if !backedUpFingerprintsByMonth.isEmpty && hashIndexRepository == nil {
-                assertionFailure("BackupResumePlanner: hashIndexRepository is nil but backedUpFingerprintsByMonth is non-empty; full-run will re-enqueue everything.")
+            if v2Mode && hashIndexRepository == nil {
+                assertionFailure("BackupResumePlanner: committedView present but hashIndexRepository is nil; V2 dedup would no-op")
             }
-            if !backedUpFingerprintsByMonth.isEmpty, let repository = hashIndexRepository {
+            if let committedView, let repository = hashIndexRepository {
                 let records = try repository.fetchAssetFingerprintRecords(assetIDs: pending)
                 let dates = Self.assetDates(forAssetIDs: Array(records.keys))
                 for (id, record) in records {
                     guard let assetDates = dates[id] else { continue }
                     let month = Self.libraryMonth(from: assetDates.creation)
-                    guard backedUpFingerprintsByMonth.contains(record.fingerprint, in: month) else { continue }
+                    guard committedView.contains(record.fingerprint, in: month) else { continue }
                     if let modDate = assetDates.modification, modDate > record.updatedAt { continue }
                     pending.remove(id)
                 }

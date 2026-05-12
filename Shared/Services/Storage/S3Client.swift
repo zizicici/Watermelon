@@ -492,10 +492,10 @@ final actor S3Client: RemoteStorageClientProtocol {
         let ns = error as NSError
         if ns.domain == errorDomain {
             if ns.code == 412 { return true }
-            if let serverCode = ns.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String,
-               serverCode == "PreconditionFailed" {
-                return true
-            }
+            let serverCode = ns.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String
+            if serverCode == "PreconditionFailed" { return true }
+            // Conditional-write loser can land as 409 instead of 412 on some S3 vendors.
+            if ns.code == 409, serverCode == "ConditionalRequestConflict" { return true }
         }
         return false
     }

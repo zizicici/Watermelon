@@ -215,7 +215,48 @@ final class BackgroundBackupRunner {
             return .skipped
         }
 
-        let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer, v2Services: v2Services)
+        var fastPathFresh = false
+        do {
+            let preMaterialized = await v2Services.initialMaterializeOutput.peek()
+            // expectV2 pins routing so a lingering V1 manifest can't drag this sync down the V1 path.
+            _ = try await assetProcessor.remoteIndexService.syncIndex(
+                client: client,
+                profile: profile,
+                preMaterialized: preMaterialized,
+                expectV2: true
+            )
+            _ = await v2Services.initialMaterializeOutput.consume()
+            await assetProcessor.remoteIndexService.markIsV2()
+            fastPathFresh = await assetProcessor.remoteIndexService.lastSyncOverlayFresh()
+        } catch is CancellationError {
+            await v2Services.shutdown()
+            await client.disconnectSafely()
+            return .cancelled
+        } catch let compatError as BackupCompatibilityError {
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, compatError.localizedDescription),
+                level: .error
+            )
+            await v2Services.shutdown()
+            await client.disconnectSafely()
+            return .failed
+        } catch {
+            if profile.isConnectionUnavailableError(error) {
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                    level: .error
+                )
+                await v2Services.shutdown()
+                await client.disconnectSafely()
+                return .failed
+            }
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                level: .warning
+            )
+        }
+
+        let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer, v2Services: v2Services, fastPathFresh: fastPathFresh)
         await v2Services.shutdown()
         await client.disconnectSafely()
         if Task.isCancelled {
@@ -267,7 +308,8 @@ final class BackgroundBackupRunner {
         monthAssetIDs: [LibraryMonthKey: [String]],
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter,
-        v2Services: BackupV2RuntimeServices
+        v2Services: BackupV2RuntimeServices,
+        fastPathFresh: Bool
     ) async -> Bool {
 
         let eventStream = BackupEventStream()
@@ -288,20 +330,20 @@ final class BackgroundBackupRunner {
         let iCloudMode = ICloudPhotoBackupMode.getValue()
         var uploadsSinceFlush = 0
         var anyMonthFailed = false
+        var connectionUnavailableAbort = false
 
         for monthKey in sortedMonths {
             if Task.isCancelled { break }
+            if connectionUnavailableAbort { break }
 
             guard let assetIDs = monthAssetIDs[monthKey], !assetIDs.isEmpty else { continue }
 
             var monthHasAssetFailures = false
 
-            // Fast-path: skip loadOrCreate if every asset is already in the sync-time
-            // committed view. BG is electricity-sensitive — a typical incremental run has
-            // 90%+ already-done months, so avoiding the materialize matters here even
-            // more than the foreground.
+            // Fast-path needs a fresh sync this run; stale cache could skip months that need repair.
             let committedSet = assetProcessor.remoteIndexService.committedAssetFingerprintsByMonth()[monthKey] ?? []
-            if monthAlreadyFullyBackedUpFast(assetIDs: assetIDs, committedFingerprints: committedSet) {
+            if fastPathFresh,
+               monthAlreadyFullyBackedUpFast(assetIDs: assetIDs, committedFingerprints: committedSet) {
                 await writer.appendLog(
                     String(format: String(localized: "backup.auto.log.monthEnd"), monthKey.displayText),
                     level: .info
@@ -393,17 +435,23 @@ final class BackgroundBackupRunner {
                             cancellationController: nil
                         )
                     } catch is CancellationError {
-                        // Stop the asset loop immediately on cancel — relying on the next
-                        // iteration's Task.isCancelled check would still process 1-2 more
-                        // assets before noticing. FG executor was already aligned this way.
                         break
                     } catch {
-                        anyMonthFailed = true
-                        monthHasAssetFailures = true
                         let displayName = BackupAssetResourcePlanner.assetDisplayName(
                             asset: asset,
                             selectedResources: resources
                         )
+                        if profile.isConnectionUnavailableError(error) {
+                            anyMonthFailed = true
+                            connectionUnavailableAbort = true
+                            await writer.appendLog(
+                                String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                                level: .error
+                            )
+                            break
+                        }
+                        anyMonthFailed = true
+                        monthHasAssetFailures = true
                         await writer.appendLog(
                             String(format: String(localized: "backup.auto.log.assetFailed"), displayName, profile.userFacingStorageErrorMessage(error)),
                             level: .error
@@ -427,11 +475,19 @@ final class BackgroundBackupRunner {
                                     .union(delta.committedV2TombstoneFingerprints)
                             )
                         } catch {
-                            // Record-committed even on cancel: commit may be durable.
                             assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                             let isCancel = error is CancellationError
                                 || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
                             if !isCancel {
+                                if profile.isConnectionUnavailableError(error) {
+                                    connectionUnavailableAbort = true
+                                    anyMonthFailed = true
+                                    await writer.appendLog(
+                                        String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                                        level: .error
+                                    )
+                                    break
+                                }
                                 await writer.appendErrorLog(
                                     String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
                                     unless: error
@@ -441,6 +497,7 @@ final class BackgroundBackupRunner {
                         uploadsSinceFlush = 0
                     }
                 }
+                if connectionUnavailableAbort { break }
             }
 
             var monthFlushFailureReason: String?
@@ -452,17 +509,25 @@ final class BackgroundBackupRunner {
                         .union(delta.committedV2TombstoneFingerprints)
                 )
             } catch {
-                // Record-committed before cancel peel: commit may be durable even on cancel.
                 assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                 let isCancel = error is CancellationError
                     || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
                 if !isCancel {
-                    let reason = profile.userFacingStorageErrorMessage(error)
-                    monthFlushFailureReason = reason
-                    await writer.appendLog(
-                        String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
-                        level: .error
-                    )
+                    if profile.isConnectionUnavailableError(error) {
+                        connectionUnavailableAbort = true
+                        anyMonthFailed = true
+                        await writer.appendLog(
+                            String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                            level: .error
+                        )
+                    } else {
+                        let reason = profile.userFacingStorageErrorMessage(error)
+                        monthFlushFailureReason = reason
+                        await writer.appendLog(
+                            String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
+                            level: .error
+                        )
+                    }
                 }
             }
             uploadsSinceFlush = 0

@@ -3,7 +3,7 @@ import os.log
 
 private let materializerLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoMaterializer")
 
-// Empty-repoID policy: snapshots accept (legacy field-absent shape); commits reject.
+// Empty-repoID snapshots are skipped when `expectedRepoID` is set; commit replay rebuilds those months.
 
 actor RepoMaterializer {
     private let client: any RemoteStorageClientProtocol
@@ -338,15 +338,17 @@ actor RepoMaterializer {
                 }
                 lastAddByMonthFP[sorted.month, default: [:]][body.assetFingerprint] = incoming
             case .tombstoneAsset(let body):
-                if let basis = body.observedBasis,
+                let tombstoneStamp = OpStamp(writerID: sorted.writerID, seq: sorted.seq, clock: sorted.op.clock)
+                // LWW: baseline addAsset is in `covered` and won't be replayed, so resolve here against its stamp.
+                if let existingStamp = state.assets[body.assetFingerprint]?.stamp,
+                   opStampPrecedes(tombstoneStamp, existingStamp) {
+                    materializerLog.info("skip tombstone superseded by newer addAsset stamp in baseline")
+                } else if let basis = body.observedBasis,
                    let lastAdd = lastAddByMonthFP[sorted.month]?[body.assetFingerprint],
                    Self.isAfterBasis(lastAdd, basis: basis) {
-                    // Heal happened after verify observed — preserve the asset, drop the
-                    // tombstone. Without this check, the tombstone would silently delete
-                    // content a peer just resurrected (Round 11 R2#4 / TOCTOU class).
+                    // Heal landed after verify observed — dropping the tombstone preserves a peer-resurrected fp.
                     materializerLog.info("skip observation-tombstone for fp; healing add observed after basis")
                 } else {
-                    let tombstoneStamp = OpStamp(writerID: sorted.writerID, seq: sorted.seq, clock: sorted.op.clock)
                     state.assets.removeValue(forKey: body.assetFingerprint)
                     state.assetResources = state.assetResources.filter { $0.key.assetFingerprint != body.assetFingerprint }
                     state.deletedAssetFingerprints.insert(body.assetFingerprint)

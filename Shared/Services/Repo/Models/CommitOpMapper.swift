@@ -47,9 +47,6 @@ enum CommitOpMapper {
                     "lamportWatermark": basis.lamportWatermark
                 ]
                 if !basis.perWriterMaxSeq.isEmpty {
-                    // Raw UInt64 so wire shape matches header.seq / clockMin / clockMax;
-                    // Int64(bitPattern:) made values > Int63.max look negative and the
-                    // decoder's requireUInt64 rejects negatives.
                     basisDict["perWriterMaxSeq"] = basis.perWriterMaxSeq
                 }
                 dict["observedBasis"] = basisDict
@@ -158,9 +155,6 @@ enum CommitOpMapper {
                 var perWriter: [String: UInt64] = [:]
                 if let raw = basisDict["perWriterMaxSeq"] as? [String: Any] {
                     for (writer, value) in raw {
-                        // Each value is the max seq we'd seen for that writer at observation
-                        // time. Strict UInt64 + Int64 acceptance — same semantics as covered
-                        // ranges (negative / fractional values are not legal seqs).
                         perWriter[writer] = try mapValidation {
                             try RepoWireValidator.requireUInt64(value, field: "perWriterMaxSeq[\(writer)]")
                         }
@@ -372,4 +366,3 @@ enum CommitWireRow: Equatable, Sendable {
         }
     }
 }
-

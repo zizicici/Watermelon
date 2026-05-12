@@ -34,7 +34,11 @@ actor SeqAllocator {
         let next = try database.write { [profileID, repoID, current] db in
             let dbCurrent = try Self.readPersistedSeq(db: db, profileID: profileID, repoID: repoID) ?? 0
             let effective = max(current, dbCurrent)
-            let next = effective &+ 1
+            // `&+ 1` would wrap to 0 and overwrite an earlier commit at the same `(writerID, seq)` path.
+            guard effective < UInt64.max else {
+                throw SeqAllocatorError.exhausted
+            }
+            let next = effective + 1
             let signed = Int64(bitPattern: next)
             try db.execute(
                 sql: """
@@ -48,6 +52,10 @@ actor SeqAllocator {
         }
         current = next
         return next
+    }
+
+    enum SeqAllocatorError: Error {
+        case exhausted
     }
 
     private func persist(value: UInt64) throws {

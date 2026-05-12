@@ -60,17 +60,7 @@ enum RemoteFormatInspection: Equatable, Sendable {
 }
 
 actor RemoteFormatCompatibilityService {
-    /// V1-manifest scan is the heaviest part of inspect — year × 12 LIST on a long-history
-    /// repo. Cache per (host, basePath) signature so verifyAllMonths' 60-month loop and
-    /// repeated BG runs don't re-scan an unchanged repo every time.
-    private var v1ScanCache: [String: (timestamp: Date, hasV1: Bool)] = [:]
-    private static let v1ScanCacheTTL: TimeInterval = 300
-
     init() {}
-
-    private static func cacheKey(_ profile: ServerProfileRecord) -> String {
-        "\(profile.host)|\(profile.port)|\(profile.basePath)|\(profile.shareName)|\(profile.username)"
-    }
 
     func verify(client: any RemoteStorageClientProtocol, profile: ServerProfileRecord) async throws {
         let basePath = RemotePathBuilder.normalizePath(profile.basePath)
@@ -109,11 +99,11 @@ actor RemoteFormatCompatibilityService {
                     return .unsupported(minAppVersion: preCheck.minAppVersion)
                 }
             }
-            // Migration-in-progress markers force .v1 regardless of version.json
-            // state — if version.json was written prematurely OR by a sibling
-            // device that crashed mid-phase1, we must resume the V1 migration.
+            // Migration marker only forces `.v1` when V1 manifests still exist; stale marker on a healthy V2 falls through.
             if try await detectMigrationInProgress(client: client, basePath: basePath) {
-                return .v1
+                if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
+                    return .v1
+                }
             }
             // Surface transport errors; `.unsupported` would lock the repo on a network blip.
             let manifest = try await loadVersionManifestStrict(client: client, profile: profile)
@@ -122,7 +112,7 @@ actor RemoteFormatCompatibilityService {
                 // Marker + no version.json: either fresh-bootstrap crashed between mkdir
                 // and version.json (re-bootstrap heals), or V1-migration crashed between
                 // phase1 and phase2 (must resume V1, not fresh-bootstrap, or data unmigrated).
-                if try await detectV1ManifestsCached(client: client, profile: profile, basePath: basePath, entries: entries) {
+                if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
                     return .v1
                 }
                 // Distinguish empty marker (fresh-bootstrap retry) from damaged V2
@@ -143,7 +133,7 @@ actor RemoteFormatCompatibilityService {
                     // Older clients that don't understand V2 may still write V1 manifests
                     // into a repo that has .watermelon/version.json. Route .v1 so builder
                     // re-runs the idempotent migration phases over the new V1 data.
-                    if try await detectV1ManifestsCached(client: client, profile: profile, basePath: basePath, entries: entries) {
+                    if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
                         return .v1
                     }
                     return .v2(formatVersion: formatVersion)
@@ -152,7 +142,7 @@ actor RemoteFormatCompatibilityService {
             }
         }
 
-        if try await detectV1ManifestsCached(client: client, profile: profile, basePath: basePath, entries: entries) {
+        if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
             return .v1
         }
         return .fresh
@@ -197,32 +187,6 @@ actor RemoteFormatCompatibilityService {
 
     private func isNotFoundError(_ error: Error) -> Bool {
         isStorageNotFoundError(error)
-    }
-
-    private func detectV1ManifestsCached(
-        client: any RemoteStorageClientProtocol,
-        profile: ServerProfileRecord,
-        basePath: String,
-        entries: [RemoteStorageEntry]
-    ) async throws -> Bool {
-        // Key includes entries' top-level signature: when a peer adds a YEAR dir
-        // (V1 manifest landing), the signature changes and we re-scan.
-        let key = Self.cacheKey(profile) + "|" + Self.entriesSignature(entries)
-        if let cached = v1ScanCache[key],
-           Date().timeIntervalSince(cached.timestamp) < Self.v1ScanCacheTTL {
-            return cached.hasV1
-        }
-        let result = try await detectV1Manifests(client: client, basePath: basePath, entries: entries)
-        v1ScanCache[key] = (Date(), result)
-        return result
-    }
-
-    private static func entriesSignature(_ entries: [RemoteStorageEntry]) -> String {
-        entries
-            .filter { $0.isDirectory && $0.name.range(of: "^[0-9]{4}$", options: .regularExpression) != nil }
-            .map(\.name)
-            .sorted()
-            .joined(separator: ",")
     }
 
     private func detectV1Manifests(

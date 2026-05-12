@@ -19,6 +19,13 @@ func isStorageNotFoundError(_ error: Error) -> Bool {
     if nsError.domain == "WebDAVClient" && nsError.code == 404 {
         return true
     }
+    if nsError.domain == S3ErrorClassifier.errorDomain {
+        if nsError.code == 404 { return true }
+        if let serverCode = nsError.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String,
+           serverCode == "NoSuchKey" || serverCode == "NotFound" {
+            return true
+        }
+    }
     if SMBErrorClassifier.isNotFound(error) {
         return true
     }

@@ -88,10 +88,27 @@ enum RemoteFileNaming {
             }
         }
 
-        if originalExt.isEmpty {
-            return stem
+        return composeLeaf(stem: stem, ext: originalExt, reservedSuffixBytes: 0)
+    }
+
+    static let maxLeafByteBudget = 255
+    static let writerIDSuffixReserveBytes = 16
+
+    static func composeLeaf(stem: String, ext: String, reservedSuffixBytes: Int) -> String {
+        let extPortion = ext.isEmpty ? "" : "." + ext
+        let extBudget = clampStringToBytes(extPortion, maxBytes: maxLeafByteBudget / 2)
+        let remaining = max(maxLeafByteBudget - reservedSuffixBytes - extBudget.utf8.count, 1)
+        let clampedStem = clampStringToBytes(stem, maxBytes: remaining)
+        return clampedStem + extBudget
+    }
+
+    static func clampStringToBytes(_ value: String, maxBytes: Int) -> String {
+        if value.utf8.count <= maxBytes { return value }
+        var result = value
+        while result.utf8.count > maxBytes && !result.isEmpty {
+            result.removeLast()
         }
-        return "\(stem).\(originalExt)"
+        return result
     }
 
     static func fallbackResourceLabel(forRole role: Int) -> String {
@@ -146,8 +163,6 @@ enum RemoteFileNaming {
         let ext = nsName.pathExtension
         let stem = nsName.deletingPathExtension
 
-        // `.overwritePossible` backends — local manifest can't see a peer's
-        // pending bytes, so suffix unconditionally.
         if forceWriterIDSuffix, let writerID {
             return resolveWithWriterIDSuffix(stem: stem, ext: ext, writerID: writerID, collisionKeys: collisionKeys)
         }
@@ -162,8 +177,12 @@ enum RemoteFileNaming {
 
         var suffix = 1
         while true {
-            let candidateStem = "\(stem)_\(suffix)"
-            let candidate = ext.isEmpty ? candidateStem : "\(candidateStem).\(ext)"
+            let suffixStr = "_\(suffix)"
+            let candidate = composeLeaf(
+                stem: stem + suffixStr,
+                ext: ext,
+                reservedSuffixBytes: 0
+            )
             if !collisionKeys.contains(collisionKey(for: candidate)) {
                 return candidate
             }
@@ -177,29 +196,22 @@ enum RemoteFileNaming {
         writerID: String,
         collisionKeys: Set<String>
     ) -> String {
-        let wid6 = RepoLayout.writerIDShort(writerID)
-        let basicCandidate = ext.isEmpty ? "\(stem)~\(wid6)" : "\(stem)~\(wid6).\(ext)"
+        let basicCandidate = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID)
         if !collisionKeys.contains(collisionKey(for: basicCandidate)) {
             return basicCandidate
         }
-        // Hard upper bound — a poisoned manifest or hostile remote could otherwise
-        // make this loop chew CPU + heap chasing a never-free suffix.
         let maxSuffix = 10_000
         var suffix = 1
         while suffix <= maxSuffix {
-            let candidateStem = "\(stem)~\(wid6)-\(suffix)"
-            let candidate = ext.isEmpty ? candidateStem : "\(candidateStem).\(ext)"
+            let candidate = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, numericSuffix: suffix)
             if !collisionKeys.contains(collisionKey(for: candidate)) {
                 return candidate
             }
             suffix += 1
         }
-        // Fall back to UUID-stamped name — guaranteed unique, breaks the loop. Caller
-        // will see an unfamiliar name and we surface via assertion in debug.
-        assertionFailure("RemoteFileNaming: writer suffix exhausted for stem=\(stem) wid=\(wid6); collision set size=\(collisionKeys.count)")
-        let escape = UUID().uuidString.lowercased().prefix(8)
-        let escapeStem = "\(stem)~\(wid6)-\(escape)"
-        return ext.isEmpty ? escapeStem : "\(escapeStem).\(ext)"
+        assertionFailure("RemoteFileNaming: writer suffix exhausted for stem=\(stem) wid=\(RepoLayout.writerIDShort(writerID)); collision set size=\(collisionKeys.count)")
+        let escape = String(UUID().uuidString.lowercased().prefix(8))
+        return writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: escape)
     }
 
     static func collisionKeySet(from fileNames: Set<String>) -> Set<String> {
@@ -211,8 +223,29 @@ enum RemoteFileNaming {
         let nsName = baseName as NSString
         let ext = nsName.pathExtension
         let stem = nsName.deletingPathExtension
+        return writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID)
+    }
+
+    private static func writerIDSuffixedName(
+        stem: String,
+        ext: String,
+        writerID: String,
+        numericSuffix: Int? = nil,
+        escapeToken: String? = nil
+    ) -> String {
         let wid6 = RepoLayout.writerIDShort(writerID)
-        return ext.isEmpty ? "\(stem)~\(wid6)" : "\(stem)~\(wid6).\(ext)"
+        var trailing = "~\(wid6)"
+        if let escapeToken {
+            trailing += "-\(escapeToken)"
+        } else if let numericSuffix {
+            trailing += "-\(numericSuffix)"
+        }
+        let extPortion = ext.isEmpty ? "" : "." + ext
+        let extBudget = clampStringToBytes(extPortion, maxBytes: maxLeafByteBudget / 2)
+        let reserved = trailing.utf8.count + extBudget.utf8.count
+        let stemBudget = max(maxLeafByteBudget - reserved, 1)
+        let clampedStem = clampStringToBytes(stem, maxBytes: stemBudget)
+        return clampedStem + trailing + extBudget
     }
 
     static func collisionKey(for fileName: String) -> String {

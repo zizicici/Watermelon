@@ -120,21 +120,25 @@ final class BackupCoordinator: Sendable {
         remoteIndexService.currentState(since: revision)
     }
 
+    /// Per-month is load-bearing — a flat set would let writer A mask writer B's pending fp on shared content.
     func backedUpAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
-        // Per-month is load-bearing: a flat set would let writer A's commit silently
-        // mark writer B's pending fp as "committed" when both share content (re-imported
-        // photo across months), and resume planner would skip B's asset. Subtracts V2
-        // optimistic-cache entries per-month so mid-batch failures still re-upload.
-        // Type forces the per-month boundary at every call site.
         remoteIndexService.committedAssetFingerprintsByMonth()
     }
 
-    /// Resume planner needs the physical-presence overlay populated for ALL
-    /// committed months — without this, unloaded months read as healthy and
-    /// partially-missing assets get skipped from repair.
-    func refreshPhysicalPresenceForResume(profile: ServerProfileRecord, password: String) async throws {
+    /// `nil` until the first sync identifies the format; callers must not collapse nil to V1.
+    func currentRepoIsV2() async -> Bool? {
+        await remoteIndexService.currentRepoIsV2()
+    }
+
+    /// Returns true only when every probed month succeeded; callers gate the committed-fp fast path on this.
+    @discardableResult
+    func refreshPhysicalPresenceForResume(profile: ServerProfileRecord, password: String) async throws -> Bool {
         try await preparationService.withConnectedClient(profile: profile, password: password) { client in
             try await self.remoteIndexService.refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath)
         }
+    }
+
+    func lastSyncOverlayFresh() async -> Bool {
+        await remoteIndexService.lastSyncOverlayFresh()
     }
 }

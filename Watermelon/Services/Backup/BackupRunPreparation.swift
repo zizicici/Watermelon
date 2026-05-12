@@ -9,6 +9,8 @@ struct BackupPreparedRun: Sendable {
     let totalAssetCount: Int
     let makeClient: @Sendable () throws -> any RemoteStorageClientProtocol
     let v2Services: BackupV2RuntimeServices?
+    /// True only on a clean syncIndex; gates the committed-fp fast path so a stale cache can't mask a month as done.
+    let fastPathFresh: Bool
 }
 
 struct BackupRunPreparationService: Sendable {
@@ -61,6 +63,7 @@ struct BackupRunPreparationService: Sendable {
                 let v2Services = try await prepareV2Runtime(client: client, profile: profile, password: password, eventStream: eventStream)
                 v2ServicesForCleanup = v2Services
 
+                var fastPathFresh = false
                 do {
                     // Peek so a syncIndex throw doesn't waste the cold-start materialize.
                     // Consume only after success.
@@ -69,9 +72,12 @@ struct BackupRunPreparationService: Sendable {
                         client: client,
                         profile: profile,
                         eventStream: eventStream,
-                        preMaterialized: preMaterialized
+                        preMaterialized: preMaterialized,
+                        expectV2: v2Services != nil
                     )
                     _ = await v2Services?.initialMaterializeOutput.consume()
+                    // Stale overlay can let a since-deleted asset look healthy; require a clean refresh to skip loadOrCreate + LIST.
+                    fastPathFresh = await remoteIndexService.lastSyncOverlayFresh()
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.log.remoteIndexSynced"),
@@ -99,6 +105,11 @@ struct BackupRunPreparationService: Sendable {
                         ),
                         level: .warning
                     )
+                }
+
+                // V2 runtime built ≡ V2 repo; pin isV2 so a non-fatal sync throw can't drop resume back to V1 dedup.
+                if v2Services != nil {
+                    await remoteIndexService.markIsV2()
                 }
 
                 let retryMode = onlyAssetLocalIdentifiers != nil
@@ -166,7 +177,8 @@ struct BackupRunPreparationService: Sendable {
                     makeClient: { [storageClientFactory, profile, password] in
                         try storageClientFactory.makeClient(profile: profile, password: password)
                     },
-                    v2Services: v2Services
+                    v2Services: v2Services,
+                    fastPathFresh: fastPathFresh
                 )
             } catch {
                 if let v2 = v2ServicesForCleanup {
@@ -326,19 +338,16 @@ struct BackupRunPreparationService: Sendable {
                 throw error
             }
             do {
-                try await verifier.applyTombstones(
+                let appliedFingerprints = try await verifier.applyTombstones(
                     month: month,
                     cleanupItems: report.cleanupCandidates,
                     services: v2
                 )
-                // Drop tombstoned assets from the local cache before attempting the remote
-                // re-sync — if the sync fails (transient transport / 401), the UI would
-                // otherwise keep showing the just-deleted assets until the next manual
-                // refresh. Resources stay because other assets may share them.
-                if let monthData = remoteIndexService.remoteMonthRawData(for: month) {
-                    let tombstoned = Set(report.cleanupCandidates.map(\.assetFingerprint))
-                    let remainingAssets = monthData.assets.filter { !tombstoned.contains($0.assetFingerprint) }
-                    let remainingLinks = monthData.assetResourceLinks.filter { !tombstoned.contains($0.assetFingerprint) }
+                // Evict only what was actually tombstoned; applyTombstones may have skipped since-healed items.
+                if !appliedFingerprints.isEmpty,
+                   let monthData = remoteIndexService.remoteMonthRawData(for: month) {
+                    let remainingAssets = monthData.assets.filter { !appliedFingerprints.contains($0.assetFingerprint) }
+                    let remainingLinks = monthData.assetResourceLinks.filter { !appliedFingerprints.contains($0.assetFingerprint) }
                     remoteIndexService.replaceCachedMonth(
                         month,
                         resources: monthData.resources,

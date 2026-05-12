@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let v1MigrationLog = Logger(subsystem: "com.zizicici.watermelon", category: "V1Migration")
 
 actor V1MigrationService {
     enum MigrationError: Error {
@@ -11,6 +14,8 @@ actor V1MigrationService {
         let month: Int
         let manifestAbsolutePath: String
     }
+
+    static let residueManifestFileName = ".watermelon_manifest.legacy-residue.sqlite"
 
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
@@ -74,151 +79,153 @@ actor V1MigrationService {
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
 
         let months = try await scanV1Months()
-        phase1ScannedMonths = months
+        phase1ScannedMonths.removeAll()
         var processed = 0
 
         for scanned in months {
             try Task.checkCancellation()
-            guard let store = try await MonthManifestStore.loadManifestDirect(
+            let storeOrNil = try await MonthManifestStore.loadManifestDirect(
                 client: client,
                 basePath: basePath,
                 year: scanned.year,
                 month: scanned.month,
                 manifestAbsolutePath: scanned.manifestAbsolutePath,
                 pushSchemaUpgrade: false
-            ) else { continue }
+            )
+            guard let store = storeOrNil else {
+                // Quarantine corrupt residue so detectV1Manifests stops looping it as .v1.
+                v1MigrationLog.warning("V1 manifest at \(scanned.manifestAbsolutePath, privacy: .public) unreadable — quarantining as legacy residue")
+                try await quarantineV1ResidueManifest(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
+                continue
+            }
 
             let snapshot = store.unsortedSnapshot()
-            if snapshot.assets.isEmpty { continue }
+            if snapshot.assets.isEmpty {
+                // No assets to migrate; remove or quarantine so the V1 scan stops finding it.
+                if snapshot.resources.isEmpty && snapshot.links.isEmpty {
+                    try await deleteIfPresent(path: scanned.manifestAbsolutePath)
+                } else {
+                    v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) has \(snapshot.resources.count, privacy: .public) resources / \(snapshot.links.count, privacy: .public) links but no assets — quarantining as legacy residue")
+                    try await quarantineV1ResidueManifest(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
+                }
+                continue
+            }
 
             let monthKey = LibraryMonthKey(year: scanned.year, month: scanned.month)
             let resourcesByHash: [Data: RemoteManifestResource] = Dictionary(uniqueKeysWithValues: snapshot.resources.map { ($0.contentHash, $0) })
             let linksByAssetFP: [Data: [RemoteAssetResourceLink]] = Dictionary(grouping: snapshot.links, by: { $0.assetFingerprint })
 
-            var ops: [CommitOp] = []
-            ops.reserveCapacity(snapshot.assets.count)
-            let clockRange = try await clock.tickRange(count: snapshot.assets.count)
-            var clockCursor = clockRange.low
-            var addAssetClocks: [Data: UInt64] = [:]
-
-            for (index, asset) in snapshot.assets.enumerated() {
-                let links = linksByAssetFP[asset.assetFingerprint] ?? []
-                var resourcesForOp: [CommitResourceEntry] = []
-                resourcesForOp.reserveCapacity(links.count)
-                for link in links {
-                    // Drop would break `state == fold(covered)` for the migrated month.
-                    guard let res = resourcesByHash[link.resourceHash] else {
-                        throw NSError(
-                            domain: "V1MigrationService",
-                            code: -10,
-                            userInfo: [NSLocalizedDescriptionKey:
-                                "V1 manifest link references missing resource hash \(link.resourceHash.hexString) — migration aborted"]
-                        )
-                    }
-                    resourcesForOp.append(CommitResourceEntry(
-                        physicalRemotePath: res.physicalRemotePath,
-                        logicalName: link.logicalName.isEmpty ? res.logicalName : link.logicalName,
-                        contentHash: res.contentHash,
-                        fileSize: res.fileSize,
-                        resourceType: res.resourceType,
-                        role: link.role,
-                        slot: link.slot,
-                        crypto: res.crypto
-                    ))
-                }
-                let body = CommitAddAssetBody(
-                    assetFingerprint: asset.assetFingerprint,
-                    creationDateMs: asset.creationDateMs,
-                    backedUpAtMs: asset.backedUpAtMs,
-                    resources: resourcesForOp
-                )
-                ops.append(CommitOp(opSeq: index, clock: clockCursor, body: .addAsset(body)))
-                addAssetClocks[asset.assetFingerprint] = clockCursor
-                clockCursor &+= 1
-            }
-
-            let seq = try await allocator.allocate()
-            let header = CommitHeader(
-                version: CommitHeader.currentVersion,
-                repoID: repoID,
-                writerID: writerID,
-                seq: seq,
-                runID: runID,
-                scope: CommitHeader.monthScope(monthKey),
-                clockMin: clockRange.low,
-                clockMax: clockRange.high,
-                bodyKind: CommitHeader.bodyKindPlain
-            )
-            // Mirror flushV2 / applyTombstones retry: a peer's commit may have advanced
-            // the writer-scoped path; bump seq and retry rather than aborting migration.
-            var migrationAttempt = 0
             let migrationMaxRetries = 4
-            var migrationHeader = header
+            var migrationAttempt = 0
+            var migrationHeader: CommitHeader
+            var ops: [CommitOp]
+            // Retry must re-tick clocks; reusing them with a new seq corrupts LWW ordering.
             while true {
+                let clockRange = try await clock.tickRange(count: snapshot.assets.count)
+                var clockCursor = clockRange.low
+                var pendingOps: [CommitOp] = []
+                pendingOps.reserveCapacity(snapshot.assets.count)
+                for (index, asset) in snapshot.assets.enumerated() {
+                    let links = linksByAssetFP[asset.assetFingerprint] ?? []
+                    var resourcesForOp: [CommitResourceEntry] = []
+                    resourcesForOp.reserveCapacity(links.count)
+                    for link in links {
+                        guard let res = resourcesByHash[link.resourceHash] else {
+                            throw NSError(
+                                domain: "V1MigrationService",
+                                code: -10,
+                                userInfo: [NSLocalizedDescriptionKey:
+                                    "V1 manifest link references missing resource hash \(link.resourceHash.hexString) — migration aborted"]
+                            )
+                        }
+                        resourcesForOp.append(CommitResourceEntry(
+                            physicalRemotePath: res.physicalRemotePath,
+                            logicalName: link.logicalName.isEmpty ? res.logicalName : link.logicalName,
+                            contentHash: res.contentHash,
+                            fileSize: res.fileSize,
+                            resourceType: res.resourceType,
+                            role: link.role,
+                            slot: link.slot,
+                            crypto: res.crypto
+                        ))
+                    }
+                    let body = CommitAddAssetBody(
+                        assetFingerprint: asset.assetFingerprint,
+                        creationDateMs: asset.creationDateMs,
+                        backedUpAtMs: asset.backedUpAtMs,
+                        resources: resourcesForOp
+                    )
+                    pendingOps.append(CommitOp(opSeq: index, clock: clockCursor, body: .addAsset(body)))
+                    clockCursor &+= 1
+                }
+                let seq = try await allocator.allocate()
+                let header = CommitHeader(
+                    version: CommitHeader.currentVersion,
+                    repoID: repoID,
+                    writerID: writerID,
+                    seq: seq,
+                    runID: runID,
+                    scope: CommitHeader.monthScope(monthKey),
+                    clockMin: clockRange.low,
+                    clockMax: clockRange.high,
+                    bodyKind: CommitHeader.bodyKindPlain
+                )
                 do {
-                    _ = try await commitWriter.write(header: migrationHeader, ops: ops, month: monthKey, respectTaskCancellation: false)
+                    _ = try await commitWriter.write(header: header, ops: pendingOps, month: monthKey, respectTaskCancellation: false)
+                    migrationHeader = header
+                    ops = pendingOps
                     break
                 } catch CommitLogWriter.WriteError.alreadyExists {
                     migrationAttempt += 1
                     if migrationAttempt >= migrationMaxRetries { throw CommitLogWriter.WriteError.alreadyExists }
-                    let nextSeq = try await allocator.allocate()
-                    migrationHeader = CommitHeader(
-                        version: migrationHeader.version,
-                        repoID: migrationHeader.repoID,
-                        writerID: migrationHeader.writerID,
-                        seq: nextSeq,
-                        runID: migrationHeader.runID,
-                        scope: migrationHeader.scope,
-                        clockMin: migrationHeader.clockMin,
-                        clockMax: migrationHeader.clockMax,
-                        bodyKind: migrationHeader.bodyKind
-                    )
+                    continue
                 }
             }
 
-            // Snapshot via builder so covered-range invariants match V2 flush.
+            // Record before snapshot write: commit is the durable transition; a later snapshot fail must not strand the V1 manifest for re-import.
+            phase1ScannedMonths.append(scanned)
+
+            let finalSeq = migrationHeader.seq
             var state = RepoMonthState.empty
-            for asset in snapshot.assets {
-                state.assets[asset.assetFingerprint] = SnapshotAssetRow(
-                    assetFingerprint: asset.assetFingerprint,
-                    creationDateMs: asset.creationDateMs,
-                    backedUpAtMs: asset.backedUpAtMs,
-                    resourceCount: asset.resourceCount,
-                    totalFileSizeBytes: asset.totalFileSizeBytes,
-                    stamp: addAssetClocks[asset.assetFingerprint].map {
-                        OpStamp(writerID: writerID, seq: seq, clock: $0)
-                    }
+            for op in ops {
+                guard case .addAsset(let body) = op.body else { continue }
+                let stamp = OpStamp(writerID: writerID, seq: finalSeq, clock: op.clock)
+                let totalSize = body.resources.reduce(Int64(0)) { $0 + $1.fileSize }
+                state.assets[body.assetFingerprint] = SnapshotAssetRow(
+                    assetFingerprint: body.assetFingerprint,
+                    creationDateMs: body.creationDateMs,
+                    backedUpAtMs: body.backedUpAtMs,
+                    resourceCount: body.resources.count,
+                    totalFileSizeBytes: totalSize,
+                    stamp: stamp
                 )
-            }
-            for resource in snapshot.resources {
-                state.resources[resource.physicalRemotePath] = SnapshotResourceRow(
-                    physicalRemotePath: resource.physicalRemotePath,
-                    contentHash: resource.contentHash,
-                    fileSize: resource.fileSize,
-                    resourceType: resource.resourceType,
-                    creationDateMs: resource.creationDateMs,
-                    backedUpAtMs: resource.backedUpAtMs,
-                    crypto: resource.crypto
-                )
-            }
-            for link in snapshot.links {
-                let key = AssetResourceKey(
-                    assetFingerprint: link.assetFingerprint,
-                    role: link.role,
-                    slot: link.slot
-                )
-                state.assetResources[key] = SnapshotAssetResourceRow(
-                    assetFingerprint: link.assetFingerprint,
-                    role: link.role,
-                    slot: link.slot,
-                    resourceHash: link.resourceHash,
-                    logicalName: link.logicalName.isEmpty
-                        ? (resourcesByHash[link.resourceHash]?.logicalName ?? "")
-                        : link.logicalName
-                )
+                for resource in body.resources {
+                    state.resources[resource.physicalRemotePath] = SnapshotResourceRow(
+                        physicalRemotePath: resource.physicalRemotePath,
+                        contentHash: resource.contentHash,
+                        fileSize: resource.fileSize,
+                        resourceType: resource.resourceType,
+                        creationDateMs: body.creationDateMs,
+                        backedUpAtMs: body.backedUpAtMs,
+                        crypto: resource.crypto
+                    )
+                    state.assetResources[
+                        AssetResourceKey(
+                            assetFingerprint: body.assetFingerprint,
+                            role: resource.role,
+                            slot: resource.slot
+                        )
+                    ] = SnapshotAssetResourceRow(
+                        assetFingerprint: body.assetFingerprint,
+                        role: resource.role,
+                        slot: resource.slot,
+                        resourceHash: resource.contentHash,
+                        logicalName: resource.logicalName
+                    )
+                }
             }
             var covered = CoveredRanges()
-            covered.add(writerID: writerID, range: ClosedSeqRange(low: seq, high: seq))
+            covered.add(writerID: writerID, range: ClosedSeqRange(low: finalSeq, high: finalSeq))
             let snapshotHeader = SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(monthKey),
@@ -280,6 +287,20 @@ actor V1MigrationService {
     private func deleteIfPresent(path: String) async throws {
         guard try await client.metadata(path: path) != nil else { return }
         try await client.delete(path: path)
+    }
+
+    /// Idempotent rename so detectV1Manifests stops routing the month as `.v1`.
+    private func quarantineV1ResidueManifest(year: Int, month: Int, sourcePath: String) async throws {
+        let monthRel = String(format: "%04d/%02d", year, month)
+        let residuePath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: monthRel + "/" + Self.residueManifestFileName
+        )
+        if let meta = try await client.metadata(path: residuePath), !meta.isDirectory {
+            try await deleteIfPresent(path: sourcePath)
+            return
+        }
+        try await client.move(from: sourcePath, to: residuePath)
     }
 
     private func writeMigrationMarker(writerID: String) async throws {

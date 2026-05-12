@@ -135,9 +135,10 @@ enum BackupV2RuntimeBuilder {
         // unobserved and our subsequent writes could land below peer ops, breaking LWW.
         let materializer = RepoMaterializer(client: client, basePath: profile.basePath)
         let output = try await materializer.materialize(expectedRepoID: resolvedRepoID)
-        let remoteSeqMax = output.observedSeqByWriter.values.max() ?? 0
-        if remoteSeqMax > initialSeq {
-            try await allocator.observeRemoteMax(remoteSeqMax)
+        // Only our own writer; peer seqs share no namespace and a corrupt UInt64.max would exhaust allocate().
+        let ourRemoteMax = output.observedSeqByWriter[writerID] ?? 0
+        if ourRemoteMax > initialSeq {
+            try await allocator.observeRemoteMax(ourRemoteMax)
         }
         if output.state.observedClock > initialClock {
             try await lamport.observe(output.state.observedClock)

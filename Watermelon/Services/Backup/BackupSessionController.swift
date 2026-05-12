@@ -307,7 +307,7 @@ enum State {
         }
 
         let configuration = resolveRunConfiguration(override: configurationOverride)
-        let startContext = session.prepareForStart(mode: mode)
+        let startContext = session.prepareForStart(mode: mode, configuration: configuration)
         notifyObserversNow()
 
         startCommandTask?.cancel()
@@ -574,23 +574,31 @@ enum State {
         }
 
         let resumeContext = session.prepareForResume()
-        let iCloudPhotoBackupMode = runDriver.activeICloudPhotoBackupMode
-        let workerCountOverride = runDriver.activeWorkerCountOverride
+        // `runDriver.active*` only populates inside startRun; a pause before startRun executed would resume on defaults without this copy.
+        let pendingConfig = session.pendingRunConfiguration
+        let iCloudPhotoBackupMode = pendingConfig?.iCloudPhotoBackupMode ?? runDriver.activeICloudPhotoBackupMode
+        let workerCountOverride = pendingConfig?.workerCountOverride ?? runDriver.activeWorkerCountOverride
         notifyObserversNow()
 
         resumePreparationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                // Authoritative probe before planning — unknown != healthy.
-                try await self.backupCoordinator.refreshPhysicalPresenceForResume(
+                // Stale/unknown presence must not count as healthy.
+                let overlayFresh = try await self.backupCoordinator.refreshPhysicalPresenceForResume(
                     profile: connection.profile,
                     password: connection.password
                 )
                 try Task.checkCancellation()
+                let committedView: PerMonth<Set<Data>>?
+                if await self.backupCoordinator.currentRepoIsV2() == false || !overlayFresh {
+                    committedView = nil
+                } else {
+                    committedView = self.backupCoordinator.backedUpAssetFingerprintsByMonth()
+                }
                 let resumePlan = try await self.resumePlanner.makePlan(
                     pausedMode: resumeContext.pausedMode,
                     completedAssetIDs: self.completedAssetIDsForResume,
-                    alreadyBackedUpFingerprintsByMonth: self.backupCoordinator.backedUpAssetFingerprintsByMonth()
+                    committedAssetFingerprintsByMonth: committedView
                 )
                 try Task.checkCancellation()
 

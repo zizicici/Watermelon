@@ -52,7 +52,7 @@ final class V2MonthSession: BackupMonthStore {
     private var resourcesByPath: [String: RemoteManifestResource]
     private var assetsByFingerprint: [Data: RemoteManifestAsset]
     private var linksByFingerprint: [Data: [RemoteAssetResourceLink]]
-    /// All known physical paths per content hash. `findResourceByHash` returns lex-min.
+    /// `findResourceByHash` returns lex-min over present paths only; missing-path lookup would bind metadata to undownloadable bytes.
     private var pathsByHash: [Data: Set<String>]
     /// Reverse leaf-name index: linear scan was N² per month under prepareUpload.
     private var resourcesByLeafName: [String: RemoteManifestResource] = [:]
@@ -61,6 +61,8 @@ final class V2MonthSession: BackupMonthStore {
     /// Workers push it into `RepoCommittedView.physicallyMissingByMonth` for
     /// cache-wide consumers (Home/download/health/resume).
     private var physicallyMissingHashes: Set<Data>
+    /// Per-path granularity needed when multi-path hashes have only some paths missing.
+    private var physicallyMissingPaths: Set<String>
 
     // Existing remote files from start-of-month directory listing (collision rename input).
     private var remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata]
@@ -114,22 +116,24 @@ final class V2MonthSession: BackupMonthStore {
         self.stepLogger = stepLogger
         self.observedClockAtLoad = observedClockAtLoad
 
-        // Project materialized state into in-memory shape **faithfully**. Earlier
-        // designs filtered out resources whose physical file was missing from the
-        // listing here — that turned into a multi-round bug class because the
-        // filtered state then leaked into snapshot writes, which violated the
-        // covered-range invariant. Now we keep the commit-log truth and stash the
-        // missing-hash set separately for the session-view layer.
+        // Faithful projection; filtering here would leak into snapshot writes and break the covered-range invariant.
         var resourcesByPath: [String: RemoteManifestResource] = [:]
         var pathsByHash: [Data: Set<String>] = [:]
-        var physicallyMissingHashes: Set<Data> = []
-        // Use Unicode-folded collision keys for matching: case-insensitive backends
-        // (most cloud / SMB) report listing names that may differ in case from what
-        // the manifest stored.
-        let existingCollisionKeys = RemoteFileNaming.collisionKeySet(from: existingFileNameSet)
+        var physicallyMissingPaths: Set<String> = []
+        var sizeByCollisionKey: [String: Int64] = [:]
+        for (name, meta) in remoteFilesByName {
+            sizeByCollisionKey[RemoteFileNaming.collisionKey(for: name)] = meta.size
+        }
         for row in materializedState.resources.values {
             let logicalName = (row.physicalRemotePath as NSString).lastPathComponent
-            let isPresent = existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: logicalName))
+            let key = RemoteFileNaming.collisionKey(for: logicalName)
+            // Size mismatch = stale/truncated; treat as missing so the worker re-uploads.
+            let isPresent: Bool
+            if let listedSize = sizeByCollisionKey[key] {
+                isPresent = listedSize == row.fileSize
+            } else {
+                isPresent = false
+            }
             let resource = RemoteManifestResource(
                 year: year,
                 month: month,
@@ -147,21 +151,18 @@ final class V2MonthSession: BackupMonthStore {
             let leaf = (row.physicalRemotePath as NSString).lastPathComponent
             resourcesByLeafName[leaf] = resource
             if !isPresent {
-                physicallyMissingHashes.insert(row.contentHash)
+                physicallyMissingPaths.insert(row.physicalRemotePath)
             }
         }
         self.resourcesByPath = resourcesByPath
         self.pathsByHash = pathsByHash
-        // A hash is missing iff ALL of its known paths are missing — promote to
-        // `physicallyMissingHashes` only when no path is present.
+        self.physicallyMissingPaths = physicallyMissingPaths
+        // Hash missing iff every path missing; overlay consumers use the hash set, in-session lookup uses paths.
         var refinedMissing: Set<Data> = []
-        for hash in physicallyMissingHashes {
-            let paths = pathsByHash[hash] ?? []
-            let anyPresent = paths.contains { path in
-                let leaf = (path as NSString).lastPathComponent
-                return existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: leaf))
+        for (hash, paths) in pathsByHash {
+            if paths.isSubset(of: physicallyMissingPaths) {
+                refinedMissing.insert(hash)
             }
-            if !anyPresent { refinedMissing.insert(hash) }
         }
         self.physicallyMissingHashes = refinedMissing
 
@@ -280,33 +281,34 @@ final class V2MonthSession: BackupMonthStore {
     func isAssetIncomplete(_ fingerprint: Data) -> Bool {
         guard let asset = assetsByFingerprint[fingerprint] else { return false }
         let links = linksByFingerprint[fingerprint] ?? []
-        // Session-view predicate: resource is available iff path exists in our
-        // bookkeeping AND the file is physically present (not in
-        // `physicallyMissingHashes`). The materialized state itself remains
-        // faithful to the commit log; this filter only gates actionability.
-        let missing = physicallyMissingHashes
+        // Filter gates actionability only; materialized state stays faithful to the commit log.
         return MonthManifestStore.isAssetIncomplete(
             links: links,
             isResourceAvailable: { hash in
-                guard pathsByHash[hash]?.isEmpty == false else { return false }
-                return !missing.contains(hash)
+                self.anyPresentPath(forHash: hash) != nil
             },
             assetFingerprint: asset.assetFingerprint
         )
     }
 
     func findResourceByHash(_ contentHash: Data) -> RemoteManifestResource? {
-        guard !physicallyMissingHashes.contains(contentHash) else { return nil }
-        guard let paths = pathsByHash[contentHash], !paths.isEmpty else { return nil }
-        // Lex-min for determinism — restore / HomeAlbumMatching get all paths via
-        // their own multi-path APIs.
-        guard let chosen = paths.min() else { return nil }
+        // Lex-min over all paths would let a missing path shadow a present one and bind metadata to undownloadable bytes.
+        guard let chosen = anyPresentPath(forHash: contentHash) else { return nil }
         return resourcesByPath[chosen]
     }
 
     func findByFileName(_ logicalName: String) -> RemoteManifestResource? {
         assert(!logicalName.contains("/"), "findByFileName takes a leaf, got: \(logicalName)")
-        return resourcesByLeafName[logicalName]
+        guard let resource = resourcesByLeafName[logicalName] else { return nil }
+        if physicallyMissingPaths.contains(resource.physicalRemotePath) { return nil }
+        return resource
+    }
+
+    /// Lex-min of present paths for `hash`; nil if no path's file is on remote.
+    private func anyPresentPath(forHash hash: Data) -> String? {
+        guard let paths = pathsByHash[hash], !paths.isEmpty else { return nil }
+        let present = paths.subtracting(physicallyMissingPaths)
+        return present.min()
     }
 
     func existingFileNames() -> Set<String> {
@@ -357,8 +359,8 @@ final class V2MonthSession: BackupMonthStore {
             existingFileNameSet.insert(resource.logicalName)
             collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: resource.logicalName))
         }
-        // We just wrote this hash to remote → it's no longer missing. Removing
-        // from the set re-enables findResourceByHash for the new content.
+        // Just wrote bytes; clear missing markers so findResourceByHash can re-resolve.
+        physicallyMissingPaths.remove(resource.physicalRemotePath)
         physicallyMissingHashes.remove(resource.contentHash)
         dirty = true
         return resource
@@ -623,13 +625,7 @@ final class V2MonthSession: BackupMonthStore {
         currentSeq: UInt64,
         ignoreCancellation: Bool
     ) async throws {
-        // Build the materialized state we just folded — faithful to commit log,
-        // no listing-based filter. RepoSnapshotBuilder enforces:
-        //   `state == fold(commit ops in covered)`.
-        // Whether resources are physically present on remote is NOT the snapshot
-        // writer's concern; that's session-view (findResourceByHash) territory.
-        // Passing the un-filtered state ensures the next materialize sees the
-        // same truth the commit log encoded — no silent history loss.
+        // Emit un-filtered state; snapshot must satisfy `state == fold(commits in covered)`.
         let snapshotState = currentMaterializedState()
         var covered = materializedCovered.merging(sessionWrittenCovered)
         covered.add(writerID: services.writerID, seq: currentSeq)

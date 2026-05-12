@@ -103,7 +103,16 @@ V2 cutover 后,`MonthManifestStore` 的 V2 路径在 Iter 7 已迁出到 `V2Mont
 
 **当前决定:保留现状直到 Stage 2 compaction 落地。** 锁定语义靠 `WatermelonTests/V2FlushTests.swift`(round-trip flush + tombstone delta)。
 
-## 13. 建议优先级
+## 13. V2 元数据 atomic-create 在 `.overwritePossible` 后端的残留风险
+
+1. SMB/WebDAV 的 `atomicCreate` 走 exists+upload，无真正的 no-overwrite 原语；S3 multipart 同样落到 `.overwritePossible`。`CommitLogWriter` 写最终路径用 atomicCreate + readback verify。`RepoBootstrap.ensureVersionJSON` 已切到 pre-check + `MetadataCreateGate` 暂存路径 + 回读校验，但 staged-move 阶段仍可能在极端窗口被对端 overwrite。
+2. `CommitLogWriter` 写 `(writerID, seq)` 最终路径用 atomicCreate + post-verify。同一 writer 的并发 run 仍可能两次都通过 verify，后写的覆盖前者；写入路径写 writer-unique 物理文件（`~widN`）也只能压低概率，因为同 writer 在同一秒选到的候选名仍可能相同。真修需要 no-overwrite primitive 或 run-unique（runID + attempt counter）终态文件名 + 一致的 manifest 引用。当前作为残留技术债保留。
+3. `RepoBootstrap.ensureRepoJSON` 已从单次 500ms 等待改为 read-stability loop（最长 ~1.5s）；首次写入仍无法用 no-overwrite 原语保证全局唯一 canonical，losing-claim 的 ts 仍留在 claims 目录，未来 winning claim 损坏后 lex-min 可能翻转 canonical。需要 protocol-level 修改（immutable seed / losing-claim adoption），不在本轮范围。
+4. `RemoteFileNaming.preferredRemoteFileName` 已通过 `clampLeafToByteBudget` 把最终文件名（含 `~widN` / `-N` / UUID 后缀和扩展名）压回 255 UTF-8 byte 内；输入超长 sanitized stem 会被按 UTF-8 边界截断再加后缀。极端碰撞导致 UUID escape 时仍由同一预算闸控制。
+5. Physical-presence overlay 仅按 leaf-name 比对，未对照 manifest 的 fileSize；listing 返回的 entry size 与 commit 内 `fileSize` 不一致会被纳入 missing 集合，下次 sync 会真修。被 truncate 但 size 完全没变的损坏（如同尺寸覆盖）仍只能通过深度 verify 抓出。
+6. `BackupMonthFinalizationResult.failed` 仍只携带 `String`，`BackupParallelExecutor` 把它包成通用 NSError 再抛给 `BackupSessionController`；session controller 因此无法区分 inline-download 阶段是 connection-unavailable 还是其它错误。改为携带 typed error / classification 需要同步改 Home `DownloadMonthResult`、`HomeExecutionCoordinator.applyDownloadResult`、Async bridge、BSC 的 reducer，本轮范围太大，暂作残留。前台 connection-unavailable 在 upload 阶段已 abort，仅 inline-download fan-out 阶段会缺分类。
+
+## 14. 建议优先级
 
 1. 优先补 `HomeExecutionCoordinator` / `BackupCoordinator` 的中等粒度集成测试，特别是暂停 / 恢复 / stop / 连接丢失。
 2. 评估为 full run 持久化 pending 集，减少恢复时重扫。

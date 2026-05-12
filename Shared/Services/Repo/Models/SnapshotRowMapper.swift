@@ -128,8 +128,7 @@ enum SnapshotRowMapper {
         // would discard the safety boundary and replay commits that should be considered baked in.
         let normalized = try Self.normalizeCovered(coveredAny)
         let covered = CoveredRanges.decode(normalized)
-        // Empty/missing repoID = legacy snapshot (pre-stamp); materializer accepts.
-        // writerID is still required — collapsing peers' snapshots breaks fold-by-writer.
+        // Empty repoID OK (materializer filters by expectedRepoID); writerID is required to keep peer folds separate.
         let repoID = (dict["repoID"] as? String) ?? ""
         let writerID = try mapValidation { try RepoWireValidator.requireNonEmptyString(dict, "writerID") }
         return SnapshotHeader(

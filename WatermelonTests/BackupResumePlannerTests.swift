@@ -1,15 +1,7 @@
 import XCTest
 @testable import Watermelon
 
-/// `BackupResumePlanner.makePlan` skips assets whose local fingerprint is in the
-/// V2-committed set FOR THE ASSET'S OWN MONTH so resume doesn't re-upload them. The
-/// per-month scoping is load-bearing — a flat set lets two PHAssets in different
-/// months share a fingerprint and silently mark each other as committed.
-///
-/// Per-month dedup requires `PHAsset.creationDate` to derive the asset's month, and
-/// `PHAsset.fetchAssets` returns empty in unit tests. So the unit-test contract is
-/// just: completedAssetIDs filtering + the empty-result early-return paths. The
-/// per-month skip path lives in integration tests where PHAsset is real.
+/// Unit scope stops before PHAsset-derived per-month dedup.
 final class BackupResumePlannerTests: XCTestCase {
     private var tempDBURL: URL!
     private var databaseManager: DatabaseManager!
@@ -66,7 +58,7 @@ final class BackupResumePlannerTests: XCTestCase {
         let plan = try await planner.makePlan(
             pausedMode: .retry(assetIDs: ["a", "b"]),
             completedAssetIDs: [],
-            alreadyBackedUpFingerprintsByMonth: byMonth
+            committedAssetFingerprintsByMonth: byMonth
         )
         guard case .retry(let pending) = plan.resumedExecutionMode else {
             XCTFail("expected .retry, got \(String(describing: plan.resumedExecutionMode))")
@@ -77,18 +69,16 @@ final class BackupResumePlannerTests: XCTestCase {
         XCTAssertEqual(pending, ["a", "b"])
     }
 
-    /// Empty per-month dedup map → all-pass early return (no records lookup, no PHAsset
-    /// fetch). This unit-test path covers both the "no fingerprints provided" case and
-    /// the production fast path when V2 cache is empty.
-    func testRetryMode_emptyByMonth_keepsAllPending() async throws {
+    /// Empty V2 committed view must ignore optimistic reducer completions.
+    func testRetryMode_v2EmptyCommitted_ignoresCompletedAssetIDs() async throws {
         let planner = BackupResumePlanner(
             photoLibraryService: PhotoLibraryService(),
             hashIndexRepository: hashIndex
         )
         let plan = try await planner.makePlan(
             pausedMode: .retry(assetIDs: ["a", "b"]),
-            completedAssetIDs: [],
-            alreadyBackedUpFingerprintsByMonth: PerMonth<Set<Data>>()
+            completedAssetIDs: ["a"],
+            committedAssetFingerprintsByMonth: PerMonth<Set<Data>>()
         )
         guard case .retry(let pending) = plan.resumedExecutionMode else {
             XCTFail("expected .retry, got \(String(describing: plan.resumedExecutionMode))")

@@ -265,7 +265,7 @@ final class LegacyMigrationExecutor {
                 case .alreadyInPlace, .skippedHashExists:
                     resourcesAlreadyInPlace += 1
                 }
-                let logicalLeaf = monthStore.findResourceByHash(component.contentHash)?.logicalName ?? component.originalFilename ?? ""
+                let logicalLeaf = monthStore.findResourceByHash(component.contentHash)?.logicalName ?? component.originalFilename
                 resourceLinks.append(
                     RemoteAssetResourceLink(
                         year: monthStore.year,
@@ -391,13 +391,13 @@ final class LegacyMigrationExecutor {
     }
 
     private func ensureNotV2() async throws {
-        let versionPath = RepoLayout.versionFilePath(base: profile.basePath)
-        let metadata: RemoteStorageEntry?
+        // Shared inspect catches half-initialized V2 (commits/snapshots present, version.json absent) as damagedV2.
+        let inspection: RemoteFormatInspection
         do {
-            metadata = try await client.metadata(path: versionPath)
+            inspection = try await RemoteFormatCompatibilityService()
+                .inspectRemoteFormat(client: client, profile: profile)
         } catch {
-            // Fail-closed: any metadata error (permission, transport) is opaque about V2
-            // presence; refuse rather than write V1 onto an unknown remote.
+            // Fail-closed; any inspect error is opaque about V2 presence.
             throw NSError(
                 domain: "LegacyMigrationExecutor",
                 code: -101,
@@ -405,12 +405,42 @@ final class LegacyMigrationExecutor {
                     "Cannot determine remote format (\(error.localizedDescription)); refusing legacy import."]
             )
         }
-        if let metadata, !metadata.isDirectory {
+        switch inspection {
+        case .v1:
+            return
+        case .fresh:
+            // inspect treats lingering identity claims / `repo.json` as `.fresh`; legacy import has no adoption path.
+            try await refuseIfV2IdentityPresent()
+            return
+        case .v2, .unsupported:
             throw NSError(
                 domain: "LegacyMigrationExecutor",
                 code: -100,
                 userInfo: [NSLocalizedDescriptionKey:
                     "Remote is V2; legacy importer would write V1 manifest invisible to iOS clients. Use the iOS app to import."]
+            )
+        }
+    }
+
+    private func refuseIfV2IdentityPresent() async throws {
+        let bootstrap = RepoBootstrap(client: client, basePath: profile.basePath)
+        let repoID: String?
+        do {
+            repoID = try await bootstrap.loadRepoID()
+        } catch {
+            throw NSError(
+                domain: "LegacyMigrationExecutor",
+                code: -102,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Cannot read remote V2 identity (\(error.localizedDescription)); refusing legacy import."]
+            )
+        }
+        guard repoID == nil else {
+            throw NSError(
+                domain: "LegacyMigrationExecutor",
+                code: -103,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Remote has V2 identity (identity claim or repo.json) from an in-progress bootstrap; legacy importer would write V1 alongside it. Resume the iOS backup to complete bootstrap, then retry."]
             )
         }
     }

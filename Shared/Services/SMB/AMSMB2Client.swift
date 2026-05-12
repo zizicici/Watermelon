@@ -304,15 +304,20 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         let components = normalized.split(separator: "/")
         for component in components {
             runningPath += "/\(component)"
-            if try await exists(path: runningPath) {
-                continue
+            if let existing = try await metadata(path: runningPath) {
+                // exists() can't tell a regular file from a dir; require a real directory or fail.
+                if existing.isDirectory {
+                    continue
+                }
+                throw RemoteStorageClientError.invalidConfiguration
             }
             do {
                 try await manager.createDirectory(atPath: runningPath)
             } catch {
-                if !(try await exists(path: runningPath)) {
-                    throw error
+                if let recheck = try? await metadata(path: runningPath), recheck.isDirectory {
+                    continue
                 }
+                throw error
             }
         }
         #else

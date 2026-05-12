@@ -64,11 +64,15 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     private actor MutableState {
         private var activeRemoteProfileKey: String?
         private var remoteManifestDigests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
+        private var lastInspectedFormatIsV2: Bool?
+        private var lastOverlayFresh: Bool = false
 
         func ensureRemoteContext(profileKey: String) -> Bool {
             guard activeRemoteProfileKey != profileKey else { return false }
             activeRemoteProfileKey = profileKey
             remoteManifestDigests.removeAll()
+            lastInspectedFormatIsV2 = nil
+            lastOverlayFresh = false
             return true
         }
 
@@ -80,9 +84,27 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             remoteManifestDigests = digests
         }
 
+        func setIsV2Repo(_ value: Bool) {
+            lastInspectedFormatIsV2 = value
+        }
+
+        func isV2Repo() -> Bool? {
+            lastInspectedFormatIsV2
+        }
+
+        func setOverlayFresh(_ value: Bool) {
+            lastOverlayFresh = value
+        }
+
+        func overlayFresh() -> Bool {
+            lastOverlayFresh
+        }
+
         func reset() {
             activeRemoteProfileKey = nil
             remoteManifestDigests.removeAll()
+            lastInspectedFormatIsV2 = nil
+            lastOverlayFresh = false
         }
     }
 
@@ -111,7 +133,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         profile: ServerProfileRecord,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
-        preMaterialized: RepoMaterializer.MaterializeOutput? = nil
+        preMaterialized: RepoMaterializer.MaterializeOutput? = nil,
+        expectV2: Bool = false
     ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
@@ -119,7 +142,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 profile: profile,
                 eventStream: eventStream,
                 onSyncProgress: onSyncProgress,
-                preMaterialized: preMaterialized
+                preMaterialized: preMaterialized,
+                expectV2: expectV2
             )
         }
     }
@@ -134,7 +158,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         profile: ServerProfileRecord,
         eventStream: BackupEventStream?,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
-        preMaterialized: RepoMaterializer.MaterializeOutput? = nil
+        preMaterialized: RepoMaterializer.MaterializeOutput? = nil,
+        expectV2: Bool = false
     ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
@@ -149,17 +174,26 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             resetUncommittedV2()
         }
 
-        // Single format gate — sync read path otherwise misses damagedV2 and
-        // future-format repos (no separate isV2Repo probe).
         let inspection = try await RemoteFormatCompatibilityService()
             .inspectRemoteFormat(client: client, profile: profile)
+        let alreadyV2 = await state.isV2Repo() == true
         switch inspection {
         case .unsupported(let minAppVersion):
             throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
         case .v2:
+            await state.setIsV2Repo(true)
             return try await syncIndexV2(client: client, profile: profile, eventStream: eventStream, onSyncProgress: onSyncProgress, syncStart: syncStart, preMaterialized: preMaterialized)
-        case .v1, .fresh:
-            break
+        case .v1:
+            // V1 manifest reappearing after V2 confirmation = legacy peer is writing; refuse stale V2 cache.
+            if alreadyV2 || expectV2 {
+                await state.setOverlayFresh(false)
+                throw BackupCompatibilityError.requiresForegroundMigration
+            }
+            await state.setIsV2Repo(false)
+            await state.setOverlayFresh(false)
+        case .fresh:
+            await state.setIsV2Repo(true)
+            await state.setOverlayFresh(false)
         }
 
         let scanStart = CFAbsoluteTimeGetCurrent()
@@ -303,8 +337,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         // Snapshot overlay before load-clear; on refresh failure stale > empty (empty makes resume skip real-missing).
         let priorOverlay = committedView.physicallyMissingSnapshot()
         committedView.loadFromMaterialize(output)
+        var overlayFresh = false
         do {
-            try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
+            overlayFresh = try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
         } catch is CancellationError {
             // Don't mask cancel as success.
             for (month, hashes) in priorOverlay {
@@ -317,6 +352,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             }
             syncLog.info("[SyncTiming] overlay refresh skipped: \(error.localizedDescription)")
         }
+        await state.setOverlayFresh(overlayFresh)
         committedView.markSynced(Date())
         onSyncProgress?(RemoteSyncProgress(current: output.state.months.count, total: output.state.months.count))
         let digest = committedView.counts()
@@ -488,6 +524,21 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         await state.reset()
     }
 
+    /// `nil` until the first successful inspection; callers must not collapse nil to V1.
+    func currentRepoIsV2() async -> Bool? {
+        await state.isV2Repo()
+    }
+
+    /// Pin V2 when a caller has independently confirmed it, so a non-fatal syncIndex throw can't strand isV2 unset.
+    func markIsV2() async {
+        await state.setIsV2Repo(true)
+    }
+
+    /// True only when the last overlay refresh probed every month successfully; fast-path skip gates on this.
+    func lastSyncOverlayFresh() async -> Bool {
+        await state.overlayFresh()
+    }
+
     /// Returns committed fingerprints grouped by month. Cache + per-month uncommitted
     /// subtraction. Resume planner uses per-asset month to dedup correctly.
     /// Phantom / partially-missing / metadata-only assets are excluded — the resume
@@ -557,18 +608,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         committedView.physicallyMissingHashes(for: month)
     }
 
-    /// Populate the missing-hash overlay for every committed month. Per-month
-    /// best-effort: a single transient list failure logs + skips that month, leaving
-    /// its overlay untouched (next sync re-attempts). Throwing the whole refresh on
-    /// one failed month would wipe overlay state worse than a stale partial.
-    /// Fan-out respects `client.concurrencyMode`: `.serialOnly` (SMB/SFTP) get
-    /// sequential probes regardless of `concurrencyCap`.
+    /// Per-month best-effort; throwing on one failure would wipe overlay worse than a stale partial. Returns true only when every month succeeded.
+    @discardableResult
     func refreshPhysicalPresenceOverlay(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         fallback: [LibraryMonthKey: Set<Data>] = [:],
         concurrencyCap: Int = 4
-    ) async throws {
+    ) async throws -> Bool {
         try Task.checkCancellation()
         let snapshot = committedView.current()
         var resourcesByMonth: [LibraryMonthKey: [RemoteManifestResource]] = [:]
@@ -578,6 +625,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
         let effectiveCap = client.concurrencyMode == .serialOnly ? 1 : concurrencyCap
         var iterator = resourcesByMonth.makeIterator()
+        var anyFailure = false
         try await withThrowingTaskGroup(of: (LibraryMonthKey, Result<Set<Data>, Error>).self) { group in
             for _ in 0..<effectiveCap {
                 guard let (month, resources) = iterator.next() else { break }
@@ -599,15 +647,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 case .success(let missing):
                     committedView.markPhysicallyMissing(month: month, hashes: missing)
                 case .failure(let error):
+                    anyFailure = true
                     if let stale = fallback[month] {
                         committedView.markPhysicallyMissing(month: month, hashes: stale)
-                    } else {
-                        // Cold start: no prior overlay. Mark all hashes missing rather than fail open —
-                        // resume planner re-verifies, worst case re-uploads. Silently treating as healthy
-                        // would skip legit repairs on first sync.
-                        let allHashes = Set(resourcesByMonth[month]?.map(\.contentHash) ?? [])
-                        committedView.markPhysicallyMissing(month: month, hashes: allHashes)
                     }
+                    // Cold-start failure leaves overlay untouched; callers must gate on `anyFailure`.
                     syncLog.info("[SyncTiming] probe failed for \(month.text): \(error.localizedDescription)")
                 }
                 if let (nextMonth, nextResources) = iterator.next() {
@@ -625,6 +669,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 }
             }
         }
+        return !anyFailure
     }
 
     private func probeMonthForMissing(
@@ -638,9 +683,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         let monthAbs = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRel)
         let entries = try await client.list(path: monthAbs)
         try Task.checkCancellation()
-        let presentKeys = Set(entries
-            .filter { !$0.isDirectory }
-            .map { RemoteFileNaming.collisionKey(for: $0.name) })
+        var sizeByKey: [String: Int64] = [:]
+        for entry in entries where !entry.isDirectory {
+            sizeByKey[RemoteFileNaming.collisionKey(for: entry.name)] = entry.size
+        }
         var resourcesByHash: [Data: [RemoteManifestResource]] = [:]
         for resource in resources {
             resourcesByHash[resource.contentHash, default: []].append(resource)
@@ -649,7 +695,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         for (hash, group) in resourcesByHash {
             let anyPresent = group.contains { resource in
                 let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-                return presentKeys.contains(RemoteFileNaming.collisionKey(for: leaf))
+                guard let listedSize = sizeByKey[RemoteFileNaming.collisionKey(for: leaf)] else {
+                    return false
+                }
+                // Size mismatch = stale/truncated; same-size silent corruption needs deeper verify.
+                return listedSize == resource.fileSize
             }
             if !anyPresent { missing.insert(hash) }
         }

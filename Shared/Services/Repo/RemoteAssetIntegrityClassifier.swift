@@ -1,10 +1,6 @@
 import Foundation
 
-/// Single source of truth for "what's wrong with this asset". Verify, download
-/// eligibility, Home album matching, manifest health all consume this — keeps
-/// per-callsite predicates from drifting (which is exactly how Round 11 #8
-/// happened: HomeAlbumMatching's narrower predicate let metadata-only assets
-/// through to restore).
+/// Single source of truth across verify / download / Home album matching / manifest health — keeps per-callsite predicates from drifting.
 enum AssetIntegrityState: Sendable, Equatable {
     case healthy
     case partiallyMissing(missingHashes: [Data])

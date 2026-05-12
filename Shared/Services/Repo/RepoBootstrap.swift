@@ -48,24 +48,31 @@ actor RepoBootstrap {
         try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
         try await client.createDirectory(path: RepoLayout.identityDirectoryPath(base: basePath))
 
-        // Adopt-not-elect: if any claim exists, the canonical is decided. New
-        // writers must inherit it — a new writer with an earlier wall clock
-        // would otherwise flip canonical and orphan all prior commits.
+        // Non-empty self claim might be canonical; only 0-byte is safe to overwrite.
+        try await healZeroByteSelfClaim(writerID: writerID)
+
         let existingCanonical = try await canonicalRepoIDFromClaims()
         let suggested: String
+        let isElectingFresh: Bool
         if let existingCanonical {
             suggested = existingCanonical
+            isElectingFresh = false
         } else if case .found(let legacyID) = try await loadRepoJSONStrict() {
-            // Pre-claims V2 repo: adopt repo.json's id.
             suggested = legacyID
+            isElectingFresh = false
         } else {
             suggested = repoID
+            isElectingFresh = true
         }
 
         let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         try await writeIdentityClaim(repoID: suggested, writerID: writerID, createdAtMs: createdAtMs)
 
-        let canonical = try await canonicalRepoIDFromClaims() ?? suggested
+        var canonical = try await canonicalRepoIDFromClaims() ?? suggested
+        // Re-poll on fresh election; a concurrent first writer could publish a lower lex-min claim right after ours.
+        if isElectingFresh {
+            canonical = try await stabilizeFreshElection(initial: canonical)
+        }
 
         // repo.json is a read-cache; claims/ is authoritative. Log so a silent fail
         // doesn't surface later as "V2 repo missing repo.json".
@@ -96,19 +103,13 @@ actor RepoBootstrap {
 
     private func writeIdentityClaim(repoID: String, writerID: String, createdAtMs: Int64) async throws {
         let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
-        // Idempotent: re-using our first claim's ts keeps lex-min ordering stable.
-        // Metadata errors must throw — `try?` would turn a transient network blip
-        // into "claim doesn't exist", then atomicCreate could overwrite our
-        // existing claim with a fresh ts, flipping canonical.
         if let meta = try await client.metadata(path: claimPath), !meta.isDirectory {
-            // Verify the existing file is ours before early-returning. Corrupt /
-            // partially-synced / externally-edited claim would otherwise stay broken
-            // forever — canonicalRepoIDFromClaims throws on parse failure and we
-            // never get past bootstrap. Self-heal by rewriting.
-            if try await isExistingClaimOurs(claimPath: claimPath, writerID: writerID) {
+            switch try await classifyExistingClaim(claimPath: claimPath, writerID: writerID) {
+            case .ours:
                 return
+            case .zeroByte:
+                try await client.delete(path: claimPath)
             }
-            try await client.delete(path: claimPath)
         }
         let dict: [String: Any] = [
             "v": 1,
@@ -125,33 +126,57 @@ actor RepoBootstrap {
         try await verifyIdentityClaim(repoID: repoID, writerID: writerID, createdAtMs: createdAtMs, claimPath: claimPath, atomicResult: result)
     }
 
-    private func isExistingClaimOurs(claimPath: String, writerID: String) async throws -> Bool {
+    /// Only 0-byte (atomicCreate half-failed) is safe to clear; any other content might be canonical.
+    private func healZeroByteSelfClaim(writerID: String) async throws {
+        let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
+        guard let meta = try await client.metadata(path: claimPath), !meta.isDirectory else { return }
+        if meta.size > 0 { return }
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("self-claim-preflight-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        try await client.download(remotePath: claimPath, localURL: temp)
+        let data = (try? Data(contentsOf: temp)) ?? Data()
+        guard data.isEmpty else { return }
+        try await client.delete(path: claimPath)
+    }
+
+    private func stabilizeFreshElection(initial: String) async throws -> String {
+        var current = initial
+        let maxRounds = 6
+        let interval: Duration = .milliseconds(250)
+        for _ in 0..<maxRounds {
+            try? await Task.sleep(for: interval)
+            let observed = try await canonicalRepoIDFromClaims() ?? current
+            if observed == current { return current }
+            current = observed
+        }
+        return current
+    }
+
+    private enum ExistingClaimClassification {
+        case ours
+        case zeroByte
+    }
+
+    private func classifyExistingClaim(claimPath: String, writerID: String) async throws -> ExistingClaimClassification {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("claim-precheck-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
-        do {
-            try await client.download(remotePath: claimPath, localURL: temp)
-        } catch {
-            // Network/permission errors propagate; we don't want to "self-heal" by
-            // overwriting a perfectly fine claim we just couldn't read.
-            throw error
-        }
+        try await client.download(remotePath: claimPath, localURL: temp)
         let data = (try? Data(contentsOf: temp)) ?? Data()
-        if data.isEmpty {
-            // 0-byte = atomicCreate half-failed; safe to overwrite.
-            return false
-        }
+        if data.isEmpty { return .zeroByte }
         guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let landedWriterID = dict["writer_id"] as? String else {
-            // Non-empty unparseable: could have been canonical — refuse self-heal, require manual cleanup.
+              let landedWriterID = dict["writer_id"] as? String,
+              landedWriterID == writerID,
+              let landedRepoID = dict["repo_id"] as? String, !landedRepoID.isEmpty else {
             throw BootstrapError.ioFailure(NSError(
                 domain: "RepoBootstrap",
                 code: 8,
                 userInfo: [NSLocalizedDescriptionKey:
-                    "claim at \(claimPath) unparseable — refusing to auto-overwrite (delete the file manually if you're sure)"]
+                    "claim at \(claimPath) corrupted or carries a foreign writerID — refusing to auto-overwrite (delete manually if you're sure)"]
             ))
         }
-        return landedWriterID == writerID
+        return .ours
     }
 
     private func verifyIdentityClaim(
@@ -291,9 +316,18 @@ actor RepoBootstrap {
            let ts = (dict["created_at_ms"] as? Int64) ?? (dict["created_at_ms"] as? Int).map(Int64.init) {
             return IdentityClaim(repoID: id, writerID: wid, createdAtMs: ts)
         }
+        // A writerID-shaped filename could have been canonical (lex-min); quarantining would silently flip the adopted repoID.
+        if RepoLayout.isValidWriterID(expectedWriterID) {
+            throw BootstrapError.ioFailure(NSError(
+                domain: "RepoBootstrap",
+                code: 9,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "identity claim \(entryName) unparseable — refusing election to avoid silent canonical flip (inspect/delete manually)"]
+            ))
+        }
         // Quarantine suffix is `.bad.<ts>` (no `.json`) so the next election doesn't
         // re-scan the file, fail-parse again, and re-quarantine in a loop.
-        bootstrapLog.error("[RepoBootstrap] malformed identity claim \(entryName, privacy: .public); quarantining")
+        bootstrapLog.error("[RepoBootstrap] non-claim .json \(entryName, privacy: .public); quarantining")
         let quarantineName = entryName + ".bad.\(Int64(Date().timeIntervalSince1970 * 1000))"
         let quarantinePath = RepoLayout.normalize(joining: [dir, quarantineName])
         try? await client.move(from: path, to: quarantinePath)
@@ -330,6 +364,13 @@ actor RepoBootstrap {
     func ensureVersionJSON(writerID: String) async throws {
         try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
 
+        let versionPath = RepoLayout.versionFilePath(base: basePath)
+        // atomicCreate on .overwritePossible backends would clobber a future-format peer.
+        if let meta = try await client.metadata(path: versionPath), !meta.isDirectory {
+            try await verifyVersionCompatible()
+            return
+        }
+
         let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let versionDict: [String: Any] = [
             "format_version": RepoLayout.formatVersion,
@@ -339,13 +380,12 @@ actor RepoBootstrap {
         ]
         let temp = try makeTempJSON(dict: versionDict, prefix: "repo-version")
         defer { try? FileManager.default.removeItem(at: temp) }
-        let result = try await client.atomicCreate(
+        let result = try await MetadataCreateGate.createWithStagingFallback(
+            client: client,
             localURL: temp,
-            remotePath: RepoLayout.versionFilePath(base: basePath),
+            remotePath: versionPath,
             respectTaskCancellation: false
         )
-        // Race window: a higher-version peer may have written between our inspect and write.
-        // Verify on collision so we don't overlay V2 commits onto a future-format repo.
         switch result {
         case .created:
             return

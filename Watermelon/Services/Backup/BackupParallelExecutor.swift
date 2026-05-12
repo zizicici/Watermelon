@@ -107,7 +107,7 @@ struct BackupParallelExecutor: Sendable {
                 let monthQueue = MonthWorkQueue(months: preparedRun.monthPlans)
 
                 for workerID in 0 ..< preparedRun.workerCount {
-                    group.addTask { [v2Services = preparedRun.v2Services] in
+                    group.addTask { [v2Services = preparedRun.v2Services, fastPathFresh = preparedRun.fastPathFresh] in
                         try await runParallelMonthWorker(
                             workerID: workerID,
                             monthQueue: monthQueue,
@@ -117,7 +117,8 @@ struct BackupParallelExecutor: Sendable {
                             aggregator: aggregator,
                             clientPool: clientPool,
                             onMonthUploaded: onMonthUploaded,
-                            v2Services: v2Services
+                            v2Services: v2Services,
+                            fastPathFresh: fastPathFresh
                         )
                     }
                 }
@@ -170,7 +171,8 @@ struct BackupParallelExecutor: Sendable {
         aggregator: ParallelBackupProgressAggregator,
         clientPool: StorageClientPool,
         onMonthUploaded: BackupMonthFinalizer? = nil,
-        v2Services: BackupV2RuntimeServices? = nil
+        v2Services: BackupV2RuntimeServices? = nil,
+        fastPathFresh: Bool = false
     ) async throws -> WorkerRunState {
         var workerState = WorkerRunState()
         let client: any RemoteStorageClientProtocol
@@ -198,11 +200,9 @@ struct BackupParallelExecutor: Sendable {
                 let monthKey = monthPlan.month
                 let monthAssetIDs = monthPlan.assetLocalIdentifiers
 
-                // Pre-materialize fast-path: sync-time committed view already filtered through
-                // the classifier (partial/phantom/metadata-only/missing excluded). When every
-                // local asset's fingerprint is in there, the month is done — skip the heavy
-                // materializeMonth + LIST that loadOrCreate would run.
+                // Fast-path requires a fresh sync this run; stale cache could skip a month that needs repair.
                 if v2Services != nil,
+                   fastPathFresh,
                    monthAlreadyFullyBackedUpFast(
                        monthAssetIDs: monthAssetIDs,
                        committedFingerprints: remoteIndexService.committedAssetFingerprintsByMonth()[monthKey] ?? []
@@ -232,11 +232,59 @@ struct BackupParallelExecutor: Sendable {
                     if let timingSummary = progressState.timingSummary {
                         eventStream.emitLog(timingSummary, level: .debug)
                     }
-                    eventStream.emit(.monthChanged(MonthChangeEvent(
-                        year: monthKey.year,
-                        month: monthKey.month,
-                        action: .completed
-                    )))
+                    // Defer `.completed` until the finalizer runs the inline download.
+                    if let onMonthUploaded {
+                        switch await onMonthUploaded(monthKey) {
+                        case .success:
+                            eventStream.emit(.monthChanged(MonthChangeEvent(
+                                year: monthKey.year,
+                                month: monthKey.month,
+                                action: .completed
+                            )))
+                        case .downloadIncomplete(let message):
+                            eventStream.emitLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.finalizationFailed"),
+                                    workerID + 1,
+                                    monthKey.text,
+                                    message
+                                ),
+                                level: .warning
+                            )
+                        case .failed(let message):
+                            eventStream.emitLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.finalizationFailed"),
+                                    workerID + 1,
+                                    monthKey.text,
+                                    message
+                                ),
+                                level: .error
+                            )
+                            throw NSError(
+                                domain: "BackupParallelExecutor",
+                                code: -201,
+                                userInfo: [NSLocalizedDescriptionKey: "onMonthUploaded failed: \(message)"]
+                            )
+                        case .cancelled:
+                            workerState.paused = true
+                            eventStream.emitLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.finalizationCancelled"),
+                                    workerID + 1,
+                                    monthKey.text
+                                ),
+                                level: .info
+                            )
+                        }
+                        if workerState.paused { break }
+                    } else {
+                        eventStream.emit(.monthChanged(MonthChangeEvent(
+                            year: monthKey.year,
+                            month: monthKey.month,
+                            action: .completed
+                        )))
+                    }
                     continue
                 }
 
@@ -591,6 +639,17 @@ struct BackupParallelExecutor: Sendable {
                                 switch await onMonthUploaded(monthKey) {
                                 case .success:
                                     emitCompleted()
+                                case .downloadIncomplete(let message):
+                                    // Upload OK, only the inline download skipped items; Home already marks the month failed.
+                                    eventStream.emitLog(
+                                        String.localizedStringWithFormat(
+                                            String(localized: "backup.parallel.finalizationFailed"),
+                                            workerID + 1,
+                                            monthKey.text,
+                                            message
+                                        ),
+                                        level: .warning
+                                    )
                                 case .failed(let message):
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(
@@ -601,9 +660,7 @@ struct BackupParallelExecutor: Sendable {
                                         ),
                                         level: .error
                                     )
-                                    // Mark fatal so the month-loop throws at end. Without this the
-                                    // worker silently completes and finished event reports success
-                                    // while Home/onMonthUploaded already knows the month failed.
+                                    // Surface as fatal so Home and the worker agree the month failed.
                                     monthFatalError = NSError(
                                         domain: "BackupParallelExecutor",
                                         code: -201,

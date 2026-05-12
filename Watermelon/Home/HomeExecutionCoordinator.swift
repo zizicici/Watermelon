@@ -696,12 +696,14 @@ final class HomeExecutionCoordinator {
             if Task.isCancelled { return .cancelled }
         }
 
+        var verifyCleanedRemote = false
         do {
             try await dependencies.backupCoordinator.verifyMonth(
                 profile: context.profile,
                 password: context.password,
                 month: month
             )
+            verifyCleanedRemote = true
         } catch is CancellationError {
             return .cancelled
         } catch {
@@ -712,6 +714,12 @@ final class HomeExecutionCoordinator {
             ))
         }
         if Task.isCancelled { return .cancelled }
+
+        // Verify may have tombstoned rows; republish before reading remote-only items.
+        if verifyCleanedRemote {
+            _ = await dataRefresher.syncRemoteDataAndWait()
+            if Task.isCancelled { return .cancelled }
+        }
 
         let remoteItems = await dataAccess.remoteOnlyItems(month)
         appendDebugLog(String(format: String(localized: "home.execution.log.pendingDownload"), month.displayText, remoteItems.count))
@@ -741,10 +749,8 @@ final class HomeExecutionCoordinator {
                 appendWarningLog(reason)
                 refreshTerminalStatus(notifyState: false)
                 notifyStateChanged()
-                // Mirror the session-side failure to the executor so the run reports
-                // the right outcome — returning .success here would tell the executor
-                // "month is done, move on" while Home shows it as failed.
-                return .failed(reason)
+                // Don't abort the whole upload phase for an informational skip.
+                return .downloadIncomplete(reason)
             }
             session.completeDownloadMonth(month)
             appendInfoLog(String(format: String(localized: "home.execution.log.downloadDone"), phaseLabel, month.displayText))
