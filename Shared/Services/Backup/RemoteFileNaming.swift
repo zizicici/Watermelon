@@ -165,7 +165,12 @@ enum RemoteFileNaming {
             )
         } catch {
             assertionFailure(error.localizedDescription)
-            return emergencyFallbackName(baseName: baseName, writerID: writerID, forceWriterIDSuffix: forceWriterIDSuffix)
+            return emergencyFallbackName(
+                baseName: baseName,
+                writerID: writerID,
+                forceWriterIDSuffix: forceWriterIDSuffix,
+                collisionKeys: collisionKeySet(from: occupiedNames)
+            )
         }
     }
 
@@ -198,7 +203,12 @@ enum RemoteFileNaming {
             )
         } catch {
             assertionFailure(error.localizedDescription)
-            return emergencyFallbackName(baseName: baseName, writerID: writerID, forceWriterIDSuffix: forceWriterIDSuffix)
+            return emergencyFallbackName(
+                baseName: baseName,
+                writerID: writerID,
+                forceWriterIDSuffix: forceWriterIDSuffix,
+                collisionKeys: collisionKeys
+            )
         }
     }
 
@@ -307,18 +317,31 @@ enum RemoteFileNaming {
         return nil
     }
 
-    private static func emergencyFallbackName(baseName: String, writerID: String?, forceWriterIDSuffix: Bool) -> String {
+    private static func emergencyFallbackName(
+        baseName: String,
+        writerID: String?,
+        forceWriterIDSuffix: Bool,
+        collisionKeys: Set<String>
+    ) -> String {
         let nsName = baseName as NSString
         let ext = nsName.pathExtension
         let stem = nsName.deletingPathExtension
-        let token = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
-        if forceWriterIDSuffix, let writerID {
-            return writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: token)
-        }
         let extPortion = ext.isEmpty ? "" : "." + ext
         let extBudget = clampStringToBytes(extPortion, maxBytes: maxLeafByteBudget / 2)
-        let stemBudget = max(maxLeafByteBudget - token.utf8.count - 1 - extBudget.utf8.count, 1)
-        return clampStringToBytes(stem, maxBytes: stemBudget) + "_" + token + extBudget
+        for _ in 0..<64 {
+            let token = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            let candidate: String
+            if forceWriterIDSuffix, let writerID {
+                candidate = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: token)
+            } else {
+                let stemBudget = max(maxLeafByteBudget - token.utf8.count - 1 - extBudget.utf8.count, 1)
+                candidate = clampStringToBytes(stem, maxBytes: stemBudget) + "_" + token + extBudget
+            }
+            if !collisionKeys.contains(collisionKey(for: candidate)) {
+                return candidate
+            }
+        }
+        preconditionFailure("RemoteFileNaming exhausted verified emergency fallback")
     }
 
     static func collisionKeySet(from fileNames: Set<String>) -> Set<String> {

@@ -309,7 +309,6 @@ final class V2MonthSession: BackupMonthStore {
     }
 
     func findByFileName(_ logicalName: String) -> RemoteManifestResource? {
-        assert(!logicalName.contains("/"), "findByFileName takes a leaf name, got: \(logicalName)")
         let leafName = logicalName
             .split(separator: "/", omittingEmptySubsequences: true)
             .last
@@ -473,6 +472,7 @@ final class V2MonthSession: BackupMonthStore {
         }
 
         // Per-flush basis (not session-constant): tombstones must reflect our own intra-session adds, else replay would suppress them.
+        pendingSnapshotRetrySeq = nil
         let priorCovered = materializedCovered.merging(sessionWrittenCovered)
         var perWriterMaxSeq: [String: UInt64] = [:]
         for (writer, ranges) in priorCovered.rangesByWriter {

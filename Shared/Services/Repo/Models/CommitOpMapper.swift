@@ -47,7 +47,7 @@ enum CommitOpMapper {
                     "lamportWatermark": basis.lamportWatermark
                 ]
                 if !basis.perWriterMaxSeq.isEmpty {
-                    basisDict["perWriterMaxSeq"] = basis.perWriterMaxSeq
+                    basisDict["perWriterMaxSeq"] = basis.perWriterMaxSeq.mapValues { Int64(bitPattern: $0) }
                 }
                 dict["observedBasis"] = basisDict
             }

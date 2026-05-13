@@ -275,6 +275,31 @@ final actor S3Client: RemoteStorageClientProtocol {
         _ = try await performTransfer(request, fromFile: localURL)
     }
 
+    private func singlePartCreateIfAbsent(localURL: URL, key: String, size: Int64) async throws -> AtomicCreateResult {
+        if size > Self.singlePartMaxSize {
+            throw Self.internalError("File exceeds 5 GiB single-part limit")
+        }
+        let url = try makeURL(key: key, query: [])
+        let request = signedRequest(
+            method: "PUT",
+            url: url,
+            additionalHeaders: [
+                "Content-Type": "application/octet-stream",
+                "If-None-Match": "*"
+            ],
+            bodyHash: .unsigned
+        )
+        do {
+            _ = try await performTransfer(request, fromFile: localURL)
+            return .created
+        } catch {
+            if Self.isPreconditionFailed(error) {
+                return .alreadyExists
+            }
+            throw error
+        }
+    }
+
     typealias PartUploader = @Sendable (_ uploadId: String, _ partNumber: Int, _ offset: Int64, _ length: Int64) async throws -> UploadedPart
 
     private func runMultipartTransfer(
@@ -468,25 +493,7 @@ final actor S3Client: RemoteStorageClientProtocol {
             try await multipartUpload(localURL: localURL, key: key, size: size, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
             return .bestEffortRetry
         }
-        let url = try makeURL(key: key, query: [])
-        let request = signedRequest(
-            method: "PUT",
-            url: url,
-            additionalHeaders: [
-                "Content-Type": "application/octet-stream",
-                "If-None-Match": "*"
-            ],
-            bodyHash: .unsigned
-        )
-        do {
-            _ = try await performTransfer(request, fromFile: localURL)
-            return .created
-        } catch {
-            if Self.isPreconditionFailed(error) {
-                return .alreadyExists
-            }
-            throw error
-        }
+        return try await singlePartCreateIfAbsent(localURL: localURL, key: key, size: size)
     }
 
     nonisolated private static func isPreconditionFailed(_ error: Error) -> Bool {
@@ -542,6 +549,36 @@ final actor S3Client: RemoteStorageClientProtocol {
     func move(from sourcePath: String, to destinationPath: String) async throws {
         try await copy(from: sourcePath, to: destinationPath)
         try await delete(path: sourcePath)
+    }
+
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        let sourceKey = key(forPath: sourcePath)
+        let destinationKey = key(forPath: destinationPath)
+        if sourceKey.isEmpty || destinationKey.isEmpty {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+
+        if try await metadata(path: destinationPath) != nil {
+            return .alreadyExists
+        }
+
+        if let sourceMeta = try await metadata(path: sourcePath),
+           sourceMeta.size > Self.singlePartMaxSize {
+            throw Self.internalError("S3 moveIfAbsent is unsupported for objects larger than 5 GiB")
+        }
+
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("s3-move-if-absent-\(UUID().uuidString).tmp")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        try await download(remotePath: sourcePath, localURL: tempURL)
+        let size = try fileSize(at: tempURL)
+        let result = try await singlePartCreateIfAbsent(localURL: tempURL, key: destinationKey, size: size)
+        guard case .created = result else {
+            return result
+        }
+        try await delete(path: sourcePath)
+        return .created
     }
 
     func copy(from sourcePath: String, to destinationPath: String) async throws {

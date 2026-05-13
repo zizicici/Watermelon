@@ -155,6 +155,9 @@ actor RemoteFormatCompatibilityService {
                         return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: cleanup.writerID)
                     }
                     if let stale = markerStates.first {
+                        if stale.phase == .phase1 {
+                            return .v2WithV1Manifests(formatVersion: formatVersion)
+                        }
                         return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: stale.writerID)
                     }
                     return .v2(formatVersion: formatVersion)

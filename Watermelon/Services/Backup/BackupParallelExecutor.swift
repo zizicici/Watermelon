@@ -563,7 +563,6 @@ struct BackupParallelExecutor: Sendable {
                                         ),
                                         level: .warning
                                     )
-                                    emitCompleted()
                                 case .failed(let message):
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(

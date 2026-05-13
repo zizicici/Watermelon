@@ -16,6 +16,7 @@ actor V1MigrationService {
     }
 
     static let residueManifestFileName = ".watermelon_manifest.legacy-residue.sqlite"
+    private static let partialMigrationMarkerFileName = ".watermelon_manifest.legacy-partial-migration.json"
 
     enum MigrationPhase: Int, Sendable {
         case phase1 = 1
@@ -151,19 +152,46 @@ actor V1MigrationService {
                 }
                 migrableAssets.append((asset, resourcesForOp))
             }
-            if let firstSkipped = skippedAssetFailures.first {
-                throw NSError(
-                    domain: "V1MigrationService",
-                    code: -31,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: "V1 manifest \(scanned.year)-\(scanned.month) has \(skippedAssetFailures.count) asset integrity issue(s); leaving source manifest in place: \(firstSkipped)"
-                    ]
-                )
+            if !migrableAssets.isEmpty {
+                let existing = try await RepoMaterializer(client: client, basePath: basePath)
+                    .materializeMonth(monthKey, expectedRepoID: repoID)
+                let existingFingerprints: Set<Data>
+                if let existingAssets = existing.state.months[monthKey]?.assets {
+                    existingFingerprints = Set(existingAssets.keys)
+                } else {
+                    existingFingerprints = []
+                }
+                if !existingFingerprints.isEmpty {
+                    migrableAssets.removeAll { existingFingerprints.contains($0.asset.assetFingerprint) }
+                }
             }
             if migrableAssets.isEmpty {
-                v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) has no migrable assets; quarantining as legacy residue")
+                if let firstSkipped = skippedAssetFailures.first {
+                    v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) has \(skippedAssetFailures.count, privacy: .public) asset integrity issue(s) and no migrable assets; quarantining as legacy residue: \(firstSkipped, privacy: .public)")
+                    try await writePartialMigrationMarker(
+                        year: scanned.year,
+                        month: scanned.month,
+                        runID: runID,
+                        migratedAssetCount: 0,
+                        totalAssetCount: snapshot.assets.count,
+                        failures: skippedAssetFailures
+                    )
+                } else {
+                    v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) has no migrable assets; quarantining as legacy residue")
+                }
                 try await quarantineV1ResidueManifest(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
                 continue
+            }
+            if let firstSkipped = skippedAssetFailures.first {
+                v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) migrating \(migrableAssets.count, privacy: .public) asset(s) and leaving \(skippedAssetFailures.count, privacy: .public) non-migrable asset(s) in residue: \(firstSkipped, privacy: .public)")
+                try await writePartialMigrationMarker(
+                    year: scanned.year,
+                    month: scanned.month,
+                    runID: runID,
+                    migratedAssetCount: migrableAssets.count,
+                    totalAssetCount: snapshot.assets.count,
+                    failures: skippedAssetFailures
+                )
             }
             let migrationMaxRetries = 4
             var migrationAttempt = 0
@@ -276,7 +304,7 @@ actor V1MigrationService {
                 month: monthKey,
                 lamport: lamport,
                 runID: runID,
-                respectTaskCancellation: false
+                respectTaskCancellation: true
             )
             processed += 1
         }
@@ -349,7 +377,9 @@ actor V1MigrationService {
                     if isStorageNotFoundError(error) { continue }
                     throw error
                 }
+                let hasPartialMigrationMarker = files.contains { !$0.isDirectory && $0.name == Self.partialMigrationMarkerFileName }
                 for file in files where !file.isDirectory && Self.isResidueManifestName(file.name) {
+                    if hasPartialMigrationMarker { continue }
                     try await deleteIfPresent(path: file.path)
                 }
             }
@@ -452,7 +482,48 @@ actor V1MigrationService {
         name == residueManifestFileName || name.hasPrefix(residueManifestFileName + ".")
     }
 
+    private func writePartialMigrationMarker(
+        year: Int,
+        month: Int,
+        runID: String,
+        migratedAssetCount: Int,
+        totalAssetCount: Int,
+        failures: [String]
+    ) async throws {
+        let monthRel = String(format: "%04d/%02d", year, month)
+        let markerPath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: monthRel + "/" + Self.partialMigrationMarkerFileName
+        )
+        let dict: [String: Any] = [
+            "v": 1,
+            "run_id": runID,
+            "year": year,
+            "month": month,
+            "total_asset_count": totalAssetCount,
+            "migrated_asset_count": migratedAssetCount,
+            "skipped_asset_count": failures.count,
+            "failures": failures
+        ]
+        let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("v1-partial-migration-\(UUID().uuidString).json")
+        try data.write(to: temp, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        _ = try await MetadataCreateGate.createWithStagingFallback(
+            client: client,
+            localURL: temp,
+            remotePath: markerPath,
+            respectTaskCancellation: false
+        )
+    }
+
     private func remoteFilesEqual(_ lhsPath: String, _ rhsPath: String) async throws -> Bool {
+        guard let lhsMeta = try await metadataIfPresent(path: lhsPath), !lhsMeta.isDirectory,
+              let rhsMeta = try await metadataIfPresent(path: rhsPath), !rhsMeta.isDirectory,
+              lhsMeta.size == rhsMeta.size else {
+            return false
+        }
         let lhsURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("v1-residue-compare-\(UUID().uuidString)-lhs.sqlite")
         let rhsURL = FileManager.default.temporaryDirectory
@@ -461,16 +532,38 @@ actor V1MigrationService {
             try? FileManager.default.removeItem(at: lhsURL)
             try? FileManager.default.removeItem(at: rhsURL)
         }
-        try await client.download(remotePath: lhsPath, localURL: lhsURL)
-        try await client.download(remotePath: rhsPath, localURL: rhsURL)
-        let lhsAttributes = try FileManager.default.attributesOfItem(atPath: lhsURL.path)
-        let rhsAttributes = try FileManager.default.attributesOfItem(atPath: rhsURL.path)
-        let lhsSize = (lhsAttributes[.size] as? NSNumber)?.int64Value
-        let rhsSize = (rhsAttributes[.size] as? NSNumber)?.int64Value
-        guard lhsSize == rhsSize else { return false }
-        let lhsData = try Data(contentsOf: lhsURL)
-        let rhsData = try Data(contentsOf: rhsURL)
-        return lhsData == rhsData
+        do {
+            try await client.download(remotePath: lhsPath, localURL: lhsURL)
+            try await client.download(remotePath: rhsPath, localURL: rhsURL)
+        } catch {
+            if isStorageNotFoundError(error) { return false }
+            throw error
+        }
+        do {
+            return try localFilesEqual(lhsURL, rhsURL, expectedSize: lhsMeta.size)
+        } catch {
+            return false
+        }
+    }
+
+    private func localFilesEqual(_ lhsURL: URL, _ rhsURL: URL, expectedSize: Int64) throws -> Bool {
+        let lhsSize = try FileManager.default.attributesOfItem(atPath: lhsURL.path)[.size] as? Int64
+        let rhsSize = try FileManager.default.attributesOfItem(atPath: rhsURL.path)[.size] as? Int64
+        guard lhsSize == expectedSize, rhsSize == expectedSize else { return false }
+
+        let lhs = try FileHandle(forReadingFrom: lhsURL)
+        defer { try? lhs.close() }
+        let rhs = try FileHandle(forReadingFrom: rhsURL)
+        defer { try? rhs.close() }
+
+        let chunkSize = 64 * 1024
+        while true {
+            try Task.checkCancellation()
+            let lhsChunk = try lhs.read(upToCount: chunkSize) ?? Data()
+            let rhsChunk = try rhs.read(upToCount: chunkSize) ?? Data()
+            if lhsChunk != rhsChunk { return false }
+            if lhsChunk.isEmpty { return true }
+        }
     }
 
     private func writeMigrationMarker(writerID: String, phase: MigrationPhase, runID: String) async throws {
@@ -478,7 +571,7 @@ actor V1MigrationService {
         let path = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         var startedAtMs = nowMs
-        let existingMeta = try? await client.metadata(path: path)
+        let existingMeta = try await metadataIfPresent(path: path)
         if let meta = existingMeta, !meta.isDirectory {
             let temp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("migration-marker-existing-\(UUID().uuidString).json")

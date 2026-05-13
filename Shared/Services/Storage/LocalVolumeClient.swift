@@ -422,6 +422,27 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         }
     }
 
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        let root = try requireRootURL()
+        do {
+            let sourceURL = try remoteFileURL(forRemotePath: sourcePath, rootURL: root)
+            let destinationURL = try remoteFileURL(forRemotePath: destinationPath, rootURL: root)
+            let destinationParent = destinationURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: destinationParent, withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+            return .created
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileWriteFileExistsError {
+                return .alreadyExists
+            }
+            if nsError.domain == NSPOSIXErrorDomain && nsError.code == EEXIST {
+                return .alreadyExists
+            }
+            throw mapStorageError(error)
+        }
+    }
+
     func copy(from sourcePath: String, to destinationPath: String) async throws {
         let root = try requireRootURL()
         do {

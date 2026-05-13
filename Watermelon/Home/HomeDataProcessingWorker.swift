@@ -147,10 +147,6 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     }
 
     func loadLocalIndex(forceReload: Bool, scope: HomeLocalLibraryScope) async -> HomeDataLoadResult {
-        if !forceReload, processingQueue.sync(execute: { localIndex.hasLoadedIndex && loadedScope == scope }) {
-            return HomeDataLoadResult(didReload: false, changedMonths: [], isAuthorized: true)
-        }
-
         let status = photoLibraryService.authorizationStatus()
         let authorized = (status == .authorized || status == .limited)
 
@@ -166,6 +162,10 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 }
             }
             return HomeDataLoadResult(didReload: true, changedMonths: changedMonths, isAuthorized: false)
+        }
+
+        if !forceReload, processingQueue.sync(execute: { localIndex.hasLoadedIndex && loadedScope == scope }) {
+            return HomeDataLoadResult(didReload: false, changedMonths: [], isAuthorized: true)
         }
 
         let changedMonths = await withCheckedContinuation { continuation in

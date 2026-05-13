@@ -26,6 +26,7 @@ final class ProfileReachabilityService: @unchecked Sendable {
 
     private static let throttleWindow: TimeInterval = 5
     private static let probeTimeout: TimeInterval = 3
+    private static let stateQueueKey = DispatchSpecificKey<Bool>()
 
     /// URLSession.shared's session-level timeout (60s default) wins over request-level
     /// during TLS / SYN-ACK wait; dedicated ephemeral session bounds probes to probeTimeout.
@@ -52,12 +53,23 @@ final class ProfileReachabilityService: @unchecked Sendable {
 
     var onChange: (@MainActor () -> Void)?
 
+    init() {
+        stateQueue.setSpecific(key: Self.stateQueueKey, value: true)
+    }
+
     func start() {
         // NWPathMonitor.start traps on second call; guard sync.
-        let alreadyStarted = stateQueue.sync { () -> Bool in
+        let alreadyStarted: Bool
+        if DispatchQueue.getSpecific(key: Self.stateQueueKey) == true {
             let was = started
             started = true
-            return was
+            alreadyStarted = was
+        } else {
+            alreadyStarted = stateQueue.sync { () -> Bool in
+                let was = started
+                started = true
+                return was
+            }
         }
         guard !alreadyStarted else { return }
         pathMonitor.pathUpdateHandler = { [weak self] _ in

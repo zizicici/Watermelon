@@ -67,12 +67,17 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
         private func release(id: UUID) {
             registeredIDs.remove(id)
-            if !waiters.isEmpty {
+            while !waiters.isEmpty {
                 let next = waiters.removeFirst()
+                if consumePreCancelled(next.0) {
+                    registeredIDs.remove(next.0)
+                    next.1.resume(throwing: CancellationError())
+                    continue
+                }
                 next.1.resume(returning: ())
-            } else {
-                isLocked = false
+                return
             }
+            isLocked = false
         }
 
         func withLock<T>(_ operation: () async throws -> T) async throws -> T {
@@ -316,11 +321,18 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
         syncLog.info("[SyncTiming] changedMonths: \(changedMonths.count), removedMonths: \(removedMonths.count)")
 
-        var appliedChangedMonths = 0
-        var appliedRemovedMonths = 0
+        var stagedChangedMonths: [
+            LibraryMonthKey: (
+                resources: [RemoteManifestResource],
+                assets: [RemoteManifestAsset],
+                links: [RemoteAssetResourceLink]
+            )
+        ] = [:]
+        var stagedMissingMonths = Set<LibraryMonthKey>()
         var processedMonthCount = 0
 
         for month in changedMonths.sorted() {
+            try Task.checkCancellation()
             let monthStart = CFAbsoluteTimeGetCurrent()
             guard let store = try await MonthManifestStore.loadManifestDirect(
                 client: client,
@@ -328,7 +340,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 year: month.year,
                 month: month.month
             ) else {
-                _ = committedView.removeMonth(month)
+                stagedMissingMonths.insert(month)
                 effectiveRemoteDigests.removeValue(forKey: month)
                 processedMonthCount += 1
                 onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
@@ -338,6 +350,25 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
             let processStart = CFAbsoluteTimeGetCurrent()
             let snapshot = store.unsortedSnapshot()
+            stagedChangedMonths[month] = (snapshot.resources, snapshot.assets, snapshot.links)
+            processedMonthCount += 1
+            onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
+            let processElapsed = CFAbsoluteTimeGetCurrent() - processStart
+            syncLog.info(
+                "[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(snapshot.assets.count), resources=\(snapshot.resources.count), links=\(snapshot.links.count)"
+            )
+        }
+
+        try Task.checkCancellation()
+        var appliedChangedMonths = 0
+        var appliedRemovedMonths = 0
+        for month in stagedMissingMonths.sorted() {
+            if committedView.removeMonth(month) {
+                appliedChangedMonths += 1
+            }
+        }
+        for month in stagedChangedMonths.keys.sorted() {
+            guard let snapshot = stagedChangedMonths[month] else { continue }
             if committedView.replaceMonth(
                 month,
                 resources: snapshot.resources,
@@ -346,12 +377,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             ) {
                 appliedChangedMonths += 1
             }
-            processedMonthCount += 1
-            onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
-            let processElapsed = CFAbsoluteTimeGetCurrent() - processStart
-            syncLog.info(
-                "[SyncTiming] Month \(month.text): download=\(Self.ms(downloadElapsed))s, process=\(Self.ms(processElapsed))s, assets=\(snapshot.assets.count), resources=\(snapshot.resources.count), links=\(snapshot.links.count)"
-            )
         }
 
         for month in removedMonths.sorted() {
@@ -819,7 +844,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         for resource in resources {
             resourcesByHash[resource.contentHash, default: []].append(resource)
         }
-        let smallLimit = RemoteContentTrust.defaultSmallFileLimitBytes
+        let smallLimit = RemoteContentTrust.overlayProbeSmallFileLimitBytes
         var missing: Set<Data> = []
         for (hash, group) in resourcesByHash {
             var anyPresent = false

@@ -80,6 +80,8 @@ final class LegacyMigrationExecutor {
                     year: plan.month.year,
                     month: plan.month.month
                 )
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 totals.bundlesFailed += plan.bundles.count
                 totals.bundlesProcessed += plan.bundles.count
@@ -91,7 +93,7 @@ final class LegacyMigrationExecutor {
 
             for bundle in plan.bundles {
                 try Task.checkCancellation()
-                let outcome = await processBundleWithRetry(
+                let outcome = try await processBundleWithRetry(
                     bundle: bundle,
                     monthStore: store,
                     options: options,
@@ -140,14 +142,10 @@ final class LegacyMigrationExecutor {
         options: LegacyMigrationOptions,
         totals: inout LegacyImportTotals,
         emit: @Sendable (LegacyImportEvent) -> Void
-    ) async -> LegacyImportBundleOutcome {
+    ) async throws -> LegacyImportBundleOutcome {
         for attempt in 0..<Self.maxRetryAttempts {
-            if Task.isCancelled {
-                totals.bundlesProcessed += 1
-                totals.bundlesFailed += 1
-                return .failed(reason: "cancelled")
-            }
-            let attemptResult = await processBundle(
+            try Task.checkCancellation()
+            let attemptResult = try await processBundle(
                 bundle: bundle,
                 monthStore: monthStore,
                 options: options
@@ -174,7 +172,7 @@ final class LegacyMigrationExecutor {
                 if shouldRetry {
                     let delay = Self.retryBackoffSchedule[attempt]
                     emit(.logMessage("transient error: retrying in \(delay / 1_000_000_000)s"))
-                    try? await Task.sleep(nanoseconds: delay)
+                    try await Task.sleep(nanoseconds: delay)
                     continue
                 }
                 totals.bundlesProcessed += 1
@@ -203,7 +201,7 @@ final class LegacyMigrationExecutor {
         bundle: LegacyAssetBundle,
         monthStore: MonthManifestStore,
         options: LegacyMigrationOptions
-    ) async -> BundleAttemptResult {
+    ) async throws -> BundleAttemptResult {
         // Honor scan-time perceptual decision: dHash data isn't in the manifest, so executor
         // can't re-derive it cheaply. Trust the scan classification.
         if case .skipPerceptualDuplicate = bundle.action {
@@ -278,7 +276,7 @@ final class LegacyMigrationExecutor {
                     )
                 )
             } catch is CancellationError {
-                return BundleAttemptResult(outcome: .failed(reason: "cancelled"), error: nil)
+                throw CancellationError()
             } catch {
                 return BundleAttemptResult(outcome: .failed(reason: error.localizedDescription), error: error)
             }

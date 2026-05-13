@@ -5,6 +5,11 @@ actor RepoVerifyMonthService {
     private let basePath: String
     private let expectedRepoID: String?
 
+    private struct TombstonePlan {
+        let tombstones: [(item: VerifyMonthReportItem, reason: CommitTombstoneBody.Reason)]
+        let perWriterMaxSeq: [String: UInt64]
+    }
+
     init(client: any RemoteStorageClientProtocol, basePath: String, expectedRepoID: String? = nil) {
         self.client = client
         self.basePath = basePath
@@ -168,65 +173,70 @@ actor RepoVerifyMonthService {
         let eligible = cleanupItems.filter { $0.allowsCleanup }
         guard !eligible.isEmpty else { return [] }
 
-        // Re-classify against a fresh materialize so a peer's heal between verify and apply lands as "no longer eligible".
         let materializer = RepoMaterializer(client: client, basePath: basePath)
-        let fresh = try await materializer.materializeMonth(month, expectedRepoID: expectedRepoID)
-        let monthState = fresh.state.months[month] ?? .empty
-        // tickRange must produce clocks above any peer op we just observed; advance lamport before allocating.
-        try await services.lamport.observe(fresh.state.observedClock)
-        var freshLinksByFP: [Data: [SnapshotAssetResourceRow]] = [:]
-        for ar in monthState.assetResources.values {
-            freshLinksByFP[ar.assetFingerprint, default: []].append(ar)
-        }
 
-        let isResourceAvailable = try await materializedPresencePredicate(month: month, state: monthState)
-
-        let coveredAtObservation = fresh.coveredByMonth[month] ?? .empty
-        var perWriterMaxSeq: [String: UInt64] = [:]
-        for (writer, ranges) in coveredAtObservation.rangesByWriter {
-            perWriterMaxSeq[writer] = ranges.map(\.high).max() ?? 0
-        }
-
-        var stillEligible: [VerifyMonthReportItem] = []
-        for item in eligible {
-            let links = freshLinksByFP[item.assetFingerprint] ?? []
-            let state = RemoteAssetIntegrityClassifier.classify(
-                assetFingerprint: item.assetFingerprint,
-                links: links,
-                isResourceAvailable: isResourceAvailable
-            )
-            if state.allowsCleanup {
-                stillEligible.append(item)
+        func buildTombstonePlan() async throws -> TombstonePlan {
+            // Re-classify against a fresh materialize so a peer's heal between verify and apply lands as "no longer eligible".
+            let fresh = try await materializer.materializeMonth(month, expectedRepoID: expectedRepoID)
+            let monthState = fresh.state.months[month] ?? .empty
+            // tickRange must produce clocks above any peer op we just observed; advance lamport before allocating.
+            try await services.lamport.observe(fresh.state.observedClock)
+            var freshLinksByFP: [Data: [SnapshotAssetResourceRow]] = [:]
+            for ar in monthState.assetResources.values {
+                freshLinksByFP[ar.assetFingerprint, default: []].append(ar)
             }
-        }
-        guard !stillEligible.isEmpty else { return [] }
 
-        let tombstones: [(item: VerifyMonthReportItem, reason: CommitTombstoneBody.Reason)] = stillEligible.compactMap { item in
-            switch item.kind {
-            case .phantomAsset, .metadataOnlyLeft:
-                return (item, .manifestOrphan)
-            case .allResourcesGone:
-                return (item, .verifyFailed)
-            case .partiallyMissing, .fingerprintMismatch:
-                assertionFailure("allowsCleanup must filter \(item.kind)")
-                return nil
+            let isResourceAvailable = try await materializedPresencePredicate(month: month, state: monthState)
+
+            let coveredAtObservation = fresh.coveredByMonth[month] ?? .empty
+            var perWriterMaxSeq: [String: UInt64] = [:]
+            for (writer, ranges) in coveredAtObservation.rangesByWriter {
+                perWriterMaxSeq[writer] = ranges.map(\.high).max() ?? 0
             }
+
+            var stillEligible: [VerifyMonthReportItem] = []
+            for item in eligible {
+                let links = freshLinksByFP[item.assetFingerprint] ?? []
+                let state = RemoteAssetIntegrityClassifier.classify(
+                    assetFingerprint: item.assetFingerprint,
+                    links: links,
+                    isResourceAvailable: isResourceAvailable
+                )
+                if state.allowsCleanup {
+                    stillEligible.append(item)
+                }
+            }
+
+            let tombstones: [(item: VerifyMonthReportItem, reason: CommitTombstoneBody.Reason)] = stillEligible.compactMap { item in
+                switch item.kind {
+                case .phantomAsset, .metadataOnlyLeft:
+                    return (item, .manifestOrphan)
+                case .allResourcesGone:
+                    return (item, .verifyFailed)
+                case .partiallyMissing, .fingerprintMismatch:
+                    assertionFailure("allowsCleanup must filter \(item.kind)")
+                    return nil
+                }
+            }
+            return TombstonePlan(tombstones: tombstones, perWriterMaxSeq: perWriterMaxSeq)
         }
-        guard !tombstones.isEmpty else { return [] }
+
+        var plan = try await buildTombstonePlan()
+        guard !plan.tombstones.isEmpty else { return [] }
 
         // Mirror flushV2's alreadyExists retry; concurrent verify or seq drift would otherwise abort cleanup permanently.
         let maxRetries = 4
         var attempt = 0
         while true {
             let basis = TombstoneObservationBasis(
-                perWriterMaxSeq: perWriterMaxSeq,
+                perWriterMaxSeq: plan.perWriterMaxSeq,
                 lamportWatermark: await services.lamport.value()
             )
-            let clockRange = try await services.lamport.tickRange(count: tombstones.count)
+            let clockRange = try await services.lamport.tickRange(count: plan.tombstones.count)
             var clockCursor = clockRange.low
             var ops: [CommitOp] = []
-            ops.reserveCapacity(tombstones.count)
-            for (index, tombstone) in tombstones.enumerated() {
+            ops.reserveCapacity(plan.tombstones.count)
+            for (index, tombstone) in plan.tombstones.enumerated() {
                 ops.append(CommitOp(
                     opSeq: index,
                     clock: clockCursor,
@@ -252,10 +262,12 @@ actor RepoVerifyMonthService {
             )
             do {
                 _ = try await services.commitWriter.write(header: header, ops: ops, month: month, respectTaskCancellation: false)
-                return Set(tombstones.map { $0.item.assetFingerprint })
+                return Set(plan.tombstones.map { $0.item.assetFingerprint })
             } catch CommitLogWriter.WriteError.alreadyExists {
                 attempt += 1
                 if attempt >= maxRetries { throw CommitLogWriter.WriteError.alreadyExists }
+                plan = try await buildTombstonePlan()
+                if plan.tombstones.isEmpty { return [] }
                 continue
             }
         }

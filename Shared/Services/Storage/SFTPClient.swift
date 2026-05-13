@@ -352,6 +352,18 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         )
     }
 
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        do {
+            try await move(from: sourcePath, to: destinationPath)
+            return .created
+        } catch {
+            if Self.isAlreadyExists(error) {
+                return .alreadyExists
+            }
+            throw error
+        }
+    }
+
     // SFTP has no native server-side copy — fall back to download+upload through a local temp.
     func copy(from sourcePath: String, to destinationPath: String) async throws {
         let resolvedSource = RemotePathBuilder.normalizePath(sourcePath)

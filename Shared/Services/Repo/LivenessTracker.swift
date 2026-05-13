@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let livenessLog = Logger(subsystem: "com.zizicici.watermelon", category: "LivenessTracker")
 
 actor LivenessTracker {
     private let client: any RemoteStorageClientProtocol
@@ -63,6 +66,7 @@ actor LivenessTracker {
         // throughout the swap. Peer's listOtherActiveWriters sweep gate can't see us
         // as inactive during the brief window between the old delete and the new create.
         let stagingPath = remotePath + ".staging-\(UUID().uuidString).tmp"
+        var lastFailure: Error?
         // Cancellation must surface so shutdown's stopAndWait can unblock past atomicCreate.
         do {
             _ = try await client.atomicCreate(
@@ -70,8 +74,13 @@ actor LivenessTracker {
                 remotePath: stagingPath,
                 respectTaskCancellation: true
             )
-        } catch {
+        } catch is CancellationError {
             try? await client.delete(path: stagingPath)
+            return
+        } catch {
+            lastFailure = error
+            try? await client.delete(path: stagingPath)
+            livenessLog.warning("[Liveness] staging write failed for \(remotePath, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return
         }
         do {
@@ -80,10 +89,17 @@ actor LivenessTracker {
         } catch is CancellationError {
             try? await client.delete(path: stagingPath)
             return
-        } catch {}
+        } catch {
+            lastFailure = error
+        }
         // S3 copy+delete failure leaves the bytes at remote; deleting it without an intact staging would wipe our liveness.
         let stagingStillExists = (try? await client.metadata(path: stagingPath))?.isDirectory == false
-        guard stagingStillExists else { return }
+        guard stagingStillExists else {
+            if let lastFailure {
+                livenessLog.warning("[Liveness] staging vanished after failed move for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
+            }
+            return
+        }
         do {
             try await client.upload(localURL: temp, remotePath: remotePath, respectTaskCancellation: true, onProgress: nil)
             try? await client.delete(path: stagingPath)
@@ -91,15 +107,24 @@ actor LivenessTracker {
         } catch is CancellationError {
             try? await client.delete(path: stagingPath)
             return
-        } catch {}
+        } catch {
+            lastFailure = error
+        }
         // Cancellation must surface here too so stopAndWait can unblock during shutdown.
         do {
             _ = try await client.atomicCreate(localURL: temp, remotePath: remotePath, respectTaskCancellation: true)
+            try? await client.delete(path: stagingPath)
+            return
         } catch is CancellationError {
             try? await client.delete(path: stagingPath)
             return
-        } catch {}
+        } catch {
+            lastFailure = error
+        }
         try? await client.delete(path: stagingPath)
+        if let lastFailure {
+            livenessLog.warning("[Liveness] all write strategies failed for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
+        }
     }
 
     static func isStale(timestampMs: Int64, now: Date = Date()) -> Bool {

@@ -51,7 +51,7 @@ enum DataPathOverwriteRisk: Sendable, Equatable {
     case none
 }
 
-/// SMB folds names case-insensitively; S3/SFTP/WebDAV do not.
+/// Claim case-insensitive only when the backend is known to alias names by case.
 enum BackendNameCaseSensitivity: Sendable, Equatable {
     case caseSensitive
     case caseInsensitive
@@ -189,6 +189,7 @@ extension RemoteStorageClientProtocol {
         if try await metadata(path: destinationPath) != nil {
             return .alreadyExists
         }
+        try Task.checkCancellation()
         try await move(from: sourcePath, to: destinationPath)
         return .created
     }

@@ -51,7 +51,8 @@ actor RepoBootstrap {
         // Non-empty self claim might be canonical; only 0-byte is safe to overwrite.
         try await healZeroByteSelfClaim(writerID: writerID)
 
-        let existingCanonical = try await canonicalRepoIDFromClaims()
+        let claimElection = try await canonicalClaimElection(ignoringCorruptSelfClaimFor: writerID)
+        let existingCanonical = claimElection.repoID
         let suggested: String
         let isElectingFresh: Bool
         if let existingCanonical {
@@ -60,6 +61,12 @@ actor RepoBootstrap {
         } else if case .found(let legacyID) = try await loadRepoJSONStrict() {
             suggested = legacyID
             isElectingFresh = false
+        } else if claimElection.ignoredSelfCorrupt {
+            throw BootstrapError.ioFailure(NSError(
+                domain: "RepoBootstrap",
+                code: 10,
+                userInfo: [NSLocalizedDescriptionKey: "own identity claim is corrupt and no trusted repo ID exists; inspect/delete manually"]
+            ))
         } else {
             suggested = repoID
             isElectingFresh = true
@@ -246,16 +253,31 @@ actor RepoBootstrap {
         )
     }
 
-    private struct IdentityClaim {
+    private struct IdentityClaim: Sendable {
         let repoID: String
         let writerID: String
         let createdAtMs: Int64
     }
 
+    private struct ClaimElectionResult: Sendable {
+        let repoID: String?
+        let ignoredSelfCorrupt: Bool
+    }
+
+    private enum ClaimFetchResult: Sendable {
+        case claim(IdentityClaim)
+        case ignoredSelfCorrupt
+        case none
+    }
+
+    private func canonicalRepoIDFromClaims() async throws -> String? {
+        (try await canonicalClaimElection()).repoID
+    }
+
     /// Fail-closed: any read failure or unparseable claim throws. A single
     /// transient blip or one corrupt claim must NOT silently flip canonical
     /// to a stale repo.json or a different writer.
-    private func canonicalRepoIDFromClaims() async throws -> String? {
+    private func canonicalClaimElection(ignoringCorruptSelfClaimFor selfWriterID: String? = nil) async throws -> ClaimElectionResult {
         let dir = RepoLayout.identityDirectoryPath(base: basePath)
         let entries: [RemoteStorageEntry]
         do {
@@ -263,46 +285,60 @@ actor RepoBootstrap {
         } catch {
             // "Directory doesn't exist" = no claims yet (legitimate pre-claims
             // state). Anything else is unreadable identity → propagate.
-            if isNotFoundError(error) { return nil }
+            if isNotFoundError(error) { return ClaimElectionResult(repoID: nil, ignoredSelfCorrupt: false) }
             throw error
         }
         let claimEntries = entries.filter { !$0.isDirectory && $0.name.hasSuffix(".json") }
         // .serialOnly backends (SMB/SFTP via raw client here) violate single-connection
         // contract if we fan out via TaskGroup. Sequential fallback for those.
         var claims: [IdentityClaim] = []
+        var ignoredSelfCorrupt = false
         if client.concurrencyMode == .serialOnly {
             for entry in claimEntries {
-                if let claim = try await fetchClaim(dir: dir, entryName: entry.name) {
+                switch try await fetchClaim(dir: dir, entryName: entry.name, selfWriterID: selfWriterID) {
+                case .claim(let claim):
                     claims.append(claim)
+                case .ignoredSelfCorrupt:
+                    ignoredSelfCorrupt = true
+                case .none:
+                    break
                 }
             }
         } else {
-            claims = try await withThrowingTaskGroup(of: IdentityClaim?.self) { group in
+            let result = try await withThrowingTaskGroup(of: ClaimFetchResult.self) { group in
                 for entry in claimEntries {
                     let entryName = entry.name
                     group.addTask { [self] in
-                        try await fetchClaim(dir: dir, entryName: entryName)
+                        try await fetchClaim(dir: dir, entryName: entryName, selfWriterID: selfWriterID)
                     }
                 }
                 var collected: [IdentityClaim] = []
+                var ignoredSelfCorrupt = false
                 for try await result in group {
-                    if let claim = result {
+                    switch result {
+                    case .claim(let claim):
                         collected.append(claim)
+                    case .ignoredSelfCorrupt:
+                        ignoredSelfCorrupt = true
+                    case .none:
+                        break
                     }
                 }
-                return collected
+                return (collected, ignoredSelfCorrupt)
             }
+            claims = result.0
+            ignoredSelfCorrupt = result.1
         }
-        guard !claims.isEmpty else { return nil }
+        guard !claims.isEmpty else { return ClaimElectionResult(repoID: nil, ignoredSelfCorrupt: ignoredSelfCorrupt) }
         // writerID tiebreak makes ms-collision deterministic.
         let canonical = claims.min { lhs, rhs in
             if lhs.createdAtMs != rhs.createdAtMs { return lhs.createdAtMs < rhs.createdAtMs }
             return lhs.writerID < rhs.writerID
         }!
-        return canonical.repoID
+        return ClaimElectionResult(repoID: canonical.repoID, ignoredSelfCorrupt: ignoredSelfCorrupt)
     }
 
-    private func fetchClaim(dir: String, entryName: String) async throws -> IdentityClaim? {
+    private func fetchClaim(dir: String, entryName: String, selfWriterID: String? = nil) async throws -> ClaimFetchResult {
         let path = RepoLayout.normalize(joining: [dir, entryName])
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("claim-fetch-\(UUID().uuidString).json")
@@ -310,7 +346,7 @@ actor RepoBootstrap {
         do {
             try await downloadWithRetry(remotePath: path, localURL: temp, attempts: 3)
         } catch {
-            if isNotFoundError(error) { return nil }
+            if isNotFoundError(error) { return .none }
             throw error
         }
         let data = (try? Data(contentsOf: temp)) ?? Data()
@@ -323,10 +359,14 @@ actor RepoBootstrap {
            let wid = dict["writer_id"] as? String, !wid.isEmpty, wid == expectedWriterID,
            RepoLayout.isValidWriterID(wid),
            let ts = (dict["created_at_ms"] as? Int64) ?? (dict["created_at_ms"] as? Int).map(Int64.init) {
-            return IdentityClaim(repoID: id, writerID: wid, createdAtMs: ts)
+            return .claim(IdentityClaim(repoID: id, writerID: wid, createdAtMs: ts))
         }
         // A writerID-shaped filename could have been canonical (lex-min); quarantining would silently flip the adopted repoID.
         if RepoLayout.isValidWriterID(expectedWriterID) {
+            if expectedWriterID == selfWriterID {
+                bootstrapLog.warning("[RepoBootstrap] own identity claim \(entryName, privacy: .public) is corrupt; will repair after repo ID is resolved")
+                return .ignoredSelfCorrupt
+            }
             throw BootstrapError.ioFailure(NSError(
                 domain: "RepoBootstrap",
                 code: 9,
@@ -340,7 +380,7 @@ actor RepoBootstrap {
         let quarantineName = entryName + ".bad.\(Int64(Date().timeIntervalSince1970 * 1000))"
         let quarantinePath = RepoLayout.normalize(joining: [dir, quarantineName])
         try? await client.move(from: path, to: quarantinePath)
-        return nil
+        return .none
     }
 
     private func downloadWithRetry(remotePath: String, localURL: URL, attempts: Int) async throws {

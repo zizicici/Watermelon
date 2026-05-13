@@ -164,6 +164,10 @@ actor StorageClientPool {
                 waiter.resume(throwing: CancellationError())
                 continue
             }
+            if isShutdown {
+                waiter.resume(throwing: CancellationError())
+                continue
+            }
             do {
                 let replacement = try makeClient()
                 try await replacement.connect()

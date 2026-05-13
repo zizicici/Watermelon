@@ -66,6 +66,8 @@ struct LocalAssetRecord: Codable, FetchableRecord, MutablePersistableRecord {
     var totalFileSizeBytes: Int64
     var modificationDateMs: Int64?
     var updatedAt: Date
+    var selectionVersion: Int = 0
+    var resourceSignature: Data? = nil
 }
 
 struct LocalAssetResourceRecord: Codable, FetchableRecord, MutablePersistableRecord {

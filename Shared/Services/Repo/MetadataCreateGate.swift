@@ -59,14 +59,9 @@ enum MetadataCreateGate {
                         "staging path \(stagingPath) already exists — UUID collision indicates a programming error"
                 ])
             }
-            // Pre-move existence check narrows the window where a peer's bytes get silently overwritten on overwrite-capable backends.
             do {
-                if let meta = try await client.metadata(path: remotePath) {
-                    guard !meta.isDirectory else {
-                        try? await client.delete(path: stagingPath)
-                        return .alreadyExists
-                    }
-                    // Idempotent retry must treat matching bytes as our lost prior success.
+                let finalization = try await client.moveIfAbsent(from: stagingPath, to: remotePath)
+                if case .alreadyExists = finalization {
                     do {
                         if try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL) {
                             try? await client.delete(path: stagingPath)
@@ -78,18 +73,6 @@ enum MetadataCreateGate {
                     } catch {
                         // Verify inconclusive — fall through to `.alreadyExists`.
                     }
-                    try? await client.delete(path: stagingPath)
-                    return .alreadyExists
-                }
-            } catch is CancellationError {
-                try? await client.delete(path: stagingPath)
-                throw CancellationError()
-            } catch {
-                // No-overwrite finalization is the authoritative conflict check.
-            }
-            do {
-                let finalization = try await client.moveIfAbsent(from: stagingPath, to: remotePath)
-                if case .alreadyExists = finalization {
                     try? await client.delete(path: stagingPath)
                     return .alreadyExists
                 }

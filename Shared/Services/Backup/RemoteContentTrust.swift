@@ -3,6 +3,7 @@ import Foundation
 
 enum RemoteContentTrust {
     static let defaultSmallFileLimitBytes: Int64 = 5 * 1024 * 1024
+    static let overlayProbeSmallFileLimitBytes: Int64 = 512 * 1024
 
     static func verifyHash(
         client: any RemoteStorageClientProtocol,

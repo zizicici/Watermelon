@@ -337,6 +337,25 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         #endif
     }
 
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        #if canImport(AMSMB2)
+        do {
+            try await manager.moveItem(
+                atPath: RemotePathBuilder.normalizePath(sourcePath),
+                toPath: RemotePathBuilder.normalizePath(destinationPath)
+            )
+            return .created
+        } catch {
+            if SMBErrorClassifier.isNameCollision(error) {
+                return .alreadyExists
+            }
+            throw error
+        }
+        #else
+        throw RemoteStorageClientError.unavailable
+        #endif
+    }
+
     func copy(from sourcePath: String, to destinationPath: String) async throws {
         #if canImport(AMSMB2)
         let normalizedSource = RemotePathBuilder.normalizePath(sourcePath)

@@ -337,8 +337,7 @@ struct BackupRunPreparationService: Sendable {
         }
         let verifier = RepoVerifyMonthService(client: metadataClient, basePath: basePath, expectedRepoID: expectedRepoID)
         var report = try await verifier.verify(month: month)
-        if !report.cleanupCandidates.isEmpty, let profile, let password {
-            _ = password
+        if !report.cleanupCandidates.isEmpty, let profile {
             let v2: BackupV2RuntimeServices
             do {
                 v2 = try await BackupV2RuntimeBuilder.build(
