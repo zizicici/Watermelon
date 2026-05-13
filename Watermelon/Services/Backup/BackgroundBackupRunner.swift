@@ -244,7 +244,7 @@ final class BackgroundBackupRunner {
             await client.disconnectSafely()
             return .failed
         } catch {
-            if profile.isConnectionUnavailableError(error) {
+            if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
                 await writer.appendLog(
                     String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
                     level: .error
@@ -369,7 +369,7 @@ final class BackgroundBackupRunner {
                 if Task.isCancelled { break }
                 anyMonthFailed = true
                 // Connection-unavailable means every subsequent loadOrCreate would re-trip the same failure.
-                if profile.isConnectionUnavailableError(error) {
+                if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
                     connectionUnavailableAbort = true
                     await writer.appendLog(
                         String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
@@ -447,7 +447,7 @@ final class BackgroundBackupRunner {
                             asset: asset,
                             selectedResources: resources
                         )
-                        if profile.isConnectionUnavailableError(error) {
+                        if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
                             anyMonthFailed = true
                             connectionUnavailableAbort = true
                             await writer.appendLog(
@@ -485,7 +485,7 @@ final class BackgroundBackupRunner {
                             let isCancel = error is CancellationError
                                 || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
                             if !isCancel {
-                                if profile.isConnectionUnavailableError(error) {
+                                if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
                                     connectionUnavailableAbort = true
                                     anyMonthFailed = true
                                     await writer.appendLog(
@@ -523,7 +523,7 @@ final class BackgroundBackupRunner {
                 let isCancel = error is CancellationError
                     || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
                 if !isCancel {
-                    if profile.isConnectionUnavailableError(error) {
+                    if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
                         connectionUnavailableAbort = true
                         anyMonthFailed = true
                         await writer.appendLog(

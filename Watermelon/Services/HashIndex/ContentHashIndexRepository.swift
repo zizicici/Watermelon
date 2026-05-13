@@ -21,6 +21,8 @@ struct IndexedAssetRow: Sendable {
     let assetFingerprint: Data
     let totalFileSizeBytes: Int64
     let updatedAt: Date
+    let selectionVersion: Int
+    let resourceSignature: Data?
 }
 
 struct LocalAssetFingerprintRecord: Sendable, Equatable {
@@ -266,7 +268,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 let rows = try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT assetLocalIdentifier, assetFingerprint, totalFileSizeBytes, updatedAt
+                    SELECT assetLocalIdentifier, assetFingerprint, totalFileSizeBytes, updatedAt, selectionVersion, resourceSignature
                     FROM local_assets
                     WHERE assetLocalIdentifier IN (\(placeholders))
                       AND assetFingerprint IS NOT NULL
@@ -279,7 +281,9 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                         assetLocalIdentifier: assetID,
                         assetFingerprint: row["assetFingerprint"],
                         totalFileSizeBytes: row["totalFileSizeBytes"],
-                        updatedAt: row["updatedAt"]
+                        updatedAt: row["updatedAt"],
+                        selectionVersion: Int(row["selectionVersion"] as Int64? ?? 0),
+                        resourceSignature: row["resourceSignature"] as Data?
                     )
                 }
             }

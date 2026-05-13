@@ -55,7 +55,7 @@ final class V2MonthSession: BackupMonthStore {
     /// `findResourceByHash` returns lex-min over present paths only; missing-path lookup would bind metadata to undownloadable bytes.
     private var pathsByHash: [Data: Set<String>]
     /// Reverse leaf-name index: linear scan was N² per month under prepareUpload.
-    private var resourcesByLeafName: [String: RemoteManifestResource] = [:]
+    private var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
     private var collisionKeysCache: Set<String>?
     /// Session-scoped physical-missing set used for upsert/flush validation.
     /// Workers push it into `RepoCommittedView.physicallyMissingByMonth` for
@@ -121,6 +121,7 @@ final class V2MonthSession: BackupMonthStore {
         // Faithful projection; filtering here would leak into snapshot writes and break the covered-range invariant.
         var resourcesByPath: [String: RemoteManifestResource] = [:]
         var pathsByHash: [Data: Set<String>] = [:]
+        var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
         var physicallyMissingPaths: Set<String> = []
         let caseSensitive = client.backendNameCaseSensitivity == .caseSensitive
         func presenceKey(_ name: String) -> String {
@@ -153,14 +154,12 @@ final class V2MonthSession: BackupMonthStore {
             )
             resourcesByPath[row.physicalRemotePath] = resource
             pathsByHash[row.contentHash, default: []].insert(row.physicalRemotePath)
-            // Last-write-wins matches upsertResource policy; collision-rename keeps leafs unique.
             let leaf = (row.physicalRemotePath as NSString).lastPathComponent
-            resourcesByLeafName[leaf] = resource
+            resourcesByLeafName[leaf, default: []].append(resource)
             if !isPresent {
                 physicallyMissingPaths.insert(row.physicalRemotePath)
             }
         }
-        // Size-only presence narrows the syncIndex content-verified overlay; carry forward hashes the overlay already flagged.
         for hash in seedMissingHashes {
             if let paths = pathsByHash[hash] {
                 physicallyMissingPaths.formUnion(paths)
@@ -168,6 +167,7 @@ final class V2MonthSession: BackupMonthStore {
         }
         self.resourcesByPath = resourcesByPath
         self.pathsByHash = pathsByHash
+        self.resourcesByLeafName = resourcesByLeafName
         self.physicallyMissingPaths = physicallyMissingPaths
         // Hash missing iff every path missing; overlay consumers use the hash set, in-session lookup uses paths.
         var refinedMissing: Set<Data> = []
@@ -313,9 +313,21 @@ final class V2MonthSession: BackupMonthStore {
             .split(separator: "/", omittingEmptySubsequences: true)
             .last
             .map(String.init) ?? logicalName
-        guard let resource = resourcesByLeafName[leafName] else { return nil }
-        if physicallyMissingPaths.contains(resource.physicalRemotePath) { return nil }
-        return resource
+        let candidates: [RemoteManifestResource]
+        if client.backendNameCaseSensitivity == .caseInsensitive {
+            let key = RemoteFileNaming.collisionKey(for: leafName)
+            candidates = resourcesByLeafName.values.flatMap { bucket in
+                bucket.filter { resource in
+                    let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
+                    return RemoteFileNaming.collisionKey(for: leaf) == key
+                }
+            }
+        } else {
+            candidates = resourcesByLeafName[leafName] ?? []
+        }
+        return candidates
+            .filter { !physicallyMissingPaths.contains($0.physicalRemotePath) }
+            .min { $0.physicalRemotePath < $1.physicalRemotePath }
     }
 
     /// Lex-min of present paths for `hash`; nil if no path's file is on remote.
@@ -360,15 +372,26 @@ final class V2MonthSession: BackupMonthStore {
         // would still return this slot and serve up the new content under the wrong key.
         if let existing = resourcesByPath[resource.physicalRemotePath],
            existing.contentHash != resource.contentHash {
-            pathsByHash[existing.contentHash]?.remove(resource.physicalRemotePath)
-            if pathsByHash[existing.contentHash]?.isEmpty == true {
-                pathsByHash.removeValue(forKey: existing.contentHash)
+            let oldHash = existing.contentHash
+            pathsByHash[oldHash]?.remove(resource.physicalRemotePath)
+            if let remaining = pathsByHash[oldHash], !remaining.isEmpty {
+                if remaining.isSubset(of: physicallyMissingPaths) {
+                    physicallyMissingHashes.insert(oldHash)
+                } else {
+                    physicallyMissingHashes.remove(oldHash)
+                }
+            } else {
+                pathsByHash.removeValue(forKey: oldHash)
+                physicallyMissingHashes.remove(oldHash)
             }
+        }
+        if let existing = resourcesByPath[resource.physicalRemotePath] {
+            removeLeafIndex(for: existing)
         }
         resourcesByPath[resource.physicalRemotePath] = resource
         pathsByHash[resource.contentHash, default: []].insert(resource.physicalRemotePath)
         let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-        resourcesByLeafName[leaf] = resource
+        resourcesByLeafName[leaf, default: []].append(resource)
         if !existingFileNameSet.contains(resource.logicalName) {
             existingFileNameSet.insert(resource.logicalName)
             collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: resource.logicalName))
@@ -378,6 +401,17 @@ final class V2MonthSession: BackupMonthStore {
         physicallyMissingHashes.remove(resource.contentHash)
         dirty = true
         return resource
+    }
+
+    private func removeLeafIndex(for resource: RemoteManifestResource) {
+        let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
+        guard var bucket = resourcesByLeafName[leaf] else { return }
+        bucket.removeAll { $0.physicalRemotePath == resource.physicalRemotePath }
+        if bucket.isEmpty {
+            resourcesByLeafName.removeValue(forKey: leaf)
+        } else {
+            resourcesByLeafName[leaf] = bucket
+        }
     }
 
     func upsertAsset(
@@ -479,74 +513,73 @@ final class V2MonthSession: BackupMonthStore {
             perWriterMaxSeq[writer] = ranges.map(\.high).max() ?? 0
         }
 
+        let lamportWatermark = max(observedClockAtLoad, await services.lamport.value())
+        let observedBasis = TombstoneObservationBasis(
+            perWriterMaxSeq: perWriterMaxSeq,
+            lamportWatermark: lamportWatermark
+        )
+        let clockRange = try await services.lamport.tickRange(count: opCount)
+        var clockCursor = clockRange.low
+        var ops: [CommitOp] = []
+        ops.reserveCapacity(opCount)
+        var opSeq = 0
+        var committedAddAssetClocks: [Data: UInt64] = [:]
+        var committedTombstoneClocks: [Data: UInt64] = [:]
+
+        for fp in pendingV2AssetFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
+            guard let asset = assetsByFingerprint[fp],
+                  let links = linksByFingerprint[fp] else { continue }
+            var resources: [CommitResourceEntry] = []
+            resources.reserveCapacity(links.count)
+            for link in links {
+                // Fail-fast: dropping a link here would emit a commit body with
+                // fewer resources than in-memory and break the snapshot
+                // covered-range invariant once the next snapshot ships the seq.
+                guard let resource = findResourceByHash(link.resourceHash) else {
+                    throw NSError(
+                        domain: "V2MonthSession",
+                        code: -13,
+                        userInfo: [NSLocalizedDescriptionKey:
+                            "flush aborted: link hash \(link.resourceHash.hexString) lost its resource between upsert and flush"]
+                    )
+                }
+                resources.append(CommitResourceEntry(
+                    physicalRemotePath: resource.physicalRemotePath,
+                    logicalName: link.logicalName.isEmpty ? resource.logicalName : link.logicalName,
+                    contentHash: link.resourceHash,
+                    fileSize: resource.fileSize,
+                    resourceType: resource.resourceType,
+                    role: link.role,
+                    slot: link.slot,
+                    crypto: resource.crypto
+                ))
+            }
+            ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp,
+                creationDateMs: asset.creationDateMs,
+                backedUpAtMs: asset.backedUpAtMs,
+                resources: resources
+            ))))
+            committedAddAssetClocks[fp] = clockCursor
+            opSeq += 1
+            if opSeq < opCount { clockCursor += 1 }
+        }
+        for fp in pendingV2TombstoneFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
+            ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .tombstoneAsset(CommitTombstoneBody(
+                assetFingerprint: fp,
+                reason: .manifestOrphan,
+                observedBasis: observedBasis
+            ))))
+            committedTombstoneClocks[fp] = clockCursor
+            opSeq += 1
+            if opSeq < opCount { clockCursor += 1 }
+        }
+
         // Retry on alreadyExists — local seq drift can produce a colliding filename.
         let maxRetries = 4
         var lastSeq: UInt64 = 0
         var attempt = 0
-        var committedAddAssetClocks: [Data: UInt64] = [:]
-        var committedTombstoneClocks: [Data: UInt64] = [:]
         while true {
-            let lamportWatermark = max(observedClockAtLoad, await services.lamport.value())
-            let observedBasis = TombstoneObservationBasis(
-                perWriterMaxSeq: perWriterMaxSeq,
-                lamportWatermark: lamportWatermark
-            )
-            let clockRange = try await services.lamport.tickRange(count: opCount)
-            var clockCursor = clockRange.low
-            var ops: [CommitOp] = []
-            ops.reserveCapacity(opCount)
-            var opSeq = 0
-            var addAssetClocks: [Data: UInt64] = [:]
-            var tombstoneClocks: [Data: UInt64] = [:]
-
-            for fp in pendingV2AssetFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
-                guard let asset = assetsByFingerprint[fp],
-                      let links = linksByFingerprint[fp] else { continue }
-                var resources: [CommitResourceEntry] = []
-                resources.reserveCapacity(links.count)
-                for link in links {
-                    // Fail-fast: dropping a link here would emit a commit body with
-                    // fewer resources than in-memory and break the snapshot
-                    // covered-range invariant once the next snapshot ships the seq.
-                    guard let resource = findResourceByHash(link.resourceHash) else {
-                        throw NSError(
-                            domain: "V2MonthSession",
-                            code: -13,
-                            userInfo: [NSLocalizedDescriptionKey:
-                                "flush aborted: link hash \(link.resourceHash.hexString) lost its resource between upsert and flush"]
-                        )
-                    }
-                    resources.append(CommitResourceEntry(
-                        physicalRemotePath: resource.physicalRemotePath,
-                        logicalName: link.logicalName.isEmpty ? resource.logicalName : link.logicalName,
-                        contentHash: link.resourceHash,
-                        fileSize: resource.fileSize,
-                        resourceType: resource.resourceType,
-                        role: link.role,
-                        slot: link.slot,
-                        crypto: resource.crypto
-                    ))
-                }
-                ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .addAsset(CommitAddAssetBody(
-                    assetFingerprint: fp,
-                    creationDateMs: asset.creationDateMs,
-                    backedUpAtMs: asset.backedUpAtMs,
-                    resources: resources
-                ))))
-                addAssetClocks[fp] = clockCursor
-                opSeq += 1
-                clockCursor &+= 1
-            }
-            for fp in pendingV2TombstoneFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
-                ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .tombstoneAsset(CommitTombstoneBody(
-                    assetFingerprint: fp,
-                    reason: .manifestOrphan,
-                    observedBasis: observedBasis
-                ))))
-                tombstoneClocks[fp] = clockCursor
-                opSeq += 1
-                clockCursor &+= 1
-            }
             let seq = try await services.seqAllocator.allocate()
             lastSeq = seq
             let header = CommitHeader(
@@ -567,8 +600,6 @@ final class V2MonthSession: BackupMonthStore {
                     month: monthKey,
                     respectTaskCancellation: !ignoreCancellation
                 )
-                committedAddAssetClocks = addAssetClocks
-                committedTombstoneClocks = tombstoneClocks
                 break
             } catch CommitLogWriter.WriteError.alreadyExists {
                 attempt += 1
@@ -711,5 +742,44 @@ final class V2MonthSession: BackupMonthStore {
         state.deletedAssetStamps = deletedAssetStamps
         state.deletedAssetFingerprints = legacyDeletedAssetFingerprints.union(deletedAssetStamps.keys)
         return state
+    }
+}
+
+extension ServerProfileRecord {
+    func isConnectionUnavailableErrorIncludingFlushUnderlying(_ error: Error) -> Bool {
+        var pending: [Error] = [error]
+        var seen: Set<String> = []
+        while let next = pending.popLast() {
+            let nsError = next as NSError
+            let key = "\(nsError.domain)#\(nsError.code)#\(nsError.localizedDescription)"
+            guard seen.insert(key).inserted else { continue }
+            if isConnectionUnavailableError(next) { return true }
+            switch next {
+            case let flush as V2MonthSession.FlushError:
+                switch flush {
+                case .snapshotWriteFailed(_, _, let underlying):
+                    pending.append(underlying)
+                }
+            case let write as SnapshotWriter.WriteError:
+                switch write {
+                case .ioFailure(let underlying), .finalizationFailed(let underlying):
+                    pending.append(underlying)
+                case .verificationFailed:
+                    break
+                }
+            case let storage as RemoteStorageClientError:
+                switch storage {
+                case .underlying(let underlying):
+                    pending.append(underlying)
+                default:
+                    break
+                }
+            default:
+                if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                    pending.append(underlying)
+                }
+            }
+        }
+        return false
     }
 }

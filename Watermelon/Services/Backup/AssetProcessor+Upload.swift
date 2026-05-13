@@ -1,6 +1,9 @@
 import CryptoKit
 import Foundation
 import Photos
+import os.log
+
+private let uploadLog = Logger(subsystem: "com.zizicici.watermelon", category: "BackupUpload")
 
 struct UploadPreparation {
     let baseFileName: String
@@ -653,6 +656,7 @@ extension AssetProcessor {
             if profile.isConnectionUnavailableError(error) { throw error }
             if isStorageNotFoundError(error) { return .absent }
             if Self.metadataProbeCanRetryAtCreateBoundary(error) { return .absent }
+            uploadLog.warning("metadata probe ambiguous for \(path, privacy: .public): \(String(describing: error), privacy: .public)")
             return .present(size: nil)
         }
     }
@@ -747,13 +751,7 @@ extension AssetProcessor {
             }
             throw error
         }
-        guard let entry else {
-            throw NSError(
-                domain: "AssetProcessor.Upload",
-                code: -121,
-                userInfo: [NSLocalizedDescriptionKey: "remote upload verification could not find \(remotePath)"]
-            )
-        }
+        guard let entry else { return true }
         guard !entry.isDirectory else { return true }
         if entry.size != expectedSize { return true }
         let tempURL = FileManager.default.temporaryDirectory

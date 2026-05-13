@@ -4,13 +4,16 @@ import os.log
 private let syncLog = Logger(subsystem: "com.zizicici.watermelon", category: "SyncTiming")
 
 final class RemoteIndexSyncService: @unchecked Sendable {
+    private static let overlayProbeMaxVerifiedFilesPerMonth = 64
+    private static let overlayProbeMaxVerifiedBytesPerMonth: Int64 = 32 * 1024 * 1024
+
     private actor SyncGate {
         private var isLocked = false
         private var waiters: [(UUID, CheckedContinuation<Void, Error>)] = []
         private var preCancelledIDs: Set<UUID> = []
         private var preCancelledOrder: [UUID] = []
         private var registeredIDs: Set<UUID> = []
-        private static let preCancelledIDsCap = 256
+        private static let preCancelledIDsCap = 4096
 
         private func registerWaiter(id: UUID, continuation: CheckedContinuation<Void, Error>) {
             if consumePreCancelled(id) {
@@ -653,12 +656,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func committedAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
-        optimisticMutationLock.withLock {
-            Self.committedFingerprints(
-                from: committedView.current(),
-                subtractingInflight: inflightTracker
-            )
-        }
+        Self.committedFingerprints(
+            from: committedView.current(),
+            subtractingInflight: inflightTracker
+        )
     }
 
     private static func committedFingerprints(
@@ -845,6 +846,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             resourcesByHash[resource.contentHash, default: []].append(resource)
         }
         let smallLimit = RemoteContentTrust.overlayProbeSmallFileLimitBytes
+        var verifiedFileCount = 0
+        var verifiedByteCount: Int64 = 0
+        var loggedProbeBudgetExhausted = false
         var missing: Set<Data> = []
         for (hash, group) in resourcesByHash {
             var anyPresent = false
@@ -860,11 +864,22 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                     break
                 }
                 for match in sizeMatches {
+                    if verifiedFileCount >= Self.overlayProbeMaxVerifiedFilesPerMonth ||
+                        verifiedByteCount + resource.fileSize > Self.overlayProbeMaxVerifiedBytesPerMonth {
+                        if !loggedProbeBudgetExhausted {
+                            loggedProbeBudgetExhausted = true
+                            syncLog.info("[SyncTiming] overlay probe budget exhausted for \(month.text); falling back to size-only for remaining small files")
+                        }
+                        anyPresent = true
+                        break candidateScan
+                    }
                     let path = RemotePathBuilder.absolutePath(
                         basePath: basePath,
                         remoteRelativePath: monthRel + "/" + match.name
                     )
                     do {
+                        verifiedFileCount += 1
+                        verifiedByteCount += resource.fileSize
                         if try await RemoteContentTrust.verifyHash(
                             client: client,
                             remotePath: path,

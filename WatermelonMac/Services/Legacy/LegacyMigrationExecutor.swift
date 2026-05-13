@@ -263,7 +263,7 @@ final class LegacyMigrationExecutor {
                 case .alreadyInPlace, .skippedHashExists:
                     resourcesAlreadyInPlace += 1
                 }
-                let logicalLeaf = monthStore.findResourceByHash(component.contentHash)?.logicalName ?? component.originalFilename
+                let logicalLeaf = monthStore.findResourceByHash(component.contentHash)?.logicalName ?? component.originalFilename ?? ""
                 resourceLinks.append(
                     RemoteAssetResourceLink(
                         year: monthStore.year,

@@ -360,6 +360,7 @@ actor V1MigrationService {
         }
         let yearEntries = entries.filter { $0.isDirectory && $0.name.range(of: "^[0-9]{4}$", options: .regularExpression) != nil }
         for yearEntry in yearEntries {
+            try Task.checkCancellation()
             let yearPath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: yearEntry.name)
             let monthEntries: [RemoteStorageEntry]
             do {
@@ -369,6 +370,7 @@ actor V1MigrationService {
                 throw error
             }
             for monthEntry in monthEntries where monthEntry.isDirectory && monthEntry.name.range(of: "^[0-9]{2}$", options: .regularExpression) != nil {
+                try Task.checkCancellation()
                 let monthPath = RemotePathBuilder.absolutePath(basePath: yearPath, remoteRelativePath: monthEntry.name)
                 let files: [RemoteStorageEntry]
                 do {
@@ -378,8 +380,15 @@ actor V1MigrationService {
                     throw error
                 }
                 let hasPartialMigrationMarker = files.contains { !$0.isDirectory && $0.name == Self.partialMigrationMarkerFileName }
-                for file in files where !file.isDirectory && Self.isResidueManifestName(file.name) {
-                    if hasPartialMigrationMarker { continue }
+                let residueFiles = files.filter { !$0.isDirectory && Self.isResidueManifestName($0.name) }
+                if hasPartialMigrationMarker && !residueFiles.isEmpty {
+                    v1MigrationLog.info(
+                        "preserving \(residueFiles.count, privacy: .public) V1 residue manifest(s) under partial migration marker at \(monthPath, privacy: .public)"
+                    )
+                    continue
+                }
+                for file in residueFiles {
+                    try Task.checkCancellation()
                     try await deleteIfPresent(path: file.path)
                 }
             }

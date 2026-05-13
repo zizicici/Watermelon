@@ -77,8 +77,6 @@ final class RestoreService {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    failureCount += 1
-                    if firstFailure == nil { firstFailure = error }
                     print("[RestoreService] onItemCompleted \(index + 1)/\(items.count) failed: \(error.localizedDescription)")
                 }
             }

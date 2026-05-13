@@ -3,7 +3,7 @@ import os.log
 
 private let materializerLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoMaterializer")
 
-// Empty-repoID snapshots are skipped when `expectedRepoID` is set; commit replay rebuilds those months.
+// Empty-repoID snapshots are legacy baselines; accept them under the resolved repo.
 
 actor RepoMaterializer {
     private let client: any RemoteStorageClientProtocol
@@ -100,12 +100,8 @@ actor RepoMaterializer {
                                 materializerLog.warning("skip snapshot whose filename disagrees with header: \(candidate.filename, privacy: .public)")
                                 continue
                             }
-                            if let expected, file.header.repoID != expected {
-                                if file.header.repoID.isEmpty {
-                                    materializerLog.warning("skip empty-repoID snapshot \(candidate.filename, privacy: .public) expected=\(expected, privacy: .public)")
-                                } else {
-                                    materializerLog.warning("skip foreign-repo snapshot \(candidate.filename, privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expected, privacy: .public)")
-                                }
+                            if let expected, !file.header.repoID.isEmpty, file.header.repoID != expected {
+                                materializerLog.warning("skip foreign-repo snapshot \(candidate.filename, privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expected, privacy: .public)")
                                 continue
                             }
                             return (month, file)
@@ -251,7 +247,7 @@ actor RepoMaterializer {
             let header = entry.file.header
             // Foreign-repoID commits exist when a profile re-points or a wiped-and-rewritten
             // remote leaves stale files; never replay them against the current repo state.
-            if let expectedRepoID, header.repoID != expectedRepoID {
+            if let expectedRepoID, !header.repoID.isEmpty, header.repoID != expectedRepoID {
                 materializerLog.warning("skip commit with mismatched repoID file=\(String(describing: entry.month), privacy: .public) header=\(header.repoID, privacy: .public) expected=\(expectedRepoID, privacy: .public)")
                 continue
             }

@@ -180,6 +180,29 @@ final actor S3Client: RemoteStorageClientProtocol {
         try throwIfEmbeddedError(method: "PUT", url: destinationURL, body: body)
     }
 
+    private func serverSideCopyIfAbsent(sourceKey: String, destinationKey: String) async throws -> AtomicCreateResult {
+        let destinationURL = try makeURL(key: destinationKey, query: [])
+        let req = signedRequest(
+            method: "PUT",
+            url: destinationURL,
+            additionalHeaders: [
+                "x-amz-copy-source": Self.copySourceHeader(bucket: config.bucket, key: sourceKey),
+                "If-None-Match": "*"
+            ],
+            bodyHash: .empty
+        )
+        do {
+            let (body, _) = try await performTransferData(req)
+            try throwIfEmbeddedError(method: "PUT", url: destinationURL, body: body)
+            return .created
+        } catch {
+            if Self.isPreconditionFailed(error) {
+                return .alreadyExists
+            }
+            throw error
+        }
+    }
+
     private func deleteObject(at url: URL) async throws {
         let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
         _ = try await performMetadata(req)
@@ -558,22 +581,12 @@ final actor S3Client: RemoteStorageClientProtocol {
             throw RemoteStorageClientError.invalidConfiguration
         }
 
-        if try await metadata(path: destinationPath) != nil {
-            return .alreadyExists
-        }
-
         if let sourceMeta = try await metadata(path: sourcePath),
            sourceMeta.size > Self.singlePartMaxSize {
             throw Self.internalError("S3 moveIfAbsent is unsupported for objects larger than 5 GiB")
         }
 
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("s3-move-if-absent-\(UUID().uuidString).tmp")
-        defer { try? FileManager.default.removeItem(at: tempURL) }
-
-        try await download(remotePath: sourcePath, localURL: tempURL)
-        let size = try fileSize(at: tempURL)
-        let result = try await singlePartCreateIfAbsent(localURL: tempURL, key: destinationKey, size: size)
+        let result = try await serverSideCopyIfAbsent(sourceKey: sourceKey, destinationKey: destinationKey)
         guard case .created = result else {
             return result
         }

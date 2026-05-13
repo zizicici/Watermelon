@@ -9,7 +9,7 @@ actor StorageClientPool {
     /// Cancel-arrived-before-register IDs; FIFO-evicted so live markers aren't dropped early.
     private var preCancelledWaiterIDs: Set<UUID> = []
     private var preCancelledOrder: [UUID] = []
-    private static let preCancelledIDsCap = 256
+    private static let preCancelledIDsCap = 4096
     private var isShutdown = false
 
     init(
@@ -86,10 +86,7 @@ actor StorageClientPool {
         }
         waiters.append((id, continuation))
         // A non-reusable release between acquire's slot check and our enqueue would never wake us; claim the freed slot.
-        if createdConnections < maxConnections {
-            createdConnections += 1
-            Task { await self.passSlotToLiveWaiter() }
-        }
+        startConnectionForWaiterIfPossible()
     }
 
     private func cancelWaiter(id: UUID) {
@@ -125,6 +122,12 @@ actor StorageClientPool {
         guard !waiters.isEmpty else { return nil }
         let entry = waiters.removeFirst()
         return (entry.0, entry.1)
+    }
+
+    private func startConnectionForWaiterIfPossible() {
+        guard !isShutdown, !waiters.isEmpty, createdConnections < maxConnections else { return }
+        createdConnections += 1
+        Task { await self.passSlotToLiveWaiter() }
     }
 
     func release(_ client: any RemoteStorageClientProtocol, reusable: Bool) async {

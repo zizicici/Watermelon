@@ -70,6 +70,16 @@ actor SerialOperationQueue {
         }
     }
 
+    func runUncancellable<T: Sendable>(_ body: @Sendable () async -> T) async -> T {
+        let handle = acquireOrEnqueue()
+        if let handle {
+            _ = await handle.wait()
+        }
+        let result = await body()
+        release()
+        return result
+    }
+
     private func acquireOrEnqueue() -> WaitHandle? {
         if !inFlight {
             inFlight = true
@@ -127,8 +137,7 @@ final class SerialOperationsClient: RemoteStorageClientProtocol, @unchecked Send
         try await queue.run { try await self.underlying.connect() }
     }
     func disconnect() async {
-        // Force-teardown bypasses the queue; queuing behind a hung op defeats the purpose.
-        await underlying.disconnect()
+        await queue.runUncancellable { await self.underlying.disconnect() }
     }
     func verifyWriteAccess() async throws {
         try await queue.run { try await self.underlying.verifyWriteAccess() }

@@ -185,6 +185,7 @@ extension RemoteStorageClientProtocol {
         nil
     }
 
+    /// Production backends must override this; exists+move is only a best-effort fallback.
     func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
         if try await metadata(path: destinationPath) != nil {
             return .alreadyExists

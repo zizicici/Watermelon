@@ -5,13 +5,28 @@ import CryptoKit
 /// without exclusive create are the durable truth of the repo and cannot
 /// tolerate a peer's bytes silently winning the destination path.
 enum MetadataCreateGate {
-    enum Error: Swift.Error {
-        case staleAfterStagedMove(remotePath: String)
+    enum Error: LocalizedError {
+        case stagingVerificationFailed(remotePath: String, underlying: Swift.Error?)
+        case finalVerificationFailed(remotePath: String, underlying: Swift.Error?)
+
+        var errorDescription: String? {
+            switch self {
+            case .stagingVerificationFailed(let remotePath, let underlying):
+                if let underlying {
+                    return "staged metadata bytes could not be verified at \(remotePath): \(underlying.localizedDescription)"
+                }
+                return "staged metadata bytes diverged at \(remotePath)"
+            case .finalVerificationFailed(let remotePath, let underlying):
+                if let underlying {
+                    return "metadata bytes could not be verified after move at \(remotePath): \(underlying.localizedDescription)"
+                }
+                return "metadata bytes diverged post-move at \(remotePath)"
+            }
+        }
     }
 
     /// `.exclusive` → direct create. `.overwritePossible` → UUID staging path,
-    /// verify, move, post-verify; mismatch surfaces as `.alreadyExists` so the
-    /// caller re-allocates.
+    /// verify, move, post-verify.
     static func createWithStagingFallback(
         client: any RemoteStorageClientProtocol,
         localURL: URL,
@@ -60,6 +75,24 @@ enum MetadataCreateGate {
                 ])
             }
             do {
+                guard try await verifyMatchesLocalWithRetries(
+                    client: client,
+                    remotePath: stagingPath,
+                    localURL: localURL
+                ) else {
+                    try? await client.delete(path: stagingPath)
+                    throw Error.stagingVerificationFailed(remotePath: stagingPath, underlying: nil)
+                }
+            } catch is CancellationError {
+                try? await client.delete(path: stagingPath)
+                throw CancellationError()
+            } catch let error as Error {
+                throw error
+            } catch {
+                try? await client.delete(path: stagingPath)
+                throw Error.stagingVerificationFailed(remotePath: stagingPath, underlying: error)
+            }
+            do {
                 let finalization = try await client.moveIfAbsent(from: stagingPath, to: remotePath)
                 if case .alreadyExists = finalization {
                     do {
@@ -80,24 +113,45 @@ enum MetadataCreateGate {
                 try? await client.delete(path: stagingPath)
                 throw error
             }
-            // A peer can overwrite during the move window; ambiguous retries must re-allocate.
-            for attempt in 0..<3 {
-                do {
-                    if try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL) {
-                        return .created
-                    } else {
-                        return .alreadyExists
-                    }
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    if attempt + 1 < 3 {
-                        try await Task.sleep(for: .milliseconds(200 * (1 << attempt)))
-                    }
+            do {
+                guard try await verifyMatchesLocalWithRetries(
+                    client: client,
+                    remotePath: remotePath,
+                    localURL: localURL
+                ) else {
+                    throw Error.finalVerificationFailed(remotePath: remotePath, underlying: nil)
+                }
+                return .created
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as Error {
+                throw error
+            } catch {
+                throw Error.finalVerificationFailed(remotePath: remotePath, underlying: error)
+            }
+        }
+    }
+
+    private static func verifyMatchesLocalWithRetries(
+        client: any RemoteStorageClientProtocol,
+        remotePath: String,
+        localURL: URL
+    ) async throws -> Bool {
+        var lastError: Swift.Error?
+        for attempt in 0..<3 {
+            do {
+                return try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
+                if attempt + 1 < 3 {
+                    try await Task.sleep(for: .milliseconds(200 * (1 << attempt)))
                 }
             }
-            return .bestEffortRetry
         }
+        if let lastError { throw lastError }
+        return false
     }
 
     private static func verifyMatchesLocal(

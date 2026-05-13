@@ -5,7 +5,7 @@ enum WatermelonRemoteFormat {
     static let versionFileName = "version.json"
 }
 
-struct WatermelonRemoteVersionManifest: Decodable {
+struct WatermelonRemoteVersionManifest: Decodable, Sendable {
     let formatVersion: Int?
     let minAppVersion: String?
     let createdAt: String?
@@ -61,7 +61,7 @@ enum RemoteFormatInspection: Equatable, Sendable {
     case unsupported(minAppVersion: String?)
 }
 
-actor RemoteFormatCompatibilityService {
+struct RemoteFormatCompatibilityService: Sendable {
     private enum MigrationMarkerPhase: Int {
         case phase1 = 1
         case phase2 = 2
@@ -155,9 +155,6 @@ actor RemoteFormatCompatibilityService {
                         return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: cleanup.writerID)
                     }
                     if let stale = markerStates.first {
-                        if stale.phase == .phase1 {
-                            return .v2WithV1Manifests(formatVersion: formatVersion)
-                        }
                         return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: stale.writerID)
                     }
                     return .v2(formatVersion: formatVersion)

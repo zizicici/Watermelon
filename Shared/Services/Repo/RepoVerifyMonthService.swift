@@ -223,6 +223,7 @@ actor RepoVerifyMonthService {
 
         var plan = try await buildTombstonePlan()
         guard !plan.tombstones.isEmpty else { return [] }
+        try Task.checkCancellation()
 
         // Mirror flushV2's alreadyExists retry; concurrent verify or seq drift would otherwise abort cleanup permanently.
         let maxRetries = 4
@@ -246,7 +247,7 @@ actor RepoVerifyMonthService {
                         observedBasis: basis
                     ))
                 ))
-                clockCursor &+= 1
+                if index + 1 < plan.tombstones.count { clockCursor += 1 }
             }
             let seq = try await services.seqAllocator.allocate()
             let header = CommitHeader(
@@ -268,6 +269,7 @@ actor RepoVerifyMonthService {
                 if attempt >= maxRetries { throw CommitLogWriter.WriteError.alreadyExists }
                 plan = try await buildTombstonePlan()
                 if plan.tombstones.isEmpty { return [] }
+                try Task.checkCancellation()
                 continue
             }
         }

@@ -6,8 +6,7 @@ import NIOSSH
 
 final actor SFTPClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
-    // SSH_FXF_EXCL prevents same-path overwrite for a single session, but cross-device peers can still race on a key when one session deletes+recreates; fail-closed.
-    nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .none }
     // POSIX-style: case-sensitive on the wire; the server FS may differ but we can't probe that cheaply.
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     private nonisolated static let chunkSize = 32 * 1024
@@ -353,6 +352,10 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     }
 
     func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        if try await metadata(path: destinationPath) != nil {
+            return .alreadyExists
+        }
+        try Task.checkCancellation()
         do {
             try await move(from: sourcePath, to: destinationPath)
             return .created

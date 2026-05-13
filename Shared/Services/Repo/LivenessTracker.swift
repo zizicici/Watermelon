@@ -67,6 +67,7 @@ actor LivenessTracker {
         // as inactive during the brief window between the old delete and the new create.
         let stagingPath = remotePath + ".staging-\(UUID().uuidString).tmp"
         var lastFailure: Error?
+        var stagingCreated = false
         // Cancellation must surface so shutdown's stopAndWait can unblock past atomicCreate.
         do {
             _ = try await client.atomicCreate(
@@ -74,6 +75,7 @@ actor LivenessTracker {
                 remotePath: stagingPath,
                 respectTaskCancellation: true
             )
+            stagingCreated = true
         } catch is CancellationError {
             try? await client.delete(path: stagingPath)
             return
@@ -81,23 +83,33 @@ actor LivenessTracker {
             lastFailure = error
             try? await client.delete(path: stagingPath)
             livenessLog.warning("[Liveness] staging write failed for \(remotePath, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            return
         }
-        do {
-            try await client.move(from: stagingPath, to: remotePath)
-            return
-        } catch is CancellationError {
+        if Task.isCancelled {
             try? await client.delete(path: stagingPath)
             return
-        } catch {
-            lastFailure = error
         }
-        // S3 copy+delete failure leaves the bytes at remote; deleting it without an intact staging would wipe our liveness.
-        let stagingStillExists = (try? await client.metadata(path: stagingPath))?.isDirectory == false
-        guard stagingStillExists else {
-            if let lastFailure {
+        if stagingCreated {
+            do {
+                try await client.move(from: stagingPath, to: remotePath)
+                return
+            } catch is CancellationError {
+                try? await client.delete(path: stagingPath)
+                return
+            } catch {
+                lastFailure = error
+            }
+            if Task.isCancelled {
+                try? await client.delete(path: stagingPath)
+                return
+            }
+            // S3 copy+delete failure can leave the bytes at remote after staging disappears.
+            let stagingStillExists = (try? await client.metadata(path: stagingPath))?.isDirectory == false
+            if !stagingStillExists, let lastFailure {
                 livenessLog.warning("[Liveness] staging vanished after failed move for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
             }
+        }
+        if Task.isCancelled {
+            try? await client.delete(path: stagingPath)
             return
         }
         do {
@@ -110,6 +122,10 @@ actor LivenessTracker {
         } catch {
             lastFailure = error
         }
+        if Task.isCancelled {
+            try? await client.delete(path: stagingPath)
+            return
+        }
         // Cancellation must surface here too so stopAndWait can unblock during shutdown.
         do {
             _ = try await client.atomicCreate(localURL: temp, remotePath: remotePath, respectTaskCancellation: true)
@@ -121,7 +137,9 @@ actor LivenessTracker {
         } catch {
             lastFailure = error
         }
-        try? await client.delete(path: stagingPath)
+        if stagingCreated {
+            try? await client.delete(path: stagingPath)
+        }
         if let lastFailure {
             livenessLog.warning("[Liveness] all write strategies failed for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
         }

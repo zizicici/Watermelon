@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum RemoteFileNaming {
@@ -341,7 +342,42 @@ enum RemoteFileNaming {
                 return candidate
             }
         }
-        preconditionFailure("RemoteFileNaming exhausted verified emergency fallback")
+        let stableToken = emergencyStableToken(
+            baseName: baseName,
+            writerID: writerID,
+            forceWriterIDSuffix: forceWriterIDSuffix,
+            collisionKeys: collisionKeys
+        )
+        for suffix in 0..<4096 {
+            let token = suffix == 0 ? stableToken : "\(stableToken)-\(String(suffix, radix: 36))"
+            let candidate: String
+            if forceWriterIDSuffix, let writerID {
+                candidate = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: token)
+            } else {
+                let stemBudget = max(maxLeafByteBudget - token.utf8.count - 1 - extBudget.utf8.count, 1)
+                candidate = clampStringToBytes(stem, maxBytes: stemBudget) + "_" + token + extBudget
+            }
+            if !collisionKeys.contains(collisionKey(for: candidate)) {
+                return candidate
+            }
+        }
+        if forceWriterIDSuffix, let writerID {
+            return writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: stableToken)
+        }
+        let stemBudget = max(maxLeafByteBudget - stableToken.utf8.count - 1 - extBudget.utf8.count, 1)
+        return clampStringToBytes(stem, maxBytes: stemBudget) + "_" + stableToken + extBudget
+    }
+
+    private static func emergencyStableToken(
+        baseName: String,
+        writerID: String?,
+        forceWriterIDSuffix: Bool,
+        collisionKeys: Set<String>
+    ) -> String {
+        let seed = ([baseName, writerID ?? "", forceWriterIDSuffix ? "1" : "0"] + collisionKeys.sorted())
+            .joined(separator: "\n")
+        let digest = SHA256.hash(data: Data(seed.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     static func collisionKeySet(from fileNames: Set<String>) -> Set<String> {

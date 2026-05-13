@@ -133,7 +133,7 @@ struct BackupParallelExecutor: Sendable {
         } catch {
             await preparedRun.v2Services?.shutdown()
             await clientPool.shutdown()
-            if profile.isConnectionUnavailableError(error) {
+            if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
                 eventStream.emitLog(String(localized: "backup.parallel.remoteUnavailable"), level: .error)
             } else {
                 eventStream.emitErrorLog(
@@ -205,7 +205,7 @@ struct BackupParallelExecutor: Sendable {
                 let monthStore: any BackupMonthStore
                 do {
                     if let v2Services {
-                        // Seed with overlay so a same-name-same-size corrupted small file the syncIndex content-verified missing stays flagged when the session relists.
+                        // Seed conservatively; the session's fresh listing clears stale overlay misses.
                         let priorMissing = remoteIndexService.physicallyMissingHashes(for: monthKey)
                         monthStore = try await V2MonthSession.loadOrCreate(
                             client: client,
@@ -430,7 +430,7 @@ struct BackupParallelExecutor: Sendable {
                                         }
                                         // Connection-loss: don't keep burning per-asset processing cycles
                                         // before the next per-asset handler notices.
-                                        if profile.isConnectionUnavailableError(error) {
+                                        if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
                                             throw error
                                         }
                                         eventStream.emitLog(
@@ -456,7 +456,7 @@ struct BackupParallelExecutor: Sendable {
                                 selectedResources: selectedResources
                             )
                             let errorMessage = profile.userFacingStorageErrorMessage(error)
-                            if profile.isConnectionUnavailableError(error) {
+                            if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
                                 clientReusable = false
                                 monthFatalError = error
                                 eventStream.emitLog(
@@ -522,7 +522,7 @@ struct BackupParallelExecutor: Sendable {
 
                 let shouldFinishMonth = !workerState.paused && monthFatalError == nil
                 let hadDirtyManifestBeforeFinalize = monthStore.dirty
-                let skipFlushDueToUnavailable = monthFatalError.map(profile.isConnectionUnavailableError) ?? false
+                let skipFlushDueToUnavailable = monthFatalError.map(profile.isConnectionUnavailableErrorIncludingFlushUnderlying) ?? false
 
                 if skipFlushDueToUnavailable {
                     eventStream.emitLog(
@@ -653,7 +653,7 @@ struct BackupParallelExecutor: Sendable {
             await clientPool.release(client, reusable: clientReusable)
             return workerState
         } catch {
-            if profile.isConnectionUnavailableError(error) {
+            if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
                 clientReusable = false
             }
             await clientPool.release(client, reusable: clientReusable)
