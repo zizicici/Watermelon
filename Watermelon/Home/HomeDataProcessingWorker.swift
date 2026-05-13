@@ -27,6 +27,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     private let localIndex = HomeLocalIndexEngine()
     private let remoteIndex = HomeRemoteIndexEngine()
     private var trackedFetchResults: [PHFetchResult<PHAsset>] = []
+    private var trackedFetchResultsRevision: UInt64 = 0
 
     // Compared against `expectedScope` on stale-detectable queries so callers never
     // receive asset IDs from a scope different from the one they asked under.
@@ -157,6 +158,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
             let changedMonths = await withCheckedContinuation { continuation in
                 processingQueue.async {
                     self.trackedFetchResults.removeAll()
+                    self.trackedFetchResultsRevision &+= 1
                     self.loadedScope = nil
                     let cleared = self.localIndex.clearIfNeeded()
                     self.publishSnapshotOnProcessingQueue()
@@ -171,6 +173,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 let results = self.photoLibraryService.fetchResults(query: scope.photoLibraryQuery)
                 let snapshotsPerCollection = results.map(snapshots(of:))
                 self.trackedFetchResults = results
+                self.trackedFetchResultsRevision &+= 1
                 let fingerprintByAsset = self.fetchAllFingerprints(in: results)
                 let changed = self.localIndex.reload(
                     payload: LibraryInitialPayload(collections: snapshotsPerCollection),
@@ -301,9 +304,16 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         _ change: PHChange,
         completion: @escaping (Set<LibraryMonthKey>) -> Void
     ) {
-        let extraction: (scope: HomeLocalLibraryScope?, changes: [LibraryChangePayload.CollectionChange]) = processingQueue.sync {
+        let extraction: (
+            scope: HomeLocalLibraryScope?,
+            revision: UInt64,
+            changes: [LibraryChangePayload.CollectionChange],
+            nextResults: [(Int, PHFetchResult<PHAsset>)]
+        ) = processingQueue.sync {
             var result: [LibraryChangePayload.CollectionChange] = []
+            var nextResults: [(Int, PHFetchResult<PHAsset>)] = []
             result.reserveCapacity(self.trackedFetchResults.count)
+            nextResults.reserveCapacity(self.trackedFetchResults.count)
             for index in self.trackedFetchResults.indices {
                 let fetchResult = self.trackedFetchResults[index]
                 guard let details = change.changeDetails(for: fetchResult) else { continue }
@@ -341,15 +351,25 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 }
 
                 result.append(entry)
-                self.trackedFetchResults[index] = nextFetchResult
+                nextResults.append((index, nextFetchResult))
             }
-            return (scope: self.loadedScope, changes: result)
+            return (
+                scope: self.loadedScope,
+                revision: self.trackedFetchResultsRevision,
+                changes: result,
+                nextResults: nextResults
+            )
         }
         guard !extraction.changes.isEmpty else { return }
 
         processingQueue.async {
             // Scope-changed between extract and apply: drop payload (collectionIndex no longer matches).
-            guard self.loadedScope == extraction.scope else { return }
+            guard self.loadedScope == extraction.scope,
+                  self.trackedFetchResultsRevision == extraction.revision else { return }
+            for (index, nextResult) in extraction.nextResults where self.trackedFetchResults.indices.contains(index) {
+                self.trackedFetchResults[index] = nextResult
+            }
+            self.trackedFetchResultsRevision &+= 1
             let changedMonths = self.localIndex.applyChange(
                 LibraryChangePayload(collectionChanges: extraction.changes),
                 fingerprintsForIDs: self.fetchFingerprintsForIDs,
@@ -576,6 +596,7 @@ extension HomeDataProcessingWorker {
                 fingerprintByAsset: [:],
                 remoteFingerprintsForMonth: { _ in [] }
             )
+            self.trackedFetchResultsRevision &+= 1
             self.loadedScope = scope
             self.publishSnapshotOnProcessingQueue()
         }

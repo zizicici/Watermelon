@@ -141,6 +141,10 @@ actor RepoMaterializer {
                     }
                 }
                 for resource in file.resources {
+                    guard Self.resourcePath(resource.physicalRemotePath, belongsTo: month) else {
+                        materializerLog.warning("skip snapshot resource outside month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
+                        continue
+                    }
                     state.resources[resource.physicalRemotePath] = resource
                 }
                 for ar in file.assetResources {
@@ -295,6 +299,10 @@ actor RepoMaterializer {
             var state = monthStates[sorted.month] ?? .empty
             switch sorted.op.body {
             case .addAsset(let body):
+                guard body.resources.allSatisfy({ Self.resourcePath($0.physicalRemotePath, belongsTo: sorted.month) }) else {
+                    materializerLog.warning("skip addAsset with resource outside month=\(sorted.month.text, privacy: .public)")
+                    continue
+                }
                 let incoming = OpStamp(writerID: sorted.writerID, seq: sorted.seq, clock: sorted.op.clock)
                 if let baselineStamp = state.assets[body.assetFingerprint]?.stamp,
                    opStampPrecedes(incoming, baselineStamp) {
@@ -383,5 +391,14 @@ actor RepoMaterializer {
         if stamp.clock > basis.lamportWatermark { return true }
         let prevMax = basis.perWriterMaxSeq[stamp.writerID] ?? 0
         return stamp.seq > prevMax
+    }
+
+    private static func resourcePath(_ path: String, belongsTo month: LibraryMonthKey) -> Bool {
+        let components = RemotePathBuilder.normalizeRelativePath(path)
+            .split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 3, !components[2].isEmpty else { return false }
+        let expectedYear = String(format: "%04d", month.year)
+        let expectedMonth = String(format: "%02d", month.month)
+        return String(components[0]) == expectedYear && String(components[1]) == expectedMonth
     }
 }

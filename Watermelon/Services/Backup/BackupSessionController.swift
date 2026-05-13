@@ -358,6 +358,9 @@ enum State {
             if Task.isCancelled {
                 if runToken != nil {
                     self.runDriver.cancelRunTask()
+                    self.session.resolveStartCancellation(mode: mode)
+                    self.activeTerminationIntent = .none
+                    self.notifyObserversNow()
                 } else {
                     self.session.resolveStartCancellation(mode: mode)
                     self.activeTerminationIntent = .none
@@ -642,6 +645,12 @@ enum State {
                 if Task.isCancelled || self.activeTerminationIntent != .none {
                     if runToken != nil {
                         self.runDriver.cancelRunTask()
+                        self.session.cancelResume(
+                            pausedMode: resumeContext.pausedMode,
+                            pausedDisplayMode: resumeContext.pausedDisplayMode
+                        )
+                        self.activeTerminationIntent = .none
+                        self.notifyObserversNow()
                         return
                     }
                     throw CancellationError()

@@ -77,13 +77,19 @@ actor LivenessTracker {
         do {
             try await client.move(from: stagingPath, to: remotePath)
             return
+        } catch is CancellationError {
+            try? await client.delete(path: stagingPath)
+            return
         } catch {}
         // S3 copy+delete failure leaves the bytes at remote; deleting it without an intact staging would wipe our liveness.
         let stagingStillExists = (try? await client.metadata(path: stagingPath))?.isDirectory == false
         guard stagingStillExists else { return }
-        try? await client.delete(path: remotePath)
         do {
-            try await client.move(from: stagingPath, to: remotePath)
+            try await client.upload(localURL: temp, remotePath: remotePath, respectTaskCancellation: true, onProgress: nil)
+            try? await client.delete(path: stagingPath)
+            return
+        } catch is CancellationError {
+            try? await client.delete(path: stagingPath)
             return
         } catch {}
         // Cancellation must surface here too so stopAndWait can unblock during shutdown.

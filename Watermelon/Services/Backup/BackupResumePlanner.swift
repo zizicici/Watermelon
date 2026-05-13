@@ -27,7 +27,7 @@ final class BackupResumePlanner {
     ) async throws -> BackupResumePlan {
         switch pausedMode {
         case .retry(let assetIDs):
-            let pending = try filterPending(
+            let pending = try await filterPending(
                 assetIDs: assetIDs,
                 completedAssetIDs: completedAssetIDs,
                 dedupMode: dedupMode
@@ -37,7 +37,7 @@ final class BackupResumePlanner {
             )
 
         case .scoped(let assetIDs):
-            let pending = try filterPending(
+            let pending = try await filterPending(
                 assetIDs: assetIDs,
                 completedAssetIDs: completedAssetIDs,
                 dedupMode: dedupMode
@@ -61,7 +61,7 @@ final class BackupResumePlanner {
         assetIDs: Set<String>,
         completedAssetIDs: Set<String>,
         dedupMode: BackupResumeDedupMode
-    ) throws -> Set<String> {
+    ) async throws -> Set<String> {
         switch dedupMode {
         case .v1CompletedIDs:
             return assetIDs.subtracting(completedAssetIDs)
@@ -75,16 +75,8 @@ final class BackupResumePlanner {
             let committedView = handle.committedAssetFingerprintsByMonth
             var pending = assetIDs
             let records = try hashIndexRepository.fetchAssetFingerprintRecords(assetIDs: pending)
-            let phAssets = Self.phAssets(forAssetIDs: Array(records.keys))
-            for (id, record) in records {
-                guard Self.cacheRowIsTrustworthy(record) else { continue }
-                guard let phAsset = phAssets[id] else { continue }
-                guard Self.cachedSignatureMatchesCurrent(record: record, phAsset: phAsset) else { continue }
-                let month = Self.libraryMonth(from: phAsset.creationDate)
-                guard committedView.contains(record.fingerprint, in: month) else { continue }
-                if let modDate = phAsset.modificationDate, modDate > record.updatedAt { continue }
-                pending.remove(id)
-            }
+            let covered = await Self.assetIDsCoveredByRemote(records: records, committedView: committedView)
+            pending.subtract(covered)
             return pending
         }
     }
@@ -96,6 +88,7 @@ final class BackupResumePlanner {
     }
 
     /// Mirrors AssetProcessor.processWithLocalCache: a same-asset-id resource-shape change leaves the cached fingerprint stale, so the planner must refuse to trust it.
+    @MainActor
     private static func cachedSignatureMatchesCurrent(record: LocalAssetFingerprintRecord, phAsset: PHAsset) -> Bool {
         guard let cachedSignature = record.resourceSignature else { return false }
         let currentResources = PHAssetResource.assetResources(for: phAsset)
@@ -108,6 +101,7 @@ final class BackupResumePlanner {
         LibraryMonthKey.from(date: date)
     }
 
+    @MainActor
     private static func phAssets(forAssetIDs ids: [String]) -> [String: PHAsset] {
         guard !ids.isEmpty else { return [:] }
         let fetched = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
@@ -118,6 +112,37 @@ final class BackupResumePlanner {
             result[asset.localIdentifier] = asset
         }
         return result
+    }
+
+    @MainActor
+    private static func assetIDsForFullRun(photoLibraryService: PhotoLibraryService) -> [String] {
+        let assets = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
+        var ids: [String] = []
+        ids.reserveCapacity(assets.count)
+        for index in 0 ..< assets.count {
+            ids.append(assets.object(at: index).localIdentifier)
+        }
+        return ids
+    }
+
+    @MainActor
+    private static func assetIDsCoveredByRemote(
+        records: [String: LocalAssetFingerprintRecord],
+        committedView: PerMonth<Set<Data>>
+    ) -> Set<String> {
+        let phAssets = phAssets(forAssetIDs: Array(records.keys))
+        var covered: Set<String> = []
+        covered.reserveCapacity(records.count)
+        for (id, record) in records {
+            guard cacheRowIsTrustworthy(record) else { continue }
+            guard let phAsset = phAssets[id] else { continue }
+            guard cachedSignatureMatchesCurrent(record: record, phAsset: phAsset) else { continue }
+            let month = libraryMonth(from: phAsset.creationDate)
+            guard committedView.contains(record.fingerprint, in: month) else { continue }
+            if let modDate = phAsset.modificationDate, modDate > record.updatedAt { continue }
+            covered.insert(id)
+        }
+        return covered
     }
 
     private func computePendingAssetIDsForFullRun(
@@ -136,20 +161,18 @@ final class BackupResumePlanner {
             throw BackupError.photoPermissionDenied
         }
 
-        let photoLibraryService = self.photoLibraryService
+        let allAssetIDs = await Self.assetIDsForFullRun(photoLibraryService: photoLibraryService)
         let hashIndexRepository = self.hashIndexRepository
         let planningTask = Task.detached(priority: .userInitiated) {
-            let assets = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
             let useHashDedup: Bool
             switch dedupMode {
             case .v1CompletedIDs: useHashDedup = false
             case .v2: useHashDedup = true
             }
             var pendingIDs: [String] = []
-            pendingIDs.reserveCapacity(max(assets.count - (useHashDedup ? 0 : completedAssetIDs.count), 0))
-            for index in 0 ..< assets.count {
+            pendingIDs.reserveCapacity(max(allAssetIDs.count - (useHashDedup ? 0 : completedAssetIDs.count), 0))
+            for assetID in allAssetIDs {
                 try Task.checkCancellation()
-                let assetID = assets.object(at: index).localIdentifier
                 if useHashDedup || !completedAssetIDs.contains(assetID) {
                     pendingIDs.append(assetID)
                 }
@@ -163,18 +186,9 @@ final class BackupResumePlanner {
                 try Task.checkCancellation()
                 let records = try repository.fetchAssetFingerprintRecords(assetIDs: pending)
                 try Task.checkCancellation()
-                let phAssets = Self.phAssets(forAssetIDs: Array(records.keys))
+                let covered = await Self.assetIDsCoveredByRemote(records: records, committedView: committedView)
                 try Task.checkCancellation()
-                for (id, record) in records {
-                    try Task.checkCancellation()
-                    guard Self.cacheRowIsTrustworthy(record) else { continue }
-                    guard let phAsset = phAssets[id] else { continue }
-                    guard Self.cachedSignatureMatchesCurrent(record: record, phAsset: phAsset) else { continue }
-                    let month = Self.libraryMonth(from: phAsset.creationDate)
-                    guard committedView.contains(record.fingerprint, in: month) else { continue }
-                    if let modDate = phAsset.modificationDate, modDate > record.updatedAt { continue }
-                    pending.remove(id)
-                }
+                pending.subtract(covered)
             }
             return pending
         }

@@ -173,20 +173,32 @@ final class RepoCommittedView: @unchecked Sendable {
         _ month: LibraryMonthKey,
         resources: [RemoteManifestResource],
         assets: [RemoteManifestAsset],
-        assetResourceLinks: [RemoteAssetResourceLink]
+        assetResourceLinks: [RemoteAssetResourceLink],
+        physicallyMissingHashes: Set<Data>? = nil
     ) -> Bool {
         missingLock.lock()
         defer { missingLock.unlock() }
+        let previousMissing = physicallyMissingByMonth[month] ?? []
         let result = cache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: assetResourceLinks)
-        // Hashes no longer in the manifest aren't "missing" — they're tombstoned. Carry overlay hashes forward only when they still appear in the new manifest.
-        if let previous = physicallyMissingByMonth[month] {
-            let stillPresent = Set(resources.map(\.contentHash))
+        let stillPresent = Set(resources.map(\.contentHash))
+        if let physicallyMissingHashes {
+            let refined = physicallyMissingHashes.intersection(stillPresent)
+            if refined.isEmpty {
+                physicallyMissingByMonth.remove(month)
+            } else {
+                physicallyMissingByMonth.set(refined, for: month)
+            }
+        } else if let previous = physicallyMissingByMonth[month] {
             let intersected = previous.intersection(stillPresent)
             if intersected.isEmpty {
                 physicallyMissingByMonth.remove(month)
             } else if intersected != previous {
                 physicallyMissingByMonth.set(intersected, for: month)
             }
+        }
+        let currentMissing = physicallyMissingByMonth[month] ?? []
+        if currentMissing != previousMissing {
+            cache.markMonthsChanged([month])
         }
         return result
     }

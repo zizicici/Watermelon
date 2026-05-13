@@ -89,7 +89,15 @@ actor RepoVerifyMonthService {
     ) async throws -> (Data) async throws -> Bool {
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
-        let entries = try await client.list(path: monthAbsolutePath)
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: monthAbsolutePath)
+        } catch {
+            if isStorageNotFoundError(error) {
+                return { _ in false }
+            }
+            throw error
+        }
         let caseSensitive = client.backendNameCaseSensitivity == .caseSensitive
         func presenceKey(_ name: String) -> String {
             caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
@@ -112,6 +120,7 @@ actor RepoVerifyMonthService {
                 hash: resource.contentHash
             ))
         }
+        let smallLimit = RemoteContentTrust.defaultSmallFileLimitBytes
         let clientRef = client
         let basePathRef = basePath
         return { hash in
@@ -120,6 +129,9 @@ actor RepoVerifyMonthService {
                 let listed = entriesByKey[candidate.key] ?? []
                 let sizeMatches = listed.filter { $0.size == candidate.size }
                 if sizeMatches.isEmpty { continue }
+                if candidate.size >= smallLimit {
+                    return true
+                }
                 for match in sizeMatches {
                     let path = RemotePathBuilder.absolutePath(
                         basePath: basePathRef,
@@ -174,10 +186,6 @@ actor RepoVerifyMonthService {
         for (writer, ranges) in coveredAtObservation.rangesByWriter {
             perWriterMaxSeq[writer] = ranges.map(\.high).max() ?? 0
         }
-        let basis = TombstoneObservationBasis(
-            perWriterMaxSeq: perWriterMaxSeq,
-            lamportWatermark: fresh.state.observedClock
-        )
 
         var stillEligible: [VerifyMonthReportItem] = []
         for item in eligible {
@@ -210,6 +218,10 @@ actor RepoVerifyMonthService {
         let maxRetries = 4
         var attempt = 0
         while true {
+            let basis = TombstoneObservationBasis(
+                perWriterMaxSeq: perWriterMaxSeq,
+                lamportWatermark: await services.lamport.value()
+            )
             let clockRange = try await services.lamport.tickRange(count: tombstones.count)
             var clockCursor = clockRange.low
             var ops: [CommitOp] = []

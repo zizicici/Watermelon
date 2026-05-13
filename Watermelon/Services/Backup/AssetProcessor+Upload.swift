@@ -134,6 +134,11 @@ extension AssetProcessor {
         let baseCollides = collisionKeys.contains(RemoteFileNaming.collisionKey(for: baseFileName))
 
         var claimCandidates: [(name: String, knownSize: Int64?)] = []
+        if baseCollides {
+            let manifestSize = monthStore.findByFileName(baseFileName)?.fileSize
+                ?? monthStore.remoteFileSize(named: baseFileName)
+            claimCandidates.append((baseFileName, manifestSize))
+        }
         if forceWriterIDSuffix, let writerID {
             let candidates: [String]
             if let runID {
@@ -173,10 +178,6 @@ extension AssetProcessor {
                 attemptedFileNames.insert(candidate)
                 claimCandidates.append((candidate, remoteSize))
             }
-        } else if baseCollides {
-            let manifestSize = monthStore.findByFileName(baseFileName)?.fileSize
-                ?? monthStore.remoteFileSize(named: baseFileName)
-            claimCandidates.append((baseFileName, manifestSize))
         }
 
         let smallFileLimit = RemoteContentTrust.defaultSmallFileLimitBytes
@@ -359,13 +360,35 @@ extension AssetProcessor {
                     throw error
                 }
                 if case .alreadyExists = createResult {
-                    let differsOrUnknown = await Self.detectRemoteContentRace(
-                        client: client,
-                        remotePath: uploadPreparation.remoteAbsolutePath,
-                        expectedSize: prepared.fileSize,
-                        expectedHash: prepared.contentHash,
-                        cancellationController: cancellationController
-                    )
+                    let differsOrUnknown: Bool
+                    do {
+                        differsOrUnknown = try await Self.detectRemoteContentRace(
+                            client: client,
+                            remotePath: uploadPreparation.remoteAbsolutePath,
+                            expectedSize: prepared.fileSize,
+                            expectedHash: prepared.contentHash,
+                            cancellationController: cancellationController
+                        )
+                    } catch {
+                        if error is CancellationError || Task.isCancelled || cancellationController?.isCancelled == true {
+                            throw CancellationError()
+                        }
+                        if profile.isConnectionUnavailableError(error) {
+                            throw error
+                        }
+                        let reason = profile.userFacingStorageErrorMessage(error)
+                        print("[BackupUpload] already-exists verify FALLBACK_RENAME: asset=\(displayName), resource=\(local.originalFilename), file=\(uploadPreparation.targetFileName), reason=\(reason)")
+                        eventStream.emitLog(
+                            String.localizedStringWithFormat(
+                                String(localized: "backup.log.remoteHashDownloadFallbackRename"),
+                                displayName,
+                                uploadPreparation.targetFileName,
+                                reason
+                            ),
+                            level: .warning
+                        )
+                        differsOrUnknown = true
+                    }
                     if differsOrUnknown {
                         let previousFileName = uploadPreparation.targetFileName
                         try advanceUploadPreparationToNextName(
@@ -381,7 +404,7 @@ extension AssetProcessor {
                 }
                 if case .bestEffortRetry = createResult {
                     // Ambiguous create must prove bytes before manifest binding.
-                    let raceDetected = await Self.detectRemoteContentRace(
+                    let raceDetected = try await Self.detectRemoteContentRace(
                         client: client,
                         remotePath: uploadPreparation.remoteAbsolutePath,
                         expectedSize: prepared.fileSize,
@@ -635,24 +658,43 @@ extension AssetProcessor {
         expectedSize: Int64,
         expectedHash: Data,
         cancellationController: BackupCancellationController?
-    ) async -> Bool {
+    ) async throws -> Bool {
+        try cancellationController?.throwIfCancelled()
+        try Task.checkCancellation()
         let entry: RemoteStorageEntry?
         do {
             entry = try await client.metadata(path: remotePath)
         } catch {
-            return true
+            if error is CancellationError || Task.isCancelled || cancellationController?.isCancelled == true {
+                throw CancellationError()
+            }
+            throw error
         }
-        guard let entry, !entry.isDirectory else { return true }
+        guard let entry else {
+            throw NSError(
+                domain: "AssetProcessor.Upload",
+                code: -121,
+                userInfo: [NSLocalizedDescriptionKey: "remote upload verification could not find \(remotePath)"]
+            )
+        }
+        guard !entry.isDirectory else { return true }
         if entry.size != expectedSize { return true }
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("upload-verify-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tempURL) }
         do {
+            try cancellationController?.throwIfCancelled()
+            try Task.checkCancellation()
             try await client.download(remotePath: remotePath, localURL: tempURL)
+            try cancellationController?.throwIfCancelled()
+            try Task.checkCancellation()
             let actualHash = try Self.contentHash(of: tempURL, cancellationController: cancellationController)
             return actualHash != expectedHash
         } catch {
-            return true
+            if error is CancellationError || Task.isCancelled || cancellationController?.isCancelled == true {
+                throw CancellationError()
+            }
+            throw error
         }
     }
 

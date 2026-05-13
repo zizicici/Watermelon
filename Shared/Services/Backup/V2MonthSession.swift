@@ -309,8 +309,12 @@ final class V2MonthSession: BackupMonthStore {
     }
 
     func findByFileName(_ logicalName: String) -> RemoteManifestResource? {
-        assert(!logicalName.contains("/"), "findByFileName takes a leaf, got: \(logicalName)")
-        guard let resource = resourcesByLeafName[logicalName] else { return nil }
+        assert(!logicalName.contains("/"), "findByFileName takes a leaf name, got: \(logicalName)")
+        let leafName = logicalName
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .last
+            .map(String.init) ?? logicalName
+        guard let resource = resourcesByLeafName[leafName] else { return nil }
         if physicallyMissingPaths.contains(resource.physicalRemotePath) { return nil }
         return resource
     }
@@ -474,11 +478,6 @@ final class V2MonthSession: BackupMonthStore {
         for (writer, ranges) in priorCovered.rangesByWriter {
             perWriterMaxSeq[writer] = ranges.map(\.high).max() ?? 0
         }
-        let lamportWatermark = max(observedClockAtLoad, await services.lamport.value())
-        let observedBasis = TombstoneObservationBasis(
-            perWriterMaxSeq: perWriterMaxSeq,
-            lamportWatermark: lamportWatermark
-        )
 
         // Retry on alreadyExists — local seq drift can produce a colliding filename.
         let maxRetries = 4
@@ -487,6 +486,11 @@ final class V2MonthSession: BackupMonthStore {
         var committedAddAssetClocks: [Data: UInt64] = [:]
         var committedTombstoneClocks: [Data: UInt64] = [:]
         while true {
+            let lamportWatermark = max(observedClockAtLoad, await services.lamport.value())
+            let observedBasis = TombstoneObservationBasis(
+                perWriterMaxSeq: perWriterMaxSeq,
+                lamportWatermark: lamportWatermark
+            )
             let clockRange = try await services.lamport.tickRange(count: opCount)
             var clockCursor = clockRange.low
             var ops: [CommitOp] = []

@@ -86,6 +86,9 @@ struct BackupRunPreparationService: Sendable {
                     if error is BackupCompatibilityError {
                         throw error
                     }
+                    if v2Services != nil {
+                        throw error
+                    }
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.log.remoteIndexScanWarning"),
@@ -291,10 +294,15 @@ struct BackupRunPreparationService: Sendable {
         defer { try? FileManager.default.removeItem(at: tempURL) }
         try await client.download(remotePath: versionPath, localURL: tempURL)
         let data = try Data(contentsOf: tempURL)
-        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let object: Any
+        do {
+            object = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw BackupCompatibilityError.damagedV2Repo
+        }
+        guard let dict = object as? [String: Any],
               let formatVersion = dict["format_version"] as? Int else {
-            // Treat parse failure as V1 — refusing here would block recovery via verify.
-            return .v1
+            throw BackupCompatibilityError.damagedV2Repo
         }
         if formatVersion > RepoLayout.currentSupportedFormatVersion {
             return .unsupported(minAppVersion: dict["min_app_version"] as? String)
@@ -313,8 +321,9 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord? = nil,
         password: String? = nil
     ) async throws -> VerifyMonthReport {
+        let metadataClient = wrapIfSerial(client)
         // Verifier needs remote repoID to filter foreign-id commits; absent on a V2 repo means broken identity, refuse.
-        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
+        let bootstrap = RepoBootstrap(client: metadataClient, basePath: basePath)
         let expectedRepoID: String
         switch try await bootstrap.loadRepoIDStrict() {
         case .absent:
@@ -326,11 +335,10 @@ struct BackupRunPreparationService: Sendable {
         case .found(let id):
             expectedRepoID = id
         }
-        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: expectedRepoID)
+        let verifier = RepoVerifyMonthService(client: metadataClient, basePath: basePath, expectedRepoID: expectedRepoID)
         var report = try await verifier.verify(month: month)
         if !report.cleanupCandidates.isEmpty, let profile, let password {
             _ = password
-            let metadataClient = wrapIfSerial(client)
             let v2: BackupV2RuntimeServices
             do {
                 v2 = try await BackupV2RuntimeBuilder.build(

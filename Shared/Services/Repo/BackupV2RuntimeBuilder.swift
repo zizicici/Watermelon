@@ -40,34 +40,47 @@ enum BackupV2RuntimeBuilder {
         case .unsupported(let minAppVersion):
             throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
         case .v2:
-            let localRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
-            if localRepoID == nil {
-                // No local cache + no remote identity + V2 data present = minting a new UUID would orphan existing commits.
-                let remoteIdentity = try await bootstrap.loadRepoID()
-                if remoteIdentity == nil,
+            let remoteRepoID = try await bootstrap.loadRepoID()
+            let localRepoID: String?
+            if let remoteRepoID {
+                let matchingState = try await identity.loadRepoState(profileID: profileID, repoID: remoteRepoID)
+                localRepoID = matchingState?.repoID
+            } else {
+                localRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
+                if localRepoID == nil,
                    try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
                     throw BackupV2RuntimeBuildError.damagedV2Repo
                 }
             }
-            let suggested = localRepoID ?? UUID().uuidString.lowercased()
+            let suggested = remoteRepoID ?? localRepoID ?? UUID().uuidString.lowercased()
             resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggested, writerID: writerID)
-            if let localRepoID, resolvedRepoID != localRepoID {
+            if let remoteRepoID, resolvedRepoID != remoteRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remoteRepoID, remote: resolvedRepoID)
+            }
+            if remoteRepoID == nil, let localRepoID, resolvedRepoID != localRepoID {
                 throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: localRepoID, remote: resolvedRepoID)
             }
             // WebDAV/SMB/SFTP don't auto-create parents on PUT.
             try await bootstrap.ensureSubdirectories()
         case .v2WithPendingMigrationCleanup(_, let ownerWriterID):
-            let localRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
-            if localRepoID == nil {
-                let remoteIdentity = try await bootstrap.loadRepoID()
-                if remoteIdentity == nil,
+            let remoteRepoID = try await bootstrap.loadRepoID()
+            let localRepoID: String?
+            if let remoteRepoID {
+                let matchingState = try await identity.loadRepoState(profileID: profileID, repoID: remoteRepoID)
+                localRepoID = matchingState?.repoID
+            } else {
+                localRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
+                if localRepoID == nil,
                    try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
                     throw BackupV2RuntimeBuildError.damagedV2Repo
                 }
             }
-            let suggested = localRepoID ?? UUID().uuidString.lowercased()
+            let suggested = remoteRepoID ?? localRepoID ?? UUID().uuidString.lowercased()
             resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggested, writerID: writerID)
-            if let localRepoID, resolvedRepoID != localRepoID {
+            if let remoteRepoID, resolvedRepoID != remoteRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remoteRepoID, remote: resolvedRepoID)
+            }
+            if remoteRepoID == nil, let localRepoID, resolvedRepoID != localRepoID {
                 throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: localRepoID, remote: resolvedRepoID)
             }
             try await bootstrap.ensureSubdirectories()
@@ -150,9 +163,9 @@ enum BackupV2RuntimeBuilder {
         // Observe peer clocks/seq before allocating so our writes can't land below them.
         let materializer = RepoMaterializer(client: client, basePath: profile.basePath)
         let output = try await materializer.materialize(expectedRepoID: resolvedRepoID)
-        let ourRemoteMax = output.observedSeqByWriter[writerID] ?? 0
-        if ourRemoteMax > initialSeq {
-            try await allocator.observeRemoteMax(ourRemoteMax)
+        let remoteSeqMax = output.observedSeqByWriter.values.max() ?? 0
+        if remoteSeqMax > initialSeq {
+            try await allocator.observeRemoteMax(remoteSeqMax)
         }
         if output.state.observedClock > initialClock {
             try await lamport.observe(output.state.observedClock)

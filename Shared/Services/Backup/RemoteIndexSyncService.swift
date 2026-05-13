@@ -681,19 +681,30 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         _ month: LibraryMonthKey,
         resources: [RemoteManifestResource],
         assets: [RemoteManifestAsset],
-        links: [RemoteAssetResourceLink]
+        links: [RemoteAssetResourceLink],
+        physicallyMissingHashes: Set<Data>? = nil
     ) {
         optimisticMutationLock.withLock {
-            _ = committedView.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links)
+            _ = committedView.replaceMonth(
+                month,
+                resources: resources,
+                assets: assets,
+                assetResourceLinks: links,
+                physicallyMissingHashes: physicallyMissingHashes
+            )
         }
     }
 
     func markPhysicallyMissingV2(month: LibraryMonthKey, hashes: Set<Data>) {
-        committedView.markPhysicallyMissing(month: month, hashes: hashes)
+        optimisticMutationLock.withLock {
+            committedView.markPhysicallyMissing(month: month, hashes: hashes)
+        }
     }
 
     func physicallyMissingHashes(for month: LibraryMonthKey) -> Set<Data> {
-        committedView.physicallyMissingHashes(for: month)
+        optimisticMutationLock.withLock {
+            committedView.physicallyMissingHashes(for: month)
+        }
     }
 
     func physicallyMissingHashesForTest(month: LibraryMonthKey) -> Set<Data> {
@@ -701,7 +712,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func physicallyMissingSnapshot() -> [LibraryMonthKey: Set<Data>] {
-        committedView.physicallyMissingSnapshot()
+        optimisticMutationLock.withLock {
+            committedView.physicallyMissingSnapshot()
+        }
     }
 
     @discardableResult
@@ -779,7 +792,15 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         try Task.checkCancellation()
         let monthRel = String(format: "%04d/%02d", month.year, month.month)
         let monthAbs = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRel)
-        let entries = try await client.list(path: monthAbs)
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: monthAbs)
+        } catch {
+            if isStorageNotFoundError(error) {
+                return (month, Set(resources.map(\.contentHash)))
+            }
+            throw error
+        }
         try Task.checkCancellation()
         // Folding on a case-sensitive backend would equate IMG.JPG/img.jpg as one file.
         let caseSensitive = client.backendNameCaseSensitivity == .caseSensitive

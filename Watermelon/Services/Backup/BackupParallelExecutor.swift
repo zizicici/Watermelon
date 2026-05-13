@@ -19,7 +19,11 @@ private actor BackupThermalThrottle {
             return
         case .critical:
             while !Task.isCancelled, ProcessInfo.processInfo.thermalState == .critical {
-                try? await Task.sleep(for: .seconds(10))
+                do {
+                    try await Task.sleep(for: .seconds(10))
+                } catch {
+                    return
+                }
             }
         @unknown default:
             return
@@ -248,11 +252,8 @@ struct BackupParallelExecutor: Sendable {
                     monthKey,
                     resources: loadedSnapshot.resources,
                     assets: loadedSnapshot.assets,
-                    links: loadedSnapshot.links
-                )
-                remoteIndexService.markPhysicallyMissingV2(
-                    month: monthKey,
-                    hashes: monthStore.physicallyMissingHashesSnapshot()
+                    links: loadedSnapshot.links,
+                    physicallyMissingHashes: monthStore.physicallyMissingHashesSnapshot()
                 )
 
                 eventStream.emitLog(
@@ -553,7 +554,6 @@ struct BackupParallelExecutor: Sendable {
                                 case .success:
                                     emitCompleted()
                                 case .downloadIncomplete(let message):
-                                    // Without `.completed`, BackupSessionState's completedMonths never catches up and Home shows the month "in progress" forever.
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(
                                             String(localized: "backup.parallel.finalizationFailed"),

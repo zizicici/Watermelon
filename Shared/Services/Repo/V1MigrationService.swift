@@ -113,22 +113,57 @@ actor V1MigrationService {
             let resourcesByHash: [Data: RemoteManifestResource] = Dictionary(uniqueKeysWithValues: snapshot.resources.map { ($0.contentHash, $0) })
             let linksByAssetFP: [Data: [RemoteAssetResourceLink]] = Dictionary(grouping: snapshot.links, by: { $0.assetFingerprint })
 
-            // Empty resources[] commits as a phantom V2 asset that restore can't reconstruct.
-            let migrableAssets = snapshot.assets.filter { asset in
+            var migrableAssets: [(asset: RemoteManifestAsset, resources: [CommitResourceEntry])] = []
+            migrableAssets.reserveCapacity(snapshot.assets.count)
+            var skippedAssetFailures: [String] = []
+            for asset in snapshot.assets {
                 let links = linksByAssetFP[asset.assetFingerprint] ?? []
                 if links.isEmpty {
-                    v1MigrationLog.warning("V1 asset \(asset.assetFingerprint.hexString, privacy: .public) in \(scanned.year)-\(scanned.month) has no resource links — migration cannot continue")
-                    return false
+                    let reason = "asset \(asset.assetFingerprint.hexString) has no resource links"
+                    skippedAssetFailures.append(reason)
+                    v1MigrationLog.warning("V1 asset \(asset.assetFingerprint.hexString, privacy: .public) in \(scanned.year)-\(scanned.month) has no resource links")
+                    continue
                 }
-                return true
+                var resourcesForOp: [CommitResourceEntry] = []
+                resourcesForOp.reserveCapacity(links.count)
+                var missingResourceHash: Data?
+                for link in links {
+                    guard let res = resourcesByHash[link.resourceHash] else {
+                        missingResourceHash = link.resourceHash
+                        break
+                    }
+                    resourcesForOp.append(CommitResourceEntry(
+                        physicalRemotePath: res.physicalRemotePath,
+                        logicalName: link.logicalName.isEmpty ? res.logicalName : link.logicalName,
+                        contentHash: res.contentHash,
+                        fileSize: res.fileSize,
+                        resourceType: res.resourceType,
+                        role: link.role,
+                        slot: link.slot,
+                        crypto: res.crypto
+                    ))
+                }
+                if let missingResourceHash {
+                    let reason = "asset \(asset.assetFingerprint.hexString) references missing resource \(missingResourceHash.hexString)"
+                    skippedAssetFailures.append(reason)
+                    v1MigrationLog.warning("V1 asset \(asset.assetFingerprint.hexString, privacy: .public) in \(scanned.year)-\(scanned.month) references missing resource \(missingResourceHash.hexString, privacy: .public)")
+                    continue
+                }
+                migrableAssets.append((asset, resourcesForOp))
             }
-            if migrableAssets.count != snapshot.assets.count {
+            if let firstSkipped = skippedAssetFailures.first {
                 throw NSError(
                     domain: "V1MigrationService",
-                    code: -12,
-                    userInfo: [NSLocalizedDescriptionKey:
-                        "V1 manifest \(scanned.year)-\(scanned.month) contains asset rows without resource links — migration aborted"]
+                    code: -31,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "V1 manifest \(scanned.year)-\(scanned.month) has \(skippedAssetFailures.count) asset integrity issue(s); leaving source manifest in place: \(firstSkipped)"
+                    ]
                 )
+            }
+            if migrableAssets.isEmpty {
+                v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) has no migrable assets; quarantining as legacy residue")
+                try await quarantineV1ResidueManifest(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
+                continue
             }
             let migrationMaxRetries = 4
             var migrationAttempt = 0
@@ -140,35 +175,13 @@ actor V1MigrationService {
                 var clockCursor = clockRange.low
                 var pendingOps: [CommitOp] = []
                 pendingOps.reserveCapacity(migrableAssets.count)
-                for (index, asset) in migrableAssets.enumerated() {
-                    let links = linksByAssetFP[asset.assetFingerprint] ?? []
-                    var resourcesForOp: [CommitResourceEntry] = []
-                    resourcesForOp.reserveCapacity(links.count)
-                    for link in links {
-                        guard let res = resourcesByHash[link.resourceHash] else {
-                            throw NSError(
-                                domain: "V1MigrationService",
-                                code: -10,
-                                userInfo: [NSLocalizedDescriptionKey:
-                                    "V1 manifest link references missing resource hash \(link.resourceHash.hexString) — migration aborted"]
-                            )
-                        }
-                        resourcesForOp.append(CommitResourceEntry(
-                            physicalRemotePath: res.physicalRemotePath,
-                            logicalName: link.logicalName.isEmpty ? res.logicalName : link.logicalName,
-                            contentHash: res.contentHash,
-                            fileSize: res.fileSize,
-                            resourceType: res.resourceType,
-                            role: link.role,
-                            slot: link.slot,
-                            crypto: res.crypto
-                        ))
-                    }
+                for (index, migrable) in migrableAssets.enumerated() {
+                    let asset = migrable.asset
                     let body = CommitAddAssetBody(
                         assetFingerprint: asset.assetFingerprint,
                         creationDateMs: asset.creationDateMs,
                         backedUpAtMs: asset.backedUpAtMs,
-                        resources: resourcesForOp
+                        resources: migrable.resources
                     )
                     pendingOps.append(CommitOp(opSeq: index, clock: clockCursor, body: .addAsset(body)))
                     clockCursor &+= 1
@@ -329,8 +342,16 @@ actor V1MigrationService {
             }
             for monthEntry in monthEntries where monthEntry.isDirectory && monthEntry.name.range(of: "^[0-9]{2}$", options: .regularExpression) != nil {
                 let monthPath = RemotePathBuilder.absolutePath(basePath: yearPath, remoteRelativePath: monthEntry.name)
-                let residuePath = RemotePathBuilder.absolutePath(basePath: monthPath, remoteRelativePath: Self.residueManifestFileName)
-                try await deleteIfPresent(path: residuePath)
+                let files: [RemoteStorageEntry]
+                do {
+                    files = try await client.list(path: monthPath)
+                } catch {
+                    if isStorageNotFoundError(error) { continue }
+                    throw error
+                }
+                for file in files where !file.isDirectory && Self.isResidueManifestName(file.name) {
+                    try await deleteIfPresent(path: file.path)
+                }
             }
         }
     }
@@ -353,8 +374,17 @@ actor V1MigrationService {
         }
     }
 
+    private func metadataIfPresent(path: String) async throws -> RemoteStorageEntry? {
+        do {
+            return try await client.metadata(path: path)
+        } catch {
+            if isStorageNotFoundError(error) { return nil }
+            throw error
+        }
+    }
+
     private func deleteIfPresent(path: String) async throws {
-        guard try await client.metadata(path: path) != nil else { return }
+        guard try await metadataIfPresent(path: path) != nil else { return }
         try await client.delete(path: path)
     }
 
@@ -365,13 +395,82 @@ actor V1MigrationService {
             basePath: basePath,
             remoteRelativePath: monthRel + "/" + Self.residueManifestFileName
         )
-        if let meta = try await client.metadata(path: residuePath), !meta.isDirectory {
-            try await deleteIfPresent(path: sourcePath)
+        if let meta = try await metadataIfPresent(path: residuePath), !meta.isDirectory {
+            guard try await metadataIfPresent(path: sourcePath) != nil else { return }
+            if try await remoteFilesEqual(sourcePath, residuePath) {
+                try await deleteIfPresent(path: sourcePath)
+                return
+            }
+            try await moveSourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
             return
         }
         // Peer-deletion between scan and quarantine must not abort the whole phase.
-        guard try await client.metadata(path: sourcePath) != nil else { return }
-        try await client.move(from: sourcePath, to: residuePath)
+        guard try await metadataIfPresent(path: sourcePath) != nil else { return }
+        do {
+            switch try await client.moveIfAbsent(from: sourcePath, to: residuePath) {
+            case .created, .bestEffortRetry:
+                return
+            case .alreadyExists:
+                if try await remoteFilesEqual(sourcePath, residuePath) {
+                    try await deleteIfPresent(path: sourcePath)
+                } else {
+                    try await moveSourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
+                }
+                return
+            }
+        } catch {
+            if isStorageNotFoundError(error) { return }
+            if let meta = try await metadataIfPresent(path: residuePath), !meta.isDirectory {
+                guard try await metadataIfPresent(path: sourcePath) != nil else { return }
+                if try await remoteFilesEqual(sourcePath, residuePath) {
+                    try await deleteIfPresent(path: sourcePath)
+                } else {
+                    try await moveSourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
+                }
+                return
+            }
+            throw error
+        }
+    }
+
+    private func moveSourceToUniqueResidue(monthRel: String, sourcePath: String) async throws {
+        let uniqueResiduePath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: monthRel + "/" + Self.residueManifestFileName + ".\(UUID().uuidString)"
+        )
+        switch try await client.moveIfAbsent(from: sourcePath, to: uniqueResiduePath) {
+        case .created, .bestEffortRetry:
+            return
+        case .alreadyExists:
+            throw NSError(domain: "V1MigrationService", code: -32, userInfo: [
+                NSLocalizedDescriptionKey: "unique residue path already exists for \(sourcePath)"
+            ])
+        }
+    }
+
+    private static func isResidueManifestName(_ name: String) -> Bool {
+        name == residueManifestFileName || name.hasPrefix(residueManifestFileName + ".")
+    }
+
+    private func remoteFilesEqual(_ lhsPath: String, _ rhsPath: String) async throws -> Bool {
+        let lhsURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("v1-residue-compare-\(UUID().uuidString)-lhs.sqlite")
+        let rhsURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("v1-residue-compare-\(UUID().uuidString)-rhs.sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: lhsURL)
+            try? FileManager.default.removeItem(at: rhsURL)
+        }
+        try await client.download(remotePath: lhsPath, localURL: lhsURL)
+        try await client.download(remotePath: rhsPath, localURL: rhsURL)
+        let lhsAttributes = try FileManager.default.attributesOfItem(atPath: lhsURL.path)
+        let rhsAttributes = try FileManager.default.attributesOfItem(atPath: rhsURL.path)
+        let lhsSize = (lhsAttributes[.size] as? NSNumber)?.int64Value
+        let rhsSize = (rhsAttributes[.size] as? NSNumber)?.int64Value
+        guard lhsSize == rhsSize else { return false }
+        let lhsData = try Data(contentsOf: lhsURL)
+        let rhsData = try Data(contentsOf: rhsURL)
+        return lhsData == rhsData
     }
 
     private func writeMigrationMarker(writerID: String, phase: MigrationPhase, runID: String) async throws {
