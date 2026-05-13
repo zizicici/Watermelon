@@ -11,6 +11,8 @@ enum BackupV2RuntimeBuildError: Error {
     /// (cloud-sync delay, manual delete, peer wipe). Stale local seq/clock would
     /// race against whatever other devices wrote in V2 since.
     case repoFormatRegression(repoID: String)
+    /// version.json reports V2 + commits/snapshots exist but identity is missing — minting a new repoID would orphan all existing data.
+    case damagedV2Repo
 }
 
 enum BackupV2RuntimeBuilder {
@@ -48,6 +50,14 @@ enum BackupV2RuntimeBuilder {
             // ensureRepoJSON heals half-bootstrap (version present, repo absent) — without
             // it each session would generate a fresh local UUID that never reaches remote.
             let localRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
+            if localRepoID == nil {
+                // No local cache: if the remote also has no identity but V2 data exists, minting a new UUID would orphan every existing commit/snapshot.
+                let remoteIdentity = try await bootstrap.loadRepoID()
+                if remoteIdentity == nil,
+                   try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
+                    throw BackupV2RuntimeBuildError.damagedV2Repo
+                }
+            }
             let suggested = localRepoID ?? UUID().uuidString.lowercased()
             resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggested, writerID: writerID)
             if let localRepoID, resolvedRepoID != localRepoID {

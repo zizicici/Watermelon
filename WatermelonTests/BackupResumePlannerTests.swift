@@ -30,7 +30,8 @@ final class BackupResumePlannerTests: XCTestCase {
         )
         let plan = try await planner.makePlan(
             pausedMode: .retry(assetIDs: ["a", "b", "c"]),
-            completedAssetIDs: ["a"]
+            completedAssetIDs: ["a"],
+            dedupMode: .v1CompletedIDs
         )
         guard case .retry(let pending) = plan.resumedExecutionMode else {
             XCTFail("expected .retry, got \(String(describing: plan.resumedExecutionMode))")
@@ -58,7 +59,7 @@ final class BackupResumePlannerTests: XCTestCase {
         let plan = try await planner.makePlan(
             pausedMode: .retry(assetIDs: ["a", "b"]),
             completedAssetIDs: [],
-            committedAssetFingerprintsByMonth: byMonth
+            dedupMode: .v2FreshCommittedView(byMonth)
         )
         guard case .retry(let pending) = plan.resumedExecutionMode else {
             XCTFail("expected .retry, got \(String(describing: plan.resumedExecutionMode))")
@@ -78,7 +79,25 @@ final class BackupResumePlannerTests: XCTestCase {
         let plan = try await planner.makePlan(
             pausedMode: .retry(assetIDs: ["a", "b"]),
             completedAssetIDs: ["a"],
-            committedAssetFingerprintsByMonth: PerMonth<Set<Data>>()
+            dedupMode: .v2FreshCommittedView(PerMonth<Set<Data>>())
+        )
+        guard case .retry(let pending) = plan.resumedExecutionMode else {
+            XCTFail("expected .retry, got \(String(describing: plan.resumedExecutionMode))")
+            return
+        }
+        XCTAssertEqual(pending, ["a", "b"])
+    }
+
+    /// V2 stale overlay must reprocess all scoped assets (no completedAssetIDs subtraction); executor's monthStore dedups against durable state.
+    func testRetryMode_v2StaleOverlay_ignoresCompletedAssetIDs() async throws {
+        let planner = BackupResumePlanner(
+            photoLibraryService: PhotoLibraryService(),
+            hashIndexRepository: hashIndex
+        )
+        let plan = try await planner.makePlan(
+            pausedMode: .retry(assetIDs: ["a", "b"]),
+            completedAssetIDs: ["a"],
+            dedupMode: .v2StaleOverlay
         )
         guard case .retry(let pending) = plan.resumedExecutionMode else {
             XCTFail("expected .retry, got \(String(describing: plan.resumedExecutionMode))")

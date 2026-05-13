@@ -593,18 +593,21 @@ enum State {
                     )
                 }
                 try Task.checkCancellation()
-                let committedView: PerMonth<Set<Data>>?
-                if isV2, overlayFresh {
-                    // V2 must always defer to commit-log truth: completedAssetIDs alone would skip reducer-acked-but-uncommitted assets on a pre-flush pause.
-                    committedView = self.backupCoordinator.backedUpAssetFingerprintsByMonth()
+                let dedupMode: BackupResumeDedupMode
+                if isV2 {
+                    // V2 must defer to commit-log truth: completedAssetIDs alone would skip reducer-acked-but-uncommitted assets on a pre-flush pause.
+                    if overlayFresh {
+                        dedupMode = .v2FreshCommittedView(self.backupCoordinator.backedUpAssetFingerprintsByMonth())
+                    } else {
+                        dedupMode = .v2StaleOverlay
+                    }
                 } else {
-                    // Stale overlay would let a since-deleted resource look healthy and dedup a real repair.
-                    committedView = nil
+                    dedupMode = .v1CompletedIDs
                 }
                 let resumePlan = try await self.resumePlanner.makePlan(
                     pausedMode: resumeContext.pausedMode,
                     completedAssetIDs: self.completedAssetIDsForResume,
-                    committedAssetFingerprintsByMonth: committedView
+                    dedupMode: dedupMode
                 )
                 try Task.checkCancellation()
 

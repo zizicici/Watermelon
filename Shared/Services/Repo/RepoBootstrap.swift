@@ -74,8 +74,12 @@ actor RepoBootstrap {
             canonical = try await stabilizeFreshElection(initial: canonical)
         }
 
-        // repo.json is a read-cache; claims/ is authoritative. Log so a silent fail
-        // doesn't surface later as "V2 repo missing repo.json".
+        // Stale-claim hazard: if a peer's claim later disappears, our claim becomes canonical again and would flip us back to `suggested`.
+        if canonical != suggested {
+            try await writeIdentityClaim(repoID: canonical, writerID: writerID, createdAtMs: createdAtMs)
+        }
+
+        // repo.json is a read-cache; claims/ is authoritative.
         do {
             try await writeRepoJSONCache(canonical: canonical, writerID: writerID, createdAtMs: createdAtMs)
         } catch {
@@ -107,7 +111,7 @@ actor RepoBootstrap {
             switch try await classifyExistingClaim(claimPath: claimPath, writerID: writerID, suggestedRepoID: repoID) {
             case .ours:
                 return
-            case .zeroByte, .staleRepoID:
+            case .zeroByte, .staleRepoID, .corrupt:
                 try await client.delete(path: claimPath)
             }
         }
@@ -145,7 +149,7 @@ actor RepoBootstrap {
         let maxRounds = 6
         let interval: Duration = .milliseconds(250)
         for _ in 0..<maxRounds {
-            try? await Task.sleep(for: interval)
+            try await Task.sleep(for: interval)
             let observed = try await canonicalRepoIDFromClaims() ?? current
             if observed == current { return current }
             current = observed
@@ -157,6 +161,8 @@ actor RepoBootstrap {
         case ours
         case zeroByte
         case staleRepoID
+        /// Non-empty but unparseable / foreign writer_id at our exclusive path: write half-failed or stale bytes; reclaim by delete + rewrite.
+        case corrupt
     }
 
     private func classifyExistingClaim(claimPath: String, writerID: String, suggestedRepoID: String) async throws -> ExistingClaimClassification {
@@ -170,14 +176,9 @@ actor RepoBootstrap {
               let landedWriterID = dict["writer_id"] as? String,
               landedWriterID == writerID,
               let landedRepoID = dict["repo_id"] as? String, !landedRepoID.isEmpty else {
-            throw BootstrapError.ioFailure(NSError(
-                domain: "RepoBootstrap",
-                code: 8,
-                userInfo: [NSLocalizedDescriptionKey:
-                    "claim at \(claimPath) corrupted or carries a foreign writerID — refusing to auto-overwrite (delete manually if you're sure)"]
-            ))
+            bootstrapLog.warning("[RepoBootstrap] claim at \(claimPath, privacy: .public) corrupt or carries a foreign writerID — reclaiming")
+            return .corrupt
         }
-        // A stale self-claim can become canonical again after the peer claim that superseded it vanishes.
         if landedRepoID != suggestedRepoID {
             return .staleRepoID
         }

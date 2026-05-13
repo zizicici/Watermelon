@@ -165,9 +165,15 @@ actor RemoteFormatCompatibilityService {
         }
     }
 
-    /// True if `commits/` or `snapshots/` has any entries. Fail-closed: non-not-found
-    /// errors throw — silently treating a 401 as "no V2 data" would let inspect mint
-    /// `.fresh` over an existing V2 repo with intact commits, orphaning them.
+    /// Surface to bootstrap: minting a new repo identity over existing commits/snapshots would orphan all of them.
+    func hasAnyV2CommitOrSnapshotData(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> Bool {
+        try await detectV2DataDirectories(client: client, basePath: basePath)
+    }
+
+    /// True if `commits/` or `snapshots/` has any entries. Fail-closed: non-not-found errors throw, else a 401 would mint `.fresh` over a real V2 repo.
     private func detectV2DataDirectories(
         client: any RemoteStorageClientProtocol,
         basePath: String

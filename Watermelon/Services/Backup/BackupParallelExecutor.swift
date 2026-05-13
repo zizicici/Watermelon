@@ -253,6 +253,7 @@ struct BackupParallelExecutor: Sendable {
                                 action: .completed
                             )))
                         case .downloadIncomplete(let message):
+                            // Upload + download both finished; skipped items are tracked separately. Without `.completed`, Home's month ring would stay "in progress" after the run ends.
                             eventStream.emitLog(
                                 String.localizedStringWithFormat(
                                     String(localized: "backup.parallel.finalizationFailed"),
@@ -262,6 +263,11 @@ struct BackupParallelExecutor: Sendable {
                                 ),
                                 level: .warning
                             )
+                            eventStream.emit(.monthChanged(MonthChangeEvent(
+                                year: monthKey.year,
+                                month: monthKey.month,
+                                action: .completed
+                            )))
                         case .failed(let message):
                             eventStream.emitLog(
                                 String.localizedStringWithFormat(
@@ -651,7 +657,7 @@ struct BackupParallelExecutor: Sendable {
                                 case .success:
                                     emitCompleted()
                                 case .downloadIncomplete(let message):
-                                    // Upload OK, only the inline download skipped items; Home already marks the month failed.
+                                    // Without `.completed`, BackupSessionState's completedMonths never catches up and Home shows the month "in progress" forever.
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(
                                             String(localized: "backup.parallel.finalizationFailed"),
@@ -661,6 +667,7 @@ struct BackupParallelExecutor: Sendable {
                                         ),
                                         level: .warning
                                     )
+                                    emitCompleted()
                                 case .failed(let message):
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(

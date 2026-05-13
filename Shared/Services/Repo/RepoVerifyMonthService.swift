@@ -18,8 +18,8 @@ actor RepoVerifyMonthService {
             return VerifyMonthReport(month: month, items: [])
         }
 
-        // Leaf-presence (not size match): size-aware would tombstone a peer's in-flight upload at the expected leaf.
-        let isResourceAvailable = try await leafPresencePredicate(month: month, state: state)
+        // Size-aware: surface truncated / wrong-size resources as partiallyMissing. allowsCleanup excludes partiallyMissing, so a peer's in-flight upload still can't be auto-tombstoned.
+        let isResourceAvailable = try await sizeAwarePresencePredicate(month: month, state: state)
         let linksByFingerprint = Dictionary(grouping: state.assetResources.values, by: \.assetFingerprint)
 
         var items: [VerifyMonthReportItem] = []
@@ -68,25 +68,29 @@ actor RepoVerifyMonthService {
         return VerifyMonthReport(month: month, items: items)
     }
 
-    private func leafPresencePredicate(
+    private func sizeAwarePresencePredicate(
         month: LibraryMonthKey,
         state: RepoMonthState
     ) async throws -> (Data) -> Bool {
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
         let entries = try await client.list(path: monthAbsolutePath)
-        var presentKeys: Set<String> = []
+        // Same collision key can map to multiple real names (case/Unicode variants); single-size dict was last-write-wins.
+        var sizesByKey: [String: Set<Int64>] = [:]
         for entry in entries where !entry.isDirectory {
-            presentKeys.insert(RemoteFileNaming.collisionKey(for: entry.name))
+            sizesByKey[RemoteFileNaming.collisionKey(for: entry.name), default: []].insert(entry.size)
         }
-        var leafKeysByHash: [Data: [String]] = [:]
+        var expectationsByHash: [Data: [(key: String, size: Int64)]] = [:]
         for resource in state.resources.values {
             let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-            leafKeysByHash[resource.contentHash, default: []].append(RemoteFileNaming.collisionKey(for: leaf))
+            expectationsByHash[resource.contentHash, default: []].append((RemoteFileNaming.collisionKey(for: leaf), resource.fileSize))
         }
         return { hash in
-            guard let keys = leafKeysByHash[hash], !keys.isEmpty else { return false }
-            return keys.contains { presentKeys.contains($0) }
+            guard let candidates = expectationsByHash[hash], !candidates.isEmpty else { return false }
+            return candidates.contains { candidate in
+                guard let listedSizes = sizesByKey[candidate.key] else { return false }
+                return listedSizes.contains(candidate.size)
+            }
         }
     }
 
@@ -110,8 +114,8 @@ actor RepoVerifyMonthService {
             freshLinksByFP[ar.assetFingerprint, default: []].append(ar)
         }
 
-        // Leaf-presence (not size match) — a peer's in-flight or multipart-resume upload at the expected leaf must not be tombstoned mid-write.
-        let isResourceAvailable = try await leafPresencePredicate(month: month, state: monthState)
+        // Size-aware again at apply time, for the same reason as verify(): truncated files surface as partiallyMissing (cleanup-blocked) rather than healthy.
+        let isResourceAvailable = try await sizeAwarePresencePredicate(month: month, state: monthState)
 
         // Basis = covered ranges + lamport observed now; materializer compares future heal ops against this.
         let coveredAtObservation = fresh.coveredByMonth[month] ?? .empty

@@ -339,6 +339,8 @@ struct BackupRunPreparationService: Sendable {
                 throw BackupCompatibilityError.requiresForegroundMigration
             } catch BackupV2RuntimeBuildError.repoFormatRegression {
                 throw BackupCompatibilityError.repoFormatRegression
+            } catch BackupV2RuntimeBuildError.damagedV2Repo {
+                throw BackupCompatibilityError.damagedV2Repo
             } catch {
                 throw error
             }
@@ -493,6 +495,9 @@ struct BackupRunPreparationService: Sendable {
         } catch BackupV2RuntimeBuildError.repoFormatRegression {
             await metadataClient.disconnectSafely()
             throw BackupCompatibilityError.repoFormatRegression
+        } catch BackupV2RuntimeBuildError.damagedV2Repo {
+            await metadataClient.disconnectSafely()
+            throw BackupCompatibilityError.damagedV2Repo
         } catch BackupV2RuntimeBuildError.profileMissingID {
             await metadataClient.disconnectSafely()
             // Fail-closed: profile with no id means we can't bind to a repo state row.

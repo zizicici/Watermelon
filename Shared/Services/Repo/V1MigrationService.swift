@@ -115,17 +115,32 @@ actor V1MigrationService {
             let resourcesByHash: [Data: RemoteManifestResource] = Dictionary(uniqueKeysWithValues: snapshot.resources.map { ($0.contentHash, $0) })
             let linksByAssetFP: [Data: [RemoteAssetResourceLink]] = Dictionary(grouping: snapshot.links, by: { $0.assetFingerprint })
 
+            // Drop assets with no resource links: committing an empty resources[] body would surface as a phantom V2 asset that restore can never reconstruct.
+            let migrableAssets = snapshot.assets.filter { asset in
+                let links = linksByAssetFP[asset.assetFingerprint] ?? []
+                if links.isEmpty {
+                    v1MigrationLog.warning("V1 asset \(asset.assetFingerprint.hexString, privacy: .public) in \(scanned.year)-\(scanned.month) has no resource links — skipping migration")
+                    return false
+                }
+                return true
+            }
+            if migrableAssets.isEmpty {
+                v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) had only resource-less assets — quarantining as residue")
+                try await quarantineV1ResidueManifest(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
+                continue
+            }
+
             let migrationMaxRetries = 4
             var migrationAttempt = 0
             var migrationHeader: CommitHeader
             var ops: [CommitOp]
             // Retry must re-tick clocks; reusing them with a new seq corrupts LWW ordering.
             while true {
-                let clockRange = try await clock.tickRange(count: snapshot.assets.count)
+                let clockRange = try await clock.tickRange(count: migrableAssets.count)
                 var clockCursor = clockRange.low
                 var pendingOps: [CommitOp] = []
-                pendingOps.reserveCapacity(snapshot.assets.count)
-                for (index, asset) in snapshot.assets.enumerated() {
+                pendingOps.reserveCapacity(migrableAssets.count)
+                for (index, asset) in migrableAssets.enumerated() {
                     let links = linksByAssetFP[asset.assetFingerprint] ?? []
                     var resourcesForOp: [CommitResourceEntry] = []
                     resourcesForOp.reserveCapacity(links.count)

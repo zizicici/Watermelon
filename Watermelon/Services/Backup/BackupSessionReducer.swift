@@ -133,12 +133,15 @@ struct BackupSessionState {
     mutating func completeAcceptedStartLaunch() {
         isStartCommandInFlight = false
         controlPhase = .idle
+        // Stale pendingRunConfiguration would override settings changed while paused — clear so resume reads live settings.
+        pendingRunConfiguration = nil
     }
 
     mutating func restoreRejectedStart(using context: BackupSessionStartContext) {
         isStartCommandInFlight = false
         controlPhase = .idle
         currentRunMode = .full
+        pendingRunConfiguration = nil
         state = context.previousState
         statusText = context.previousStatusText
     }
@@ -175,6 +178,7 @@ struct BackupSessionState {
             lastPausedRunMode = nil
             lastPausedDisplayRunMode = nil
             currentRunMode = .full
+            pendingRunConfiguration = nil
             state = .stopped
             statusText = String(localized: "backup.session.stopped")
         } else {

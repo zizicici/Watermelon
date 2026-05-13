@@ -188,6 +188,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             await state.setIsV2Repo(false)
             await state.setOverlayFresh(false)
         case .fresh:
+            // `.fresh` after a confirmed V2 repo = remote markers vanished or became unreadable; treating stale V2 cache as authoritative would let Home/resume dedup against data that may no longer exist.
+            if alreadyV2 || expectV2 {
+                await state.setOverlayFresh(false)
+                throw BackupCompatibilityError.damagedV2Repo
+            }
             // Pinning isV2 here would trip the alreadyV2 guard if a peer writes V1 before we bootstrap; `markIsV2` pins after build.
             await state.setOverlayFresh(false)
         }

@@ -136,16 +136,16 @@ extension AssetProcessor {
         let forceWriterIDSuffix = baseGuarantee == .overwritePossible && monthStore.v2Services?.writerID != nil
         let baseCollides = existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: baseFileName))
 
-        // Same-name + same-hash = orphan reuse; runs before suffix-rename so crash retries
-        // don't bloat remote with ~writerID duplicates. Big collisions skip the dedup.
+        // Crash-retry orphan reuse. When forceWriterIDSuffix, only the ~wid6 path is uniquely ours; reusing the base name on overwrite-possible backends would bind metadata to a path any peer can clobber.
         let precheckMaxBytes: Int64 = 64 * 1024 * 1024
-        // Force-suffix backends: also probe ~wid6 name so crash-retry reuses the bytes.
-        var probeCandidate: String? = baseCollides ? baseFileName : nil
-        if probeCandidate == nil, forceWriterIDSuffix, let writerID = monthStore.v2Services?.writerID {
+        let probeCandidate: String?
+        if forceWriterIDSuffix, let writerID = monthStore.v2Services?.writerID {
             let candidate = RemoteFileNaming.writerIDSuffixedName(baseName: baseFileName, writerID: writerID)
-            if existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: candidate)) {
-                probeCandidate = candidate
-            }
+            probeCandidate = existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: candidate)) ? candidate : nil
+        } else if baseCollides {
+            probeCandidate = baseFileName
+        } else {
+            probeCandidate = nil
         }
         if let candidate = probeCandidate, localFileSize <= precheckMaxBytes {
             let existingManifestResource = monthStore.findByFileName(candidate)

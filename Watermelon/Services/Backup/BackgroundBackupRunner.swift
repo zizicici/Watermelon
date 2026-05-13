@@ -204,6 +204,14 @@ final class BackgroundBackupRunner {
             await metadataClient.disconnectSafely()
             await client.disconnectSafely()
             return .failed
+        } catch BackupV2RuntimeBuildError.damagedV2Repo {
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, BackupCompatibilityError.damagedV2Repo.errorDescription ?? ""),
+                level: .error
+            )
+            await metadataClient.disconnectSafely()
+            await client.disconnectSafely()
+            return .failed
         } catch {
             // Don't degrade to V1 — a V1 manifest into a V2 repo creates dual-format divergence.
             await writer.appendLog(
@@ -216,8 +224,12 @@ final class BackgroundBackupRunner {
         }
 
         var fastPathFresh = false
+        var corruptedSnapshotMonths: Set<LibraryMonthKey> = []
         do {
             let preMaterialized = await v2Services.initialMaterializeOutput.peek()
+            if let preMaterialized {
+                corruptedSnapshotMonths = preMaterialized.corruptedSnapshotMonths
+            }
             // expectV2 pins routing so a lingering V1 manifest can't drag this sync down the V1 path.
             _ = try await assetProcessor.remoteIndexService.syncIndex(
                 client: client,
@@ -250,13 +262,17 @@ final class BackgroundBackupRunner {
                 await client.disconnectSafely()
                 return .failed
             }
+            // Non-transient sync failure: committed-view baseline is unknown. Skip rather than process months against stale or partial data.
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
-                level: .warning
+                level: .error
             )
+            await v2Services.shutdown()
+            await client.disconnectSafely()
+            return .failed
         }
 
-        let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer, v2Services: v2Services, fastPathFresh: fastPathFresh)
+        let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer, v2Services: v2Services, fastPathFresh: fastPathFresh, corruptedSnapshotMonths: corruptedSnapshotMonths)
         await v2Services.shutdown()
         await client.disconnectSafely()
         if Task.isCancelled {
@@ -309,7 +325,8 @@ final class BackgroundBackupRunner {
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter,
         v2Services: BackupV2RuntimeServices,
-        fastPathFresh: Bool
+        fastPathFresh: Bool,
+        corruptedSnapshotMonths: Set<LibraryMonthKey>
     ) async -> Bool {
 
         let eventStream = BackupEventStream()
@@ -344,8 +361,10 @@ final class BackgroundBackupRunner {
             var monthHasAssetFailures = false
 
             // Fast-path needs a fresh sync this run; stale cache could skip months that need repair.
+            // Months flagged corrupt-snapshot need V2MonthSession.loadOrCreate so rebaseline runs.
             let committedSet = committedFingerprintsByMonth[monthKey] ?? []
             if fastPathFresh,
+               !corruptedSnapshotMonths.contains(monthKey),
                monthAlreadyFullyBackedUpFast(assetIDs: assetIDs, committedFingerprints: committedSet) {
                 await writer.appendLog(
                     String(format: String(localized: "backup.auto.log.monthEnd"), monthKey.displayText),

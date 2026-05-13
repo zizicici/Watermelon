@@ -160,7 +160,18 @@ final class RepoCommittedView: @unchecked Sendable {
     ) -> Bool {
         missingLock.lock()
         defer { missingLock.unlock() }
-        return cache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: assetResourceLinks)
+        let result = cache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: assetResourceLinks)
+        // Hashes no longer in the manifest aren't "missing" — they're tombstoned. Carry overlay hashes forward only when they still appear in the new manifest.
+        if let previous = physicallyMissingByMonth[month] {
+            let stillPresent = Set(resources.map(\.contentHash))
+            let intersected = previous.intersection(stillPresent)
+            if intersected.isEmpty {
+                physicallyMissingByMonth.remove(month)
+            } else if intersected != previous {
+                physicallyMissingByMonth.set(intersected, for: month)
+            }
+        }
+        return result
     }
 
     @discardableResult

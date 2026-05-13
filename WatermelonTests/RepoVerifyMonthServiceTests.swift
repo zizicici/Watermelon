@@ -41,7 +41,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         )
         let path = "2026/01/photo.jpg"
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
-        await client.injectFile(path: "\(basePath)/\(path)", contents: "anything")
+        await client.injectFile(path: "\(basePath)/\(path)", data: Self.expectedSizedBytes())
 
         let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
         let report = try await verifier.verify(month: month)
@@ -107,7 +107,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
             month: month,
             respectTaskCancellation: false
         )
-        await client.injectFile(path: "\(basePath)/\(path)", contents: "x")
+        await client.injectFile(path: "\(basePath)/\(path)", data: Self.expectedSizedBytes())
 
         let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
         let report = try await verifier.verify(month: month)
@@ -131,7 +131,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
 
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: pathA, writerID: writerA)
         try await writeAssetCommit(writer: writer, seq: 2, clock: 2, fp: fp, hash: hash, path: pathB, writerID: writerB)
-        await client.injectFile(path: "\(basePath)/\(pathB)", contents: "shared content")
+        await client.injectFile(path: "\(basePath)/\(pathB)", data: Self.expectedSizedBytes())
         try await client.createDirectory(path: "\(basePath)/2026/01")
 
         let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
@@ -152,7 +152,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let hash = TestFixtures.fingerprint(0xFF)
         let path = "2026/01/photo.jpg"
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
-        await client.injectFile(path: "\(basePath)/\(path)", contents: "x")
+        await client.injectFile(path: "\(basePath)/\(path)", data: Self.expectedSizedBytes())
 
         let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
         let report = try await verifier.verify(month: month)
@@ -199,7 +199,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let storedPath = "2026/01/Photo.HEIC"
         let landedLeaf = "photo.heic"
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: storedPath)
-        await client.injectFile(path: "\(basePath)/2026/01/\(landedLeaf)", contents: "x")
+        await client.injectFile(path: "\(basePath)/2026/01/\(landedLeaf)", data: Self.expectedSizedBytes())
 
         let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
         let report = try await verifier.verify(month: month)
@@ -257,7 +257,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         XCTAssertEqual(report.items.first?.kind, .allResourcesGone)
 
         // Heal: peer uploads the file before we apply tombstone.
-        await scaffold.client.injectFile(path: "\(basePath)/\(path)", contents: "healed bytes")
+        await scaffold.client.injectFile(path: "\(basePath)/\(path)", data: Self.expectedSizedBytes())
 
         try await verifier.applyTombstones(month: month, cleanupItems: report.items, services: v2)
 
@@ -293,7 +293,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         XCTAssertEqual(report.items.first?.kind, .allResourcesGone)
 
         // Only pathB reappears.
-        await scaffold.client.injectFile(path: "\(basePath)/\(pathB)", contents: "shared content")
+        await scaffold.client.injectFile(path: "\(basePath)/\(pathB)", data: Self.expectedSizedBytes())
 
         try await verifier.applyTombstones(month: month, cleanupItems: report.items, services: v2)
 
@@ -355,6 +355,11 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),
             sweepTask: nil
         )
+    }
+
+    /// All fixtures write `fileSize: 100`. Size-aware presence requires the listed file to match — pad to 100 bytes.
+    private static func expectedSizedBytes() -> Data {
+        Data(repeating: 0x2A, count: 100)
     }
 
     private func writeAssetCommit(
