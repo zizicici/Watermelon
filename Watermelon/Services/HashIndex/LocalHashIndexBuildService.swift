@@ -478,6 +478,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 }
             )
 
+            let signature = BackupAssetResourcePlanner.resourceSignature(orderedResources: selectedResources)
             try repository.upsertAssetHashSnapshot(
                 assetLocalIdentifier: asset.localIdentifier,
                 assetFingerprint: fingerprint,
@@ -490,7 +491,9 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                     )
                 },
                 totalFileSizeBytes: totalFileSizeBytes,
-                modificationDateMs: asset.modificationDate?.millisecondsSinceEpoch
+                modificationDateMs: asset.modificationDate?.millisecondsSinceEpoch,
+                selectionVersion: BackupAssetResourcePlanner.currentSelectionVersion,
+                resourceSignature: signature
             )
             return LocalHashIndexProcessedAssetResult(
                 outcome: .ready(asset.localIdentifier),
@@ -524,6 +527,13 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
            modificationDate > cachedLocalHash.updatedAt {
             return false
         }
+
+        if cachedLocalHash.selectionVersion < BackupAssetResourcePlanner.currentSelectionVersion {
+            return false
+        }
+        guard let cachedSignature = cachedLocalHash.resourceSignature else { return false }
+        let currentSignature = BackupAssetResourcePlanner.resourceSignature(orderedResources: selectedResources)
+        guard cachedSignature == currentSignature else { return false }
 
         for selected in selectedResources {
             let key = AssetResourceRoleSlot(role: selected.role, slot: selected.slot)

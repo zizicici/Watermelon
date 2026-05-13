@@ -17,13 +17,17 @@ actor V1MigrationService {
 
     static let residueManifestFileName = ".watermelon_manifest.legacy-residue.sqlite"
 
+    enum MigrationPhase: Int, Sendable {
+        case phase1 = 1
+        case phase2 = 2
+        case phase3 = 3
+    }
+
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
     private let database: DatabaseManager
     private let identity: RepoIdentity
     private let bootstrap: RepoBootstrap
-    /// Phase1's scan list — phase3 deletes only these so newer V1 manifests (older peer writing between scans) survive.
-    private var phase1ScannedMonths: [ScannedV1Month] = []
 
     init(
         client: any RemoteStorageClientProtocol,
@@ -46,8 +50,7 @@ actor V1MigrationService {
         for yearEntry in yearEntries {
             guard let year = Int(yearEntry.name) else { continue }
             let yearPath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: yearEntry.name)
-            // Surface list errors — silently skipping months on transient failures means phase1
-            // misses them, then phase3's retry-scan finds + DELETES those V1 manifests.
+            // Silent skip + phase3 retry-scan would DELETE V1 manifests phase1 never processed; surface list failures.
             let monthEntries = try await client.list(path: yearPath)
             for monthEntry in monthEntries where monthEntry.isDirectory && monthEntry.name.range(of: "^[0-9]{2}$", options: .regularExpression) != nil {
                 guard let month = Int(monthEntry.name), (1...12).contains(month) else { continue }
@@ -66,12 +69,8 @@ actor V1MigrationService {
     func runPhase1(profileID: Int64, repoID: String, writerID: String, runID: String) async throws -> Int {
         // WebDAV/SMB/SFTP don't auto-create parents on PUT.
         try await bootstrap.ensureSubdirectories()
-        // Migration-in-progress marker BEFORE any commit. version.json stays
-        // deferred to phase2 — if phase1 crashes mid-commit, the marker keeps
-        // inspect routing back to .v1 (resume), even though some V2 commits
-        // already exist. Earlier code wrote version.json here, leaving a
-        // crashed migration permanently looking like a clean V2 repo.
-        try await writeMigrationMarker(writerID: writerID)
+        // Marker before any commit so a phase1 crash routes inspect back to `.v1`.
+        try await writeMigrationMarker(writerID: writerID, phase: .phase1, runID: runID)
 
         let allocator = SeqAllocator(database: database, profileID: profileID, repoID: repoID, initial: try await initialSeq(repoID: repoID, profileID: profileID))
         let clock = PersistedLamportClock(database: database, profileID: profileID, repoID: repoID, initial: try await initialClock(repoID: repoID, profileID: profileID))
@@ -79,7 +78,6 @@ actor V1MigrationService {
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
 
         let months = try await scanV1Months()
-        phase1ScannedMonths.removeAll()
         var processed = 0
 
         for scanned in months {
@@ -115,7 +113,7 @@ actor V1MigrationService {
             let resourcesByHash: [Data: RemoteManifestResource] = Dictionary(uniqueKeysWithValues: snapshot.resources.map { ($0.contentHash, $0) })
             let linksByAssetFP: [Data: [RemoteAssetResourceLink]] = Dictionary(grouping: snapshot.links, by: { $0.assetFingerprint })
 
-            // Drop assets with no resource links: committing an empty resources[] body would surface as a phantom V2 asset that restore can never reconstruct.
+            // Empty resources[] commits as a phantom V2 asset that restore can't reconstruct.
             let migrableAssets = snapshot.assets.filter { asset in
                 let links = linksByAssetFP[asset.assetFingerprint] ?? []
                 if links.isEmpty {
@@ -197,13 +195,12 @@ actor V1MigrationService {
                 }
             }
 
-            // Quarantine BEFORE snapshot: a snapshot-write failure would otherwise leave the V1 manifest in place for next scan, producing duplicate commits on retry.
+            // Quarantine before snapshot — a snapshot-write failure with the V1 manifest still in place would commit duplicates on retry.
             try await quarantineV1ResidueManifest(
                 year: scanned.year,
                 month: scanned.month,
                 sourcePath: scanned.manifestAbsolutePath
             )
-            phase1ScannedMonths.append(scanned)
 
             let finalSeq = migrationHeader.seq
             var state = RepoMonthState.empty
@@ -271,21 +268,43 @@ actor V1MigrationService {
         return processed
     }
 
-    func runPhase2(profileID: Int64, repoID: String, writerID: String) async throws {
-        // repo.json was already written by the builder before phase 1, so identity is already canonical.
+    func runPhase2(profileID: Int64, repoID: String, writerID: String, runID: String) async throws {
         try await bootstrap.ensureVersionJSON(writerID: writerID)
         try await bootstrap.ensureSubdirectories()
         try await identity.setMigrationCompleted(profileID: profileID, repoID: repoID)
+        try await writeMigrationMarker(writerID: writerID, phase: .phase2, runID: runID)
     }
 
-    func runPhase3(writerID: String) async throws {
-        // Filesystem sweep so a prior-session quarantine is also cleaned.
+    func runPhase3(writerID: String, runID: String) async throws {
+        try await writeMigrationMarker(writerID: writerID, phase: .phase3, runID: runID)
         try await sweepResidueManifests()
-        for scanned in phase1ScannedMonths {
-            try await deleteIfPresent(path: scanned.manifestAbsolutePath)
-        }
-        // Marker last — if cleanup races a peer, inspect keeps routing to .v1 until V1 manifests are gone.
         try await deleteIfPresent(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID))
+    }
+
+    func runPhase3Cleanup(writerID: String, runID: String) async throws {
+        try await runPhase3(writerID: writerID, runID: runID)
+    }
+
+    /// Pre-phase markers (no `phase` field) report `.phase1`; phase1 is idempotent.
+    func currentPhase(writerID: String) async throws -> MigrationPhase? {
+        let path = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
+        guard let meta = try await client.metadata(path: path), !meta.isDirectory else { return nil }
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("migration-marker-read-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        do {
+            try await client.download(remotePath: path, localURL: temp)
+        } catch {
+            return .phase1
+        }
+        let data = (try? Data(contentsOf: temp)) ?? Data()
+        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .phase1
+        }
+        if let phaseRaw = dict["phase"] as? Int, let phase = MigrationPhase(rawValue: phaseRaw) {
+            return phase
+        }
+        return .phase1
     }
 
     private func sweepResidueManifests() async throws {
@@ -353,21 +372,42 @@ actor V1MigrationService {
         try await client.move(from: sourcePath, to: residuePath)
     }
 
-    private func writeMigrationMarker(writerID: String) async throws {
+    private func writeMigrationMarker(writerID: String, phase: MigrationPhase, runID: String) async throws {
         try await client.createDirectory(path: RepoLayout.migrationsDirectoryPath(base: basePath))
         let path = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
-        if let meta = try await client.metadata(path: path), !meta.isDirectory { return }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        var startedAtMs = nowMs
+        let existingMeta = try? await client.metadata(path: path)
+        if let meta = existingMeta, !meta.isDirectory {
+            let temp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("migration-marker-existing-\(UUID().uuidString).json")
+            defer { try? FileManager.default.removeItem(at: temp) }
+            if (try? await client.download(remotePath: path, localURL: temp)) != nil,
+               let data = try? Data(contentsOf: temp),
+               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let existing = (dict["started_at_ms"] as? Int64) ?? (dict["started_at_ms"] as? Int).map(Int64.init) {
+                startedAtMs = existing
+            }
+        }
         let dict: [String: Any] = [
-            "v": 1,
+            "v": 2,
             "writer_id": writerID,
-            "started_at_ms": Int64(Date().timeIntervalSince1970 * 1000)
+            "run_id": runID,
+            "phase": phase.rawValue,
+            "started_at_ms": startedAtMs,
+            "last_step_at_ms": nowMs
         ]
         let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("migration-marker-\(UUID().uuidString).json")
         try data.write(to: temp, options: .atomic)
         defer { try? FileManager.default.removeItem(at: temp) }
-        _ = try await client.atomicCreate(localURL: temp, remotePath: path, respectTaskCancellation: false)
+        if existingMeta == nil {
+            _ = try await client.atomicCreate(localURL: temp, remotePath: path, respectTaskCancellation: false)
+        } else {
+            // Overwrite in place — delete+create left a window where inspect could see no marker on a half-migrated repo.
+            try await client.upload(localURL: temp, remotePath: path, respectTaskCancellation: false, onProgress: nil)
+        }
     }
 
     private func initialSeq(repoID: String, profileID: Int64) async throws -> UInt64 {

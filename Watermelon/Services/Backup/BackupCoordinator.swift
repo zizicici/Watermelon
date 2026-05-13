@@ -131,13 +131,11 @@ final class BackupCoordinator: Sendable {
         await remoteIndexService.currentRepoIsV2()
     }
 
-    /// Returns true only when every probed month succeeded; callers gate the committed-fp fast path on this.
-    @discardableResult
-    func refreshPhysicalPresenceForResume(profile: ServerProfileRecord, password: String) async throws -> Bool {
+    func prepareResumeHandle(profile: ServerProfileRecord, password: String) async throws -> RemoteViewHandle {
         try await preparationService.withConnectedClient(profile: profile, password: password) { client in
             // Resume isn't a cold start; transient LIST failure must preserve the prior overlay.
             let priorOverlay = self.remoteIndexService.physicallyMissingSnapshot()
-            return try await self.remoteIndexService.refreshPhysicalPresenceOverlay(
+            return try await self.remoteIndexService.syncOverlayAndCaptureHandle(
                 client: client,
                 basePath: profile.basePath,
                 fallback: priorOverlay

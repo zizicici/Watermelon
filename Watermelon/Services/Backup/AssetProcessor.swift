@@ -239,11 +239,7 @@ final class AssetProcessor: Sendable {
             }
 
             if uploadResult.status != .failed {
-                // The link records THIS asset's original filename — not the on-remote
-                // filename, which may have a collision-rename suffix (~widB-1) when a
-                // peer wrote a different content under the same preferred name. Restore
-                // surfaces link.logicalName as PHAssetResourceCreationOptions.originalFilename,
-                // so it must reflect what the user named the file, not where it landed.
+                // logicalName is what restore surfaces as `originalFilename`; must reflect the user's name, not the collision-renamed remote path.
                 let originalLogicalName = prepared.local.preferredRemoteFileName
                 links.append(
                     RemoteAssetResourceLink(
@@ -314,8 +310,7 @@ final class AssetProcessor: Sendable {
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
         try context.monthStore.upsertAsset(manifestAsset, links: links)
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
-        // V2: cache write is optimistic — flag as uncommitted so resume doesn't skip assets
-        // whose physical file uploaded but V2 commit failed mid-batch. Cleared on flushV2 success.
+        // Mark uncommitted so resume planner doesn't dedup an upload that hasn't reached a V2 commit yet.
         optimisticWriter.appendAsset(
             manifestAsset,
             links: links,
@@ -323,6 +318,9 @@ final class AssetProcessor: Sendable {
         )
 
         let snapshotWriteStart = CFAbsoluteTimeGetCurrent()
+        let resourceSignature = BackupAssetResourcePlanner.resourceSignature(
+            roleSlots: preparedResources.map { (role: $0.local.resourceRole, slot: $0.local.resourceSlot) }
+        )
         try hashIndexRepository.upsertAssetHashSnapshot(
             assetLocalIdentifier: context.asset.localIdentifier,
             assetFingerprint: assetFingerprint,
@@ -335,7 +333,9 @@ final class AssetProcessor: Sendable {
                 )
             },
             totalFileSizeBytes: totalFileSizeBytes,
-            modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch
+            modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch,
+            selectionVersion: BackupAssetResourcePlanner.currentSelectionVersion,
+            resourceSignature: resourceSignature
         )
         timing.databaseSeconds += Self.elapsedSeconds(since: snapshotWriteStart)
 
@@ -377,6 +377,15 @@ final class AssetProcessor: Sendable {
             return nil
         }
 
+        if cachedLocalHash.selectionVersion < BackupAssetResourcePlanner.currentSelectionVersion {
+            return nil
+        }
+        guard let cachedSignature = cachedLocalHash.resourceSignature else { return nil }
+        let currentSignature = BackupAssetResourcePlanner.resourceSignature(
+            roleSlots: context.selectedResources.map { (role: $0.role, slot: $0.slot) }
+        )
+        guard cachedSignature == currentSignature else { return nil }
+
         try cancellationController?.throwIfCancelled()
         try Task.checkCancellation()
         guard let roleSlotHashes = roleSlotHashes(
@@ -417,11 +426,7 @@ final class AssetProcessor: Sendable {
             )
         }
 
-        // Compute THIS asset's preferred filename per resource, not the existing
-        // remote resource's logicalName — the latter belongs to whichever asset
-        // first uploaded that hash, and may carry a collision-rename suffix.
-        // Restore surfaces link.logicalName as PHAssetResourceCreationOptions.originalFilename,
-        // so it must reflect what the user named the file. Mirrors the full-upload path.
+        // logicalName must reflect the user's name; reusing the existing resource's name would surface another asset's collision-renamed filename on restore.
         let preferredAssetNameStem = Self.preferredAssetNameStem(
             asset: context.asset,
             selectedResources: context.selectedResources
@@ -472,9 +477,6 @@ final class AssetProcessor: Sendable {
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
         try context.monthStore.upsertAsset(manifestAsset, links: links)
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
-        // Same uncommitted gate as the full-upload path — without this, a pause/resume
-        // between cached-reuse and the next flushV2 would let the resume planner skip
-        // an asset whose fingerprint is in the cache but not yet in any V2 commit.
         optimisticWriter.appendAsset(
             manifestAsset,
             links: links,

@@ -40,6 +40,24 @@ final class BackupResumePlannerTests: XCTestCase {
         XCTAssertEqual(pending, ["b", "c"])
     }
 
+    private func freshHandle(_ committed: PerMonth<Set<Data>>) -> RemoteViewHandle {
+        RemoteViewHandle(
+            revision: 1,
+            committedAssetFingerprintsByMonth: committed,
+            overlayFreshness: .fresh,
+            producedAt: Date()
+        )
+    }
+
+    private func staleHandle() -> RemoteViewHandle {
+        RemoteViewHandle(
+            revision: 0,
+            committedAssetFingerprintsByMonth: PerMonth<Set<Data>>(),
+            overlayFreshness: .stale,
+            producedAt: Date()
+        )
+    }
+
     /// Without PHAsset.creationDate (unit-test environment), per-month dedup can't
     /// derive the asset's month and conservatively keeps the asset pending. The
     /// production skip path requires real PHAssets and is covered in integration tests.
@@ -59,7 +77,7 @@ final class BackupResumePlannerTests: XCTestCase {
         let plan = try await planner.makePlan(
             pausedMode: .retry(assetIDs: ["a", "b"]),
             completedAssetIDs: [],
-            dedupMode: .v2FreshCommittedView(byMonth)
+            dedupMode: .v2(freshHandle(byMonth))
         )
         guard case .retry(let pending) = plan.resumedExecutionMode else {
             XCTFail("expected .retry, got \(String(describing: plan.resumedExecutionMode))")
@@ -79,7 +97,7 @@ final class BackupResumePlannerTests: XCTestCase {
         let plan = try await planner.makePlan(
             pausedMode: .retry(assetIDs: ["a", "b"]),
             completedAssetIDs: ["a"],
-            dedupMode: .v2FreshCommittedView(PerMonth<Set<Data>>())
+            dedupMode: .v2(freshHandle(PerMonth<Set<Data>>()))
         )
         guard case .retry(let pending) = plan.resumedExecutionMode else {
             XCTFail("expected .retry, got \(String(describing: plan.resumedExecutionMode))")
@@ -88,7 +106,7 @@ final class BackupResumePlannerTests: XCTestCase {
         XCTAssertEqual(pending, ["a", "b"])
     }
 
-    /// V2 stale overlay must reprocess all scoped assets (no completedAssetIDs subtraction); executor's monthStore dedups against durable state.
+    /// V2 stale overlay must reprocess all scoped assets; completedAssetIDs can outrun durable commit-log state.
     func testRetryMode_v2StaleOverlay_ignoresCompletedAssetIDs() async throws {
         let planner = BackupResumePlanner(
             photoLibraryService: PhotoLibraryService(),
@@ -97,7 +115,7 @@ final class BackupResumePlannerTests: XCTestCase {
         let plan = try await planner.makePlan(
             pausedMode: .retry(assetIDs: ["a", "b"]),
             completedAssetIDs: ["a"],
-            dedupMode: .v2StaleOverlay
+            dedupMode: .v2(staleHandle())
         )
         guard case .retry(let pending) = plan.resumedExecutionMode else {
             XCTFail("expected .retry, got \(String(describing: plan.resumedExecutionMode))")

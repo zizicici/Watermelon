@@ -6,6 +6,10 @@ import AMSMB2
 
 final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
+    // SMB doesn't enforce O_EXCL across sessions; assume peers can win the same path.
+    nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    // SMB servers are case-insensitive by spec (Windows roots) — listings fold `IMG.JPG` and `img.jpg` together.
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseInsensitive }
 
     private let config: SMBServerConfig
 

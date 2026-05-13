@@ -56,6 +56,7 @@ enum RemoteFormatInspection: Equatable, Sendable {
     case fresh
     case v1
     case v2(formatVersion: Int)
+    case v2WithPendingMigrationCleanup(formatVersion: Int, ownerWriterID: String)
     case unsupported(minAppVersion: String?)
 }
 
@@ -91,29 +92,26 @@ actor RemoteFormatCompatibilityService {
         }
 
         if markerExists {
-            // version.json is checked first so a stale migration marker on a peer-upgraded
-            // V3+ repo can't trick us into writing V2 over it.
-            if case .found(let preCheck) = try await loadVersionManifestStrict(client: client, profile: profile) {
+            let manifest = try await loadVersionManifestStrict(client: client, profile: profile)
+            if case .found(let preCheck) = manifest {
                 let preVersion = preCheck.formatVersion ?? 0
                 if preVersion > RepoLayout.currentSupportedFormatVersion {
                     return .unsupported(minAppVersion: preCheck.minAppVersion)
                 }
             }
-            // Migration marker only forces `.v1` when V1 manifests still exist; stale marker on a healthy V2 falls through.
-            if try await detectMigrationInProgress(client: client, basePath: basePath) {
+            let migrationMarkers = try await listMigrationMarkers(client: client, basePath: basePath)
+            let migrationInProgress = !migrationMarkers.isEmpty
+            if migrationInProgress {
                 if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
                     return .v1
                 }
             }
-            // Surface transport errors; `.unsupported` would lock the repo on a network blip.
-            let manifest = try await loadVersionManifestStrict(client: client, profile: profile)
             switch manifest {
             case .absent:
                 if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
                     return .v1
                 }
-                // Marker + V2 data + no version.json = phase1-done/phase2-pending after manifest quarantine; resume via .v1 to write version.json.
-                if try await detectMigrationInProgress(client: client, basePath: basePath) {
+                if migrationInProgress {
                     if try await detectV2DataDirectories(client: client, basePath: basePath) {
                         return .v1
                     }
@@ -125,16 +123,12 @@ actor RemoteFormatCompatibilityService {
                 return .fresh
             case .found(let manifest):
                 let formatVersion = manifest.formatVersion ?? 0
-                // Higher than `currentSupportedFormatVersion` means a peer wrote
-                // something we don't understand; refuse to overlay our writes
-                // on it. v2 additive fields stay forward-compatible across
-                // v2-development cycles without bumping the format version.
                 if formatVersion >= 2 && formatVersion <= RepoLayout.currentSupportedFormatVersion {
-                    // Older clients that don't understand V2 may still write V1 manifests
-                    // into a repo that has .watermelon/version.json. Route .v1 so builder
-                    // re-runs the idempotent migration phases over the new V1 data.
                     if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
                         return .v1
+                    }
+                    if let owner = try await detectPendingMigrationCleanupOwner(client: client, basePath: basePath, markers: migrationMarkers) {
+                        return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: owner)
                     }
                     return .v2(formatVersion: formatVersion)
                 }
@@ -148,24 +142,57 @@ actor RemoteFormatCompatibilityService {
         return .fresh
     }
 
-    /// True if `migrations/<*>.json` exists. Fail-closed: list transport errors must
-    /// throw, not be swallowed as "no migration", or a network blip would let us
-    /// route a half-migrated repo through the wrong path.
-    private func detectMigrationInProgress(
+    private func detectPendingMigrationCleanupOwner(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        markers: [RemoteStorageEntry]
+    ) async throws -> String? {
+        let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
+        for entry in markers where !entry.isDirectory && entry.name.hasSuffix(".json") {
+            let path = RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name)
+            let temp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("migration-marker-detect-\(UUID().uuidString).json")
+            defer { try? FileManager.default.removeItem(at: temp) }
+            let writerFromName = String(entry.name.dropLast(".json".count))
+            var payloadWriter: String?
+            do {
+                try await client.download(remotePath: path, localURL: temp)
+                if let data = try? Data(contentsOf: temp),
+                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let parsed = dict["writer_id"] as? String,
+                   RepoLayout.isValidWriterID(parsed) {
+                    payloadWriter = parsed
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if !isNotFoundError(error) { throw error }
+            }
+            if let payloadWriter {
+                return payloadWriter
+            }
+            if RepoLayout.isValidWriterID(writerFromName) {
+                return writerFromName
+            }
+        }
+        return nil
+    }
+
+    /// Fail-closed: list errors throw so a network blip can't be misread as "no migration".
+    private func listMigrationMarkers(
         client: any RemoteStorageClientProtocol,
         basePath: String
-    ) async throws -> Bool {
+    ) async throws -> [RemoteStorageEntry] {
         let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
         do {
-            let entries = try await client.list(path: dir)
-            return entries.contains { !$0.isDirectory && $0.name.hasSuffix(".json") }
+            return try await client.list(path: dir)
         } catch {
-            if isNotFoundError(error) { return false }
+            if isNotFoundError(error) { return [] }
             throw error
         }
     }
 
-    /// Surface to bootstrap: minting a new repo identity over existing commits/snapshots would orphan all of them.
+    /// Bootstrap-side guard: minting a new repoID over existing V2 data would orphan it.
     func hasAnyV2CommitOrSnapshotData(
         client: any RemoteStorageClientProtocol,
         basePath: String
@@ -173,7 +200,7 @@ actor RemoteFormatCompatibilityService {
         try await detectV2DataDirectories(client: client, basePath: basePath)
     }
 
-    /// True if `commits/` or `snapshots/` has any entries. Fail-closed: non-not-found errors throw, else a 401 would mint `.fresh` over a real V2 repo.
+    /// Fail-closed: non-not-found errors throw so a 401 can't mint `.fresh` over a real V2 repo.
     private func detectV2DataDirectories(
         client: any RemoteStorageClientProtocol,
         basePath: String
@@ -200,7 +227,6 @@ actor RemoteFormatCompatibilityService {
         basePath: String,
         entries: [RemoteStorageEntry]
     ) async throws -> Bool {
-        // Surface list errors — a transient failure misclassified as fresh would bootstrap V2 over a real V1 repo.
         let yearEntries = entries
             .filter { $0.isDirectory && $0.name.range(of: "^[0-9]{4}$", options: .regularExpression) != nil }
             .sorted(by: { $0.name > $1.name })
@@ -223,8 +249,7 @@ actor RemoteFormatCompatibilityService {
         case found(WatermelonRemoteVersionManifest)
     }
 
-    /// `.absent` only on confirmed not-found; transport/parse errors throw so callers
-    /// don't conflate "missing" with "couldn't read".
+    /// `.absent` only on confirmed not-found; transport/parse errors throw so callers can't conflate "missing" with "couldn't read".
     private func loadVersionManifestStrict(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord

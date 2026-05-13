@@ -71,7 +71,7 @@ final class V1MigrationServiceTests: XCTestCase {
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
-        try await service.runPhase2(profileID: profileID, repoID: "r", writerID: "w")
+        try await service.runPhase2(profileID: profileID, repoID: "r", writerID: "w", runID: "run-001")
 
         let exists = await client.hasFile(RepoLayout.versionFilePath(base: basePath))
         XCTAssertTrue(exists, "phase2 must write version.json")
@@ -125,12 +125,6 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertGreaterThan(stamp.clock, 0)
     }
 
-    /// Phase1 must write version.json before any commits — closes the multi-device race
-    /// where a peer publishing a higher format_version between inspect and phase1 would
-    /// phase1 writes the migration-in-progress marker BEFORE any commit and
-    /// does NOT yet write version.json. A phase1 crash leaves the marker on
-    /// remote → inspect routes back to .v1 → resume migration. version.json
-    /// only lands in phase2 after all commits succeed.
     func testPhase1WritesMigrationMarkerNotVersionJSON() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -179,7 +173,7 @@ final class V1MigrationServiceTests: XCTestCase {
 
         let service = makeService(client: client, profileID: profileID)
         _ = try await service.runPhase1(profileID: profileID, repoID: "r", writerID: "w", runID: "run-1")
-        try await service.runPhase3(writerID: "w")
+        try await service.runPhase3(writerID: "w", runID: "run-1")
 
         let m1 = await client.hasFile(path1)
         let m2 = await client.hasFile(path2)
@@ -207,7 +201,7 @@ final class V1MigrationServiceTests: XCTestCase {
         let postScanPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 7)
         await client.injectFile(path: postScanPath, data: lateBytes)
 
-        try await service.runPhase3(writerID: "w")
+        try await service.runPhase3(writerID: "w", runID: "run-1")
 
         let scannedRemoved = await client.hasFile(scannedPath)
         let lateSurvived = await client.hasFile(postScanPath)
@@ -224,8 +218,8 @@ final class V1MigrationServiceTests: XCTestCase {
         await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2024, month: 3)
 
         let service = makeService(client: client)
-        try await service.runPhase3(writerID: "test-writer")
-        try await service.runPhase3(writerID: "test-writer")
+        try await service.runPhase3(writerID: "test-writer", runID: "run-1")
+        try await service.runPhase3(writerID: "test-writer", runID: "run-1")
     }
 
     /// ownsMigrationMarker discriminates "our cleanup failed" from "real V2→V1 regression".
@@ -244,7 +238,7 @@ final class V1MigrationServiceTests: XCTestCase {
         let beforeCleanup = try await service.ownsMigrationMarker(writerID: "w")
         XCTAssertTrue(beforeCleanup)
 
-        try await service.runPhase3(writerID: "w")
+        try await service.runPhase3(writerID: "w", runID: "run-1")
         let afterCleanup = try await service.ownsMigrationMarker(writerID: "w")
         XCTAssertFalse(afterCleanup, "phase3 must remove marker so routing flips to .v2")
     }

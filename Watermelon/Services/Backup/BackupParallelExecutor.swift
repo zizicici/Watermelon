@@ -102,17 +102,12 @@ struct BackupParallelExecutor: Sendable {
         )
         await clientPool.seedConnectedClient(preparedRun.initialClient)
 
-        // Project once: each call iterates every asset/link/resource, so per-worker per-month rebuilds cost O(M·N).
-        let committedFingerprintsByMonth: PerMonth<Set<Data>>? = preparedRun.v2Services != nil
-            ? remoteIndexService.committedAssetFingerprintsByMonth()
-            : nil
-
         do {
             try await withThrowingTaskGroup(of: WorkerRunState.self) { group in
                 let monthQueue = MonthWorkQueue(months: preparedRun.monthPlans)
 
                 for workerID in 0 ..< preparedRun.workerCount {
-                    group.addTask { [v2Services = preparedRun.v2Services, fastPathFresh = preparedRun.fastPathFresh, corruptedSnapshotMonths = preparedRun.corruptedSnapshotMonths] in
+                    group.addTask { [v2Services = preparedRun.v2Services] in
                         try await runParallelMonthWorker(
                             workerID: workerID,
                             monthQueue: monthQueue,
@@ -122,10 +117,7 @@ struct BackupParallelExecutor: Sendable {
                             aggregator: aggregator,
                             clientPool: clientPool,
                             onMonthUploaded: onMonthUploaded,
-                            v2Services: v2Services,
-                            fastPathFresh: fastPathFresh,
-                            committedFingerprintsByMonth: committedFingerprintsByMonth,
-                            corruptedSnapshotMonths: corruptedSnapshotMonths
+                            v2Services: v2Services
                         )
                     }
                 }
@@ -178,10 +170,7 @@ struct BackupParallelExecutor: Sendable {
         aggregator: ParallelBackupProgressAggregator,
         clientPool: StorageClientPool,
         onMonthUploaded: BackupMonthFinalizer? = nil,
-        v2Services: BackupV2RuntimeServices? = nil,
-        fastPathFresh: Bool = false,
-        committedFingerprintsByMonth: PerMonth<Set<Data>>? = nil,
-        corruptedSnapshotMonths: Set<LibraryMonthKey> = []
+        v2Services: BackupV2RuntimeServices? = nil
     ) async throws -> WorkerRunState {
         var workerState = WorkerRunState()
         let client: any RemoteStorageClientProtocol
@@ -209,111 +198,18 @@ struct BackupParallelExecutor: Sendable {
                 let monthKey = monthPlan.month
                 let monthAssetIDs = monthPlan.assetLocalIdentifiers
 
-                // Fast-path requires a fresh sync this run; stale cache could skip a month that needs repair.
-                // Also force loadOrCreate for months flagged corrupt-snapshot so rebaseline runs.
-                if v2Services != nil,
-                   fastPathFresh,
-                   !corruptedSnapshotMonths.contains(monthKey),
-                   monthAlreadyFullyBackedUpFast(
-                       monthAssetIDs: monthAssetIDs,
-                       committedFingerprints: committedFingerprintsByMonth?[monthKey] ?? []
-                   ) {
-                    let progressState = await aggregator.recordMonthSkipped(count: monthAssetIDs.count)
-                    eventStream.emit(.monthChanged(MonthChangeEvent(
-                        year: monthKey.year,
-                        month: monthKey.month,
-                        action: .started
-                    )))
-                    eventStream.emit(.progress(BackupProgress(
-                        succeeded: progressState.state.succeeded,
-                        failed: progressState.state.failed,
-                        skipped: progressState.state.skipped,
-                        total: progressState.state.total,
-                        message: String.localizedStringWithFormat(
-                            String(localized: "backup.parallel.monthPreCovered"),
-                            workerID + 1,
-                            monthKey.text,
-                            monthAssetIDs.count
-                        ),
-                        logMessage: nil,
-                        logLevel: .info,
-                        itemEvent: nil,
-                        transferState: nil
-                    )))
-                    if let timingSummary = progressState.timingSummary {
-                        eventStream.emitLog(timingSummary, level: .debug)
-                    }
-                    // Defer `.completed` until the finalizer runs the inline download.
-                    if let onMonthUploaded {
-                        switch await onMonthUploaded(monthKey) {
-                        case .success:
-                            eventStream.emit(.monthChanged(MonthChangeEvent(
-                                year: monthKey.year,
-                                month: monthKey.month,
-                                action: .completed
-                            )))
-                        case .downloadIncomplete(let message):
-                            // Upload + download both finished; skipped items are tracked separately. Without `.completed`, Home's month ring would stay "in progress" after the run ends.
-                            eventStream.emitLog(
-                                String.localizedStringWithFormat(
-                                    String(localized: "backup.parallel.finalizationFailed"),
-                                    workerID + 1,
-                                    monthKey.text,
-                                    message
-                                ),
-                                level: .warning
-                            )
-                            eventStream.emit(.monthChanged(MonthChangeEvent(
-                                year: monthKey.year,
-                                month: monthKey.month,
-                                action: .completed
-                            )))
-                        case .failed(let message):
-                            eventStream.emitLog(
-                                String.localizedStringWithFormat(
-                                    String(localized: "backup.parallel.finalizationFailed"),
-                                    workerID + 1,
-                                    monthKey.text,
-                                    message
-                                ),
-                                level: .error
-                            )
-                            throw NSError(
-                                domain: "BackupParallelExecutor",
-                                code: -201,
-                                userInfo: [NSLocalizedDescriptionKey: "onMonthUploaded failed: \(message)"]
-                            )
-                        case .cancelled:
-                            workerState.paused = true
-                            eventStream.emitLog(
-                                String.localizedStringWithFormat(
-                                    String(localized: "backup.parallel.finalizationCancelled"),
-                                    workerID + 1,
-                                    monthKey.text
-                                ),
-                                level: .info
-                            )
-                        }
-                        if workerState.paused { break }
-                    } else {
-                        eventStream.emit(.monthChanged(MonthChangeEvent(
-                            year: monthKey.year,
-                            month: monthKey.month,
-                            action: .completed
-                        )))
-                    }
-                    continue
-                }
-
                 let monthStore: any BackupMonthStore
                 do {
                     if let v2Services {
+                        // Seed with overlay so a same-name-same-size corrupted small file the syncIndex content-verified missing stays flagged when the session relists.
+                        let priorMissing = remoteIndexService.physicallyMissingHashes(for: monthKey)
                         monthStore = try await V2MonthSession.loadOrCreate(
                             client: client,
                             basePath: profile.basePath,
                             year: monthKey.year,
                             month: monthKey.month,
                             v2Services: v2Services,
+                            seedMissingHashes: priorMissing,
                             stepLogger: { message in
                                 eventStream.emitLog(message, level: .error)
                             }
@@ -767,33 +663,6 @@ struct BackupParallelExecutor: Sendable {
         }
     }
 
-    /// Pre-materialize variant: same predicate but uses sync-time committed fingerprints
-    /// (already filtered through the classifier) instead of monthStore. Lets the executor
-    /// skip loadOrCreate / materializeMonth for already-done months.
-    private func monthAlreadyFullyBackedUpFast(
-        monthAssetIDs: [String],
-        committedFingerprints: Set<Data>
-    ) -> Bool {
-        guard !monthAssetIDs.isEmpty else { return true }
-        guard !committedFingerprints.isEmpty else { return false }
-        guard let cachedHashes = try? hashIndexRepository.fetchAssetHashCaches(
-            assetIDs: Set(monthAssetIDs)
-        ) else { return false }
-        guard cachedHashes.count == monthAssetIDs.count else { return false }
-        let fetchResult = PHAsset.fetchAssets(
-            withLocalIdentifiers: monthAssetIDs,
-            options: nil
-        )
-        guard fetchResult.count == monthAssetIDs.count else { return false }
-        for index in 0 ..< fetchResult.count {
-            let asset = fetchResult.object(at: index)
-            guard let cache = cachedHashes[asset.localIdentifier] else { return false }
-            if let modDate = asset.modificationDate, modDate > cache.updatedAt { return false }
-            if !committedFingerprints.contains(cache.assetFingerprint) { return false }
-        }
-        return true
-    }
-
     private func monthAlreadyFullyBackedUp(
         monthAssetIDs: [String],
         monthStore: any BackupMonthStore
@@ -824,6 +693,22 @@ struct BackupParallelExecutor: Sendable {
             // Force full processing so AssetProcessor heals incomplete assets.
             if monthStore.isAssetIncomplete(cache.assetFingerprint) {
                 executorLog.info("[heal] month \(monthStore.year)-\(monthStore.month) has incomplete asset")
+                return false
+            }
+            // Cached row predates current selection rules: re-evaluate rather than skip.
+            if cache.selectionVersion < BackupAssetResourcePlanner.currentSelectionVersion {
+                return false
+            }
+            // PHAsset resource-shape drift can occur without an mtime bump.
+            let currentResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
+                from: PHAssetResource.assetResources(for: asset)
+            )
+            if currentResources.count != cache.resourceCount {
+                return false
+            }
+            guard let cachedSignature = cache.resourceSignature else { return false }
+            let currentSignature = BackupAssetResourcePlanner.resourceSignature(orderedResources: currentResources)
+            if cachedSignature != currentSignature {
                 return false
             }
         }

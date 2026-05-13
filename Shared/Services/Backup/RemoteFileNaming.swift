@@ -270,15 +270,27 @@ enum RemoteFileNaming {
         return writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID)
     }
 
+    /// Writer + run suffix so a same-writer prior-run multipart orphan can't be clobbered by this run's multipart completion.
+    static func writerIDRunIDSuffixedName(baseName: String, writerID: String, runID: String) -> String {
+        let nsName = baseName as NSString
+        let ext = nsName.pathExtension
+        let stem = nsName.deletingPathExtension
+        return writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, runIDToken: RepoLayout.runIDPrefix(runID))
+    }
+
     private static func writerIDSuffixedName(
         stem: String,
         ext: String,
         writerID: String,
         numericSuffix: Int? = nil,
-        escapeToken: String? = nil
+        escapeToken: String? = nil,
+        runIDToken: String? = nil
     ) -> String {
         let wid6 = RepoLayout.writerIDShort(writerID)
         var trailing = "~\(wid6)"
+        if let runIDToken, !runIDToken.isEmpty {
+            trailing += "-r\(runIDToken)"
+        }
         if let escapeToken {
             trailing += "-\(escapeToken)"
         } else if let numericSuffix {

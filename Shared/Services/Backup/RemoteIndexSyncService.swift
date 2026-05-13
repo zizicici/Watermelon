@@ -3,19 +3,19 @@ import os.log
 
 private let syncLog = Logger(subsystem: "com.zizicici.watermelon", category: "SyncTiming")
 
-// `uncommittedV2FingerprintsByMonth` is mutable but only mutated under `uncommittedLock`;
-// other state is either `let` or wrapped in actors. Hence `@unchecked Sendable`.
 final class RemoteIndexSyncService: @unchecked Sendable {
     private actor SyncGate {
         private var isLocked = false
         private var waiters: [(UUID, CheckedContinuation<Void, Error>)] = []
         private var preCancelledIDs: Set<UUID> = []
+        private var registeredIDs: Set<UUID> = []
 
         private func registerWaiter(id: UUID, continuation: CheckedContinuation<Void, Error>) {
             if preCancelledIDs.remove(id) != nil {
                 continuation.resume(throwing: CancellationError())
                 return
             }
+            registeredIDs.insert(id)
             if !isLocked {
                 isLocked = true
                 continuation.resume(returning: ())
@@ -27,14 +27,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         private func cancelWaiter(id: UUID) {
             if let idx = waiters.firstIndex(where: { $0.0 == id }) {
                 let (_, cont) = waiters.remove(at: idx)
+                registeredIDs.remove(id)
                 cont.resume(throwing: CancellationError())
-            } else {
+            } else if !registeredIDs.contains(id) {
                 preCancelledIDs.insert(id)
             }
         }
 
-        private func acquire() async throws {
-            let id = UUID()
+        private func acquire(id: UUID) async throws {
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
                     Task { await self.registerWaiter(id: id, continuation: cont) }
@@ -44,7 +44,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             }
         }
 
-        private func release() {
+        private func release(id: UUID) {
+            registeredIDs.remove(id)
             if !waiters.isEmpty {
                 let next = waiters.removeFirst()
                 next.1.resume(returning: ())
@@ -54,8 +55,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
 
         func withLock<T>(_ operation: () async throws -> T) async throws -> T {
-            try await acquire()
-            defer { release() }
+            let id = UUID()
+            try await acquire(id: id)
+            defer { release(id: id) }
             try Task.checkCancellation()
             return try await operation()
         }
@@ -148,7 +150,58 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
     }
 
-    /// O(N) flat-array projection — call only when callers actually need the flat arrays.
+    @discardableResult
+    func syncOverlayOnly(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        fallback: [LibraryMonthKey: Set<Data>] = [:],
+        concurrencyCap: Int = 4
+    ) async throws -> Bool {
+        try await syncGate.withLock { [self] in
+            let fresh = try await refreshPhysicalPresenceOverlay(
+                client: client,
+                basePath: basePath,
+                fallback: fallback,
+                concurrencyCap: concurrencyCap
+            )
+            await state.setOverlayFresh(fresh)
+            return fresh
+        }
+    }
+
+    /// Single syncGate hold so a concurrent syncIndex can't mutate read-model between overlay refresh and handle capture.
+    func syncOverlayAndCaptureHandle(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        fallback: [LibraryMonthKey: Set<Data>] = [:],
+        concurrencyCap: Int = 4
+    ) async throws -> RemoteViewHandle {
+        try await syncGate.withLock { [self] in
+            let fresh = try await refreshPhysicalPresenceOverlay(
+                client: client,
+                basePath: basePath,
+                fallback: fallback,
+                concurrencyCap: concurrencyCap
+            )
+            await state.setOverlayFresh(fresh)
+            return self.handleFromCurrentSnapshot(overlayFresh: fresh)
+        }
+    }
+
+    private func handleFromCurrentSnapshot(overlayFresh: Bool) -> RemoteViewHandle {
+        let (revision, snapshot) = committedView.currentSnapshotWithRevision()
+        let fingerprints = Self.committedFingerprints(
+            from: snapshot,
+            subtractingInflight: inflightTracker
+        )
+        return RemoteViewHandle(
+            revision: revision,
+            committedAssetFingerprintsByMonth: fingerprints,
+            overlayFreshness: overlayFresh ? .fresh : .stale,
+            producedAt: Date()
+        )
+    }
+
     func fullSnapshot() -> RemoteLibrarySnapshot {
         committedView.current()
     }
@@ -166,7 +219,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: Self.remoteProfileKey(profile))
         if shouldResetSnapshot {
             committedView.reset()
-            // Profile switch invalidates inflight fingerprints from the prior profile; leaving them strands subtract callsites.
             resetUncommittedV2()
         }
 
@@ -176,11 +228,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         switch inspection {
         case .unsupported(let minAppVersion):
             throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
-        case .v2:
+        case .v2, .v2WithPendingMigrationCleanup:
             await state.setIsV2Repo(true)
             return try await syncIndexV2(client: client, profile: profile, eventStream: eventStream, onSyncProgress: onSyncProgress, syncStart: syncStart, preMaterialized: preMaterialized)
         case .v1:
-            // V1 manifest reappearing after V2 confirmation = legacy peer is writing; refuse stale V2 cache.
             if alreadyV2 || expectV2 {
                 await state.setOverlayFresh(false)
                 throw BackupCompatibilityError.requiresForegroundMigration
@@ -188,12 +239,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             await state.setIsV2Repo(false)
             await state.setOverlayFresh(false)
         case .fresh:
-            // `.fresh` after a confirmed V2 repo = remote markers vanished or became unreadable; treating stale V2 cache as authoritative would let Home/resume dedup against data that may no longer exist.
             if alreadyV2 || expectV2 {
                 await state.setOverlayFresh(false)
                 throw BackupCompatibilityError.damagedV2Repo
             }
-            // Pinning isV2 here would trip the alreadyV2 guard if a peer writes V1 before we bootstrap; `markIsV2` pins after build.
             await state.setOverlayFresh(false)
         }
 
@@ -251,16 +300,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 year: month.year,
                 month: month.month
             ) else {
-                throw NSError(
-                    domain: "RemoteIndexSyncService",
-                    code: -21,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: String.localizedStringWithFormat(
-                            String(localized: "backup.remoteIndex.error.missingMonthManifest"),
-                            month.text
-                        )
-                    ]
-                )
+                _ = committedView.removeMonth(month)
+                processedMonthCount += 1
+                onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
+                continue
             }
             let downloadElapsed = CFAbsoluteTimeGetCurrent() - monthStart
 
@@ -290,8 +333,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
         }
 
-        // Keep scan-time digests even when loadManifestDirect rewrote the manifest:
-        // refreshing post-flush would race with concurrent writers and drop their updates.
         await state.updateRemoteManifestDigests(remoteDigests)
 
         committedView.markSynced(Date())
@@ -311,14 +352,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         syncStart: CFAbsoluteTime,
         preMaterialized: RepoMaterializer.MaterializeOutput? = nil
     ) async throws -> RemoteIndexSyncDigest {
-        // Reuse builder's materialize output to avoid running it twice in prepareRun.
         let output: RepoMaterializer.MaterializeOutput
         if let preMaterialized {
             output = preMaterialized
         } else {
             let bootstrap = RepoBootstrap(client: client, basePath: profile.basePath)
-            // Absent repo.json on a V2 repo is broken identity state — surface, not silently
-            // disable repoID filtering (would let foreign commits leak into cache).
             let expectedRepoID: String
             switch try await bootstrap.loadRepoIDStrict() {
             case .absent:
@@ -333,9 +371,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             let materializer = RepoMaterializer(client: client, basePath: profile.basePath)
             output = try await materializer.materialize(expectedRepoID: expectedRepoID)
         }
-        // After fresh materialize, all assets in the cache are committed.
         resetUncommittedV2()
-        // Atomic snapshot+clear; concurrent worker marks between snapshot and load would otherwise be lost.
         let priorOverlay = committedView.loadFromMaterialize(output)
         var overlayFresh = false
         do {
@@ -365,16 +401,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         return digest
     }
 
-    /// Backup workers reconcile inline via `MonthManifestStore.loadOrCreate`.
+    /// V1-only verify; the version.json probe must fail-closed so a V2 repo can't be misclassified and corrupted.
     func verifyMonth(
         client: RemoteStorageClientProtocol,
         basePath: String,
         month: LibraryMonthKey
     ) async throws {
-        // V1-only path. If a V2 repo lost metadata and inspection misclassified it
-        // as V1, this would write V1 manifest state into `committedView` and pollute
-        // the V2 cache. metadata() must fail-closed — `try?` would swallow a transient
-        // permission/network error as "not V2" and let V1 logic run on a V2 repo.
         let versionPath = RepoLayout.versionFilePath(base: basePath)
         let versionMeta: RemoteStorageEntry?
         do {
@@ -430,13 +462,16 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             remoteRelativePath: monthRelativePath
         )
         let entries = try await client.list(path: monthAbsolutePath)
-        // Fold-compare: NAS may return listing in different case than manifest stored.
         let remoteFileNames = entries
             .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
             .map(\.name)
-        let remoteCollisionKeys = RemoteFileNaming.collisionKeySet(from: Set(remoteFileNames))
+        let caseSensitive = client.backendNameCaseSensitivity == .caseSensitive
+        func presenceKey(_ name: String) -> String {
+            caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
+        }
+        let remotePresenceKeys = Set(remoteFileNames.map(presenceKey))
         let listingMissing = store.existingFileNames().filter { name in
-            !remoteCollisionKeys.contains(RemoteFileNaming.collisionKey(for: name))
+            !remotePresenceKeys.contains(presenceKey(name))
         }
         let listingResult = try store.reconcileMonth(missingFileNames: Set(listingMissing))
 
@@ -528,7 +563,16 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func committedAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
-        let snapshot = committedView.current()
+        Self.committedFingerprints(
+            from: committedView.current(),
+            subtractingInflight: inflightTracker
+        )
+    }
+
+    private static func committedFingerprints(
+        from snapshot: RemoteLibrarySnapshot,
+        subtractingInflight inflightTracker: OptimisticInflightTracker
+    ) -> PerMonth<Set<Data>> {
         var linksByMonthFP: [LibraryMonthKey: [Data: [RemoteAssetResourceLink]]] = [:]
         for link in snapshot.assetResourceLinks {
             let month = LibraryMonthKey(year: link.year, month: link.month)
@@ -544,7 +588,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         for asset in snapshot.assets {
             let month = LibraryMonthKey(year: asset.year, month: asset.month)
             let links = linksByMonthFP[month]?[asset.assetFingerprint] ?? []
-            // Physically-missing resources still have commit-log rows; subtract so resume planner doesn't skip the repair.
+            // Physically-missing resources still have commit-log rows; subtract so resume planner sees the asset as needing repair.
             let availableHashes = (resourceHashesByMonth[month] ?? [])
                 .subtracting(missingByMonth[month] ?? [])
             let state = RemoteAssetIntegrityClassifier.classify(
@@ -579,8 +623,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         committedView.markPhysicallyMissing(month: month, hashes: hashes)
     }
 
-    func physicallyMissingHashesForTest(month: LibraryMonthKey) -> Set<Data> {
+    func physicallyMissingHashes(for month: LibraryMonthKey) -> Set<Data> {
         committedView.physicallyMissingHashes(for: month)
+    }
+
+    func physicallyMissingHashesForTest(month: LibraryMonthKey) -> Set<Data> {
+        physicallyMissingHashes(for: month)
     }
 
     func physicallyMissingSnapshot() -> [LibraryMonthKey: Set<Data>] {
@@ -664,24 +712,61 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         let monthAbs = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRel)
         let entries = try await client.list(path: monthAbs)
         try Task.checkCancellation()
-        // Same collision key can map to multiple real names (case/Unicode variants); single-size dict was last-write-wins.
-        var sizesByKey: [String: Set<Int64>] = [:]
+        // Folding on a case-sensitive backend would equate IMG.JPG/img.jpg as one file.
+        let caseSensitive = client.backendNameCaseSensitivity == .caseSensitive
+        func presenceKey(_ name: String) -> String {
+            caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
+        }
+        struct ListedFile {
+            let name: String
+            let size: Int64
+        }
+        var entriesByKey: [String: [ListedFile]] = [:]
         for entry in entries where !entry.isDirectory {
-            sizesByKey[RemoteFileNaming.collisionKey(for: entry.name), default: []].insert(entry.size)
+            entriesByKey[presenceKey(entry.name), default: []].append(ListedFile(name: entry.name, size: entry.size))
         }
         var resourcesByHash: [Data: [RemoteManifestResource]] = [:]
         for resource in resources {
             resourcesByHash[resource.contentHash, default: []].append(resource)
         }
+        let smallLimit = RemoteContentTrust.defaultSmallFileLimitBytes
         var missing: Set<Data> = []
         for (hash, group) in resourcesByHash {
-            let anyPresent = group.contains { resource in
+            var anyPresent = false
+            candidateScan: for resource in group {
+                try Task.checkCancellation()
                 let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-                guard let listedSizes = sizesByKey[RemoteFileNaming.collisionKey(for: leaf)] else {
-                    return false
+                guard let listed = entriesByKey[presenceKey(leaf)] else { continue }
+                let sizeMatches = listed.filter { $0.size == resource.fileSize }
+                if sizeMatches.isEmpty { continue }
+                // Small files require content verification; size-only would dedup peer-overwritten bytes via BackupResumePlanner.
+                if resource.fileSize >= smallLimit {
+                    anyPresent = true
+                    break
                 }
-                // Size mismatch = stale/truncated; same-size silent corruption needs deeper verify.
-                return listedSizes.contains(resource.fileSize)
+                for match in sizeMatches {
+                    let path = RemotePathBuilder.absolutePath(
+                        basePath: basePath,
+                        remoteRelativePath: monthRel + "/" + match.name
+                    )
+                    do {
+                        if try await RemoteContentTrust.verifyHash(
+                            client: client,
+                            remotePath: path,
+                            expectedSize: resource.fileSize,
+                            expectedHash: hash
+                        ) {
+                            anyPresent = true
+                            break candidateScan
+                        }
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        // Not-found = continue probing alternates; transport/truncation throws so overlay refresh records the month as inconclusive rather than falsely healthy.
+                        if isStorageNotFoundError(error) { continue }
+                        throw error
+                    }
+                }
             }
             if !anyPresent { missing.insert(hash) }
         }
@@ -772,33 +857,26 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 }
 
-/// Sole production entry point for optimistic-cache writes that must keep
-/// inflight tracking in sync. `RemoteIndexSyncService.markCommittedV2` clears
-/// the inflight side at flush success — separate concern, kept on the service.
 struct OptimisticAssetWriter: Sendable {
     fileprivate let service: RemoteIndexSyncService
 
-    /// Optimistic cache write + (V2 only) inflight marking, atomic from the
-    /// caller's view. `markUncommitted: false` is the phantom/test-asset path
-    /// where we want classifier subtraction, not inflight subtraction.
+    /// Inflight must be marked before publish — reverse ordering lets a reader see the asset as committed but not inflight, and skip it as done.
     func appendAsset(
         _ asset: RemoteManifestAsset,
         links: [RemoteAssetResourceLink]?,
         markUncommitted: Bool
     ) {
-        service._optimisticUpsertAsset(asset, links: links)
         if markUncommitted {
             let month = LibraryMonthKey(year: asset.year, month: asset.month)
             service._markUncommitted(month: month, fingerprints: [asset.assetFingerprint])
         }
+        service._optimisticUpsertAsset(asset, links: links)
     }
 
     func appendResource(_ resource: RemoteManifestResource) {
         service._optimisticUpsertResource(resource)
     }
 
-    /// For tests / non-asset paths that need to seed inflight state directly.
-    /// Production AssetProcessor path goes through `appendAsset(markUncommitted: true)`.
     func markUncommitted(month: LibraryMonthKey, fingerprints: Set<Data>) {
         service._markUncommitted(month: month, fingerprints: fingerprints)
     }

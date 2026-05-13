@@ -24,61 +24,40 @@ struct RemoteStorageCapacity: Sendable {
     let totalBytes: Int64?
 }
 
-/// Persistence primitive contract: callers MUST decide each case explicitly via
-/// exhaustive switch. Default-success on the catch-all (`if case .alreadyExists`
-/// patterns + implicit fall-through) hides "we don't know if our bytes landed"
-/// as "OK, continue" — and this anti-pattern reappeared across SnapshotWriter,
-/// CommitLogWriter, and asset upload in successive reviews. Adding a new case
-/// must intentionally break every caller's switch.
+/// Callers MUST exhaust every case — silent fall-through hides "we don't know if our bytes landed" as success.
 enum AtomicCreateResult: Sendable {
-    /// Our bytes are durably at the path. Verified by post-write check on
-    /// `.overwritePossible` backends; trusted on `.exclusive`.
     case created
-    /// The path holds bytes that are NOT ours — peer write, residual stale file,
-    /// or backend pre-existing object. Caller decides whether to error (metadata
-    /// path: peer collision) or rename (asset path).
     case alreadyExists
-    /// Backend completed the write but caller-side verification is inconclusive
-    /// (network timeout on verify, S3 read-after-write delay). DO NOT treat as
-    /// success without an explicit policy decision: snapshot path defers to
-    /// commit log replay; asset path is uniquely renamed so retries can't
-    /// double-write. Add new policy at each caller, not by silently passing through.
+    /// Backend completed but caller-side verification is inconclusive (timeout, read-after-write delay); each caller decides policy explicitly.
     case bestEffortRetry
 }
 
-/// What guarantee did the backend ACTUALLY provide for this specific
-/// `atomicCreate` call? Per-operation, not per-backend (S3 single-part supports
-/// If-None-Match; multipart historically doesn't). `MetadataCreateGate` adapts
-/// `.overwritePossible` via UUID staging + post-move verify; the "we overwrote
-/// peer at final" case is undetectable but writer-unique destination paths make
-/// it inert. Asset uploads handle this via `forceWriterIDSuffix`.
-/// Concurrency contract for a single client instance. Callers that fan out
-/// (e.g. `refreshPhysicalPresenceOverlay`) MUST serialize when the client is
-/// `.serialOnly`; otherwise behaviour is library-dependent.
+/// Single-instance concurrency contract; `.serialOnly` callers must externally serialize fan-out.
 enum ClientConcurrencyMode: Sendable {
-    /// Multiple in-flight ops on the same instance are safe (actor-bound clients).
     case concurrent
-    /// At most one in-flight op per instance — caller must serialize.
     case serialOnly
 }
 
 enum CreateGuarantee: Sendable, Equatable {
-    /// Backend MUST refuse if the path is already taken. Contract: callers report
-    /// `.exclusive` only when the backend's atomic-create semantic is verified
-    /// (POSIX O_EXCL, S3 If-None-Match honored end-to-end). Backends that "support
-    /// but might not enforce" report `.overwritePossible` so the gate stages safely.
+    /// Kernel- or server-enforced exclusivity — `.exclusive` is only reported when the backend verifies the contract end-to-end.
     case exclusive
-    /// The backend executed exists+upload internally (or honors conditional creates
-    /// only optimistically). Peer's bytes can win the path. Callers use staging +
-    /// post-verify to detect peer collision.
+    /// Peer's bytes can still win the path; callers stage + post-verify.
     case overwritePossible
 }
 
+/// Independent of size — S3's multipart-completion race is per-key regardless.
+enum DataPathOverwriteRisk: Sendable, Equatable {
+    case perKey
+    case none
+}
+
+/// SMB folds names case-insensitively; S3/SFTP/WebDAV do not.
+enum BackendNameCaseSensitivity: Sendable, Equatable {
+    case caseSensitive
+    case caseInsensitive
+}
+
 extension AtomicCreateResult {
-    /// Default guarantee inference for the common 3-result enum, used by clients
-    /// that haven't yet wired explicit guarantee reporting through. The actual
-    /// guarantee depends on backend internals — clients with backend-specific
-    /// knowledge should override.
     var defaultGuarantee: CreateGuarantee {
         switch self {
         case .created: return .exclusive
@@ -149,14 +128,12 @@ protocol RemoteStorageClientProtocol: Sendable {
         respectTaskCancellation: Bool,
         onProgress: ((Double) -> Void)?
     ) async throws -> AtomicCreateResult
-    /// What guarantee will `atomicCreate` provide for a file of this size at this
-    /// path? The pair (path, size) matters because S3 multipart kicks in at a size
-    /// threshold, and only multipart drops the guarantee from `.exclusive` to
-    /// `.overwritePossible`. Default is conservative `.overwritePossible`.
+    /// Per-(path, size) because S3 multipart degrades the guarantee at the threshold.
     func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee
+    var dataPathOverwriteRisk: DataPathOverwriteRisk { get }
+    var backendNameCaseSensitivity: BackendNameCaseSensitivity { get }
     var concurrencyMode: ClientConcurrencyMode { get }
-    /// True when ops on this client are already serialized end-to-end. Composing
-    /// wrappers can transitively expose this so `wrapIfSerial` doesn't double-wrap.
+    /// Composing wrappers transitively expose this so `wrapIfSerial` doesn't double-wrap.
     var isSerialized: Bool { get }
     func setModificationDate(_ date: Date, forPath path: String) async throws
     func download(remotePath: String, localURL: URL) async throws
@@ -177,6 +154,10 @@ extension RemoteStorageClientProtocol {
     }
 
     var isSerialized: Bool { false }
+
+    /// Fail-closed: treat unknown backends as overwrite-risky and case-sensitive.
+    var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
 
     func verifyWriteAccess() async throws {}
 
@@ -199,9 +180,6 @@ extension RemoteStorageClientProtocol {
         return .bestEffortRetry
     }
 
-    /// Returns a local URL for a remote path if the underlying storage already keeps the file
-    /// on this device's filesystem (e.g. external volumes). Returns nil otherwise — caller must
-    /// `download(remotePath:localURL:)` to materialize. Default returns nil.
     func directReadURL(forRemotePath _: String) async -> URL? {
         nil
     }
@@ -217,9 +195,6 @@ extension RemoteStorageClientProtocol {
         await disconnect()
     }
 
-    /// Convenience overload — keeps existing metadata-write callsites (commits,
-    /// snapshots, repo.json, claims, liveness) unchanged. The new on-progress
-    /// argument is only needed by the data-upload path (AssetProcessor+Upload).
     func atomicCreate(
         localURL: URL,
         remotePath: String,

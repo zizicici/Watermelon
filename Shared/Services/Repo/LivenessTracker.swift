@@ -87,7 +87,12 @@ actor LivenessTracker {
             return
         } catch {}
         // Cancellation must surface here too so stopAndWait can unblock during shutdown.
-        _ = try? await client.atomicCreate(localURL: temp, remotePath: remotePath, respectTaskCancellation: true)
+        do {
+            _ = try await client.atomicCreate(localURL: temp, remotePath: remotePath, respectTaskCancellation: true)
+        } catch is CancellationError {
+            try? await client.delete(path: stagingPath)
+            return
+        } catch {}
         try? await client.delete(path: stagingPath)
     }
 

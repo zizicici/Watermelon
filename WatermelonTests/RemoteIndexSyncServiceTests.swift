@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import Watermelon
 
@@ -218,7 +219,9 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.connect()
 
         let service = RemoteIndexSyncService()
-        let hashPresent = TestFixtures.fingerprint(0xAA)
+        // Sub-threshold file → overlay verifies via SHA-256, so the test content's hash must match.
+        let presentBytes = Data("present-overlay-bytes".utf8)
+        let hashPresent = Data(SHA256.hash(data: presentBytes))
         let hashGone = TestFixtures.fingerprint(0xBB)
         let role = ResourceTypeCode.photo
 
@@ -226,7 +229,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         let resPresent = RemoteManifestResource(
             year: monthA.year, month: monthA.month,
             physicalRemotePath: "\(monthRel)/present.jpg",
-            contentHash: hashPresent, fileSize: 1, resourceType: role,
+            contentHash: hashPresent, fileSize: Int64(presentBytes.count), resourceType: role,
             creationDateMs: nil, backedUpAtMs: 0
         )
         let resGone = RemoteManifestResource(
@@ -240,7 +243,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         writer.appendResource(resGone)
 
         // Stage only one of the two on remote; the other is "physically missing".
-        await client.injectFile(path: "\(basePath)/\(monthRel)/present.jpg", contents: "x")
+        await client.injectFile(path: "\(basePath)/\(monthRel)/present.jpg", data: presentBytes)
         try await client.createDirectory(path: "\(basePath)/\(monthRel)")
 
         try await service.refreshPhysicalPresenceOverlay(client: client, basePath: basePath)

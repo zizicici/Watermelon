@@ -59,8 +59,18 @@ enum TestFixtures {
         [:]
     }
 
-    static func record(_ fingerprint: Data, updatedAt: Date = Date()) -> LocalAssetFingerprintRecord {
-        LocalAssetFingerprintRecord(fingerprint: fingerprint, updatedAt: updatedAt)
+    static func record(
+        _ fingerprint: Data,
+        updatedAt: Date = Date(),
+        selectionVersion: Int = BackupAssetResourcePlanner.currentSelectionVersion,
+        resourceSignature: Data? = Data()
+    ) -> LocalAssetFingerprintRecord {
+        LocalAssetFingerprintRecord(
+            fingerprint: fingerprint,
+            updatedAt: updatedAt,
+            selectionVersion: selectionVersion,
+            resourceSignature: resourceSignature
+        )
     }
 
     static func emptyRemoteFingerprints(for month: LibraryMonthKey) -> Set<Data> {

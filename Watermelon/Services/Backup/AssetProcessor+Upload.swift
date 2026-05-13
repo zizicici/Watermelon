@@ -125,58 +125,114 @@ extension AssetProcessor {
         var skipReason: String?
         var attemptedFileNames: Set<String> = [targetFileName]
 
-        let existingCollisionKeys = monthStore.existingCollisionKeys()
+        let writerID = monthStore.v2Services?.writerID
+        let runID = monthStore.v2Services?.runID
+        let forceWriterIDSuffix = client.dataPathOverwriteRisk == .perKey && writerID != nil
+        var collisionKeys = monthStore.existingCollisionKeys()
+        let baseCollides = collisionKeys.contains(RemoteFileNaming.collisionKey(for: baseFileName))
 
-        // .overwritePossible backends (SMB / S3-multipart) need writerID-suffix to keep peer uploads distinct.
-        let baseRemotePath = RemotePathBuilder.absolutePath(
-            basePath: profile.basePath,
-            remoteRelativePath: monthStore.monthRelativePath + "/" + baseFileName
-        )
-        let baseGuarantee = client.atomicCreateGuarantee(forFileSize: localFileSize, remotePath: baseRemotePath)
-        let forceWriterIDSuffix = baseGuarantee == .overwritePossible && monthStore.v2Services?.writerID != nil
-        let baseCollides = existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: baseFileName))
-
-        // Crash-retry orphan reuse. When forceWriterIDSuffix, only the ~wid6 path is uniquely ours; reusing the base name on overwrite-possible backends would bind metadata to a path any peer can clobber.
-        let precheckMaxBytes: Int64 = 64 * 1024 * 1024
-        let probeCandidate: String?
-        if forceWriterIDSuffix, let writerID = monthStore.v2Services?.writerID {
-            let candidate = RemoteFileNaming.writerIDSuffixedName(baseName: baseFileName, writerID: writerID)
-            probeCandidate = existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: candidate)) ? candidate : nil
+        enum ClaimSource { case manifest, unmanifestedOrphan }
+        var claimCandidates: [(name: String, knownSize: Int64?, source: ClaimSource)] = []
+        if forceWriterIDSuffix, let writerID {
+            let candidates: [String]
+            if let runID {
+                candidates = [
+                    RemoteFileNaming.writerIDRunIDSuffixedName(baseName: baseFileName, writerID: writerID, runID: runID),
+                    RemoteFileNaming.writerIDSuffixedName(baseName: baseFileName, writerID: writerID)
+                ]
+            } else {
+                candidates = [RemoteFileNaming.writerIDSuffixedName(baseName: baseFileName, writerID: writerID)]
+            }
+            for candidate in candidates {
+                let key = RemoteFileNaming.collisionKey(for: candidate)
+                if collisionKeys.contains(key) {
+                    let manifestSize = monthStore.findByFileName(candidate)?.fileSize
+                        ?? monthStore.remoteFileSize(named: candidate)
+                    claimCandidates.append((candidate, manifestSize, .manifest))
+                    continue
+                }
+                let probePath = RemotePathBuilder.absolutePath(
+                    basePath: profile.basePath,
+                    remoteRelativePath: monthStore.monthRelativePath + "/" + candidate
+                )
+                let probe = try await probeRemoteExistence(
+                    client: client,
+                    profile: profile,
+                    path: probePath,
+                    cancellationController: cancellationController
+                )
+                let remoteSize: Int64?
+                switch probe {
+                case .absent: continue
+                case .present(let size): remoteSize = size
+                }
+                // Block from target selection — different content at this path must not be overwritten.
+                collisionKeys.insert(key)
+                attemptedFileNames.insert(candidate)
+                claimCandidates.append((candidate, remoteSize, .unmanifestedOrphan))
+            }
         } else if baseCollides {
-            probeCandidate = baseFileName
-        } else {
-            probeCandidate = nil
+            let manifestSize = monthStore.findByFileName(baseFileName)?.fileSize
+                ?? monthStore.remoteFileSize(named: baseFileName)
+            claimCandidates.append((baseFileName, manifestSize, .manifest))
         }
-        if let candidate = probeCandidate, localFileSize <= precheckMaxBytes {
-            let existingManifestResource = monthStore.findByFileName(candidate)
-            let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: candidate)
-            let sizesMatchOrUnknown = knownRemoteSize == nil || knownRemoteSize == localFileSize
-            if sizesMatchOrUnknown {
+
+        let smallFileLimit = RemoteContentTrust.defaultSmallFileLimitBytes
+        for candidate in claimCandidates {
+            let sizesMatchOrUnknown = candidate.knownSize == nil || candidate.knownSize == localFileSize
+            guard sizesMatchOrUnknown else { continue }
+            if localFileSize < smallFileLimit {
                 try cancellationController?.throwIfCancelled()
                 try Task.checkCancellation()
                 let remoteHash = try await downloadAndHashRemoteFileForConflictCheck(
                     profile: profile,
                     client: client,
                     monthStore: monthStore,
-                    fileName: candidate,
+                    fileName: candidate.name,
                     displayName: displayName,
                     eventStream: eventStream,
                     cancellationController: cancellationController
                 )
                 if let remoteHash, remoteHash == localHash {
                     skipReason = "name_same_hash"
-                    targetFileName = candidate
+                    targetFileName = candidate.name
+                    break
                 }
+            } else if candidate.source == .unmanifestedOrphan, candidate.knownSize == localFileSize {
+                // Size+name approximation only for unmanifested orphans — claiming a manifest entry under our hash would orphan assets bound to its existing hash.
+                skipReason = "name_size_approximation"
+                targetFileName = candidate.name
+                break
             }
         }
 
         if skipReason == nil && (forceWriterIDSuffix || baseCollides) {
-            targetFileName = RemoteFileNaming.resolveNextAvailableName(
-                baseName: baseFileName,
-                collisionKeys: existingCollisionKeys,
-                writerID: monthStore.v2Services?.writerID,
-                forceWriterIDSuffix: forceWriterIDSuffix
+            let baseAbsolutePath = RemotePathBuilder.absolutePath(
+                basePath: profile.basePath,
+                remoteRelativePath: monthStore.monthRelativePath + "/" + baseFileName
             )
+            let sizeGuarantee = client.atomicCreateGuarantee(forFileSize: localFileSize, remotePath: baseAbsolutePath)
+            if forceWriterIDSuffix, sizeGuarantee == .overwritePossible,
+               let writerID, let runID {
+                let runCandidate = RemoteFileNaming.writerIDRunIDSuffixedName(baseName: baseFileName, writerID: writerID, runID: runID)
+                if collisionKeys.contains(RemoteFileNaming.collisionKey(for: runCandidate)) {
+                    targetFileName = RemoteFileNaming.resolveNextAvailableName(
+                        baseName: runCandidate,
+                        collisionKeys: collisionKeys,
+                        writerID: writerID,
+                        forceWriterIDSuffix: false
+                    )
+                } else {
+                    targetFileName = runCandidate
+                }
+            } else {
+                targetFileName = RemoteFileNaming.resolveNextAvailableName(
+                    baseName: baseFileName,
+                    collisionKeys: collisionKeys,
+                    writerID: writerID,
+                    forceWriterIDSuffix: forceWriterIDSuffix
+                )
+            }
             attemptedFileNames.insert(targetFileName)
         }
 
@@ -327,7 +383,7 @@ extension AssetProcessor {
                     continue
                 }
                 if case .bestEffortRetry = createResult {
-                    // `~<wid6>` paths aren't run-unique — same-writer concurrent runs can collide; always verify on bestEffortRetry.
+                    // `~<wid6>` is not run-unique — same-writer concurrent runs can collide; verify before binding our hash to remote bytes.
                     let raceDetected = await Self.detectRemoteContentRace(
                         client: client,
                         remotePath: uploadPreparation.remoteAbsolutePath,
@@ -434,7 +490,7 @@ extension AssetProcessor {
             }
         }
 
-        // All retries used by collision-rename → lastError stays nil, surface a real reason.
+        // Collision-rename burns retries without throwing; lastError stays nil and would surface as "Unknown".
         if lastError == nil {
             lastError = NSError(
                 domain: "AssetProcessor.Upload",
@@ -538,7 +594,32 @@ extension AssetProcessor {
         }
     }
 
-    /// Fail-closed: unverifiable remote (size match, metadata error, missing) reports race rather than binding our hash to peer bytes.
+    enum RemoteProbeResult {
+        case absent
+        case present(size: Int64?)
+    }
+
+    /// Fail-closed: unknown probe state reports `.present(size: nil)` so resolveNextAvailableName won't pick the path.
+    func probeRemoteExistence(
+        client: RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        path: String,
+        cancellationController: BackupCancellationController?
+    ) async throws -> RemoteProbeResult {
+        do {
+            if let meta = try await client.metadata(path: path), !meta.isDirectory {
+                return .present(size: meta.size)
+            }
+            return .absent
+        } catch {
+            if error is CancellationError { throw error }
+            if cancellationController?.isCancelled == true { throw CancellationError() }
+            if profile.isConnectionUnavailableError(error) { throw error }
+            if isStorageNotFoundError(error) { return .absent }
+            return .present(size: nil)
+        }
+    }
+
     static func detectRemoteContentRace(
         client: RemoteStorageClientProtocol,
         remotePath: String,
@@ -554,7 +635,10 @@ extension AssetProcessor {
         }
         guard let entry, !entry.isDirectory else { return true }
         if entry.size != expectedSize { return true }
-        // Same size — could still be different content. Hash to confirm.
+        // Symmetric with the upload-prep small-file threshold: large files cost too much to re-download and the writer-run suffix already makes same-name collisions vanishingly rare.
+        if expectedSize >= RemoteContentTrust.defaultSmallFileLimitBytes {
+            return false
+        }
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("upload-verify-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tempURL) }

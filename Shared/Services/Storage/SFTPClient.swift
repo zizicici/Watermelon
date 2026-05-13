@@ -6,6 +6,10 @@ import NIOSSH
 
 final actor SFTPClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
+    // SSH_FXF_EXCL prevents same-path overwrite for a single session, but cross-device peers can still race on a key when one session deletes+recreates; fail-closed.
+    nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    // POSIX-style: case-sensitive on the wire; the server FS may differ but we can't probe that cheaply.
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     private nonisolated static let chunkSize = 32 * 1024
     // Citadel 0.12.1's listDirectory leaks server-side directory handles; recycle
     // the channel after N lists so the leak can't exhaust the server's budget.

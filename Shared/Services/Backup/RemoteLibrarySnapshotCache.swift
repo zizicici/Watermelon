@@ -77,6 +77,11 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         lock.withLock { rebuildFullSnapshotLocked() }
     }
 
+    /// Single-lock snapshot + revision — splitting the reads lets a concurrent mutation bump revision past the snapshot's state.
+    func currentWithRevision() -> (revision: UInt64, snapshot: RemoteLibrarySnapshot) {
+        lock.withLock { (revision, rebuildFullSnapshotLocked()) }
+    }
+
     func state(since baseRevision: UInt64?) -> RemoteLibrarySnapshotState {
         let (isFullSnapshot, responseRevision, monthEntries) = lock.withLock { () -> (Bool, UInt64, [(month: LibraryMonthKey, resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink])]) in
             let (isFullSnapshot, changedMonths) = changedMonthsLocked(since: baseRevision)
@@ -122,6 +127,10 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             lastResetRevision = revision
             monthLastChangedRevision.removeAll()
         }
+    }
+
+    func currentRevision() -> UInt64 {
+        lock.withLock { revision }
     }
 
     func markSynced(_ at: Date) {
@@ -812,7 +821,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
     }
 
-    // Defensive first-seen drop: buggy NAS listings shouldn't crash Debug.
+    // Defensive first-seen drop in release; debug assertions surface upstream contract violations.
     private static func dedupedByKey<Element, Key: Hashable>(
         _ elements: [Element],
         key: (Element) -> Key,
@@ -827,6 +836,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             if result[k] != nil {
                 let descr = describe(element)
                 snapshotCacheLog.error("[RemoteLibrarySnapshotCache] duplicate \(scope, privacy: .public) month=\(month.text, privacy: .public) entry=\(descr, privacy: .public)")
+                #if DEBUG
+                assertionFailure("duplicate \(scope) in month=\(month.text) entry=\(descr)")
+                #endif
                 continue
             }
             result[k] = element

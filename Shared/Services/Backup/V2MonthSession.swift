@@ -104,6 +104,7 @@ final class V2MonthSession: BackupMonthStore {
         materializedCovered: CoveredRanges,
         observedClockAtLoad: UInt64,
         remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata],
+        seedMissingHashes: Set<Data> = [],
         stepLogger: MonthManifestStepLogger? = nil
     ) {
         self.client = client
@@ -121,17 +122,20 @@ final class V2MonthSession: BackupMonthStore {
         var resourcesByPath: [String: RemoteManifestResource] = [:]
         var pathsByHash: [Data: Set<String>] = [:]
         var physicallyMissingPaths: Set<String> = []
-        // Same collision key may map to multiple real names (case/Unicode variants); single-size dict was last-write-wins.
-        var sizesByCollisionKey: [String: Set<Int64>] = [:]
+        let caseSensitive = client.backendNameCaseSensitivity == .caseSensitive
+        func presenceKey(_ name: String) -> String {
+            caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
+        }
+        var sizesByPresenceKey: [String: Set<Int64>] = [:]
         for (name, meta) in remoteFilesByName {
-            sizesByCollisionKey[RemoteFileNaming.collisionKey(for: name), default: []].insert(meta.size)
+            sizesByPresenceKey[presenceKey(name), default: []].insert(meta.size)
         }
         for row in materializedState.resources.values {
             let logicalName = (row.physicalRemotePath as NSString).lastPathComponent
-            let key = RemoteFileNaming.collisionKey(for: logicalName)
+            let key = presenceKey(logicalName)
             // Size mismatch = stale/truncated; treat as missing so the worker re-uploads.
             let isPresent: Bool
-            if let listedSizes = sizesByCollisionKey[key] {
+            if let listedSizes = sizesByPresenceKey[key] {
                 isPresent = listedSizes.contains(row.fileSize)
             } else {
                 isPresent = false
@@ -154,6 +158,12 @@ final class V2MonthSession: BackupMonthStore {
             resourcesByLeafName[leaf] = resource
             if !isPresent {
                 physicallyMissingPaths.insert(row.physicalRemotePath)
+            }
+        }
+        // Size-only presence narrows the syncIndex content-verified overlay; carry forward hashes the overlay already flagged.
+        for hash in seedMissingHashes {
+            if let paths = pathsByHash[hash] {
+                physicallyMissingPaths.formUnion(paths)
             }
         }
         self.resourcesByPath = resourcesByPath
@@ -209,6 +219,7 @@ final class V2MonthSession: BackupMonthStore {
         year: Int,
         month: Int,
         v2Services: BackupV2RuntimeServices,
+        seedMissingHashes: Set<Data> = [],
         stepLogger: MonthManifestStepLogger? = nil
     ) async throws -> V2MonthSession {
         let monthKey = LibraryMonthKey(year: year, month: month)
@@ -257,6 +268,7 @@ final class V2MonthSession: BackupMonthStore {
             materializedCovered: materializedCovered,
             observedClockAtLoad: output.state.observedClock,
             remoteFilesByName: remoteFilesByName,
+            seedMissingHashes: seedMissingHashes,
             stepLogger: stepLogger
         )
         if output.corruptedSnapshotMonths.contains(monthKey),

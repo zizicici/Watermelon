@@ -4,14 +4,8 @@ enum BackupV2RuntimeBuildError: Error {
     case profileMissingID
     case unsupportedRemoteFormat(minAppVersion: String?)
     case requiresForegroundMigration
-    /// Local repoID disagrees with remote `repo.json` — caller must resolve before backup
-    /// (drop local repo_state + retry, or re-point the profile).
     case repoIdentityMismatch(local: String, remote: String)
-    /// Local says migrated but remote inspection is V1 — V2 marker disappeared
-    /// (cloud-sync delay, manual delete, peer wipe). Stale local seq/clock would
-    /// race against whatever other devices wrote in V2 since.
     case repoFormatRegression(repoID: String)
-    /// version.json reports V2 + commits/snapshots exist but identity is missing — minting a new repoID would orphan all existing data.
     case damagedV2Repo
 }
 
@@ -32,8 +26,7 @@ enum BackupV2RuntimeBuilder {
         guard let profileID = profile.id else {
             throw BackupV2RuntimeBuildError.profileMissingID
         }
-        // Both foreground (BackupRunPreparation) and background paths land here — ensure
-        // base path exists before inspect tries to list it on a fresh profile / empty remote.
+        // Inspect lists basePath; ensure it exists for fresh-profile bootstraps.
         try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
         let inspection = try await format.inspectRemoteFormat(client: client, profile: profile)
 
@@ -47,11 +40,9 @@ enum BackupV2RuntimeBuilder {
         case .unsupported(let minAppVersion):
             throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
         case .v2:
-            // ensureRepoJSON heals half-bootstrap (version present, repo absent) — without
-            // it each session would generate a fresh local UUID that never reaches remote.
             let localRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
             if localRepoID == nil {
-                // No local cache: if the remote also has no identity but V2 data exists, minting a new UUID would orphan every existing commit/snapshot.
+                // No local cache + no remote identity + V2 data present = minting a new UUID would orphan existing commits.
                 let remoteIdentity = try await bootstrap.loadRepoID()
                 if remoteIdentity == nil,
                    try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
@@ -65,6 +56,29 @@ enum BackupV2RuntimeBuilder {
             }
             // WebDAV/SMB/SFTP don't auto-create parents on PUT.
             try await bootstrap.ensureSubdirectories()
+        case .v2WithPendingMigrationCleanup(_, let ownerWriterID):
+            let localRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
+            if localRepoID == nil {
+                let remoteIdentity = try await bootstrap.loadRepoID()
+                if remoteIdentity == nil,
+                   try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
+                    throw BackupV2RuntimeBuildError.damagedV2Repo
+                }
+            }
+            let suggested = localRepoID ?? UUID().uuidString.lowercased()
+            resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggested, writerID: writerID)
+            if let localRepoID, resolvedRepoID != localRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: localRepoID, remote: resolvedRepoID)
+            }
+            try await bootstrap.ensureSubdirectories()
+            let cleanup = V1MigrationService(
+                client: client,
+                basePath: profile.basePath,
+                database: databaseManager,
+                identity: identity,
+                bootstrap: bootstrap
+            )
+            try await cleanup.runPhase3Cleanup(writerID: ownerWriterID, runID: runID)
         case .fresh:
             do {
                 resolvedRepoID = try await bootstrap.initializeFreshRepo(writerID: writerID)
@@ -82,12 +96,10 @@ enum BackupV2RuntimeBuilder {
             guard allowMigration else {
                 throw BackupV2RuntimeBuildError.requiresForegroundMigration
             }
-            // Canonical repoID before phase 1 — otherwise a peer racing on repo.json
-            // leaves us writing phase-1 commits stamped with our local (foreign-to-remote) id.
+            // Canonical repoID must land before phase 1 so commits are stamped with the remote-canonical id.
             let storedRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
             let suggestedRepoID = storedRepoID ?? UUID().uuidString.lowercased()
             resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggestedRepoID, writerID: writerID)
-            // Mismatch only when DB had a binding; freshly-generated UUID has nothing to mismatch.
             if let storedRepoID, resolvedRepoID != storedRepoID {
                 throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: resolvedRepoID)
             }
@@ -103,14 +115,8 @@ enum BackupV2RuntimeBuilder {
             if state.migrationCompleted != 1 {
                 needsMigration = true
             } else if try await migration.ownsMigrationMarker(writerID: writerID) {
-                // Our phase3 was incomplete; phase1 is idempotent at fingerprint level so re-running is safe.
                 needsMigration = true
             } else {
-                // V1 manifests after our completed migration: peer mid-migration, older
-                // V1-only client writing into the V2 repo, or stale marker. All three are
-                // resolved by re-running phase1+2+3 idempotently — phase1 folds new V1 into
-                // V2 commits, phase3 deletes only what we scanned. No marker is no longer
-                // a regression signal: V1 visibility itself triggers re-migrate.
                 let lingering = try await migration.scanV1Months()
                 needsMigration = !lingering.isEmpty
             }
@@ -119,14 +125,14 @@ enum BackupV2RuntimeBuilder {
                 await onMigrationStart?()
                 let processed = try await migration.runPhase1(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
                 do {
-                    try await migration.runPhase2(profileID: profileID, repoID: resolvedRepoID, writerID: writerID)
+                    try await migration.runPhase2(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
                 } catch let error as RepoBootstrap.VersionConflict {
                     if case .higherFormatVersion(_, _, let minApp) = error {
                         throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
                     }
                     throw error
                 }
-                try await migration.runPhase3(writerID: writerID)
+                try await migration.runPhase3(writerID: writerID, runID: runID)
                 await onMigrationComplete?(processed)
             }
         }
@@ -136,16 +142,13 @@ enum BackupV2RuntimeBuilder {
         let initialClock = UInt64(bitPattern: state.lastClock)
         let allocator = SeqAllocator(database: databaseManager, profileID: profileID, repoID: resolvedRepoID, initial: initialSeq)
         let lamport = PersistedLamportClock(database: databaseManager, profileID: profileID, repoID: resolvedRepoID, initial: initialClock)
-        // Writers share a dedicated connection so they don't contend with worker uploads.
+        // Dedicated metadata connection so commits/snapshots/liveness don't contend with worker uploads.
         let commitWriter = CommitLogWriter(client: metadataClient, basePath: profile.basePath)
         let snapshotWriter = SnapshotWriter(client: metadataClient, basePath: profile.basePath)
 
-        // Always materialize — even after our own phase1, peer commits may interleave with
-        // higher clocks; the earlier "skip after migration" optimization let those go
-        // unobserved and our subsequent writes could land below peer ops, breaking LWW.
+        // Observe peer clocks/seq before allocating so our writes can't land below them.
         let materializer = RepoMaterializer(client: client, basePath: profile.basePath)
         let output = try await materializer.materialize(expectedRepoID: resolvedRepoID)
-        // Only our own writer; peer seqs share no namespace and a corrupt UInt64.max would exhaust allocate().
         let ourRemoteMax = output.observedSeqByWriter[writerID] ?? 0
         if ourRemoteMax > initialSeq {
             try await allocator.observeRemoteMax(ourRemoteMax)
@@ -161,7 +164,6 @@ enum BackupV2RuntimeBuilder {
             writerID: writerID,
             isLocalVolume: profile.resolvedStorageType == .externalVolume
         )
-        // verify-cleanup borrows caller's client — skip maintenance to avoid concurrent ops.
         var sweepTask: Task<Void, Never>? = nil
         if runMaintenanceTasks {
             await liveness.start()

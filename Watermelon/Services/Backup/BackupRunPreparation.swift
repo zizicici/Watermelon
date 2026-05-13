@@ -9,8 +9,6 @@ struct BackupPreparedRun: Sendable {
     let totalAssetCount: Int
     let makeClient: @Sendable () throws -> any RemoteStorageClientProtocol
     let v2Services: BackupV2RuntimeServices?
-    let fastPathFresh: Bool
-    let corruptedSnapshotMonths: Set<LibraryMonthKey>
 }
 
 struct BackupRunPreparationService: Sendable {
@@ -61,13 +59,8 @@ struct BackupRunPreparationService: Sendable {
                 let v2Services = try await prepareV2Runtime(client: client, profile: profile, password: password, eventStream: eventStream)
                 v2ServicesForCleanup = v2Services
 
-                var fastPathFresh = false
-                var corruptedSnapshotMonths: Set<LibraryMonthKey> = []
                 do {
                     let preMaterialized = await v2Services?.initialMaterializeOutput.peek()
-                    if let preMaterialized {
-                        corruptedSnapshotMonths = preMaterialized.corruptedSnapshotMonths
-                    }
                     let digest = try await remoteIndexService.syncIndex(
                         client: client,
                         profile: profile,
@@ -76,8 +69,6 @@ struct BackupRunPreparationService: Sendable {
                         expectV2: v2Services != nil
                     )
                     _ = await v2Services?.initialMaterializeOutput.consume()
-                    // Stale overlay can let a since-deleted asset look healthy; require a clean refresh to skip loadOrCreate + LIST.
-                    fastPathFresh = await remoteIndexService.lastSyncOverlayFresh()
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.log.remoteIndexSynced"),
@@ -91,10 +82,7 @@ struct BackupRunPreparationService: Sendable {
                     if profile.isConnectionUnavailableError(error) {
                         throw error
                     }
-                    // damagedV2Repo / repoFormatRegression / repoIdentityMismatch
-                    // are fatal — continuing would write into a half-initialized
-                    // repo. BackupV2RuntimeBuilder would re-throw later anyway,
-                    // but only after we've spun up worker pools.
+                    // Fatal: continuing past a compat error would spin up worker pools against a half-initialized repo.
                     if error is BackupCompatibilityError {
                         throw error
                     }
@@ -177,9 +165,7 @@ struct BackupRunPreparationService: Sendable {
                     makeClient: { [storageClientFactory, profile, password] in
                         try storageClientFactory.makeClient(profile: profile, password: password)
                     },
-                    v2Services: v2Services,
-                    fastPathFresh: fastPathFresh,
-                    corruptedSnapshotMonths: corruptedSnapshotMonths
+                    v2Services: v2Services
                 )
             } catch {
                 if let v2 = v2ServicesForCleanup {
@@ -247,7 +233,6 @@ struct BackupRunPreparationService: Sendable {
         month: LibraryMonthKey
     ) async throws -> Bool {
         try await withConnectedClient(profile: profile, password: password) { client in
-            // Profile + password let verify build a V2 runtime (dedicated metadata client + tombstones).
             try await self.verifyMonth(client: client, basePath: profile.basePath, month: month, profile: profile, password: password)
         }
     }
@@ -260,22 +245,21 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord? = nil,
         password: String? = nil
     ) async throws -> Bool {
-            // A separate version.json probe would re-open the damagedV2-vs-V1 TOCTOU window.
-            let inspection: RemoteFormatInspection
+        let inspection: RemoteFormatInspection
         if let profile {
             inspection = try await RemoteFormatCompatibilityService()
                 .inspectRemoteFormat(client: client, profile: profile)
         } else {
-            // Profile-less paths can't run damagedV2 detection.
-            let versionPath = RepoLayout.versionFilePath(base: basePath)
-            inspection = try await client.metadata(path: versionPath) != nil
-                ? .v2(formatVersion: RepoLayout.formatVersion)
-                : .v1
+            // Profile-less inspect must still parse version.json so a future format isn't downgraded to V2 stamped at the local formatVersion.
+            inspection = try await Self.profileLessInspect(client: client, basePath: basePath)
         }
         switch inspection {
         case .unsupported(let minAppVersion):
             throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
         case .v2:
+            let report = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
+            return report.didMutateRemote
+        case .v2WithPendingMigrationCleanup:
             let report = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
             return report.didMutateRemote
         case .v1:
@@ -291,6 +275,34 @@ struct BackupRunPreparationService: Sendable {
         }
     }
 
+    /// Read+parse `.watermelon/version.json` directly so the profile-less verify path doesn't hardcode the local formatVersion onto a remote that may be V3+.
+    private static func profileLessInspect(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> RemoteFormatInspection {
+        let versionPath = RepoLayout.versionFilePath(base: basePath)
+        guard let meta = try await client.metadata(path: versionPath), !meta.isDirectory else {
+            return .v1
+        }
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("verify-version-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        try await client.download(remotePath: versionPath, localURL: tempURL)
+        let data = try Data(contentsOf: tempURL)
+        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let formatVersion = dict["format_version"] as? Int else {
+            // Treat parse failure as V1 — refusing here would block recovery via verify.
+            return .v1
+        }
+        if formatVersion > RepoLayout.currentSupportedFormatVersion {
+            return .unsupported(minAppVersion: dict["min_app_version"] as? String)
+        }
+        if formatVersion >= 2 {
+            return .v2(formatVersion: formatVersion)
+        }
+        return .v1
+    }
+
     @discardableResult
     func verifyMonthV2(
         client: any RemoteStorageClientProtocol,
@@ -299,8 +311,7 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord? = nil,
         password: String? = nil
     ) async throws -> VerifyMonthReport {
-        // RepoID from remote up-front lets the verifier filter foreign-id commits;
-        // absent on a V2 repo is broken identity state — verify must not run.
+        // Verifier needs remote repoID to filter foreign-id commits; absent on a V2 repo means broken identity, refuse.
         let bootstrap = RepoBootstrap(client: client, basePath: basePath)
         let expectedRepoID: String
         switch try await bootstrap.loadRepoIDStrict() {
@@ -316,7 +327,6 @@ struct BackupRunPreparationService: Sendable {
         let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: expectedRepoID)
         var report = try await verifier.verify(month: month)
         if !report.cleanupCandidates.isEmpty, let profile, let password {
-            // Verify cleanup is sequential; reuse caller's client (no maintenance tasks).
             _ = password
             let metadataClient = wrapIfSerial(client)
             let v2: BackupV2RuntimeServices
@@ -459,11 +469,10 @@ struct BackupRunPreparationService: Sendable {
         password: String,
         eventStream: BackupEventStream
     ) async throws -> BackupV2RuntimeServices? {
-        // Dedicated metadata connection so commits/snapshots/liveness don't contend with worker uploads.
+        // Dedicated metadata connection so metadata writes don't contend with worker uploads.
         let raw = try storageClientFactory.makeClient(profile: profile, password: password)
         try await raw.connect()
-        // serialOnly backends (SMB / SFTP) — wrap so concurrent workers writing
-        // commits/snapshots can't violate the single-connection contract.
+        // serialOnly backends must serialize concurrent metadata writes.
         let metadataClient = wrapIfSerial(raw)
         do {
             return try await BackupV2RuntimeBuilder.build(
@@ -500,9 +509,7 @@ struct BackupRunPreparationService: Sendable {
             throw BackupCompatibilityError.damagedV2Repo
         } catch BackupV2RuntimeBuildError.profileMissingID {
             await metadataClient.disconnectSafely()
-            // Fail-closed: profile with no id means we can't bind to a repo state row.
-            // Fallback to V1 path would write V1 manifests on a V2 repo (dual-format
-            // corruption); surface as a generic error instead.
+            // Fail-closed: V1 fallback would write V1 manifests over a V2 repo.
             throw NSError(
                 domain: "BackupRunPreparation",
                 code: -90,

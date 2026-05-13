@@ -29,6 +29,10 @@ final class RepoCommittedView: @unchecked Sendable {
         return physicallyMissingByMonth[month] ?? []
     }
 
+    func currentRevision() -> UInt64 {
+        cache.currentRevision()
+    }
+
     func current() -> RemoteLibrarySnapshot {
         missingLock.lock()
         defer { missingLock.unlock() }
@@ -39,6 +43,20 @@ final class RepoCommittedView: @unchecked Sendable {
             assetResourceLinks: base.assetResourceLinks,
             physicallyMissingHashesByMonth: physicallyMissingSnapshotMapLocked()
         )
+    }
+
+    /// Single read for handle producers: revision + snapshot + overlay captured under both locks so a cache mutation can't slip between the reads.
+    func currentSnapshotWithRevision() -> (revision: UInt64, snapshot: RemoteLibrarySnapshot) {
+        missingLock.lock()
+        defer { missingLock.unlock() }
+        let combined = cache.currentWithRevision()
+        let snapshot = RemoteLibrarySnapshot(
+            resources: combined.snapshot.resources,
+            assets: combined.snapshot.assets,
+            assetResourceLinks: combined.snapshot.assetResourceLinks,
+            physicallyMissingHashesByMonth: physicallyMissingSnapshotMapLocked()
+        )
+        return (combined.revision, snapshot)
     }
     func state(since baseRevision: UInt64?) -> RemoteLibrarySnapshotState {
         missingLock.lock()

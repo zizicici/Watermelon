@@ -98,10 +98,7 @@ final class BackgroundBackupRunner {
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter
     ) async -> ProfileRunResult {
-        // BG runner reuses one RemoteIndexSyncService across profiles. Full reset
-        // (cache + overlay + inflight + active-profile-key) — without this, profile
-        // A's resources mixed with profile B's physically-missing overlay produced
-        // garbage in committedAssetFingerprintsByMonth.
+        // BG runner reuses one RemoteIndexSyncService across profiles; mixed-profile state would corrupt committedAssetFingerprintsByMonth.
         await assetProcessor.remoteIndexService.resetForProfileSwitch()
         await writer.appendLog(
             String(format: String(localized: "backup.auto.log.profileStart"), profile.name),
@@ -223,13 +220,8 @@ final class BackgroundBackupRunner {
             return .skipped
         }
 
-        var fastPathFresh = false
-        var corruptedSnapshotMonths: Set<LibraryMonthKey> = []
         do {
             let preMaterialized = await v2Services.initialMaterializeOutput.peek()
-            if let preMaterialized {
-                corruptedSnapshotMonths = preMaterialized.corruptedSnapshotMonths
-            }
             // expectV2 pins routing so a lingering V1 manifest can't drag this sync down the V1 path.
             _ = try await assetProcessor.remoteIndexService.syncIndex(
                 client: client,
@@ -239,7 +231,6 @@ final class BackgroundBackupRunner {
             )
             _ = await v2Services.initialMaterializeOutput.consume()
             await assetProcessor.remoteIndexService.markIsV2()
-            fastPathFresh = await assetProcessor.remoteIndexService.lastSyncOverlayFresh()
         } catch is CancellationError {
             await v2Services.shutdown()
             await client.disconnectSafely()
@@ -272,7 +263,7 @@ final class BackgroundBackupRunner {
             return .failed
         }
 
-        let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer, v2Services: v2Services, fastPathFresh: fastPathFresh, corruptedSnapshotMonths: corruptedSnapshotMonths)
+        let anyMonthFailed = await runBackupLoop(client: client, profile: profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer, v2Services: v2Services)
         await v2Services.shutdown()
         await client.disconnectSafely()
         if Task.isCancelled {
@@ -324,9 +315,7 @@ final class BackgroundBackupRunner {
         monthAssetIDs: [LibraryMonthKey: [String]],
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter,
-        v2Services: BackupV2RuntimeServices,
-        fastPathFresh: Bool,
-        corruptedSnapshotMonths: Set<LibraryMonthKey>
+        v2Services: BackupV2RuntimeServices
     ) async -> Bool {
 
         let eventStream = BackupEventStream()
@@ -349,9 +338,6 @@ final class BackgroundBackupRunner {
         var anyMonthFailed = false
         var connectionUnavailableAbort = false
 
-        // Project once: each call iterates every asset/link/resource, so per-month rebuilds cost O(M·N).
-        let committedFingerprintsByMonth = assetProcessor.remoteIndexService.committedAssetFingerprintsByMonth()
-
         for monthKey in sortedMonths {
             if Task.isCancelled { break }
             if connectionUnavailableAbort { break }
@@ -360,19 +346,6 @@ final class BackgroundBackupRunner {
 
             var monthHasAssetFailures = false
 
-            // Fast-path needs a fresh sync this run; stale cache could skip months that need repair.
-            // Months flagged corrupt-snapshot need V2MonthSession.loadOrCreate so rebaseline runs.
-            let committedSet = committedFingerprintsByMonth[monthKey] ?? []
-            if fastPathFresh,
-               !corruptedSnapshotMonths.contains(monthKey),
-               monthAlreadyFullyBackedUpFast(assetIDs: assetIDs, committedFingerprints: committedSet) {
-                await writer.appendLog(
-                    String(format: String(localized: "backup.auto.log.monthEnd"), monthKey.displayText),
-                    level: .info
-                )
-                continue
-            }
-
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.monthStart"), monthKey.displayText, assetIDs.count),
                 level: .info
@@ -380,12 +353,14 @@ final class BackgroundBackupRunner {
 
             let monthStore: any BackupMonthStore
             do {
+                let priorMissing = assetProcessor.remoteIndexService.physicallyMissingHashes(for: monthKey)
                 monthStore = try await V2MonthSession.loadOrCreate(
                     client: client,
                     basePath: profile.basePath,
                     year: monthKey.year,
                     month: monthKey.month,
                     v2Services: v2Services,
+                    seedMissingHashes: priorMissing,
                     stepLogger: { message in
                         eventStream.emitLog(message, level: .error)
                     }
@@ -590,29 +565,6 @@ final class BackgroundBackupRunner {
         eventStream.finish()
         await drainTask.value
         return anyMonthFailed
-    }
-
-    /// Same predicate as BackupParallelExecutor — sync-time committed fingerprints
-    /// already exclude phantom/partial/metadata-only/missing, so monthStore isn't needed.
-    private func monthAlreadyFullyBackedUpFast(
-        assetIDs: [String],
-        committedFingerprints: Set<Data>
-    ) -> Bool {
-        guard !assetIDs.isEmpty else { return true }
-        guard !committedFingerprints.isEmpty else { return false }
-        guard let cachedHashes = try? hashIndexRepository.fetchAssetHashCaches(
-            assetIDs: Set(assetIDs)
-        ) else { return false }
-        guard cachedHashes.count == assetIDs.count else { return false }
-        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: assetIDs, options: nil)
-        guard fetchResult.count == assetIDs.count else { return false }
-        for index in 0 ..< fetchResult.count {
-            let asset = fetchResult.object(at: index)
-            guard let cache = cachedHashes[asset.localIdentifier] else { return false }
-            if let modDate = asset.modificationDate, modDate > cache.updatedAt { return false }
-            if !committedFingerprints.contains(cache.assetFingerprint) { return false }
-        }
-        return true
     }
 
     // MARK: - Wi-Fi Check

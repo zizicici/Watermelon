@@ -2,6 +2,10 @@ import Foundation
 
 final actor S3Client: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    // Multipart `CompleteMultipartUpload` historically doesn't honor If-None-Match across S3 vendors → concurrent multipart writers can clobber.
+    nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    // S3 keys are byte-exact; `IMG.JPG` and `img.jpg` are distinct objects.
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     static let errorDomain = S3ErrorClassifier.errorDomain
 
     struct Config: Sendable {

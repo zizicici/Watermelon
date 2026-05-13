@@ -5,11 +5,10 @@ struct BackupResumePlan {
     let resumedExecutionMode: BackupRunMode?
 }
 
-/// V2 `completedAssetIDs` can outrun commit-log truth: a pre-flush pause leaves reducer-acked items not yet durable. Make the dedup contract explicit so V2 paths can't accidentally fall back to V1 subtraction.
+/// V2 must not subtract `completedAssetIDs` directly: a pre-flush pause leaves reducer-acked items not yet durable, so resume reads committed-fingerprint state instead.
 enum BackupResumeDedupMode: Sendable {
     case v1CompletedIDs
-    case v2FreshCommittedView(PerMonth<Set<Data>>)
-    case v2StaleOverlay
+    case v2(RemoteViewHandle)
 }
 
 final class BackupResumePlanner {
@@ -66,48 +65,58 @@ final class BackupResumePlanner {
         switch dedupMode {
         case .v1CompletedIDs:
             return assetIDs.subtracting(completedAssetIDs)
-        case .v2StaleOverlay:
-            // Reprocess everything; executor's monthStore.containsAssetFingerprint dedups against durable state.
-            return assetIDs
-        case .v2FreshCommittedView(let committedView):
+        case .v2(let handle):
+            if handle.overlayFreshness == .stale {
+                return assetIDs
+            }
             guard let hashIndexRepository else {
                 assertionFailure("BackupResumePlanner: V2 dedup requires hashIndexRepository")
                 return assetIDs.subtracting(completedAssetIDs)
             }
+            let committedView = handle.committedAssetFingerprintsByMonth
             var pending = assetIDs
             let records = try hashIndexRepository.fetchAssetFingerprintRecords(assetIDs: pending)
-            let assetDates = Self.assetDates(forAssetIDs: Array(records.keys))
+            let phAssets = Self.phAssets(forAssetIDs: Array(records.keys))
             for (id, record) in records {
-                guard let dates = assetDates[id] else { continue }
-                let month = Self.libraryMonth(from: dates.creation)
+                guard Self.cacheRowIsTrustworthy(record) else { continue }
+                guard let phAsset = phAssets[id] else { continue }
+                guard Self.cachedSignatureMatchesCurrent(record: record, phAsset: phAsset) else { continue }
+                let month = Self.libraryMonth(from: phAsset.creationDate)
                 guard committedView.contains(record.fingerprint, in: month) else { continue }
-                if let modDate = dates.modification, modDate > record.updatedAt { continue }
+                if let modDate = phAsset.modificationDate, modDate > record.updatedAt { continue }
                 pending.remove(id)
             }
             return pending
         }
     }
 
+    /// Pre-v4 cache rows default to selectionVersion=0 and have no resourceSignature; trusting them would skip uploads under stale selection rules.
+    private static func cacheRowIsTrustworthy(_ record: LocalAssetFingerprintRecord) -> Bool {
+        guard record.selectionVersion >= BackupAssetResourcePlanner.currentSelectionVersion else { return false }
+        return record.resourceSignature != nil
+    }
+
+    /// Mirrors AssetProcessor.processWithLocalCache: a same-asset-id resource-shape change leaves the cached fingerprint stale, so the planner must refuse to trust it.
+    private static func cachedSignatureMatchesCurrent(record: LocalAssetFingerprintRecord, phAsset: PHAsset) -> Bool {
+        guard let cachedSignature = record.resourceSignature else { return false }
+        let currentResources = PHAssetResource.assetResources(for: phAsset)
+        let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: currentResources)
+        let currentSignature = BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered)
+        return cachedSignature == currentSignature
+    }
+
     private static func libraryMonth(from date: Date?) -> LibraryMonthKey {
         LibraryMonthKey.from(date: date)
     }
 
-    private struct AssetDates {
-        let creation: Date?
-        let modification: Date?
-    }
-
-    private static func assetDates(forAssetIDs ids: [String]) -> [String: AssetDates] {
+    private static func phAssets(forAssetIDs ids: [String]) -> [String: PHAsset] {
         guard !ids.isEmpty else { return [:] }
         let fetched = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
-        var result: [String: AssetDates] = [:]
+        var result: [String: PHAsset] = [:]
         result.reserveCapacity(fetched.count)
         for index in 0 ..< fetched.count {
             let asset = fetched.object(at: index)
-            result[asset.localIdentifier] = AssetDates(
-                creation: asset.creationDate,
-                modification: asset.modificationDate
-            )
+            result[asset.localIdentifier] = asset
         }
         return result
     }
@@ -135,7 +144,7 @@ final class BackupResumePlanner {
             let useHashDedup: Bool
             switch dedupMode {
             case .v1CompletedIDs: useHashDedup = false
-            case .v2FreshCommittedView, .v2StaleOverlay: useHashDedup = true
+            case .v2: useHashDedup = true
             }
             var pendingIDs: [String] = []
             pendingIDs.reserveCapacity(max(assets.count - (useHashDedup ? 0 : completedAssetIDs.count), 0))
@@ -147,18 +156,21 @@ final class BackupResumePlanner {
                 }
             }
             var pending = Set(pendingIDs)
-            if case .v2FreshCommittedView(let committedView) = dedupMode {
+            if case .v2(let handle) = dedupMode, handle.overlayFreshness == .fresh {
                 guard let repository = hashIndexRepository else {
                     assertionFailure("BackupResumePlanner: V2 dedup requires hashIndexRepository")
                     return pending
                 }
+                let committedView = handle.committedAssetFingerprintsByMonth
                 let records = try repository.fetchAssetFingerprintRecords(assetIDs: pending)
-                let dates = Self.assetDates(forAssetIDs: Array(records.keys))
+                let phAssets = Self.phAssets(forAssetIDs: Array(records.keys))
                 for (id, record) in records {
-                    guard let assetDates = dates[id] else { continue }
-                    let month = Self.libraryMonth(from: assetDates.creation)
+                    guard Self.cacheRowIsTrustworthy(record) else { continue }
+                    guard let phAsset = phAssets[id] else { continue }
+                    guard Self.cachedSignatureMatchesCurrent(record: record, phAsset: phAsset) else { continue }
+                    let month = Self.libraryMonth(from: phAsset.creationDate)
                     guard committedView.contains(record.fingerprint, in: month) else { continue }
-                    if let modDate = assetDates.modification, modDate > record.updatedAt { continue }
+                    if let modDate = phAsset.modificationDate, modDate > record.updatedAt { continue }
                     pending.remove(id)
                 }
             }

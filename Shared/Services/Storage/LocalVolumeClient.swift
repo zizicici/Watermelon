@@ -5,6 +5,10 @@ private let localVolumeLog = Logger(subsystem: "com.zizicici.watermelon", catego
 
 final actor LocalVolumeClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    // POSIX O_EXCL → kernel-enforced uniqueness per path, even across processes; no peer can win.
+    nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .none }
+    // External volumes can be exFAT/APFS (insensitive default) or HFS+/APFS-case-sensitive. Claiming case-sensitive trades a missed-presence re-upload for the worse failure mode: a false "present" verdict binding the manifest to bytes under the wrong case.
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     struct Config {
         let rootBookmarkData: Data
         let onBookmarkRefreshed: ((BookmarkRefreshPayload) -> Void)?

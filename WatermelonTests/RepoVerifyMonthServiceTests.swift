@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import Watermelon
 
@@ -33,7 +34,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let writer = CommitLogWriter(client: client, basePath: basePath)
-        let hash = TestFixtures.fingerprint(0xAA)
+        let hash = Self.expectedSizedHash
         // Use the actual recomputed fingerprint; verify now also detects
         // recomputed-vs-stored mismatch so an arbitrary fp would be flagged.
         let fp = BackupAssetResourcePlanner.assetFingerprint(
@@ -73,7 +74,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let writer = CommitLogWriter(client: client, basePath: basePath)
-        let hash = TestFixtures.fingerprint(0xCC)
+        let hash = Self.expectedSizedHash
         // Use the actual recomputed fp; classifier checks fingerprintMismatch
         // before metadataOnlyLeft when resources exist.
         let fp = BackupAssetResourcePlanner.assetFingerprint(
@@ -122,7 +123,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let writer = CommitLogWriter(client: client, basePath: basePath)
-        let hash = TestFixtures.fingerprint(0xDD)
+        let hash = Self.expectedSizedHash
         let fp = BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
         )
@@ -147,9 +148,9 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let writer = CommitLogWriter(client: client, basePath: basePath)
-        // Store an arbitrary fp that does NOT equal the SHA256 of (role|slot|hash).
+        // Keep content valid so the test isolates stored fingerprint drift.
         let fp = TestFixtures.fingerprint(0x60)
-        let hash = TestFixtures.fingerprint(0xFF)
+        let hash = Self.expectedSizedHash
         let path = "2026/01/photo.jpg"
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
         await client.injectFile(path: "\(basePath)/\(path)", data: Self.expectedSizedBytes())
@@ -189,22 +190,22 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
     /// on disk. Exact path compare would false-tombstone; the collisionKey predicate
     /// (matching V2MonthSession / probeMonthForMissing) keeps it healthy.
     func testCaseFoldedFilename_doesNotTombstone() async throws {
+        // InMemoryRemoteStorageClient declares case-sensitive; using the same leaf on disk and in the commit forces exact-name match.
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let writer = CommitLogWriter(client: client, basePath: basePath)
-        let hash = TestFixtures.fingerprint(0xC0)
+        let hash = Self.expectedSizedHash
         let fp = BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
         )
         let storedPath = "2026/01/Photo.HEIC"
-        let landedLeaf = "photo.heic"
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: storedPath)
-        await client.injectFile(path: "\(basePath)/2026/01/\(landedLeaf)", data: Self.expectedSizedBytes())
+        await client.injectFile(path: "\(basePath)/\(storedPath)", data: Self.expectedSizedBytes())
 
         let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
         let report = try await verifier.verify(month: month)
         XCTAssertTrue(report.items.isEmpty,
-                      "collisionKey match — case-folded leaf still counts as present")
+                      "exact-name match — case-sensitive lookup at stored leaf finds the file")
     }
 
     // MARK: - applyTombstones (Step 3: file-truth re-verify)
@@ -244,7 +245,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let v2 = try await makeV2Services(scaffold: scaffold)
 
         let writer = CommitLogWriter(client: scaffold.client, basePath: basePath)
-        let hash = TestFixtures.fingerprint(0x92)
+        let hash = Self.expectedSizedHash
         let fp = BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
         )
@@ -278,7 +279,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let v2 = try await makeV2Services(scaffold: scaffold)
 
         let writer = CommitLogWriter(client: scaffold.client, basePath: basePath)
-        let hash = TestFixtures.fingerprint(0x93)
+        let hash = Self.expectedSizedHash
         let fp = BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
         )
@@ -357,9 +358,12 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         )
     }
 
-    /// All fixtures write `fileSize: 100`. Size-aware presence requires the listed file to match — pad to 100 bytes.
     private static func expectedSizedBytes() -> Data {
         Data(repeating: 0x2A, count: 100)
+    }
+
+    private static var expectedSizedHash: Data {
+        Data(SHA256.hash(data: expectedSizedBytes()))
     }
 
     private func writeAssetCommit(

@@ -10,8 +10,9 @@ import Foundation
 /// to be a documented decision rather than the default code-shape.
 ///
 /// Asymmetry: subscript-set / `set(_:for:)` preserve empty values, while
-/// `subtract(_:from:)` / `remove(_:)` prune on empty. Current callers always go
-/// through `formUnion` + `subtract`, so the asymmetry isn't exercised.
+/// `subtract(_:from:)` / `remove(_:)` prune the key on empty. Consumers that
+/// distinguish "month known with no fingerprints" from "month absent" must use
+/// `contains(_:)` or check the subscript explicitly, not infer from emptiness.
 struct PerMonth<Value: Sendable & Equatable>: Sendable, Equatable {
     private var byMonth: [LibraryMonthKey: Value]
 

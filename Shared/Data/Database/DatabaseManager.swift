@@ -13,9 +13,6 @@ final class DatabaseManager: @unchecked Sendable {
         Self.enableBackgroundAccessForDatabaseFiles(at: url)
     }
 
-    /// All schema migrations the app ships, in order. Exposed as a static factory so
-    /// migration tests can replay the same migrator step-by-step (`migrate(_:upTo:)`)
-    /// without duplicating the SQL.
     static func makeMigrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1_initial") { db in
@@ -101,6 +98,12 @@ final class DatabaseManager: @unchecked Sendable {
                 table.column("migrationCompleted", .integer).notNull().defaults(to: 0)
                 table.primaryKey(["profileID", "repoID"])
             }
+        }
+
+        // Default 0 forces a re-hash on next index build before the skip predicate trusts the row.
+        migrator.registerMigration("v4_selection_version") { db in
+            try db.execute(sql: "ALTER TABLE local_assets ADD COLUMN selectionVersion INTEGER NOT NULL DEFAULT 0")
+            try db.execute(sql: "ALTER TABLE local_assets ADD COLUMN resourceSignature BLOB")
         }
 
         return migrator

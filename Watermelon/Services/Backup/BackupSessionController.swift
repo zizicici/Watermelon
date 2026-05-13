@@ -583,24 +583,24 @@ enum State {
         resumePreparationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                // V1 dedup ignores the overlay; refreshing would issue per-month LISTs for nothing.
-                let isV2 = await self.backupCoordinator.currentRepoIsV2() == true
-                var overlayFresh = true
-                if isV2 {
-                    overlayFresh = try await self.backupCoordinator.refreshPhysicalPresenceForResume(
+                // nil → collapsing to v1CompletedIDs would let pre-flush V2 commits get skipped on resume; re-sync to identify format first.
+                var isV2 = await self.backupCoordinator.currentRepoIsV2()
+                if isV2 == nil {
+                    _ = try await self.backupCoordinator.reloadRemoteIndex(
                         profile: connection.profile,
                         password: connection.password
                     )
+                    try Task.checkCancellation()
+                    isV2 = await self.backupCoordinator.currentRepoIsV2()
                 }
-                try Task.checkCancellation()
                 let dedupMode: BackupResumeDedupMode
-                if isV2 {
-                    // V2 must defer to commit-log truth: completedAssetIDs alone would skip reducer-acked-but-uncommitted assets on a pre-flush pause.
-                    if overlayFresh {
-                        dedupMode = .v2FreshCommittedView(self.backupCoordinator.backedUpAssetFingerprintsByMonth())
-                    } else {
-                        dedupMode = .v2StaleOverlay
-                    }
+                if isV2 == true {
+                    let handle = try await self.backupCoordinator.prepareResumeHandle(
+                        profile: connection.profile,
+                        password: connection.password
+                    )
+                    try Task.checkCancellation()
+                    dedupMode = .v2(handle)
                 } else {
                     dedupMode = .v1CompletedIDs
                 }

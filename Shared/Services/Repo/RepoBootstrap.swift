@@ -139,7 +139,8 @@ actor RepoBootstrap {
             .appendingPathComponent("self-claim-preflight-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
         try await client.download(remotePath: claimPath, localURL: temp)
-        let data = (try? Data(contentsOf: temp)) ?? Data()
+        // Surface local-read failures: silently treating them as empty would delete a non-zero remote claim under disk pressure.
+        let data = try Data(contentsOf: temp)
         guard data.isEmpty else { return }
         try await client.delete(path: claimPath)
     }
@@ -170,7 +171,8 @@ actor RepoBootstrap {
             .appendingPathComponent("claim-precheck-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
         try await client.download(remotePath: claimPath, localURL: temp)
-        let data = (try? Data(contentsOf: temp)) ?? Data()
+        // Surface local-read failures: silently classifying as zero-byte would delete and reclaim a healthy remote on disk pressure.
+        let data = try Data(contentsOf: temp)
         if data.isEmpty { return .zeroByte }
         guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let landedWriterID = dict["writer_id"] as? String,
