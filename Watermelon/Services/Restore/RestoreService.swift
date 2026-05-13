@@ -72,8 +72,6 @@ final class RestoreService {
                     if firstFailure == nil { firstFailure = error }
                     print("[RestoreService] item \(index + 1)/\(items.count) failed: \(error.localizedDescription)")
                 }
-                // Callback throw (e.g. hash-index DB write) shouldn't strand the imported
-                // asset or mask other per-item failures; treat as per-item, propagate cancel.
                 do {
                     try await onItemCompleted(index + 1, items.count, restoredItem)
                 } catch is CancellationError {

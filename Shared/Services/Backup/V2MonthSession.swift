@@ -480,68 +480,69 @@ final class V2MonthSession: BackupMonthStore {
             lamportWatermark: lamportWatermark
         )
 
-        let clockRange = try await services.lamport.tickRange(count: opCount)
-        var clockCursor = clockRange.low
-        var ops: [CommitOp] = []
-        ops.reserveCapacity(opCount)
-        var opSeq = 0
-        var addAssetClocks: [Data: UInt64] = [:]
-        var tombstoneClocks: [Data: UInt64] = [:]
-
-        for fp in pendingV2AssetFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
-            guard let asset = assetsByFingerprint[fp],
-                  let links = linksByFingerprint[fp] else { continue }
-            var resources: [CommitResourceEntry] = []
-            resources.reserveCapacity(links.count)
-            for link in links {
-                // Fail-fast: dropping a link here would emit a commit body with
-                // fewer resources than in-memory and break the snapshot
-                // covered-range invariant once the next snapshot ships the seq.
-                guard let resource = findResourceByHash(link.resourceHash) else {
-                    throw NSError(
-                        domain: "V2MonthSession",
-                        code: -13,
-                        userInfo: [NSLocalizedDescriptionKey:
-                            "flush aborted: link hash \(link.resourceHash.hexString) lost its resource between upsert and flush"]
-                    )
-                }
-                resources.append(CommitResourceEntry(
-                    physicalRemotePath: resource.physicalRemotePath,
-                    logicalName: link.logicalName.isEmpty ? resource.logicalName : link.logicalName,
-                    contentHash: link.resourceHash,
-                    fileSize: resource.fileSize,
-                    resourceType: resource.resourceType,
-                    role: link.role,
-                    slot: link.slot,
-                    crypto: resource.crypto
-                ))
-            }
-            ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .addAsset(CommitAddAssetBody(
-                assetFingerprint: fp,
-                creationDateMs: asset.creationDateMs,
-                backedUpAtMs: asset.backedUpAtMs,
-                resources: resources
-            ))))
-            addAssetClocks[fp] = clockCursor
-            opSeq += 1
-            clockCursor &+= 1
-        }
-        for fp in pendingV2TombstoneFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
-            ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: fp,
-                reason: .manifestOrphan,
-                observedBasis: observedBasis
-            ))))
-            tombstoneClocks[fp] = clockCursor
-            opSeq += 1
-            clockCursor &+= 1
-        }
-
         // Retry on alreadyExists — local seq drift can produce a colliding filename.
         let maxRetries = 4
         var lastSeq: UInt64 = 0
         var attempt = 0
+        var committedAddAssetClocks: [Data: UInt64] = [:]
+        var committedTombstoneClocks: [Data: UInt64] = [:]
         while true {
+            let clockRange = try await services.lamport.tickRange(count: opCount)
+            var clockCursor = clockRange.low
+            var ops: [CommitOp] = []
+            ops.reserveCapacity(opCount)
+            var opSeq = 0
+            var addAssetClocks: [Data: UInt64] = [:]
+            var tombstoneClocks: [Data: UInt64] = [:]
+
+            for fp in pendingV2AssetFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
+                guard let asset = assetsByFingerprint[fp],
+                      let links = linksByFingerprint[fp] else { continue }
+                var resources: [CommitResourceEntry] = []
+                resources.reserveCapacity(links.count)
+                for link in links {
+                    // Fail-fast: dropping a link here would emit a commit body with
+                    // fewer resources than in-memory and break the snapshot
+                    // covered-range invariant once the next snapshot ships the seq.
+                    guard let resource = findResourceByHash(link.resourceHash) else {
+                        throw NSError(
+                            domain: "V2MonthSession",
+                            code: -13,
+                            userInfo: [NSLocalizedDescriptionKey:
+                                "flush aborted: link hash \(link.resourceHash.hexString) lost its resource between upsert and flush"]
+                        )
+                    }
+                    resources.append(CommitResourceEntry(
+                        physicalRemotePath: resource.physicalRemotePath,
+                        logicalName: link.logicalName.isEmpty ? resource.logicalName : link.logicalName,
+                        contentHash: link.resourceHash,
+                        fileSize: resource.fileSize,
+                        resourceType: resource.resourceType,
+                        role: link.role,
+                        slot: link.slot,
+                        crypto: resource.crypto
+                    ))
+                }
+                ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .addAsset(CommitAddAssetBody(
+                    assetFingerprint: fp,
+                    creationDateMs: asset.creationDateMs,
+                    backedUpAtMs: asset.backedUpAtMs,
+                    resources: resources
+                ))))
+                addAssetClocks[fp] = clockCursor
+                opSeq += 1
+                clockCursor &+= 1
+            }
+            for fp in pendingV2TombstoneFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
+                ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .tombstoneAsset(CommitTombstoneBody(
+                    assetFingerprint: fp,
+                    reason: .manifestOrphan,
+                    observedBasis: observedBasis
+                ))))
+                tombstoneClocks[fp] = clockCursor
+                opSeq += 1
+                clockCursor &+= 1
+            }
             let seq = try await services.seqAllocator.allocate()
             lastSeq = seq
             let header = CommitHeader(
@@ -562,10 +563,13 @@ final class V2MonthSession: BackupMonthStore {
                     month: monthKey,
                     respectTaskCancellation: !ignoreCancellation
                 )
+                committedAddAssetClocks = addAssetClocks
+                committedTombstoneClocks = tombstoneClocks
                 break
             } catch CommitLogWriter.WriteError.alreadyExists {
                 attempt += 1
                 if attempt >= maxRetries { throw CommitLogWriter.WriteError.alreadyExists }
+                if !ignoreCancellation { try Task.checkCancellation() }
                 continue
             }
         }
@@ -574,7 +578,7 @@ final class V2MonthSession: BackupMonthStore {
         sessionWrittenCovered.add(writerID: services.writerID, seq: lastSeq)
 
         // Stamp committed rows so the snapshot baseline matches what a future replay would derive (LWW gate).
-        for (fp, clock) in addAssetClocks {
+        for (fp, clock) in committedAddAssetClocks {
             guard let asset = assetsByFingerprint[fp] else { continue }
             assetsByFingerprint[fp] = RemoteManifestAsset(
                 year: asset.year,
@@ -588,7 +592,7 @@ final class V2MonthSession: BackupMonthStore {
             )
         }
         // Tombstones need stamps too; without them replay loses LWW evidence against stale adds once the snapshot covers the tombstone seq.
-        for (fp, clock) in tombstoneClocks {
+        for (fp, clock) in committedTombstoneClocks {
             deletedAssetStamps[fp] = OpStamp(writerID: services.writerID, seq: lastSeq, clock: clock)
             legacyDeletedAssetFingerprints.remove(fp)
         }

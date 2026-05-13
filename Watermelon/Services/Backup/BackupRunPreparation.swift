@@ -258,10 +258,12 @@ struct BackupRunPreparationService: Sendable {
             throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
         case .v2:
             let report = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
-            return report.didMutateRemote
+            return report.didMutateRemote || !report.reportOnly.isEmpty
         case .v2WithPendingMigrationCleanup:
             let report = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
-            return report.didMutateRemote
+            return report.didMutateRemote || !report.reportOnly.isEmpty
+        case .v2WithV1Manifests:
+            throw BackupCompatibilityError.requiresForegroundMigration
         case .v1:
             try await remoteIndexService.verifyMonth(
                 client: client,

@@ -172,6 +172,9 @@ final class SerialOperationsClient: RemoteStorageClientProtocol, @unchecked Send
     func move(from sourcePath: String, to destinationPath: String) async throws {
         try await queue.run { try await self.underlying.move(from: sourcePath, to: destinationPath) }
     }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await queue.run { try await self.underlying.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    }
     func copy(from sourcePath: String, to destinationPath: String) async throws {
         try await queue.run { try await self.underlying.copy(from: sourcePath, to: destinationPath) }
     }

@@ -117,17 +117,19 @@ actor V1MigrationService {
             let migrableAssets = snapshot.assets.filter { asset in
                 let links = linksByAssetFP[asset.assetFingerprint] ?? []
                 if links.isEmpty {
-                    v1MigrationLog.warning("V1 asset \(asset.assetFingerprint.hexString, privacy: .public) in \(scanned.year)-\(scanned.month) has no resource links — skipping migration")
+                    v1MigrationLog.warning("V1 asset \(asset.assetFingerprint.hexString, privacy: .public) in \(scanned.year)-\(scanned.month) has no resource links — migration cannot continue")
                     return false
                 }
                 return true
             }
-            if migrableAssets.isEmpty {
-                v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) had only resource-less assets — quarantining as residue")
-                try await quarantineV1ResidueManifest(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
-                continue
+            if migrableAssets.count != snapshot.assets.count {
+                throw NSError(
+                    domain: "V1MigrationService",
+                    code: -12,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "V1 manifest \(scanned.year)-\(scanned.month) contains asset rows without resource links — migration aborted"]
+                )
             }
-
             let migrationMaxRetries = 4
             var migrationAttempt = 0
             var migrationHeader: CommitHeader

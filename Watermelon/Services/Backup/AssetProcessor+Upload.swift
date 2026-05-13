@@ -9,6 +9,7 @@ struct UploadPreparation {
     var attemptedFileNames: Set<String>
     let skipReason: String?
     let forceWriterIDSuffix: Bool
+    let retryBaseFileName: String
 }
 
 struct UploadRetryOutcome {
@@ -124,6 +125,7 @@ extension AssetProcessor {
         var targetFileName = baseFileName
         var skipReason: String?
         var attemptedFileNames: Set<String> = [targetFileName]
+        var retryBaseFileName = baseFileName
 
         let writerID = monthStore.v2Services?.writerID
         let runID = monthStore.v2Services?.runID
@@ -131,13 +133,13 @@ extension AssetProcessor {
         var collisionKeys = monthStore.existingCollisionKeys()
         let baseCollides = collisionKeys.contains(RemoteFileNaming.collisionKey(for: baseFileName))
 
-        enum ClaimSource { case manifest, unmanifestedOrphan }
-        var claimCandidates: [(name: String, knownSize: Int64?, source: ClaimSource)] = []
+        var claimCandidates: [(name: String, knownSize: Int64?)] = []
         if forceWriterIDSuffix, let writerID {
             let candidates: [String]
             if let runID {
+                let runCandidate = RemoteFileNaming.writerIDRunIDSuffixedName(baseName: baseFileName, writerID: writerID, runID: runID)
                 candidates = [
-                    RemoteFileNaming.writerIDRunIDSuffixedName(baseName: baseFileName, writerID: writerID, runID: runID),
+                    runCandidate,
                     RemoteFileNaming.writerIDSuffixedName(baseName: baseFileName, writerID: writerID)
                 ]
             } else {
@@ -148,7 +150,7 @@ extension AssetProcessor {
                 if collisionKeys.contains(key) {
                     let manifestSize = monthStore.findByFileName(candidate)?.fileSize
                         ?? monthStore.remoteFileSize(named: candidate)
-                    claimCandidates.append((candidate, manifestSize, .manifest))
+                    claimCandidates.append((candidate, manifestSize))
                     continue
                 }
                 let probePath = RemotePathBuilder.absolutePath(
@@ -169,12 +171,12 @@ extension AssetProcessor {
                 // Block from target selection — different content at this path must not be overwritten.
                 collisionKeys.insert(key)
                 attemptedFileNames.insert(candidate)
-                claimCandidates.append((candidate, remoteSize, .unmanifestedOrphan))
+                claimCandidates.append((candidate, remoteSize))
             }
         } else if baseCollides {
             let manifestSize = monthStore.findByFileName(baseFileName)?.fileSize
                 ?? monthStore.remoteFileSize(named: baseFileName)
-            claimCandidates.append((baseFileName, manifestSize, .manifest))
+            claimCandidates.append((baseFileName, manifestSize))
         }
 
         let smallFileLimit = RemoteContentTrust.defaultSmallFileLimitBytes
@@ -198,11 +200,6 @@ extension AssetProcessor {
                     targetFileName = candidate.name
                     break
                 }
-            } else if candidate.source == .unmanifestedOrphan, candidate.knownSize == localFileSize {
-                // Size+name approximation only for unmanifested orphans — claiming a manifest entry under our hash would orphan assets bound to its existing hash.
-                skipReason = "name_size_approximation"
-                targetFileName = candidate.name
-                break
             }
         }
 
@@ -215,18 +212,17 @@ extension AssetProcessor {
             if forceWriterIDSuffix, sizeGuarantee == .overwritePossible,
                let writerID, let runID {
                 let runCandidate = RemoteFileNaming.writerIDRunIDSuffixedName(baseName: baseFileName, writerID: writerID, runID: runID)
+                retryBaseFileName = runCandidate
                 if collisionKeys.contains(RemoteFileNaming.collisionKey(for: runCandidate)) {
-                    targetFileName = RemoteFileNaming.resolveNextAvailableName(
+                    targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
                         baseName: runCandidate,
-                        collisionKeys: collisionKeys,
-                        writerID: writerID,
-                        forceWriterIDSuffix: false
+                        collisionKeys: collisionKeys
                     )
                 } else {
                     targetFileName = runCandidate
                 }
             } else {
-                targetFileName = RemoteFileNaming.resolveNextAvailableName(
+                targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
                     baseName: baseFileName,
                     collisionKeys: collisionKeys,
                     writerID: writerID,
@@ -248,7 +244,8 @@ extension AssetProcessor {
             remoteAbsolutePath: remoteAbsolutePath,
             attemptedFileNames: attemptedFileNames,
             skipReason: skipReason,
-            forceWriterIDSuffix: forceWriterIDSuffix
+            forceWriterIDSuffix: forceWriterIDSuffix,
+            retryBaseFileName: retryBaseFileName
         )
     }
 
@@ -362,28 +359,28 @@ extension AssetProcessor {
                     throw error
                 }
                 if case .alreadyExists = createResult {
-                    var occupiedNames = monthStore.existingFileNames()
-                    occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
-                    occupiedNames.insert(uploadPreparation.targetFileName)
-                    let previousFileName = uploadPreparation.targetFileName
-                    uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
-                        baseName: uploadPreparation.baseFileName,
-                        occupiedNames: occupiedNames,
-                        writerID: monthStore.v2Services?.writerID,
-                        forceWriterIDSuffix: uploadPreparation.forceWriterIDSuffix
+                    let differsOrUnknown = await Self.detectRemoteContentRace(
+                        client: client,
+                        remotePath: uploadPreparation.remoteAbsolutePath,
+                        expectedSize: prepared.fileSize,
+                        expectedHash: prepared.contentHash,
+                        cancellationController: cancellationController
                     )
-                    uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
-                    let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
-                    uploadPreparation.remoteAbsolutePath = RemotePathBuilder.absolutePath(
-                        basePath: profile.basePath,
-                        remoteRelativePath: retryRelativePath
-                    )
-                    assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
-                    print("[BackupUpload] atomicCreate already-exists RETRY: asset=\(displayName), resource=\(local.originalFilename), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
-                    continue
+                    if differsOrUnknown {
+                        let previousFileName = uploadPreparation.targetFileName
+                        try advanceUploadPreparationToNextName(
+                            &uploadPreparation,
+                            monthStore: monthStore,
+                            profile: profile
+                        )
+                        assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
+                        print("[BackupUpload] atomicCreate already-exists RETRY: asset=\(displayName), resource=\(local.originalFilename), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
+                        continue
+                    }
+                    print("[BackupUpload] atomicCreate already-exists MATCHED: asset=\(displayName), resource=\(local.originalFilename), file=\(uploadPreparation.targetFileName)")
                 }
                 if case .bestEffortRetry = createResult {
-                    // `~<wid6>` is not run-unique — same-writer concurrent runs can collide; verify before binding our hash to remote bytes.
+                    // Ambiguous create must prove bytes before manifest binding.
                     let raceDetected = await Self.detectRemoteContentRace(
                         client: client,
                         remotePath: uploadPreparation.remoteAbsolutePath,
@@ -392,21 +389,11 @@ extension AssetProcessor {
                         cancellationController: cancellationController
                     )
                     if raceDetected {
-                        var occupiedNames = monthStore.existingFileNames()
-                        occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
-                        occupiedNames.insert(uploadPreparation.targetFileName)
                         let previousFileName = uploadPreparation.targetFileName
-                        uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
-                            baseName: uploadPreparation.baseFileName,
-                            occupiedNames: occupiedNames,
-                            writerID: monthStore.v2Services?.writerID,
-                            forceWriterIDSuffix: uploadPreparation.forceWriterIDSuffix
-                        )
-                        uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
-                        let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
-                        uploadPreparation.remoteAbsolutePath = RemotePathBuilder.absolutePath(
-                            basePath: profile.basePath,
-                            remoteRelativePath: retryRelativePath
+                        try advanceUploadPreparationToNextName(
+                            &uploadPreparation,
+                            monthStore: monthStore,
+                            profile: profile
                         )
                         assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
                         print("[BackupUpload] bestEffort race RETRY: asset=\(displayName), resource=\(local.originalFilename), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
@@ -435,6 +422,9 @@ extension AssetProcessor {
                 if cancellationController?.isCancelled == true {
                     throw CancellationError()
                 }
+                if error is RemoteFileNaming.ResolutionError {
+                    throw error
+                }
                 if profile.isConnectionUnavailableError(error) {
                     throw error
                 }
@@ -443,21 +433,11 @@ extension AssetProcessor {
                 let retryLimit = shouldLimitUploadRetries ? min(maxRetry, 2) : maxRetry
 
                 if SMBErrorClassifier.isNameCollision(error) {
-                    var occupiedNames = monthStore.existingFileNames()
-                    occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
-                    occupiedNames.insert(uploadPreparation.targetFileName)
                     let previousFileName = uploadPreparation.targetFileName
-                    uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
-                        baseName: uploadPreparation.baseFileName,
-                        occupiedNames: occupiedNames,
-                        writerID: monthStore.v2Services?.writerID,
-                        forceWriterIDSuffix: uploadPreparation.forceWriterIDSuffix
-                    )
-                    uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
-                    let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
-                    uploadPreparation.remoteAbsolutePath = RemotePathBuilder.absolutePath(
-                        basePath: profile.basePath,
-                        remoteRelativePath: retryRelativePath
+                    try advanceUploadPreparationToNextName(
+                        &uploadPreparation,
+                        monthStore: monthStore,
+                        profile: profile
                     )
                     print("[BackupUpload] collision RETRY: asset=\(displayName), resource=\(local.originalFilename), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
                     continue
@@ -502,6 +482,35 @@ extension AssetProcessor {
             )
         }
         return UploadRetryOutcome(fileName: nil, lastError: lastError)
+    }
+
+    func advanceUploadPreparationToNextName(
+        _ uploadPreparation: inout UploadPreparation,
+        monthStore: any BackupMonthStore,
+        profile: ServerProfileRecord
+    ) throws {
+        var occupiedNames = monthStore.existingFileNames()
+        occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
+        occupiedNames.insert(uploadPreparation.targetFileName)
+        if uploadPreparation.retryBaseFileName != uploadPreparation.baseFileName {
+            uploadPreparation.targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
+                baseName: uploadPreparation.retryBaseFileName,
+                occupiedNames: occupiedNames
+            )
+        } else {
+            uploadPreparation.targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
+                baseName: uploadPreparation.baseFileName,
+                occupiedNames: occupiedNames,
+                writerID: monthStore.v2Services?.writerID,
+                forceWriterIDSuffix: uploadPreparation.forceWriterIDSuffix
+            )
+        }
+        uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
+        let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
+        uploadPreparation.remoteAbsolutePath = RemotePathBuilder.absolutePath(
+            basePath: profile.basePath,
+            remoteRelativePath: retryRelativePath
+        )
     }
 
     func recordUploadedResource(
@@ -635,10 +644,6 @@ extension AssetProcessor {
         }
         guard let entry, !entry.isDirectory else { return true }
         if entry.size != expectedSize { return true }
-        // Symmetric with the upload-prep small-file threshold: large files cost too much to re-download and the writer-run suffix already makes same-name collisions vanishingly rare.
-        if expectedSize >= RemoteContentTrust.defaultSmallFileLimitBytes {
-            return false
-        }
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("upload-verify-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tempURL) }

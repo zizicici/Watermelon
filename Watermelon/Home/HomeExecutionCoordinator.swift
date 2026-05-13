@@ -696,9 +696,9 @@ final class HomeExecutionCoordinator {
             if Task.isCancelled { return .cancelled }
         }
 
-        var verifyMutatedRemote = false
+        var verifyNeedsRemoteRefresh = false
         do {
-            verifyMutatedRemote = try await dependencies.backupCoordinator.verifyMonth(
+            verifyNeedsRemoteRefresh = try await dependencies.backupCoordinator.verifyMonth(
                 profile: context.profile,
                 password: context.password,
                 month: month
@@ -714,8 +714,7 @@ final class HomeExecutionCoordinator {
         }
         if Task.isCancelled { return .cancelled }
 
-        // Resync only when verify actually wrote tombstones — otherwise we'd re-fold the commit log per month for nothing.
-        if verifyMutatedRemote {
+        if verifyNeedsRemoteRefresh {
             _ = await dataRefresher.syncRemoteDataAndWait()
             if Task.isCancelled { return .cancelled }
         }

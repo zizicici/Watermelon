@@ -80,7 +80,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
             result.reserveCapacity(raw.count)
             for asset in phAssets {
                 guard let record = raw[asset.localIdentifier] else { continue }
-                if let mtime = asset.modificationDate, mtime > record.updatedAt { continue }
+                guard Self.canTrustFingerprint(record, for: asset) else { continue }
                 result[asset.localIdentifier] = record
             }
             return result
@@ -90,13 +90,37 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
-    private func fetchAllFingerprints() -> [String: LocalAssetFingerprintRecord] {
+    private func fetchAllFingerprints(in results: [PHFetchResult<PHAsset>]) -> [String: LocalAssetFingerprintRecord] {
         do {
-            return try contentHashIndexRepository.fetchAssetFingerprintRecords()
+            let raw = try contentHashIndexRepository.fetchAssetFingerprintRecords()
+            guard !raw.isEmpty else { return [:] }
+            var result: [String: LocalAssetFingerprintRecord] = [:]
+            result.reserveCapacity(raw.count)
+            for fetchResult in results {
+                for index in 0 ..< fetchResult.count {
+                    let asset = fetchResult.object(at: index)
+                    guard result[asset.localIdentifier] == nil,
+                          let record = raw[asset.localIdentifier],
+                          Self.canTrustFingerprint(record, for: asset) else { continue }
+                    result[asset.localIdentifier] = record
+                }
+            }
+            return result
         } catch {
             dataLog.error("[HomeData] fetchAssetFingerprintRecords() failed: \(String(describing: error))")
             return [:]
         }
+    }
+
+    private static func canTrustFingerprint(_ record: LocalAssetFingerprintRecord, for asset: PHAsset) -> Bool {
+        if let mtime = asset.modificationDate, mtime > record.updatedAt { return false }
+        guard record.selectionVersion >= BackupAssetResourcePlanner.currentSelectionVersion,
+              let cachedSignature = record.resourceSignature else {
+            return false
+        }
+        let currentResources = PHAssetResource.assetResources(for: asset)
+        let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: currentResources)
+        return cachedSignature == BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered)
     }
 
     private func remoteFingerprintsForMonth(_ month: LibraryMonthKey) -> Set<Data> {
@@ -147,7 +171,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 let results = self.photoLibraryService.fetchResults(query: scope.photoLibraryQuery)
                 let snapshotsPerCollection = results.map(snapshots(of:))
                 self.trackedFetchResults = results
-                let fingerprintByAsset = self.fetchAllFingerprints()
+                let fingerprintByAsset = self.fetchAllFingerprints(in: results)
                 let changed = self.localIndex.reload(
                     payload: LibraryInitialPayload(collections: snapshotsPerCollection),
                     fingerprintByAsset: fingerprintByAsset,

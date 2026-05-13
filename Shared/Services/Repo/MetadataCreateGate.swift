@@ -61,7 +61,11 @@ enum MetadataCreateGate {
             }
             // Pre-move existence check narrows the window where a peer's bytes get silently overwritten on overwrite-capable backends.
             do {
-                if let meta = try await client.metadata(path: remotePath), !meta.isDirectory {
+                if let meta = try await client.metadata(path: remotePath) {
+                    guard !meta.isDirectory else {
+                        try? await client.delete(path: stagingPath)
+                        return .alreadyExists
+                    }
                     // Idempotent retry must treat matching bytes as our lost prior success.
                     do {
                         if try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL) {
@@ -81,10 +85,14 @@ enum MetadataCreateGate {
                 try? await client.delete(path: stagingPath)
                 throw CancellationError()
             } catch {
-                // Metadata probe failure ≠ destination exists; fall through to move (move-error path still cleans staging).
+                // No-overwrite finalization is the authoritative conflict check.
             }
             do {
-                try await client.move(from: stagingPath, to: remotePath)
+                let finalization = try await client.moveIfAbsent(from: stagingPath, to: remotePath)
+                if case .alreadyExists = finalization {
+                    try? await client.delete(path: stagingPath)
+                    return .alreadyExists
+                }
             } catch {
                 try? await client.delete(path: stagingPath)
                 throw error

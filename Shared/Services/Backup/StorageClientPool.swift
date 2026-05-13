@@ -40,21 +40,28 @@ actor StorageClientPool {
         }
         if createdConnections < maxConnections {
             createdConnections += 1
+            let client: any RemoteStorageClientProtocol
             do {
-                let client = try makeClient()
+                client = try makeClient()
                 try await client.connect()
-                // shutdown may have run during connect; surrender rather than hand a live client to a dead pool.
-                if isShutdown {
-                    createdConnections = max(createdConnections - 1, 0)
-                    await client.disconnect()
-                    throw CancellationError()
-                }
-                return client
             } catch {
                 // Hand slot to any waiter queued during our connect-await; otherwise they'd strand.
                 await passSlotToLiveWaiter()
                 throw error
             }
+            // shutdown may have run during connect; surrender rather than hand a live client to a dead pool.
+            if isShutdown {
+                createdConnections = max(createdConnections - 1, 0)
+                await client.disconnect()
+                throw CancellationError()
+            }
+            do {
+                try Task.checkCancellation()
+            } catch {
+                handReusableClientToLiveWaiter(client)
+                throw error
+            }
+            return client
         }
         let id = UUID()
         return try await withTaskCancellationHandler {

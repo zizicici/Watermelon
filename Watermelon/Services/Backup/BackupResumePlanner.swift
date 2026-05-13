@@ -70,8 +70,7 @@ final class BackupResumePlanner {
                 return assetIDs
             }
             guard let hashIndexRepository else {
-                assertionFailure("BackupResumePlanner: V2 dedup requires hashIndexRepository")
-                return assetIDs.subtracting(completedAssetIDs)
+                return assetIDs
             }
             let committedView = handle.committedAssetFingerprintsByMonth
             var pending = assetIDs
@@ -139,7 +138,7 @@ final class BackupResumePlanner {
 
         let photoLibraryService = self.photoLibraryService
         let hashIndexRepository = self.hashIndexRepository
-        return try await Task.detached(priority: .userInitiated) {
+        let planningTask = Task.detached(priority: .userInitiated) {
             let assets = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
             let useHashDedup: Bool
             switch dedupMode {
@@ -158,13 +157,16 @@ final class BackupResumePlanner {
             var pending = Set(pendingIDs)
             if case .v2(let handle) = dedupMode, handle.overlayFreshness == .fresh {
                 guard let repository = hashIndexRepository else {
-                    assertionFailure("BackupResumePlanner: V2 dedup requires hashIndexRepository")
                     return pending
                 }
                 let committedView = handle.committedAssetFingerprintsByMonth
+                try Task.checkCancellation()
                 let records = try repository.fetchAssetFingerprintRecords(assetIDs: pending)
+                try Task.checkCancellation()
                 let phAssets = Self.phAssets(forAssetIDs: Array(records.keys))
+                try Task.checkCancellation()
                 for (id, record) in records {
+                    try Task.checkCancellation()
                     guard Self.cacheRowIsTrustworthy(record) else { continue }
                     guard let phAsset = phAssets[id] else { continue }
                     guard Self.cachedSignatureMatchesCurrent(record: record, phAsset: phAsset) else { continue }
@@ -175,6 +177,11 @@ final class BackupResumePlanner {
                 }
             }
             return pending
-        }.value
+        }
+        return try await withTaskCancellationHandler {
+            try await planningTask.value
+        } onCancel: {
+            planningTask.cancel()
+        }
     }
 }

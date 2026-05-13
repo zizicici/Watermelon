@@ -101,7 +101,11 @@ actor RepoMaterializer {
                                 continue
                             }
                             if let expected, file.header.repoID != expected {
-                                materializerLog.warning("skip foreign-repo snapshot \(candidate.filename, privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expected, privacy: .public)")
+                                if file.header.repoID.isEmpty {
+                                    materializerLog.warning("skip empty-repoID snapshot \(candidate.filename, privacy: .public) expected=\(expected, privacy: .public)")
+                                } else {
+                                    materializerLog.warning("skip foreign-repo snapshot \(candidate.filename, privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expected, privacy: .public)")
+                                }
                                 continue
                             }
                             return (month, file)

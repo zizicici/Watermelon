@@ -56,11 +56,27 @@ enum RemoteFormatInspection: Equatable, Sendable {
     case fresh
     case v1
     case v2(formatVersion: Int)
+    case v2WithV1Manifests(formatVersion: Int)
     case v2WithPendingMigrationCleanup(formatVersion: Int, ownerWriterID: String)
     case unsupported(minAppVersion: String?)
 }
 
 actor RemoteFormatCompatibilityService {
+    private enum MigrationMarkerPhase: Int {
+        case phase1 = 1
+        case phase2 = 2
+        case phase3 = 3
+    }
+
+    private struct MigrationMarkerState {
+        let writerID: String
+        let phase: MigrationMarkerPhase
+
+        var isCleanupSafe: Bool {
+            phase == .phase2 || phase == .phase3
+        }
+    }
+
     init() {}
 
     func verify(client: any RemoteStorageClientProtocol, profile: ServerProfileRecord) async throws {
@@ -101,14 +117,21 @@ actor RemoteFormatCompatibilityService {
             }
             let migrationMarkers = try await listMigrationMarkers(client: client, basePath: basePath)
             let migrationInProgress = !migrationMarkers.isEmpty
+            var cachedV1Manifests: Bool?
+            func hasV1Manifests() async throws -> Bool {
+                if let cachedV1Manifests { return cachedV1Manifests }
+                let detected = try await detectV1Manifests(client: client, basePath: basePath, entries: entries)
+                cachedV1Manifests = detected
+                return detected
+            }
             if migrationInProgress {
-                if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
+                if case .absent = manifest, try await hasV1Manifests() {
                     return .v1
                 }
             }
             switch manifest {
             case .absent:
-                if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
+                if try await hasV1Manifests() {
                     return .v1
                 }
                 if migrationInProgress {
@@ -124,11 +147,15 @@ actor RemoteFormatCompatibilityService {
             case .found(let manifest):
                 let formatVersion = manifest.formatVersion ?? 0
                 if formatVersion >= 2 && formatVersion <= RepoLayout.currentSupportedFormatVersion {
-                    if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
-                        return .v1
+                    let markerStates = try await inspectMigrationMarkers(client: client, basePath: basePath, markers: migrationMarkers)
+                    if try await hasV1Manifests() {
+                        return .v2WithV1Manifests(formatVersion: formatVersion)
                     }
-                    if let owner = try await detectPendingMigrationCleanupOwner(client: client, basePath: basePath, markers: migrationMarkers) {
-                        return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: owner)
+                    if let cleanup = markerStates.first(where: { $0.isCleanupSafe }) {
+                        return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: cleanup.writerID)
+                    }
+                    if let stale = markerStates.first {
+                        return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: stale.writerID)
                     }
                     return .v2(formatVersion: formatVersion)
                 }
@@ -142,40 +169,48 @@ actor RemoteFormatCompatibilityService {
         return .fresh
     }
 
-    private func detectPendingMigrationCleanupOwner(
+    private func inspectMigrationMarkers(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         markers: [RemoteStorageEntry]
-    ) async throws -> String? {
+    ) async throws -> [MigrationMarkerState] {
         let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
+        var results: [MigrationMarkerState] = []
         for entry in markers where !entry.isDirectory && entry.name.hasSuffix(".json") {
             let path = RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name)
             let temp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("migration-marker-detect-\(UUID().uuidString).json")
             defer { try? FileManager.default.removeItem(at: temp) }
             let writerFromName = String(entry.name.dropLast(".json".count))
-            var payloadWriter: String?
+            var writerID: String?
+            var phase: MigrationMarkerPhase = .phase1
             do {
                 try await client.download(remotePath: path, localURL: temp)
                 if let data = try? Data(contentsOf: temp),
-                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let parsed = dict["writer_id"] as? String,
-                   RepoLayout.isValidWriterID(parsed) {
-                    payloadWriter = parsed
+                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let parsed = dict["writer_id"] as? String,
+                       RepoLayout.isValidWriterID(parsed) {
+                        writerID = parsed
+                    }
+                    if let raw = dict["phase"] as? Int,
+                       let parsedPhase = MigrationMarkerPhase(rawValue: raw) {
+                        phase = parsedPhase
+                    }
                 }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 if !isNotFoundError(error) { throw error }
+                continue
             }
-            if let payloadWriter {
-                return payloadWriter
+            if writerID == nil, RepoLayout.isValidWriterID(writerFromName) {
+                writerID = writerFromName
             }
-            if RepoLayout.isValidWriterID(writerFromName) {
-                return writerFromName
+            if let writerID {
+                results.append(MigrationMarkerState(writerID: writerID, phase: phase))
             }
         }
-        return nil
+        return results
     }
 
     /// Fail-closed: list errors throw so a network blip can't be misread as "no migration".

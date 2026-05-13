@@ -1,6 +1,17 @@
 import Foundation
 
 enum RemoteFileNaming {
+    enum ResolutionError: LocalizedError {
+        case exhausted(stem: String, collisionCount: Int)
+
+        var errorDescription: String? {
+            switch self {
+            case .exhausted(let stem, let collisionCount):
+                return "Unable to find a collision-free remote filename for \(stem) after checking \(collisionCount) existing names"
+            }
+        }
+    }
+
     struct ResourceIdentity: Equatable {
         let role: Int
         let slot: Int
@@ -108,7 +119,7 @@ enum RemoteFileNaming {
         while result.utf8.count > maxBytes && !result.isEmpty {
             result.removeLast()
         }
-        return result
+        return result.isEmpty ? "_" : result
     }
 
     static func fallbackResourceLabel(forRole role: Int) -> String {
@@ -145,7 +156,26 @@ enum RemoteFileNaming {
         writerID: String? = nil,
         forceWriterIDSuffix: Bool = false
     ) -> String {
-        resolveNextAvailableName(
+        do {
+            return try resolveNextAvailableNameOrThrow(
+                baseName: baseName,
+                occupiedNames: occupiedNames,
+                writerID: writerID,
+                forceWriterIDSuffix: forceWriterIDSuffix
+            )
+        } catch {
+            assertionFailure(error.localizedDescription)
+            return emergencyFallbackName(baseName: baseName, writerID: writerID, forceWriterIDSuffix: forceWriterIDSuffix)
+        }
+    }
+
+    static func resolveNextAvailableNameOrThrow(
+        baseName: String,
+        occupiedNames: Set<String>,
+        writerID: String? = nil,
+        forceWriterIDSuffix: Bool = false
+    ) throws -> String {
+        try resolveNextAvailableNameOrThrow(
             baseName: baseName,
             collisionKeys: collisionKeySet(from: occupiedNames),
             writerID: writerID,
@@ -159,12 +189,31 @@ enum RemoteFileNaming {
         writerID: String? = nil,
         forceWriterIDSuffix: Bool = false
     ) -> String {
+        do {
+            return try resolveNextAvailableNameOrThrow(
+                baseName: baseName,
+                collisionKeys: collisionKeys,
+                writerID: writerID,
+                forceWriterIDSuffix: forceWriterIDSuffix
+            )
+        } catch {
+            assertionFailure(error.localizedDescription)
+            return emergencyFallbackName(baseName: baseName, writerID: writerID, forceWriterIDSuffix: forceWriterIDSuffix)
+        }
+    }
+
+    static func resolveNextAvailableNameOrThrow(
+        baseName: String,
+        collisionKeys: Set<String>,
+        writerID: String? = nil,
+        forceWriterIDSuffix: Bool = false
+    ) throws -> String {
         let nsName = baseName as NSString
         let ext = nsName.pathExtension
         let stem = nsName.deletingPathExtension
 
         if forceWriterIDSuffix, let writerID {
-            return resolveWithWriterIDSuffix(stem: stem, ext: ext, writerID: writerID, collisionKeys: collisionKeys)
+            return try resolveWithWriterIDSuffix(stem: stem, ext: ext, writerID: writerID, collisionKeys: collisionKeys)
         }
 
         guard collisionKeys.contains(collisionKey(for: baseName)) else {
@@ -172,7 +221,7 @@ enum RemoteFileNaming {
         }
 
         if let writerID {
-            return resolveWithWriterIDSuffix(stem: stem, ext: ext, writerID: writerID, collisionKeys: collisionKeys)
+            return try resolveWithWriterIDSuffix(stem: stem, ext: ext, writerID: writerID, collisionKeys: collisionKeys)
         }
 
         let extPortion = ext.isEmpty ? "" : "." + ext
@@ -202,7 +251,7 @@ enum RemoteFileNaming {
         if let widened = widenedUUIDFallback(stem: stem, ext: ext, extBudget: extBudget, collisionKeys: collisionKeys) {
             return widened
         }
-        fatalError("RemoteFileNaming: numeric + UUID fallbacks exhausted for stem=\(stem); collision set size=\(collisionKeys.count)")
+        throw ResolutionError.exhausted(stem: stem, collisionCount: collisionKeys.count)
     }
 
     private static func resolveWithWriterIDSuffix(
@@ -210,7 +259,7 @@ enum RemoteFileNaming {
         ext: String,
         writerID: String,
         collisionKeys: Set<String>
-    ) -> String {
+    ) throws -> String {
         let basicCandidate = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID)
         if !collisionKeys.contains(collisionKey(for: basicCandidate)) {
             return basicCandidate
@@ -237,7 +286,7 @@ enum RemoteFileNaming {
         if !collisionKeys.contains(collisionKey(for: widened)) {
             return widened
         }
-        fatalError("RemoteFileNaming: writer suffix exhausted for stem=\(stem) wid=\(RepoLayout.writerIDShort(writerID)); collision set size=\(collisionKeys.count)")
+        throw ResolutionError.exhausted(stem: stem, collisionCount: collisionKeys.count)
     }
 
     /// Last-resort: full 32-hex UUID makes collision astronomically improbable; still verified before return.
@@ -256,6 +305,20 @@ enum RemoteFileNaming {
             }
         }
         return nil
+    }
+
+    private static func emergencyFallbackName(baseName: String, writerID: String?, forceWriterIDSuffix: Bool) -> String {
+        let nsName = baseName as NSString
+        let ext = nsName.pathExtension
+        let stem = nsName.deletingPathExtension
+        let token = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+        if forceWriterIDSuffix, let writerID {
+            return writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: token)
+        }
+        let extPortion = ext.isEmpty ? "" : "." + ext
+        let extBudget = clampStringToBytes(extPortion, maxBytes: maxLeafByteBudget / 2)
+        let stemBudget = max(maxLeafByteBudget - token.utf8.count - 1 - extBudget.utf8.count, 1)
+        return clampStringToBytes(stem, maxBytes: stemBudget) + "_" + token + extBudget
     }
 
     static func collisionKeySet(from fileNames: Set<String>) -> Set<String> {

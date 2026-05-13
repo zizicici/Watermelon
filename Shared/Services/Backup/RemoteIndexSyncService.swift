@@ -8,10 +8,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         private var isLocked = false
         private var waiters: [(UUID, CheckedContinuation<Void, Error>)] = []
         private var preCancelledIDs: Set<UUID> = []
+        private var preCancelledOrder: [UUID] = []
         private var registeredIDs: Set<UUID> = []
+        private static let preCancelledIDsCap = 256
 
         private func registerWaiter(id: UUID, continuation: CheckedContinuation<Void, Error>) {
-            if preCancelledIDs.remove(id) != nil {
+            if consumePreCancelled(id) {
                 continuation.resume(throwing: CancellationError())
                 return
             }
@@ -30,8 +32,27 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 registeredIDs.remove(id)
                 cont.resume(throwing: CancellationError())
             } else if !registeredIDs.contains(id) {
-                preCancelledIDs.insert(id)
+                recordPreCancelled(id)
             }
+        }
+
+        private func recordPreCancelled(_ id: UUID) {
+            if preCancelledIDs.contains(id) { return }
+            if preCancelledIDs.count >= Self.preCancelledIDsCap,
+               let oldest = preCancelledOrder.first {
+                preCancelledOrder.removeFirst()
+                preCancelledIDs.remove(oldest)
+            }
+            preCancelledIDs.insert(id)
+            preCancelledOrder.append(id)
+        }
+
+        private func consumePreCancelled(_ id: UUID) -> Bool {
+            guard preCancelledIDs.remove(id) != nil else { return false }
+            if let index = preCancelledOrder.firstIndex(of: id) {
+                preCancelledOrder.remove(at: index)
+            }
+            return true
         }
 
         private func acquire(id: UUID) async throws {
@@ -112,6 +133,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     private let committedView: RepoCommittedView
     private let inflightTracker: OptimisticInflightTracker
+    private let optimisticMutationLock = NSLock()
     private let syncGate = SyncGate()
     private let state = MutableState()
 
@@ -189,14 +211,17 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     private func handleFromCurrentSnapshot(overlayFresh: Bool) -> RemoteViewHandle {
-        let (revision, snapshot) = committedView.currentSnapshotWithRevision()
-        let fingerprints = Self.committedFingerprints(
-            from: snapshot,
-            subtractingInflight: inflightTracker
-        )
+        let captured = optimisticMutationLock.withLock {
+            let (revision, snapshot) = committedView.currentSnapshotWithRevision()
+            let fingerprints = Self.committedFingerprints(
+                from: snapshot,
+                subtractingInflight: inflightTracker
+            )
+            return (revision: revision, fingerprints: fingerprints)
+        }
         return RemoteViewHandle(
-            revision: revision,
-            committedAssetFingerprintsByMonth: fingerprints,
+            revision: captured.revision,
+            committedAssetFingerprintsByMonth: captured.fingerprints,
             overlayFreshness: overlayFresh ? .fresh : .stale,
             producedAt: Date()
         )
@@ -218,8 +243,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
         let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: Self.remoteProfileKey(profile))
         if shouldResetSnapshot {
-            committedView.reset()
-            resetUncommittedV2()
+            resetCommittedViewAndUncommitted()
         }
 
         let inspection = try await RemoteFormatCompatibilityService()
@@ -231,6 +255,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         case .v2, .v2WithPendingMigrationCleanup:
             await state.setIsV2Repo(true)
             return try await syncIndexV2(client: client, profile: profile, eventStream: eventStream, onSyncProgress: onSyncProgress, syncStart: syncStart, preMaterialized: preMaterialized)
+        case .v2WithV1Manifests:
+            await state.setOverlayFresh(false)
+            throw BackupCompatibilityError.requiresForegroundMigration
         case .v1:
             if alreadyV2 || expectV2 {
                 await state.setOverlayFresh(false)
@@ -251,6 +278,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             client: client,
             basePath: profile.basePath
         )
+        var effectiveRemoteDigests = remoteDigests
         let scanElapsed = CFAbsoluteTimeGetCurrent() - scanStart
         syncLog.info("[SyncTiming] scanManifestDigests: \(Self.ms(scanElapsed))s (\(remoteDigests.count) months)")
 
@@ -301,6 +329,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 month: month.month
             ) else {
                 _ = committedView.removeMonth(month)
+                effectiveRemoteDigests.removeValue(forKey: month)
                 processedMonthCount += 1
                 onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
                 continue
@@ -333,7 +362,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
         }
 
-        await state.updateRemoteManifestDigests(remoteDigests)
+        await state.updateRemoteManifestDigests(effectiveRemoteDigests)
 
         committedView.markSynced(Date())
         let digest = committedView.counts()
@@ -371,8 +400,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             let materializer = RepoMaterializer(client: client, basePath: profile.basePath)
             output = try await materializer.materialize(expectedRepoID: expectedRepoID)
         }
-        resetUncommittedV2()
-        let priorOverlay = committedView.loadFromMaterialize(output)
+        let priorOverlay = resetUncommittedAndLoadMaterialize(output)
         var overlayFresh = false
         do {
             overlayFresh = try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
@@ -519,15 +547,35 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     fileprivate func _optimisticUpsertResource(_ item: RemoteManifestResource) {
-        committedView.applyOptimisticUpsert(resource: item)
+        optimisticMutationLock.withLock {
+            committedView.applyOptimisticUpsert(resource: item)
+        }
     }
 
     fileprivate func _optimisticUpsertAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]?) {
-        committedView.applyOptimisticUpsert(asset: asset, links: links)
+        optimisticMutationLock.withLock {
+            committedView.applyOptimisticUpsert(asset: asset, links: links)
+        }
     }
 
     fileprivate func _markUncommitted(month: LibraryMonthKey, fingerprints: Set<Data>) {
-        inflightTracker.markUncommittedAssets(month: month, fingerprints: fingerprints)
+        optimisticMutationLock.withLock {
+            inflightTracker.markUncommittedAssets(month: month, fingerprints: fingerprints)
+        }
+    }
+
+    fileprivate func _appendOptimisticAsset(
+        _ asset: RemoteManifestAsset,
+        links: [RemoteAssetResourceLink]?,
+        markUncommitted: Bool
+    ) {
+        optimisticMutationLock.withLock {
+            if markUncommitted {
+                let month = LibraryMonthKey(year: asset.year, month: asset.month)
+                inflightTracker.markUncommittedAssets(month: month, fingerprints: [asset.assetFingerprint])
+            }
+            committedView.applyOptimisticUpsert(asset: asset, links: links)
+        }
     }
 
     func recordCommittedFromFlushError(month: LibraryMonthKey, _ error: Error) {
@@ -537,17 +585,34 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func markCommittedV2(month: LibraryMonthKey, fingerprints: Set<Data>) {
-        inflightTracker.markCommitted(month: month, fingerprints: fingerprints)
+        optimisticMutationLock.withLock {
+            inflightTracker.markCommitted(month: month, fingerprints: fingerprints)
+        }
     }
 
     func resetUncommittedV2() {
-        inflightTracker.reset()
+        optimisticMutationLock.withLock {
+            inflightTracker.reset()
+        }
     }
 
     func resetForProfileSwitch() async {
-        inflightTracker.reset()
-        committedView.reset()
+        resetCommittedViewAndUncommitted()
         await state.reset()
+    }
+
+    private func resetUncommittedAndLoadMaterialize(_ output: RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] {
+        optimisticMutationLock.withLock {
+            inflightTracker.reset()
+            return committedView.loadFromMaterialize(output)
+        }
+    }
+
+    private func resetCommittedViewAndUncommitted() {
+        optimisticMutationLock.withLock {
+            inflightTracker.reset()
+            committedView.reset()
+        }
     }
 
     func currentRepoIsV2() async -> Bool? {
@@ -563,10 +628,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func committedAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
-        Self.committedFingerprints(
-            from: committedView.current(),
-            subtractingInflight: inflightTracker
-        )
+        optimisticMutationLock.withLock {
+            Self.committedFingerprints(
+                from: committedView.current(),
+                subtractingInflight: inflightTracker
+            )
+        }
     }
 
     private static func committedFingerprints(
@@ -616,7 +683,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         assets: [RemoteManifestAsset],
         links: [RemoteAssetResourceLink]
     ) {
-        _ = committedView.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links)
+        optimisticMutationLock.withLock {
+            _ = committedView.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links)
+        }
     }
 
     func markPhysicallyMissingV2(month: LibraryMonthKey, hashes: Set<Data>) {
@@ -866,11 +935,7 @@ struct OptimisticAssetWriter: Sendable {
         links: [RemoteAssetResourceLink]?,
         markUncommitted: Bool
     ) {
-        if markUncommitted {
-            let month = LibraryMonthKey(year: asset.year, month: asset.month)
-            service._markUncommitted(month: month, fingerprints: [asset.assetFingerprint])
-        }
-        service._optimisticUpsertAsset(asset, links: links)
+        service._appendOptimisticAsset(asset, links: links, markUncommitted: markUncommitted)
     }
 
     func appendResource(_ resource: RemoteManifestResource) {

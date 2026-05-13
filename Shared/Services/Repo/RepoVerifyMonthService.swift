@@ -112,7 +112,6 @@ actor RepoVerifyMonthService {
                 hash: resource.contentHash
             ))
         }
-        let smallLimit = RemoteContentTrust.defaultSmallFileLimitBytes
         let clientRef = client
         let basePathRef = basePath
         return { hash in
@@ -121,9 +120,6 @@ actor RepoVerifyMonthService {
                 let listed = entriesByKey[candidate.key] ?? []
                 let sizeMatches = listed.filter { $0.size == candidate.size }
                 if sizeMatches.isEmpty { continue }
-                if candidate.size >= smallLimit {
-                    return true
-                }
                 for match in sizeMatches {
                     let path = RemotePathBuilder.absolutePath(
                         basePath: basePathRef,
@@ -197,34 +193,39 @@ actor RepoVerifyMonthService {
         }
         guard !stillEligible.isEmpty else { return [] }
 
-        let clockRange = try await services.lamport.tickRange(count: stillEligible.count)
-        var clockCursor = clockRange.low
-        var ops: [CommitOp] = []
-        ops.reserveCapacity(stillEligible.count)
-        for (index, item) in stillEligible.enumerated() {
-            let reason: CommitTombstoneBody.Reason
+        let tombstones: [(item: VerifyMonthReportItem, reason: CommitTombstoneBody.Reason)] = stillEligible.compactMap { item in
             switch item.kind {
-            case .phantomAsset, .metadataOnlyLeft: reason = .manifestOrphan
-            case .allResourcesGone: reason = .verifyFailed
+            case .phantomAsset, .metadataOnlyLeft:
+                return (item, .manifestOrphan)
+            case .allResourcesGone:
+                return (item, .verifyFailed)
             case .partiallyMissing, .fingerprintMismatch:
                 assertionFailure("allowsCleanup must filter \(item.kind)")
-                continue
+                return nil
             }
-            ops.append(CommitOp(
-                opSeq: index,
-                clock: clockCursor,
-                body: .tombstoneAsset(CommitTombstoneBody(
-                    assetFingerprint: item.assetFingerprint,
-                    reason: reason,
-                    observedBasis: basis
-                ))
-            ))
-            clockCursor &+= 1
         }
+        guard !tombstones.isEmpty else { return [] }
+
         // Mirror flushV2's alreadyExists retry; concurrent verify or seq drift would otherwise abort cleanup permanently.
         let maxRetries = 4
         var attempt = 0
         while true {
+            let clockRange = try await services.lamport.tickRange(count: tombstones.count)
+            var clockCursor = clockRange.low
+            var ops: [CommitOp] = []
+            ops.reserveCapacity(tombstones.count)
+            for (index, tombstone) in tombstones.enumerated() {
+                ops.append(CommitOp(
+                    opSeq: index,
+                    clock: clockCursor,
+                    body: .tombstoneAsset(CommitTombstoneBody(
+                        assetFingerprint: tombstone.item.assetFingerprint,
+                        reason: tombstone.reason,
+                        observedBasis: basis
+                    ))
+                ))
+                clockCursor &+= 1
+            }
             let seq = try await services.seqAllocator.allocate()
             let header = CommitHeader(
                 version: CommitHeader.currentVersion,
@@ -239,7 +240,7 @@ actor RepoVerifyMonthService {
             )
             do {
                 _ = try await services.commitWriter.write(header: header, ops: ops, month: month, respectTaskCancellation: false)
-                return Set(stillEligible.map(\.assetFingerprint))
+                return Set(tombstones.map { $0.item.assetFingerprint })
             } catch CommitLogWriter.WriteError.alreadyExists {
                 attempt += 1
                 if attempt >= maxRetries { throw CommitLogWriter.WriteError.alreadyExists }

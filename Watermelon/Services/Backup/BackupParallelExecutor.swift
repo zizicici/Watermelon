@@ -625,8 +625,7 @@ struct BackupParallelExecutor: Sendable {
                     } catch {
                         // Record-committed before cancel peel: commit may be durable even on cancel.
                         remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
-                        if let cancel = (error as? V2MonthSession.FlushError)?.cancellationCause {
-                            _ = cancel
+                        if error is CancellationError || (error as? V2MonthSession.FlushError)?.cancellationCause != nil {
                             workerState.paused = true
                             break
                         }

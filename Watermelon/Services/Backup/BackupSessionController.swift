@@ -336,6 +336,14 @@ enum State {
                 return
             }
 
+            if Task.isCancelled || self.activeTerminationIntent != .none {
+                self.startCommandTask = nil
+                self.session.resolveStartCancellation(mode: mode)
+                self.activeTerminationIntent = .none
+                self.notifyObserversNow()
+                return
+            }
+
             let runToken = self.startRun(
                 profile: connection.profile,
                 password: connection.password,
@@ -349,7 +357,7 @@ enum State {
             self.startCommandTask = nil
             if Task.isCancelled {
                 if runToken != nil {
-                    self.session.completeAcceptedStartLaunch()
+                    self.runDriver.cancelRunTask()
                 } else {
                     self.session.resolveStartCancellation(mode: mode)
                     self.activeTerminationIntent = .none
@@ -432,7 +440,6 @@ enum State {
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) -> UInt64? {
-        activeTerminationIntent = .none
         let runToken = runDriver.startRun(
             profile: profile,
             password: password,
@@ -569,7 +576,7 @@ enum State {
         }
         guard let connection = resolveActiveConnection() else {
             session.failForMissingConnection()
-            notifyObservers()
+            notifyObserversNow()
             return false
         }
 
@@ -583,16 +590,12 @@ enum State {
         resumePreparationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                // nil → collapsing to v1CompletedIDs would let pre-flush V2 commits get skipped on resume; re-sync to identify format first.
-                var isV2 = await self.backupCoordinator.currentRepoIsV2()
-                if isV2 == nil {
-                    _ = try await self.backupCoordinator.reloadRemoteIndex(
-                        profile: connection.profile,
-                        password: connection.password
-                    )
-                    try Task.checkCancellation()
-                    isV2 = await self.backupCoordinator.currentRepoIsV2()
-                }
+                _ = try await self.backupCoordinator.reloadRemoteIndex(
+                    profile: connection.profile,
+                    password: connection.password
+                )
+                try Task.checkCancellation()
+                let isV2 = await self.backupCoordinator.currentRepoIsV2()
                 let dedupMode: BackupResumeDedupMode
                 if isV2 == true {
                     let handle = try await self.backupCoordinator.prepareResumeHandle(
@@ -621,6 +624,10 @@ enum State {
                 }
 
                 try await self.runDriver.waitForPreviousRunToClear()
+                try Task.checkCancellation()
+                if self.activeTerminationIntent != .none {
+                    throw CancellationError()
+                }
 
                 let runToken = self.startRun(
                     profile: connection.profile,
@@ -631,6 +638,14 @@ enum State {
                     iCloudPhotoBackupMode: iCloudPhotoBackupMode,
                     onMonthUploaded: onMonthUploaded
                 )
+
+                if Task.isCancelled || self.activeTerminationIntent != .none {
+                    if runToken != nil {
+                        self.runDriver.cancelRunTask()
+                        return
+                    }
+                    throw CancellationError()
+                }
 
                 if runToken != nil {
                     self.session.completeResumeLaunchSucceeded(displayMode: resumeContext.pausedDisplayMode)
@@ -646,6 +661,7 @@ enum State {
                     pausedMode: resumeContext.pausedMode,
                     pausedDisplayMode: resumeContext.pausedDisplayMode
                 )
+                self.activeTerminationIntent = .none
                 self.notifyObserversNow()
             } catch {
                 self.resumePreparationTask = nil

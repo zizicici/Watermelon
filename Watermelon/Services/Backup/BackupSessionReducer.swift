@@ -205,6 +205,7 @@ struct BackupSessionState {
         lastPausedRunMode = nil
         lastPausedDisplayRunMode = nil
         currentRunMode = .full
+        pendingRunConfiguration = nil
         state = .completed
         statusText = String(localized: "backup.session.completed")
     }
@@ -212,6 +213,7 @@ struct BackupSessionState {
     mutating func completeResumeLaunchSucceeded(displayMode: BackupRunMode) {
         controlPhase = .idle
         currentRunMode = displayMode
+        pendingRunConfiguration = nil
     }
 
     mutating func completeResumeLaunchFailed() {
@@ -219,6 +221,7 @@ struct BackupSessionState {
         lastPausedRunMode = nil
         lastPausedDisplayRunMode = nil
         currentRunMode = .full
+        pendingRunConfiguration = nil
         state = .failed
         statusText = String(localized: "backup.session.resumeFailed")
     }
@@ -238,6 +241,7 @@ struct BackupSessionState {
             lastPausedRunMode = nil
             lastPausedDisplayRunMode = nil
             currentRunMode = .full
+            pendingRunConfiguration = nil
         } else {
             lastPausedRunMode = pausedMode
             lastPausedDisplayRunMode = pausedDisplayMode
@@ -250,6 +254,7 @@ struct BackupSessionState {
         lastPausedRunMode = nil
         lastPausedDisplayRunMode = nil
         currentRunMode = .full
+        pendingRunConfiguration = nil
         state = .failed
         statusText = String(localized: "backup.session.resumeFailed")
     }
@@ -328,6 +333,7 @@ struct BackupSessionState {
                 lastPausedRunMode = nil
                 lastPausedDisplayRunMode = nil
                 currentRunMode = .full
+                pendingRunConfiguration = nil
             } else {
                 lastPausedRunMode = runMode
                 lastPausedDisplayRunMode = displayMode
@@ -343,6 +349,7 @@ struct BackupSessionState {
         lastPausedRunMode = nil
         lastPausedDisplayRunMode = nil
         currentRunMode = .full
+        pendingRunConfiguration = nil
         state = .failed
         statusText = externalUnavailable
             ? String(localized: "backup.session.externalUnavailable")
@@ -367,6 +374,7 @@ struct BackupSessionState {
             lastPausedRunMode = nil
             lastPausedDisplayRunMode = nil
             currentRunMode = .full
+            pendingRunConfiguration = nil
             state = .stopped
             statusText = String(localized: "backup.session.stopped")
             return
@@ -384,6 +392,7 @@ struct BackupSessionState {
         lastPausedRunMode = nil
         lastPausedDisplayRunMode = nil
         currentRunMode = .full
+        pendingRunConfiguration = nil
         state = .completed
         completedAssetIDsForResume.removeAll()
         switch (runMode.isRetry, result.failed == 0) {

@@ -151,6 +151,7 @@ actor RepoBootstrap {
         let interval: Duration = .milliseconds(250)
         for _ in 0..<maxRounds {
             try await Task.sleep(for: interval)
+            try Task.checkCancellation()
             let observed = try await canonicalRepoIDFromClaims() ?? current
             if observed == current { return current }
             current = observed

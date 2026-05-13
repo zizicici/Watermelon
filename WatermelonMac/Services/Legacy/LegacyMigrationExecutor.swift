@@ -343,7 +343,7 @@ final class LegacyMigrationExecutor {
                 originalFilename: component.originalFilename
             )
         )
-        let targetFileName = RemoteFileNaming.resolveNextAvailableName(
+        let targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
             baseName: baseFileName,
             collisionKeys: collisionKeys
         )
@@ -412,7 +412,7 @@ final class LegacyMigrationExecutor {
             // inspect treats lingering identity claims / `repo.json` as `.fresh`; legacy import has no adoption path.
             try await refuseIfV2IdentityPresent()
             return
-        case .v2, .unsupported:
+        case .v2, .v2WithV1Manifests, .v2WithPendingMigrationCleanup, .unsupported:
             throw NSError(
                 domain: "LegacyMigrationExecutor",
                 code: -100,

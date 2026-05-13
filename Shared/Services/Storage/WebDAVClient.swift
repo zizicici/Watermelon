@@ -918,6 +918,30 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
     }
 
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try requireConnected()
+        await drainPendingCancelledUploadCleanup()
+
+        let sourceURL = try remoteURL(forRemotePath: sourcePath)
+        let destinationURL = try remoteURL(forRemotePath: destinationPath)
+        let request = makeRequest(
+            url: sourceURL,
+            method: "MOVE",
+            headers: [
+                "Destination": destinationURL.absoluteString,
+                "Overwrite": "F"
+            ]
+        )
+        let status = try await sendStatus(request)
+        if status == 412 {
+            return .alreadyExists
+        }
+        guard (200 ... 299).contains(status) else {
+            throw Self.statusError(status, method: "MOVE", url: request.url)
+        }
+        return .created
+    }
+
     func copy(from sourcePath: String, to destinationPath: String) async throws {
         try requireConnected()
         await drainPendingCancelledUploadCleanup()

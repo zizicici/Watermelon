@@ -20,8 +20,8 @@ actor SeqAllocator {
 
     func observeRemoteMax(_ remoteMax: UInt64) throws {
         if remoteMax > current {
+            try persist(value: remoteMax)
             current = remoteMax
-            try persist(value: current)
         }
     }
 
@@ -32,7 +32,9 @@ actor SeqAllocator {
     /// local `current` and return a seq someone else already used.
     func allocate() throws -> UInt64 {
         let next = try database.write { [profileID, repoID, current] db in
-            let dbCurrent = try Self.readPersistedSeq(db: db, profileID: profileID, repoID: repoID) ?? 0
+            guard let dbCurrent = try Self.readPersistedSeq(db: db, profileID: profileID, repoID: repoID) else {
+                throw SeqAllocatorError.missingRepoState(profileID: profileID, repoID: repoID)
+            }
             let effective = max(current, dbCurrent)
             // `&+ 1` would wrap to 0 and overwrite an earlier commit at the same `(writerID, seq)` path.
             guard effective < UInt64.max else {
@@ -55,6 +57,7 @@ actor SeqAllocator {
     }
 
     enum SeqAllocatorError: Error {
+        case missingRepoState(profileID: Int64, repoID: String)
         case exhausted
     }
 
@@ -63,6 +66,9 @@ actor SeqAllocator {
         // Used by `observeRemoteMax` where conditional advance is the desired semantic.
         let signed = Int64(bitPattern: value)
         try database.write { [profileID, repoID] db in
+            guard try Self.readPersistedSeq(db: db, profileID: profileID, repoID: repoID) != nil else {
+                throw SeqAllocatorError.missingRepoState(profileID: profileID, repoID: repoID)
+            }
             try db.execute(
                 sql: """
                 UPDATE \(RepoStateRecord.databaseTableName)

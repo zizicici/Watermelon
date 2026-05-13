@@ -71,12 +71,13 @@ enum BackupV2RuntimeBuilder {
                 throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: localRepoID, remote: resolvedRepoID)
             }
             try await bootstrap.ensureSubdirectories()
+            let cleanupBootstrap = RepoBootstrap(client: metadataClient, basePath: profile.basePath)
             let cleanup = V1MigrationService(
-                client: client,
+                client: metadataClient,
                 basePath: profile.basePath,
                 database: databaseManager,
                 identity: identity,
-                bootstrap: bootstrap
+                bootstrap: cleanupBootstrap
             )
             try await cleanup.runPhase3Cleanup(writerID: ownerWriterID, runID: runID)
         case .fresh:
@@ -92,7 +93,7 @@ enum BackupV2RuntimeBuilder {
                 }
             }
             await onBootstrap?()
-        case .v1:
+        case .v1, .v2WithV1Manifests:
             guard allowMigration else {
                 throw BackupV2RuntimeBuildError.requiresForegroundMigration
             }

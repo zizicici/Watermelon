@@ -14,8 +14,8 @@ enum RemoteContentTrust {
             .appendingPathComponent("remote-content-verify-\(UUID().uuidString).bin")
         defer { try? FileManager.default.removeItem(at: temp) }
         try await client.download(remotePath: remotePath, localURL: temp)
-        let attrs = try FileManager.default.attributesOfItem(atPath: temp.path)
-        let downloadedSize = (attrs[.size] as? NSNumber)?.int64Value ?? -1
+        let values = try temp.resourceValues(forKeys: [.fileSizeKey])
+        let downloadedSize = values.fileSize.map(Int64.init) ?? -1
         guard downloadedSize == expectedSize else {
             throw NSError(
                 domain: "RemoteContentTrust",

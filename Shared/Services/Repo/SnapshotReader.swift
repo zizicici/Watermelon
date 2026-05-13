@@ -58,11 +58,12 @@ actor SnapshotReader {
     }
 
     static func parse(text: String) throws -> SnapshotFile {
-        // Strip per-line \r — some WebDAV gateways inject CRLF; bare \r corrupts SHA.
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { sub -> String in
-            var s = String(sub)
-            if s.hasSuffix("\r") { s.removeLast() }
-            return s
+            var line = String(sub)
+            if line.hasSuffix("\r") {
+                line.removeLast()
+            }
+            return line
         }
         while let last = lines.last, last.isEmpty { lines.removeLast() }
         guard !lines.isEmpty else { throw ReadError.missingHeader }

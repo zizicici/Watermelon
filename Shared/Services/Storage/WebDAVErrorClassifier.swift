@@ -21,6 +21,14 @@ enum WebDAVErrorClassifier {
                 break
             }
         }
+        if ns.domain == WebDAVClient.errorDomain {
+            switch ns.code {
+            case 502, 503, 504:
+                return true
+            default:
+                break
+            }
+        }
         if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error {
             return isConnectionUnavailable(underlying)
         }

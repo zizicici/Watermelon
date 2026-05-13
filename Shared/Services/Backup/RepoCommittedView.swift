@@ -11,6 +11,7 @@ final class RepoCommittedView: @unchecked Sendable {
 
     func markPhysicallyMissing(month: LibraryMonthKey, hashes: Set<Data>) {
         missingLock.lock()
+        defer { missingLock.unlock() }
         let previous = physicallyMissingByMonth[month] ?? []
         if hashes.isEmpty {
             physicallyMissingByMonth.remove(month)
@@ -18,8 +19,6 @@ final class RepoCommittedView: @unchecked Sendable {
             physicallyMissingByMonth.set(hashes, for: month)
         }
         let changed = previous != hashes
-        missingLock.unlock()
-        // Overlay changes must bump revision so incremental Home sync sees the month as changed.
         if changed { cache.markMonthsChanged([month]) }
     }
 

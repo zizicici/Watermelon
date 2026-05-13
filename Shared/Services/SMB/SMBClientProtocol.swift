@@ -141,6 +141,7 @@ protocol RemoteStorageClientProtocol: Sendable {
     func delete(path: String) async throws
     func createDirectory(path: String) async throws
     func move(from sourcePath: String, to destinationPath: String) async throws
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult
     func copy(from sourcePath: String, to destinationPath: String) async throws
 }
 
@@ -182,6 +183,14 @@ extension RemoteStorageClientProtocol {
 
     func directReadURL(forRemotePath _: String) async -> URL? {
         nil
+    }
+
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        if try await metadata(path: destinationPath) != nil {
+            return .alreadyExists
+        }
+        try await move(from: sourcePath, to: destinationPath)
+        return .created
     }
 
     func disconnectSafely() async {

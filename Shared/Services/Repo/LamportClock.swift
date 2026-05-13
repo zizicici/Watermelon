@@ -63,8 +63,8 @@ actor PersistedLamportClock {
 
     func observe(_ external: UInt64) throws {
         if external > current {
+            try persist(value: external)
             current = external
-            try persist(value: current)
         }
     }
 
@@ -75,7 +75,9 @@ actor PersistedLamportClock {
     func tickRange(count: Int) throws -> LamportClock.Range {
         precondition(count > 0, "tickRange count must be positive")
         let range: LamportClock.Range = try database.write { [profileID, repoID, current] db in
-            let dbCurrent = try Self.readPersistedClock(db: db, profileID: profileID, repoID: repoID) ?? 0
+            guard let dbCurrent = try Self.readPersistedClock(db: db, profileID: profileID, repoID: repoID) else {
+                throw PersistedLamportClockError.missingRepoState(profileID: profileID, repoID: repoID)
+            }
             let effective = max(current, dbCurrent)
             let (low, lowOverflow) = effective.addingReportingOverflow(1)
             let (high, highOverflow) = effective.addingReportingOverflow(UInt64(count))
@@ -102,6 +104,9 @@ actor PersistedLamportClock {
         // where conditional advance (no regression) is the desired semantic.
         let signed = Int64(bitPattern: value)
         try database.write { [profileID, repoID] db in
+            guard try Self.readPersistedClock(db: db, profileID: profileID, repoID: repoID) != nil else {
+                throw PersistedLamportClockError.missingRepoState(profileID: profileID, repoID: repoID)
+            }
             try db.execute(
                 sql: """
                 UPDATE \(RepoStateRecord.databaseTableName)
@@ -124,4 +129,8 @@ actor PersistedLamportClock {
         }
         return UInt64(bitPattern: signed)
     }
+}
+
+enum PersistedLamportClockError: Error {
+    case missingRepoState(profileID: Int64, repoID: String)
 }
