@@ -14,7 +14,6 @@ enum WebDAVErrorClassifier {
                  NSURLErrorCannotConnectToHost,
                  NSURLErrorCannotFindHost,
                  NSURLErrorDNSLookupFailed,
-                 NSURLErrorSecureConnectionFailed,
                  NSURLErrorInternationalRoamingOff,
                  NSURLErrorDataNotAllowed:
                 return true

@@ -109,16 +109,16 @@ actor RemoteFormatCompatibilityService {
             let manifest = try await loadVersionManifestStrict(client: client, profile: profile)
             switch manifest {
             case .absent:
-                // Marker + no version.json: either fresh-bootstrap crashed between mkdir
-                // and version.json (re-bootstrap heals), or V1-migration crashed between
-                // phase1 and phase2 (must resume V1, not fresh-bootstrap, or data unmigrated).
                 if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
                     return .v1
                 }
-                // Distinguish empty marker (fresh-bootstrap retry) from damaged V2
-                // (commits/snapshots survived but identity files vanished). Treating
-                // the damaged case as fresh would mint a new repoID and orphan all
-                // pre-existing commits.
+                // Marker + V2 data + no version.json = phase1-done/phase2-pending after manifest quarantine; resume via .v1 to write version.json.
+                if try await detectMigrationInProgress(client: client, basePath: basePath) {
+                    if try await detectV2DataDirectories(client: client, basePath: basePath) {
+                        return .v1
+                    }
+                    return .fresh
+                }
                 if try await detectV2DataDirectories(client: client, basePath: basePath) {
                     throw BackupCompatibilityError.damagedV2Repo
                 }

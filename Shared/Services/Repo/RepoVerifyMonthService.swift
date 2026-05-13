@@ -18,7 +18,8 @@ actor RepoVerifyMonthService {
             return VerifyMonthReport(month: month, items: [])
         }
 
-        let isResourceAvailable = try await fileTruthPredicate(month: month, state: state)
+        // Leaf-presence (not size match): size-aware would tombstone a peer's in-flight upload at the expected leaf.
+        let isResourceAvailable = try await leafPresencePredicate(month: month, state: state)
         let linksByFingerprint = Dictionary(grouping: state.assetResources.values, by: \.assetFingerprint)
 
         var items: [VerifyMonthReportItem] = []
@@ -67,19 +68,17 @@ actor RepoVerifyMonthService {
         return VerifyMonthReport(month: month, items: items)
     }
 
-    /// OR across paths (multi-writer collision-rename) and collisionKey match (V2MonthSession /
-    /// probeMonthForMissing already fold case + unicode; exact-path would false-tombstone on
-    /// case-folding servers). List errors surface — a network blip mustn't tombstone the month.
-    private func fileTruthPredicate(
+    private func leafPresencePredicate(
         month: LibraryMonthKey,
         state: RepoMonthState
     ) async throws -> (Data) -> Bool {
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
         let entries = try await client.list(path: monthAbsolutePath)
-        let presentKeys: Set<String> = Set(entries
-            .filter { !$0.isDirectory }
-            .map { RemoteFileNaming.collisionKey(for: $0.name) })
+        var presentKeys: Set<String> = []
+        for entry in entries where !entry.isDirectory {
+            presentKeys.insert(RemoteFileNaming.collisionKey(for: entry.name))
+        }
         var leafKeysByHash: [Data: [String]] = [:]
         for resource in state.resources.values {
             let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
@@ -87,7 +86,7 @@ actor RepoVerifyMonthService {
         }
         return { hash in
             guard let keys = leafKeysByHash[hash], !keys.isEmpty else { return false }
-            return keys.contains(where: { presentKeys.contains($0) })
+            return keys.contains { presentKeys.contains($0) }
         }
     }
 
@@ -100,26 +99,21 @@ actor RepoVerifyMonthService {
         let eligible = cleanupItems.filter { $0.allowsCleanup }
         guard !eligible.isEmpty else { return [] }
 
-        // Re-materialize at apply time and re-classify each candidate. A concurrent
-        // backup may have healed an asset between verify and apply; without this
-        // check we'd write a tombstone the basis would later reject (correct), but
-        // the cheaper path is to not write it at all.
+        // Re-classify against a fresh materialize; a peer may have healed an asset between verify and apply.
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let fresh = try await materializer.materializeMonth(month, expectedRepoID: expectedRepoID)
         let monthState = fresh.state.months[month] ?? .empty
+        // Observe-before-send: tickRange below must produce clocks above any peer write we just read.
+        try await services.lamport.observe(fresh.state.observedClock)
         var freshLinksByFP: [Data: [SnapshotAssetResourceRow]] = [:]
         for ar in monthState.assetResources.values {
             freshLinksByFP[ar.assetFingerprint, default: []].append(ar)
         }
 
-        // File-truth (listing), not commit-log truth: an `.allResourcesGone`
-        // candidate's commit-log resource rows are still there, so a hash-only
-        // check would always re-derive `.healthy` and skip the tombstone.
-        let isResourceAvailable = try await fileTruthPredicate(month: month, state: monthState)
+        // Leaf-presence (not size match) — a peer's in-flight or multipart-resume upload at the expected leaf must not be tombstoned mid-write.
+        let isResourceAvailable = try await leafPresencePredicate(month: month, state: monthState)
 
-        // Observation basis: covered ranges + lamport at re-verify time. This is
-        // the snapshot of "what truth I saw" that the materializer compares
-        // future heal ops against.
+        // Basis = covered ranges + lamport observed now; materializer compares future heal ops against this.
         let coveredAtObservation = fresh.coveredByMonth[month] ?? .empty
         var perWriterMaxSeq: [String: UInt64] = [:]
         for (writer, ranges) in coveredAtObservation.rangesByWriter {

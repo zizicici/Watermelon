@@ -104,10 +104,10 @@ actor RepoBootstrap {
     private func writeIdentityClaim(repoID: String, writerID: String, createdAtMs: Int64) async throws {
         let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
         if let meta = try await client.metadata(path: claimPath), !meta.isDirectory {
-            switch try await classifyExistingClaim(claimPath: claimPath, writerID: writerID) {
+            switch try await classifyExistingClaim(claimPath: claimPath, writerID: writerID, suggestedRepoID: repoID) {
             case .ours:
                 return
-            case .zeroByte:
+            case .zeroByte, .staleRepoID:
                 try await client.delete(path: claimPath)
             }
         }
@@ -156,9 +156,10 @@ actor RepoBootstrap {
     private enum ExistingClaimClassification {
         case ours
         case zeroByte
+        case staleRepoID
     }
 
-    private func classifyExistingClaim(claimPath: String, writerID: String) async throws -> ExistingClaimClassification {
+    private func classifyExistingClaim(claimPath: String, writerID: String, suggestedRepoID: String) async throws -> ExistingClaimClassification {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("claim-precheck-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
@@ -175,6 +176,10 @@ actor RepoBootstrap {
                 userInfo: [NSLocalizedDescriptionKey:
                     "claim at \(claimPath) corrupted or carries a foreign writerID — refusing to auto-overwrite (delete manually if you're sure)"]
             ))
+        }
+        // A stale self-claim can become canonical again after the peer claim that superseded it vanishes.
+        if landedRepoID != suggestedRepoID {
+            return .staleRepoID
         }
         return .ours
     }

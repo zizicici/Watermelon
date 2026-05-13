@@ -31,7 +31,7 @@ final class ContractsAreNotBypassedTests: XCTestCase {
     /// the new shape is safe for tests to call directly. Compile-time check.
     func testCanonicalWriteAPIShape() {
         // RepoCommittedView's mutation entry points
-        let _: (RepoMaterializer.MaterializeOutput) -> Void = RepoCommittedView().loadFromMaterialize
+        let _: (RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] = RepoCommittedView().loadFromMaterialize
         let _: (LibraryMonthKey) -> Bool = RepoCommittedView().removeMonth
 
         // OptimisticInflightTracker's mutation entry points

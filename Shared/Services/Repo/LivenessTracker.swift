@@ -63,29 +63,32 @@ actor LivenessTracker {
         // throughout the swap. Peer's listOtherActiveWriters sweep gate can't see us
         // as inactive during the brief window between the old delete and the new create.
         let stagingPath = remotePath + ".staging-\(UUID().uuidString).tmp"
+        // Cancellation must surface so shutdown's stopAndWait can unblock past atomicCreate.
         do {
-            // Respect cancellation so shutdown's stopAndWait can actually unblock — without
-            // this, an SMB socket hang inside atomicCreate leaks the heartbeat Task past
-            // BackupV2RuntimeServices.shutdown's 10s deadline.
             _ = try await client.atomicCreate(
                 localURL: temp,
                 remotePath: stagingPath,
                 respectTaskCancellation: true
             )
-            do {
-                try await client.move(from: stagingPath, to: remotePath)
-            } catch {
-                // S3 copy+delete: skip fallback if staging already gone — otherwise we'd
-                // delete our own liveness and peers would treat us as inactive.
-                let stagingStillExists = (try? await client.metadata(path: stagingPath))?.isDirectory == false
-                if stagingStillExists {
-                    try? await client.delete(path: remotePath)
-                    try await client.move(from: stagingPath, to: remotePath)
-                }
-            }
         } catch {
             try? await client.delete(path: stagingPath)
+            return
         }
+        do {
+            try await client.move(from: stagingPath, to: remotePath)
+            return
+        } catch {}
+        // S3 copy+delete failure leaves the bytes at remote; deleting it without an intact staging would wipe our liveness.
+        let stagingStillExists = (try? await client.metadata(path: stagingPath))?.isDirectory == false
+        guard stagingStillExists else { return }
+        try? await client.delete(path: remotePath)
+        do {
+            try await client.move(from: stagingPath, to: remotePath)
+            return
+        } catch {}
+        // Cancellation must surface here too so stopAndWait can unblock during shutdown.
+        _ = try? await client.atomicCreate(localURL: temp, remotePath: remotePath, respectTaskCancellation: true)
+        try? await client.delete(path: stagingPath)
     }
 
     static func isStale(timestampMs: Int64, now: Date = Date()) -> Bool {

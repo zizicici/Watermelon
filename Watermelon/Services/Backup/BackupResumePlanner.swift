@@ -61,6 +61,7 @@ final class BackupResumePlanner {
             return assetIDs.subtracting(completedAssetIDs)
         }
         guard let hashIndexRepository else {
+            // Miswired V2 fallback keeps executor-acked assets from being reprocessed.
             assertionFailure("BackupResumePlanner: committedView present but hashIndexRepository is nil; V2 dedup would no-op")
             return assetIDs.subtracting(completedAssetIDs)
         }

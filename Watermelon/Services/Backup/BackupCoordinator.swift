@@ -64,11 +64,12 @@ final class BackupCoordinator: Sendable {
         )
     }
 
+    @discardableResult
     func verifyMonth(
         profile: ServerProfileRecord,
         password: String,
         month: LibraryMonthKey
-    ) async throws {
+    ) async throws -> Bool {
         try await preparationService.verifyMonth(
             profile: profile,
             password: password,
@@ -134,7 +135,13 @@ final class BackupCoordinator: Sendable {
     @discardableResult
     func refreshPhysicalPresenceForResume(profile: ServerProfileRecord, password: String) async throws -> Bool {
         try await preparationService.withConnectedClient(profile: profile, password: password) { client in
-            try await self.remoteIndexService.refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath)
+            // Resume isn't a cold start; transient LIST failure must preserve the prior overlay.
+            let priorOverlay = self.remoteIndexService.physicallyMissingSnapshot()
+            return try await self.remoteIndexService.refreshPhysicalPresenceOverlay(
+                client: client,
+                basePath: profile.basePath,
+                fallback: priorOverlay
+            )
         }
     }
 

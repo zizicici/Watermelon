@@ -90,6 +90,7 @@ final class V2MonthSession: BackupMonthStore {
 
     /// Pinned when commit landed but snapshot write failed; drives standalone retry on next flush.
     private var pendingSnapshotRetrySeq: UInt64?
+    private var pendingRebaselineOnly: Bool = false
 
     var hasAnyAsset: Bool { !assetsByFingerprint.isEmpty }
 
@@ -120,17 +121,18 @@ final class V2MonthSession: BackupMonthStore {
         var resourcesByPath: [String: RemoteManifestResource] = [:]
         var pathsByHash: [Data: Set<String>] = [:]
         var physicallyMissingPaths: Set<String> = []
-        var sizeByCollisionKey: [String: Int64] = [:]
+        // Same collision key may map to multiple real names (case/Unicode variants); single-size dict was last-write-wins.
+        var sizesByCollisionKey: [String: Set<Int64>] = [:]
         for (name, meta) in remoteFilesByName {
-            sizeByCollisionKey[RemoteFileNaming.collisionKey(for: name)] = meta.size
+            sizesByCollisionKey[RemoteFileNaming.collisionKey(for: name), default: []].insert(meta.size)
         }
         for row in materializedState.resources.values {
             let logicalName = (row.physicalRemotePath as NSString).lastPathComponent
             let key = RemoteFileNaming.collisionKey(for: logicalName)
             // Size mismatch = stale/truncated; treat as missing so the worker re-uploads.
             let isPresent: Bool
-            if let listedSize = sizeByCollisionKey[key] {
-                isPresent = listedSize == row.fileSize
+            if let listedSizes = sizesByCollisionKey[key] {
+                isPresent = listedSizes.contains(row.fileSize)
             } else {
                 isPresent = false
             }
@@ -214,6 +216,8 @@ final class V2MonthSession: BackupMonthStore {
         let output = try await materializer.materializeMonth(monthKey, expectedRepoID: v2Services.repoID)
         let monthState = output.state.months[monthKey] ?? .empty
         let materializedCovered = output.coveredByMonth[monthKey] ?? .empty
+        // Observe-before-send: subsequent tickRange must happen above any peer clock we just read.
+        try await v2Services.lamport.observe(output.state.observedClock)
 
         // WebDAV/SMB/SFTP don't auto-create parents; ensure dir exists for the list below.
         let monthRelativePath = String(format: "%04d/%02d", year, month)
@@ -255,20 +259,15 @@ final class V2MonthSession: BackupMonthStore {
             remoteFilesByName: remoteFilesByName,
             stepLogger: stepLogger
         )
-        // All snapshots corrupt → next flush writes fresh baseline.
-        if output.corruptedSnapshotMonths.contains(monthKey) {
-            let ourMaxSeq = materializedCovered.rangesByWriter[v2Services.writerID]?
-                .map(\.high).max() ?? 0
-            if ourMaxSeq > 0 {
-                session.requestSnapshotRebaseline(at: ourMaxSeq)
-            }
+        if output.corruptedSnapshotMonths.contains(monthKey),
+           materializedCovered.rangesByWriter.values.contains(where: { !$0.isEmpty }) {
+            session.requestSnapshotRebaseline()
         }
         return session
     }
 
-    /// Force next flush to emit a fresh snapshot baseline even without new ops.
-    func requestSnapshotRebaseline(at seq: UInt64) {
-        pendingSnapshotRetrySeq = seq
+    func requestSnapshotRebaseline() {
+        pendingRebaselineOnly = true
         dirty = true
     }
 
@@ -432,11 +431,17 @@ final class V2MonthSession: BackupMonthStore {
         let monthKey = LibraryMonthKey(year: year, month: month)
         let opCount = pendingV2AssetFingerprints.count + pendingV2TombstoneFingerprints.count
         if opCount == 0 {
-            // dirty + no ops = stranded snapshot retry from a prior failure.
-            if let retrySeq = pendingSnapshotRetrySeq, let services = v2Services {
+            // dirty + no ops = stranded snapshot retry from a prior failure or a rebaseline request.
+            if pendingSnapshotRetrySeq != nil || pendingRebaselineOnly, let services = v2Services {
                 do {
-                    try await writeSnapshot(services: services, month: monthKey, currentSeq: retrySeq, ignoreCancellation: ignoreCancellation)
+                    try await writeSnapshot(
+                        services: services,
+                        month: monthKey,
+                        ownCommitSeq: pendingSnapshotRetrySeq,
+                        ignoreCancellation: ignoreCancellation
+                    )
                     pendingSnapshotRetrySeq = nil
+                    pendingRebaselineOnly = false
                     dirty = false
                 } catch {
                     throw FlushError.snapshotWriteFailed(
@@ -451,10 +456,7 @@ final class V2MonthSession: BackupMonthStore {
             return .none
         }
 
-        // Basis = what we'd observed BEFORE allocating this flush's clocks.
-        // Using the session-constant load-time basis would let our own later
-        // flushes' addAsset ops appear as "after observation" to a tombstone
-        // emitted in the same session, suppressing it on replay.
+        // Per-flush basis (not session-constant): tombstones must reflect our own intra-session adds, else replay would suppress them.
         let priorCovered = materializedCovered.merging(sessionWrittenCovered)
         var perWriterMaxSeq: [String: UInt64] = [:]
         for (writer, ranges) in priorCovered.rangesByWriter {
@@ -556,16 +558,10 @@ final class V2MonthSession: BackupMonthStore {
             }
         }
 
-        // Record coverage BEFORE writing the snapshot — the commit succeeded above, so
-        // the seq IS on remote. If writeSnapshot fails, the next snapshot must still
-        // include this seq in its covered range; otherwise the materializer would replay
-        // this commit on top of a future snapshot baseline (bad if a later upsert for
-        // the same fp landed in between, since the older commit's data would overwrite
-        // the newer one stored in the snapshot).
+        // Coverage must reflect the durable commit even if snapshot write later fails; otherwise the next materialize would replay this seq atop a future baseline.
         sessionWrittenCovered.add(writerID: services.writerID, seq: lastSeq)
 
-        // Stamp just-committed assets so the snapshot baseline matches what a
-        // future replay would derive — feeds the materializer's LWW gate.
+        // Stamp committed rows so the snapshot baseline matches what a future replay would derive (LWW gate).
         for (fp, clock) in addAssetClocks {
             guard let asset = assetsByFingerprint[fp] else { continue }
             assetsByFingerprint[fp] = RemoteManifestAsset(
@@ -579,20 +575,13 @@ final class V2MonthSession: BackupMonthStore {
                 stamp: OpStamp(writerID: services.writerID, seq: lastSeq, clock: clock)
             )
         }
-        // Tombstones too — without stamps, replay loses LWW evidence against
-        // stale adds once the snapshot covers the tombstone seq.
+        // Tombstones need stamps too; without them replay loses LWW evidence against stale adds once the snapshot covers the tombstone seq.
         for (fp, clock) in tombstoneClocks {
             deletedAssetStamps[fp] = OpStamp(writerID: services.writerID, seq: lastSeq, clock: clock)
             legacyDeletedAssetFingerprints.remove(fp)
         }
 
-        // Clear pending BEFORE writeSnapshot. The commit is already durable on remote
-        // (we passed the write above), so its fingerprints are "committed" regardless
-        // of whether the snapshot baseline writes successfully. Leaving them in pending
-        // would let the next flush re-emit the same addAsset/tombstone ops as a NEW
-        // commit. A snapshot-write failure still surfaces, but as `FlushError.snapshotWriteFailed`
-        // carrying the committed sets so caller can update inflight tracker before rethrow —
-        // otherwise the executor's `markCommittedV2` never runs and resume planner double-counts.
+        // Clear pending before writeSnapshot: commit is durable, so a snapshot failure must not re-emit the same ops in the next flush.
         let committedAssets = pendingV2AssetFingerprints
         let committedTombstones = pendingV2TombstoneFingerprints
         pendingV2AssetFingerprints.removeAll()
@@ -600,8 +589,14 @@ final class V2MonthSession: BackupMonthStore {
         dirty = false
 
         do {
-            try await writeSnapshot(services: services, month: monthKey, currentSeq: lastSeq, ignoreCancellation: ignoreCancellation)
+            try await writeSnapshot(
+                services: services,
+                month: monthKey,
+                ownCommitSeq: lastSeq,
+                ignoreCancellation: ignoreCancellation
+            )
             pendingSnapshotRetrySeq = nil
+            pendingRebaselineOnly = false
         } catch {
             dirty = true
             pendingSnapshotRetrySeq = lastSeq
@@ -622,13 +617,16 @@ final class V2MonthSession: BackupMonthStore {
     private func writeSnapshot(
         services: BackupV2RuntimeServices,
         month: LibraryMonthKey,
-        currentSeq: UInt64,
+        ownCommitSeq: UInt64?,
         ignoreCancellation: Bool
     ) async throws {
         // Emit un-filtered state; snapshot must satisfy `state == fold(commits in covered)`.
         let snapshotState = currentMaterializedState()
         var covered = materializedCovered.merging(sessionWrittenCovered)
-        covered.add(writerID: services.writerID, seq: currentSeq)
+        // Only own-writer commit seqs may be added; peer-derived rebaseline values come through `materializedCovered`.
+        if let ownSeq = ownCommitSeq {
+            covered.add(writerID: services.writerID, seq: ownSeq)
+        }
         let header = SnapshotHeader(
             version: SnapshotHeader.currentVersion,
             scope: CommitHeader.monthScope(month),

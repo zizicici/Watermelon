@@ -175,19 +175,34 @@ enum RemoteFileNaming {
             return resolveWithWriterIDSuffix(stem: stem, ext: ext, writerID: writerID, collisionKeys: collisionKeys)
         }
 
+        let extPortion = ext.isEmpty ? "" : "." + ext
+        let extBudget = clampStringToBytes(extPortion, maxBytes: maxLeafByteBudget / 2)
+        let maxSuffix = 1_000_000
         var suffix = 1
-        while true {
+        while suffix <= maxSuffix {
             let suffixStr = "_\(suffix)"
-            let candidate = composeLeaf(
-                stem: stem + suffixStr,
-                ext: ext,
-                reservedSuffixBytes: 0
-            )
+            // Reserve suffix bytes before clamping; without this, a 255-byte stem swallows `_N` on truncate and loops forever.
+            let stemBudget = max(maxLeafByteBudget - suffixStr.utf8.count - extBudget.utf8.count, 1)
+            let clampedStem = clampStringToBytes(stem, maxBytes: stemBudget)
+            let candidate = clampedStem + suffixStr + extBudget
             if !collisionKeys.contains(collisionKey(for: candidate)) {
                 return candidate
             }
             suffix += 1
         }
+        // Every other branch returns a verified-unique name; the UUID fallback must honor that invariant.
+        for _ in 0..<32 {
+            let escape = String(UUID().uuidString.lowercased().prefix(8))
+            let stemBudget = max(maxLeafByteBudget - escape.utf8.count - 1 - extBudget.utf8.count, 1)
+            let candidate = clampStringToBytes(stem, maxBytes: stemBudget) + "_" + escape + extBudget
+            if !collisionKeys.contains(collisionKey(for: candidate)) {
+                return candidate
+            }
+        }
+        if let widened = widenedUUIDFallback(stem: stem, ext: ext, extBudget: extBudget, collisionKeys: collisionKeys) {
+            return widened
+        }
+        fatalError("RemoteFileNaming: numeric + UUID fallbacks exhausted for stem=\(stem); collision set size=\(collisionKeys.count)")
     }
 
     private static func resolveWithWriterIDSuffix(
@@ -209,9 +224,38 @@ enum RemoteFileNaming {
             }
             suffix += 1
         }
-        assertionFailure("RemoteFileNaming: writer suffix exhausted for stem=\(stem) wid=\(RepoLayout.writerIDShort(writerID)); collision set size=\(collisionKeys.count)")
-        let escape = String(UUID().uuidString.lowercased().prefix(8))
-        return writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: escape)
+        // Final fallback must also be verified — short escape token still has a non-zero collision rate.
+        for _ in 0..<32 {
+            let escape = String(UUID().uuidString.lowercased().prefix(8))
+            let candidate = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: escape)
+            if !collisionKeys.contains(collisionKey(for: candidate)) {
+                return candidate
+            }
+        }
+        let fullEscape = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+        let widened = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: fullEscape)
+        if !collisionKeys.contains(collisionKey(for: widened)) {
+            return widened
+        }
+        fatalError("RemoteFileNaming: writer suffix exhausted for stem=\(stem) wid=\(RepoLayout.writerIDShort(writerID)); collision set size=\(collisionKeys.count)")
+    }
+
+    /// Last-resort: full 32-hex UUID makes collision astronomically improbable; still verified before return.
+    private static func widenedUUIDFallback(
+        stem: String,
+        ext: String,
+        extBudget: String,
+        collisionKeys: Set<String>
+    ) -> String? {
+        for _ in 0..<8 {
+            let escape = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            let stemBudget = max(maxLeafByteBudget - escape.utf8.count - 1 - extBudget.utf8.count, 1)
+            let candidate = clampStringToBytes(stem, maxBytes: stemBudget) + "_" + escape + extBudget
+            if !collisionKeys.contains(collisionKey(for: candidate)) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     static func collisionKeySet(from fileNames: Set<String>) -> Set<String> {

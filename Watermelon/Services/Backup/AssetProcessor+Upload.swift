@@ -8,6 +8,7 @@ struct UploadPreparation {
     var remoteAbsolutePath: String
     var attemptedFileNames: Set<String>
     let skipReason: String?
+    let forceWriterIDSuffix: Bool
 }
 
 struct UploadRetryOutcome {
@@ -190,7 +191,8 @@ extension AssetProcessor {
             targetFileName: targetFileName,
             remoteAbsolutePath: remoteAbsolutePath,
             attemptedFileNames: attemptedFileNames,
-            skipReason: skipReason
+            skipReason: skipReason,
+            forceWriterIDSuffix: forceWriterIDSuffix
         )
     }
 
@@ -311,7 +313,8 @@ extension AssetProcessor {
                     uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
                         baseName: uploadPreparation.baseFileName,
                         occupiedNames: occupiedNames,
-                        writerID: monthStore.v2Services?.writerID
+                        writerID: monthStore.v2Services?.writerID,
+                        forceWriterIDSuffix: uploadPreparation.forceWriterIDSuffix
                     )
                     uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
                     let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
@@ -340,7 +343,8 @@ extension AssetProcessor {
                         uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
                             baseName: uploadPreparation.baseFileName,
                             occupiedNames: occupiedNames,
-                            writerID: monthStore.v2Services?.writerID
+                            writerID: monthStore.v2Services?.writerID,
+                            forceWriterIDSuffix: uploadPreparation.forceWriterIDSuffix
                         )
                         uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
                         let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
@@ -390,7 +394,8 @@ extension AssetProcessor {
                     uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
                         baseName: uploadPreparation.baseFileName,
                         occupiedNames: occupiedNames,
-                        writerID: monthStore.v2Services?.writerID
+                        writerID: monthStore.v2Services?.writerID,
+                        forceWriterIDSuffix: uploadPreparation.forceWriterIDSuffix
                     )
                     uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
                     let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName

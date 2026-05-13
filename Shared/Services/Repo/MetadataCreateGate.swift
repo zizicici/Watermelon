@@ -59,18 +59,37 @@ enum MetadataCreateGate {
                         "staging path \(stagingPath) already exists — UUID collision indicates a programming error"
                 ])
             }
-            // Skip staging verify: the path is UUID-unique so no peer can win it,
-            // and atomicCreate just wrote our bytes there. The earlier round-trip
-            // verify was redundant defense against backend silent corruption (rare;
-            // HTTPS/SMB sign data) and doubled metadata write latency.
+            // Pre-move existence check narrows the window where a peer's bytes get silently overwritten on overwrite-capable backends.
+            do {
+                if let meta = try await client.metadata(path: remotePath), !meta.isDirectory {
+                    // Idempotent retry must treat matching bytes as our lost prior success.
+                    do {
+                        if try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL) {
+                            try? await client.delete(path: stagingPath)
+                            return .created
+                        }
+                    } catch is CancellationError {
+                        try? await client.delete(path: stagingPath)
+                        throw CancellationError()
+                    } catch {
+                        // Verify inconclusive — fall through to `.alreadyExists`.
+                    }
+                    try? await client.delete(path: stagingPath)
+                    return .alreadyExists
+                }
+            } catch is CancellationError {
+                try? await client.delete(path: stagingPath)
+                throw CancellationError()
+            } catch {
+                // Metadata probe failure ≠ destination exists; fall through to move (move-error path still cleans staging).
+            }
             do {
                 try await client.move(from: stagingPath, to: remotePath)
             } catch {
                 try? await client.delete(path: stagingPath)
                 throw error
             }
-            // Verify the move landed our bytes (peer could overwrite during the move window).
-            // Throwing here would deadlock the next retry; degrade to bestEffortRetry instead.
+            // A peer can overwrite during the move window; ambiguous retries must re-allocate.
             for attempt in 0..<3 {
                 do {
                     if try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL) {
@@ -99,9 +118,6 @@ enum MetadataCreateGate {
             .appendingPathComponent("metadata-verify-\(UUID().uuidString).bin")
         defer { try? FileManager.default.removeItem(at: verifyURL) }
         try await client.download(remotePath: remotePath, localURL: verifyURL)
-        // Streamed SHA + length compare avoids two full-file memory peaks; current
-        // metadata files are KB-scale but the same gate may serve larger payloads
-        // (encrypted snapshots, embedded indices) without a rewrite.
         let remoteAttrs = try FileManager.default.attributesOfItem(atPath: verifyURL.path)
         let localAttrs = try FileManager.default.attributesOfItem(atPath: localURL.path)
         guard let remoteSize = remoteAttrs[.size] as? Int64,

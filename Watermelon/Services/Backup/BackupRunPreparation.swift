@@ -9,8 +9,8 @@ struct BackupPreparedRun: Sendable {
     let totalAssetCount: Int
     let makeClient: @Sendable () throws -> any RemoteStorageClientProtocol
     let v2Services: BackupV2RuntimeServices?
-    /// True only on a clean syncIndex; gates the committed-fp fast path so a stale cache can't mask a month as done.
     let fastPathFresh: Bool
+    let corruptedSnapshotMonths: Set<LibraryMonthKey>
 }
 
 struct BackupRunPreparationService: Sendable {
@@ -58,16 +58,16 @@ struct BackupRunPreparationService: Sendable {
 
             var v2ServicesForCleanup: BackupV2RuntimeServices?
             do {
-                // basePath creation moved into BackupV2RuntimeBuilder so background runner
-                // benefits too; explicit call here is now redundant.
                 let v2Services = try await prepareV2Runtime(client: client, profile: profile, password: password, eventStream: eventStream)
                 v2ServicesForCleanup = v2Services
 
                 var fastPathFresh = false
+                var corruptedSnapshotMonths: Set<LibraryMonthKey> = []
                 do {
-                    // Peek so a syncIndex throw doesn't waste the cold-start materialize.
-                    // Consume only after success.
                     let preMaterialized = await v2Services?.initialMaterializeOutput.peek()
+                    if let preMaterialized {
+                        corruptedSnapshotMonths = preMaterialized.corruptedSnapshotMonths
+                    }
                     let digest = try await remoteIndexService.syncIndex(
                         client: client,
                         profile: profile,
@@ -178,7 +178,8 @@ struct BackupRunPreparationService: Sendable {
                         try storageClientFactory.makeClient(profile: profile, password: password)
                     },
                     v2Services: v2Services,
-                    fastPathFresh: fastPathFresh
+                    fastPathFresh: fastPathFresh,
+                    corruptedSnapshotMonths: corruptedSnapshotMonths
                 )
             } catch {
                 if let v2 = v2ServicesForCleanup {
@@ -239,27 +240,28 @@ struct BackupRunPreparationService: Sendable {
         return digest
     }
 
+    @discardableResult
     func verifyMonth(
         profile: ServerProfileRecord,
         password: String,
         month: LibraryMonthKey
-    ) async throws {
+    ) async throws -> Bool {
         try await withConnectedClient(profile: profile, password: password) { client in
             // Profile + password let verify build a V2 runtime (dedicated metadata client + tombstones).
             try await self.verifyMonth(client: client, basePath: profile.basePath, month: month, profile: profile, password: password)
         }
     }
 
+    @discardableResult
     func verifyMonth(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         month: LibraryMonthKey,
         profile: ServerProfileRecord? = nil,
         password: String? = nil
-    ) async throws {
-        // Inspect drives routing AND format gating — separate version.json probe
-        // would re-open the damagedV2-vs-V1 TOCTOU window.
-        let inspection: RemoteFormatInspection
+    ) async throws -> Bool {
+            // A separate version.json probe would re-open the damagedV2-vs-V1 TOCTOU window.
+            let inspection: RemoteFormatInspection
         if let profile {
             inspection = try await RemoteFormatCompatibilityService()
                 .inspectRemoteFormat(client: client, profile: profile)
@@ -274,15 +276,18 @@ struct BackupRunPreparationService: Sendable {
         case .unsupported(let minAppVersion):
             throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
         case .v2:
-            _ = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
+            let report = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
+            return report.didMutateRemote
         case .v1:
             try await remoteIndexService.verifyMonth(
                 client: client,
                 basePath: basePath,
                 month: month
             )
+            // V1 verify may flush manifest changes; treat as potentially mutating.
+            return true
         case .fresh:
-            break
+            return false
         }
     }
 
@@ -309,7 +314,7 @@ struct BackupRunPreparationService: Sendable {
             expectedRepoID = id
         }
         let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: expectedRepoID)
-        let report = try await verifier.verify(month: month)
+        var report = try await verifier.verify(month: month)
         if !report.cleanupCandidates.isEmpty, let profile, let password {
             // Verify cleanup is sequential; reuse caller's client (no maintenance tasks).
             _ = password
@@ -343,6 +348,7 @@ struct BackupRunPreparationService: Sendable {
                     cleanupItems: report.cleanupCandidates,
                     services: v2
                 )
+                report.didMutateRemote = !appliedFingerprints.isEmpty
                 // Evict only what was actually tombstoned; applyTombstones may have skipped since-healed items.
                 if !appliedFingerprints.isEmpty,
                    let monthData = remoteIndexService.remoteMonthRawData(for: month) {

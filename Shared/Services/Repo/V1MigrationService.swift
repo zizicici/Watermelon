@@ -182,7 +182,12 @@ actor V1MigrationService {
                 }
             }
 
-            // Record before snapshot write: commit is the durable transition; a later snapshot fail must not strand the V1 manifest for re-import.
+            // Quarantine BEFORE snapshot: a snapshot-write failure would otherwise leave the V1 manifest in place for next scan, producing duplicate commits on retry.
+            try await quarantineV1ResidueManifest(
+                year: scanned.year,
+                month: scanned.month,
+                sourcePath: scanned.manifestAbsolutePath
+            )
             phase1ScannedMonths.append(scanned)
 
             let finalSeq = migrationHeader.seq
@@ -259,11 +264,39 @@ actor V1MigrationService {
     }
 
     func runPhase3(writerID: String) async throws {
+        // Filesystem sweep so a prior-session quarantine is also cleaned.
+        try await sweepResidueManifests()
         for scanned in phase1ScannedMonths {
             try await deleteIfPresent(path: scanned.manifestAbsolutePath)
         }
         // Marker last — if cleanup races a peer, inspect keeps routing to .v1 until V1 manifests are gone.
         try await deleteIfPresent(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID))
+    }
+
+    private func sweepResidueManifests() async throws {
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: basePath)
+        } catch {
+            if isStorageNotFoundError(error) { return }
+            throw error
+        }
+        let yearEntries = entries.filter { $0.isDirectory && $0.name.range(of: "^[0-9]{4}$", options: .regularExpression) != nil }
+        for yearEntry in yearEntries {
+            let yearPath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: yearEntry.name)
+            let monthEntries: [RemoteStorageEntry]
+            do {
+                monthEntries = try await client.list(path: yearPath)
+            } catch {
+                if isStorageNotFoundError(error) { continue }
+                throw error
+            }
+            for monthEntry in monthEntries where monthEntry.isDirectory && monthEntry.name.range(of: "^[0-9]{2}$", options: .regularExpression) != nil {
+                let monthPath = RemotePathBuilder.absolutePath(basePath: yearPath, remoteRelativePath: monthEntry.name)
+                let residuePath = RemotePathBuilder.absolutePath(basePath: monthPath, remoteRelativePath: Self.residueManifestFileName)
+                try await deleteIfPresent(path: residuePath)
+            }
+        }
     }
 
     /// Distinguishes our incomplete phase3 cleanup (marker survived) from a real V1 regression.
@@ -300,6 +333,8 @@ actor V1MigrationService {
             try await deleteIfPresent(path: sourcePath)
             return
         }
+        // Peer-deletion between scan and quarantine must not abort the whole phase.
+        guard try await client.metadata(path: sourcePath) != nil else { return }
         try await client.move(from: sourcePath, to: residuePath)
     }
 

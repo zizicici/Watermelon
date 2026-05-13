@@ -102,12 +102,17 @@ struct BackupParallelExecutor: Sendable {
         )
         await clientPool.seedConnectedClient(preparedRun.initialClient)
 
+        // Project once: each call iterates every asset/link/resource, so per-worker per-month rebuilds cost O(M·N).
+        let committedFingerprintsByMonth: PerMonth<Set<Data>>? = preparedRun.v2Services != nil
+            ? remoteIndexService.committedAssetFingerprintsByMonth()
+            : nil
+
         do {
             try await withThrowingTaskGroup(of: WorkerRunState.self) { group in
                 let monthQueue = MonthWorkQueue(months: preparedRun.monthPlans)
 
                 for workerID in 0 ..< preparedRun.workerCount {
-                    group.addTask { [v2Services = preparedRun.v2Services, fastPathFresh = preparedRun.fastPathFresh] in
+                    group.addTask { [v2Services = preparedRun.v2Services, fastPathFresh = preparedRun.fastPathFresh, corruptedSnapshotMonths = preparedRun.corruptedSnapshotMonths] in
                         try await runParallelMonthWorker(
                             workerID: workerID,
                             monthQueue: monthQueue,
@@ -118,7 +123,9 @@ struct BackupParallelExecutor: Sendable {
                             clientPool: clientPool,
                             onMonthUploaded: onMonthUploaded,
                             v2Services: v2Services,
-                            fastPathFresh: fastPathFresh
+                            fastPathFresh: fastPathFresh,
+                            committedFingerprintsByMonth: committedFingerprintsByMonth,
+                            corruptedSnapshotMonths: corruptedSnapshotMonths
                         )
                     }
                 }
@@ -172,7 +179,9 @@ struct BackupParallelExecutor: Sendable {
         clientPool: StorageClientPool,
         onMonthUploaded: BackupMonthFinalizer? = nil,
         v2Services: BackupV2RuntimeServices? = nil,
-        fastPathFresh: Bool = false
+        fastPathFresh: Bool = false,
+        committedFingerprintsByMonth: PerMonth<Set<Data>>? = nil,
+        corruptedSnapshotMonths: Set<LibraryMonthKey> = []
     ) async throws -> WorkerRunState {
         var workerState = WorkerRunState()
         let client: any RemoteStorageClientProtocol
@@ -201,11 +210,13 @@ struct BackupParallelExecutor: Sendable {
                 let monthAssetIDs = monthPlan.assetLocalIdentifiers
 
                 // Fast-path requires a fresh sync this run; stale cache could skip a month that needs repair.
+                // Also force loadOrCreate for months flagged corrupt-snapshot so rebaseline runs.
                 if v2Services != nil,
                    fastPathFresh,
+                   !corruptedSnapshotMonths.contains(monthKey),
                    monthAlreadyFullyBackedUpFast(
                        monthAssetIDs: monthAssetIDs,
-                       committedFingerprints: remoteIndexService.committedAssetFingerprintsByMonth()[monthKey] ?? []
+                       committedFingerprints: committedFingerprintsByMonth?[monthKey] ?? []
                    ) {
                     let progressState = await aggregator.recordMonthSkipped(count: monthAssetIDs.count)
                     eventStream.emit(.monthChanged(MonthChangeEvent(

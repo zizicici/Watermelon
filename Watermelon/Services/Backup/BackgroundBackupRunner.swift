@@ -332,6 +332,9 @@ final class BackgroundBackupRunner {
         var anyMonthFailed = false
         var connectionUnavailableAbort = false
 
+        // Project once: each call iterates every asset/link/resource, so per-month rebuilds cost O(M·N).
+        let committedFingerprintsByMonth = assetProcessor.remoteIndexService.committedAssetFingerprintsByMonth()
+
         for monthKey in sortedMonths {
             if Task.isCancelled { break }
             if connectionUnavailableAbort { break }
@@ -341,7 +344,7 @@ final class BackgroundBackupRunner {
             var monthHasAssetFailures = false
 
             // Fast-path needs a fresh sync this run; stale cache could skip months that need repair.
-            let committedSet = assetProcessor.remoteIndexService.committedAssetFingerprintsByMonth()[monthKey] ?? []
+            let committedSet = committedFingerprintsByMonth[monthKey] ?? []
             if fastPathFresh,
                monthAlreadyFullyBackedUpFast(assetIDs: assetIDs, committedFingerprints: committedSet) {
                 await writer.appendLog(
@@ -371,6 +374,15 @@ final class BackgroundBackupRunner {
             } catch {
                 if Task.isCancelled { break }
                 anyMonthFailed = true
+                // Connection-unavailable means every subsequent loadOrCreate would re-trip the same failure.
+                if profile.isConnectionUnavailableError(error) {
+                    connectionUnavailableAbort = true
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                        level: .error
+                    )
+                    break
+                }
                 await writer.appendLog(
                     String(format: String(localized: "backup.auto.log.monthManifestFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
                     level: .error
@@ -501,6 +513,10 @@ final class BackgroundBackupRunner {
             }
 
             var monthFlushFailureReason: String?
+            if connectionUnavailableAbort {
+                // Connection-unavailable already terminated this profile; another remote write would just re-log the same failure.
+                break
+            }
             do {
                 let delta = try await monthStore.flushToRemote(ignoreCancellation: true)
                 assetProcessor.remoteIndexService.markCommittedV2(

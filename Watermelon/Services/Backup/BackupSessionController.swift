@@ -583,17 +583,23 @@ enum State {
         resumePreparationTask = Task { [weak self] in
             guard let self else { return }
             do {
-                // Stale/unknown presence must not count as healthy.
-                let overlayFresh = try await self.backupCoordinator.refreshPhysicalPresenceForResume(
-                    profile: connection.profile,
-                    password: connection.password
-                )
+                // V1 dedup ignores the overlay; refreshing would issue per-month LISTs for nothing.
+                let isV2 = await self.backupCoordinator.currentRepoIsV2() == true
+                var overlayFresh = true
+                if isV2 {
+                    overlayFresh = try await self.backupCoordinator.refreshPhysicalPresenceForResume(
+                        profile: connection.profile,
+                        password: connection.password
+                    )
+                }
                 try Task.checkCancellation()
                 let committedView: PerMonth<Set<Data>>?
-                if await self.backupCoordinator.currentRepoIsV2() == false || !overlayFresh {
-                    committedView = nil
-                } else {
+                if isV2, overlayFresh {
+                    // V2 must always defer to commit-log truth: completedAssetIDs alone would skip reducer-acked-but-uncommitted assets on a pre-flush pause.
                     committedView = self.backupCoordinator.backedUpAssetFingerprintsByMonth()
+                } else {
+                    // Stale overlay would let a since-deleted resource look healthy and dedup a real repair.
+                    committedView = nil
                 }
                 let resumePlan = try await self.resumePlanner.makePlan(
                     pausedMode: resumeContext.pausedMode,
@@ -647,7 +653,15 @@ enum State {
                     ),
                     level: .error
                 ))
-                self.session.failResumePreparation()
+                // Transient drop must keep paused context; clearing it would force a full restart on the next resume tap.
+                if connection.profile.isConnectionUnavailableError(error) {
+                    self.session.cancelResume(
+                        pausedMode: resumeContext.pausedMode,
+                        pausedDisplayMode: resumeContext.pausedDisplayMode
+                    )
+                } else {
+                    self.session.failResumePreparation()
+                }
                 self.notifyObserversNow()
             }
         }

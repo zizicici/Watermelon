@@ -21,6 +21,7 @@ struct VerifyMonthReportItem: Sendable, Hashable {
 struct VerifyMonthReport: Sendable {
     let month: LibraryMonthKey
     let items: [VerifyMonthReportItem]
+    var didMutateRemote: Bool = false
 
     var cleanupCandidates: [VerifyMonthReportItem] {
         items.filter { $0.allowsCleanup }

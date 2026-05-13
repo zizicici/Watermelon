@@ -696,14 +696,13 @@ final class HomeExecutionCoordinator {
             if Task.isCancelled { return .cancelled }
         }
 
-        var verifyCleanedRemote = false
+        var verifyMutatedRemote = false
         do {
-            try await dependencies.backupCoordinator.verifyMonth(
+            verifyMutatedRemote = try await dependencies.backupCoordinator.verifyMonth(
                 profile: context.profile,
                 password: context.password,
                 month: month
             )
-            verifyCleanedRemote = true
         } catch is CancellationError {
             return .cancelled
         } catch {
@@ -715,8 +714,8 @@ final class HomeExecutionCoordinator {
         }
         if Task.isCancelled { return .cancelled }
 
-        // Verify may have tombstoned rows; republish before reading remote-only items.
-        if verifyCleanedRemote {
+        // Resync only when verify actually wrote tombstones — otherwise we'd re-fold the commit log per month for nothing.
+        if verifyMutatedRemote {
             _ = await dataRefresher.syncRemoteDataAndWait()
             if Task.isCancelled { return .cancelled }
         }

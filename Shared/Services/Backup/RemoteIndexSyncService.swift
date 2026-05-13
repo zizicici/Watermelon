@@ -166,11 +166,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: Self.remoteProfileKey(profile))
         if shouldResetSnapshot {
             committedView.reset()
-            // Tied to snapshotCache identity: a profile switch invalidates whatever
-            // uncommitted-V2 fingerprints belonged to the previous profile. Without
-            // this, V1 path leaves stale entries that later make
-            // `committedAssetFingerprintsByMonth` no-op on optional-chain subtraction
-            // (cache no longer has the month, so byMonth[month]?.subtract(...) misses).
+            // Profile switch invalidates inflight fingerprints from the prior profile; leaving them strands subtract callsites.
             resetUncommittedV2()
         }
 
@@ -192,7 +188,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             await state.setIsV2Repo(false)
             await state.setOverlayFresh(false)
         case .fresh:
-            await state.setIsV2Repo(true)
+            // Pinning isV2 here would trip the alreadyV2 guard if a peer writes V1 before we bootstrap; `markIsV2` pins after build.
             await state.setOverlayFresh(false)
         }
 
@@ -334,17 +330,16 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
         // After fresh materialize, all assets in the cache are committed.
         resetUncommittedV2()
-        // Snapshot overlay before load-clear; on refresh failure stale > empty (empty makes resume skip real-missing).
-        let priorOverlay = committedView.physicallyMissingSnapshot()
-        committedView.loadFromMaterialize(output)
+        // Atomic snapshot+clear; concurrent worker marks between snapshot and load would otherwise be lost.
+        let priorOverlay = committedView.loadFromMaterialize(output)
         var overlayFresh = false
         do {
             overlayFresh = try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
         } catch is CancellationError {
-            // Don't mask cancel as success.
             for (month, hashes) in priorOverlay {
                 committedView.markPhysicallyMissing(month: month, hashes: hashes)
             }
+            await state.setOverlayFresh(false)
             throw CancellationError()
         } catch {
             for (month, hashes) in priorOverlay {
@@ -479,8 +474,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         committedView.state(since: revision)
     }
 
-    /// Production callers must go through `OptimisticAssetWriter` so optimistic
-    /// upsert + inflight marking can't drift out of sync.
     func makeOptimisticAssetWriter() -> OptimisticAssetWriter {
         OptimisticAssetWriter(service: self)
     }
@@ -497,9 +490,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         inflightTracker.markUncommittedAssets(month: month, fingerprints: fingerprints)
     }
 
-    /// Recovers inflight-tracker state from `V2MonthSession.FlushError.snapshotWriteFailed`.
-    /// Caller pattern: `catch { remoteIndexService.recordCommittedFromError(month:, error); throw error }`.
-    /// No-op for other error types.
     func recordCommittedFromFlushError(month: LibraryMonthKey, _ error: Error) {
         if case let V2MonthSession.FlushError.snapshotWriteFailed(assets, tombstones, _) = error {
             markCommittedV2(month: month, fingerprints: assets.union(tombstones))
@@ -510,40 +500,28 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         inflightTracker.markCommitted(month: month, fingerprints: fingerprints)
     }
 
-    /// Reset uncommitted tracking — used after a fresh V2 materialize or session boundary.
     func resetUncommittedV2() {
         inflightTracker.reset()
     }
 
-    /// Full wipe for cross-profile reuse. BG runner shares one service across profiles;
-    /// without clearing cache + overlay, profile A's resources mix with profile B's
-    /// missing-overlay and committedAssetFingerprintsByMonth returns garbage.
     func resetForProfileSwitch() async {
         inflightTracker.reset()
         committedView.reset()
         await state.reset()
     }
 
-    /// `nil` until the first successful inspection; callers must not collapse nil to V1.
     func currentRepoIsV2() async -> Bool? {
         await state.isV2Repo()
     }
 
-    /// Pin V2 when a caller has independently confirmed it, so a non-fatal syncIndex throw can't strand isV2 unset.
     func markIsV2() async {
         await state.setIsV2Repo(true)
     }
 
-    /// True only when the last overlay refresh probed every month successfully; fast-path skip gates on this.
     func lastSyncOverlayFresh() async -> Bool {
         await state.overlayFresh()
     }
 
-    /// Returns committed fingerprints grouped by month. Cache + per-month uncommitted
-    /// subtraction. Resume planner uses per-asset month to dedup correctly.
-    /// Phantom / partially-missing / metadata-only assets are excluded — the resume
-    /// planner would otherwise skip a local asset whose fingerprint is "in cache" but
-    /// whose remote resources are gone, leaving a real gap unfilled.
     func committedAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
         let snapshot = committedView.current()
         var linksByMonthFP: [LibraryMonthKey: [Data: [RemoteAssetResourceLink]]] = [:]
@@ -557,15 +535,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             resourceHashesByMonth[month, default: []].insert(resource.contentHash)
         }
         var byMonth = PerMonth<Set<Data>>()
-        // Snapshot already carries an atomic overlay map — re-querying per asset both
-        // duplicates lock acquires and risks reading a different generation of the overlay
-        // than the cache snapshot above.
         let missingByMonth = snapshot.physicallyMissingHashesByMonth
         for asset in snapshot.assets {
             let month = LibraryMonthKey(year: asset.year, month: asset.month)
             let links = linksByMonthFP[month]?[asset.assetFingerprint] ?? []
-            // Subtract physically-missing — commit log keeps the row, but the
-            // file is gone, so resume planner must NOT skip the repair.
+            // Physically-missing resources still have commit-log rows; subtract so resume planner doesn't skip the repair.
             let availableHashes = (resourceHashesByMonth[month] ?? [])
                 .subtracting(missingByMonth[month] ?? [])
             let state = RemoteAssetIntegrityClassifier.classify(
@@ -577,9 +551,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 byMonth.insert(asset.assetFingerprint, for: month)
             }
         }
-        // Subtract inflight: assets/tombstones we wrote optimistically but
-        // haven't confirmed via commit log fold yet. Resume planner needs the
-        // pure-committed view; UI layers see committed + inflight via the cache.
         inflightTracker.readUncommittedAssets { uncommittedAssets in
             for month in uncommittedAssets.months {
                 if let fps = uncommittedAssets[month] {
@@ -599,7 +570,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         _ = committedView.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links)
     }
 
-    /// V2-only physical-presence overlay; subtracted in committed view.
     func markPhysicallyMissingV2(month: LibraryMonthKey, hashes: Set<Data>) {
         committedView.markPhysicallyMissing(month: month, hashes: hashes)
     }
@@ -608,7 +578,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         committedView.physicallyMissingHashes(for: month)
     }
 
-    /// Per-month best-effort; throwing on one failure would wipe overlay worse than a stale partial. Returns true only when every month succeeded.
+    func physicallyMissingSnapshot() -> [LibraryMonthKey: Set<Data>] {
+        committedView.physicallyMissingSnapshot()
+    }
+
     @discardableResult
     func refreshPhysicalPresenceOverlay(
         client: any RemoteStorageClientProtocol,
@@ -650,8 +623,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                     anyFailure = true
                     if let stale = fallback[month] {
                         committedView.markPhysicallyMissing(month: month, hashes: stale)
+                    } else {
+                        // Fail-closed: Home/health/restore read the overlay without gating on freshness, so a cold-start probe failure must not look healthy.
+                        let allHashes = Set((resourcesByMonth[month] ?? []).map(\.contentHash))
+                        committedView.markPhysicallyMissing(month: month, hashes: allHashes)
                     }
-                    // Cold-start failure leaves overlay untouched; callers must gate on `anyFailure`.
                     syncLog.info("[SyncTiming] probe failed for \(month.text): \(error.localizedDescription)")
                 }
                 if let (nextMonth, nextResources) = iterator.next() {
@@ -683,9 +659,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         let monthAbs = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRel)
         let entries = try await client.list(path: monthAbs)
         try Task.checkCancellation()
-        var sizeByKey: [String: Int64] = [:]
+        // Same collision key can map to multiple real names (case/Unicode variants); single-size dict was last-write-wins.
+        var sizesByKey: [String: Set<Int64>] = [:]
         for entry in entries where !entry.isDirectory {
-            sizeByKey[RemoteFileNaming.collisionKey(for: entry.name)] = entry.size
+            sizesByKey[RemoteFileNaming.collisionKey(for: entry.name), default: []].insert(entry.size)
         }
         var resourcesByHash: [Data: [RemoteManifestResource]] = [:]
         for resource in resources {
@@ -695,11 +672,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         for (hash, group) in resourcesByHash {
             let anyPresent = group.contains { resource in
                 let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-                guard let listedSize = sizeByKey[RemoteFileNaming.collisionKey(for: leaf)] else {
+                guard let listedSizes = sizesByKey[RemoteFileNaming.collisionKey(for: leaf)] else {
                     return false
                 }
                 // Size mismatch = stale/truncated; same-size silent corruption needs deeper verify.
-                return listedSize == resource.fileSize
+                return listedSizes.contains(resource.fileSize)
             }
             if !anyPresent { missing.insert(hash) }
         }
