@@ -124,24 +124,32 @@ struct RemoteFormatCompatibilityService: Sendable {
                 cachedV1Manifests = detected
                 return detected
             }
-            if migrationInProgress {
-                if case .absent = manifest, try await hasV1Manifests() {
-                    return .v1
-                }
-            }
             switch manifest {
             case .absent:
-                if try await hasV1Manifests() {
-                    return .v1
-                }
-                if migrationInProgress {
-                    if try await detectV2DataDirectories(client: client, basePath: basePath) {
-                        return .v1
+                let v1Manifests = try await hasV1Manifests()
+                let hasV2Data = try await detectV2DataDirectories(client: client, basePath: basePath)
+                if hasV2Data {
+                    if v1Manifests {
+                        return .v2WithV1Manifests(formatVersion: RepoLayout.formatVersion)
                     }
-                    return .fresh
-                }
-                if try await detectV2DataDirectories(client: client, basePath: basePath) {
+                    if migrationInProgress {
+                        let markerStates = try await inspectMigrationMarkers(
+                            client: client,
+                            basePath: basePath,
+                            markers: migrationMarkers
+                        )
+                        if let marker = markerStates.first {
+                            return .v2WithPendingMigrationCleanup(
+                                formatVersion: RepoLayout.formatVersion,
+                                ownerWriterID: marker.writerID
+                            )
+                        }
+                    }
                     throw BackupCompatibilityError.damagedV2Repo
+                }
+                if v1Manifests { return .v1 }
+                if migrationInProgress {
+                    return .fresh
                 }
                 return .fresh
             case .found(let manifest):

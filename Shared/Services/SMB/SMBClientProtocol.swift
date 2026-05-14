@@ -139,6 +139,7 @@ protocol RemoteStorageClientProtocol: Sendable {
     ) async throws -> AtomicCreateResult
     /// Per-(path, size) because S3 multipart degrades the guarantee at the threshold.
     func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee
+    var moveIfAbsentGuarantee: CreateGuarantee { get }
     var dataPathOverwriteRisk: DataPathOverwriteRisk { get }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { get }
     var concurrencyMode: ClientConcurrencyMode { get }
@@ -168,6 +169,7 @@ extension RemoteStorageClientProtocol {
     /// Fail-closed: treat uncustomized backends as overwrite-risky and exact-match.
     var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
 
     func verifyWriteAccess() async throws {}
 

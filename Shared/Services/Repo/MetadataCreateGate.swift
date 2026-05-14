@@ -5,9 +5,15 @@ import CryptoKit
 /// without exclusive create are the durable truth of the repo and cannot
 /// tolerate a peer's bytes silently winning the destination path.
 enum MetadataCreateGate {
+    enum FinalizationPolicy: Equatable {
+        case allowBestEffort
+        case requireExclusiveMove
+    }
+
     enum Error: LocalizedError {
         case stagingVerificationFailed(remotePath: String, underlying: Swift.Error?)
         case finalVerificationFailed(remotePath: String, underlying: Swift.Error?)
+        case nonExclusiveFinalization(remotePath: String)
 
         var errorDescription: String? {
             switch self {
@@ -21,6 +27,8 @@ enum MetadataCreateGate {
                     return "metadata bytes could not be verified after move at \(remotePath): \(underlying.localizedDescription)"
                 }
                 return "metadata bytes diverged post-move at \(remotePath)"
+            case .nonExclusiveFinalization(let remotePath):
+                return "metadata finalization at \(remotePath) requires exclusive move support"
             }
         }
     }
@@ -31,7 +39,8 @@ enum MetadataCreateGate {
         client: any RemoteStorageClientProtocol,
         localURL: URL,
         remotePath: String,
-        respectTaskCancellation: Bool
+        respectTaskCancellation: Bool,
+        finalizationPolicy: FinalizationPolicy = .allowBestEffort
     ) async throws -> AtomicCreateResult {
         let size = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? Int64) ?? 0
         let guarantee = client.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
@@ -92,6 +101,11 @@ enum MetadataCreateGate {
                 try? await client.delete(path: stagingPath)
                 throw Error.stagingVerificationFailed(remotePath: stagingPath, underlying: error)
             }
+            if finalizationPolicy == .requireExclusiveMove,
+               client.moveIfAbsentGuarantee != .exclusive {
+                try? await client.delete(path: stagingPath)
+                throw Error.nonExclusiveFinalization(remotePath: remotePath)
+            }
             do {
                 let finalization = try await client.moveIfAbsent(from: stagingPath, to: remotePath)
                 if case .alreadyExists = finalization {
@@ -108,6 +122,11 @@ enum MetadataCreateGate {
                     }
                     try? await client.delete(path: stagingPath)
                     return .alreadyExists
+                }
+                if case .bestEffortRetry = finalization,
+                   finalizationPolicy == .requireExclusiveMove {
+                    try? await client.delete(path: stagingPath)
+                    throw Error.nonExclusiveFinalization(remotePath: remotePath)
                 }
             } catch {
                 try? await client.delete(path: stagingPath)

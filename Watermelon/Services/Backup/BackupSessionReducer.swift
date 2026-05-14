@@ -290,6 +290,8 @@ struct BackupSessionState {
                 startedMonths.insert(monthKey)
             case .completed:
                 completedMonths.insert(monthKey)
+            case .downloadIncomplete:
+                break
             }
             return BackupSessionReductionOutcome(shouldStop: false, notification: .throttled)
 

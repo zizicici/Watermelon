@@ -25,6 +25,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         var fresh: Bool { inconclusiveHashes.isEmpty }
     }
 
+    private struct OverlayProbeResult: Sendable {
+        let fresh: Bool
+        let missingByMonth: [LibraryMonthKey: Set<Data>]
+        let freshMonths: Set<LibraryMonthKey>
+    }
+
     private actor SyncGate {
         private var isLocked = false
         private var waiters: [(UUID, CheckedContinuation<Void, Error>)] = []
@@ -134,14 +140,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         private var activeRemoteProfileKey: String?
         private var remoteManifestDigests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
         private var lastInspectedFormatIsV2: Bool?
-        private var lastOverlayFresh: Bool = false
 
         func ensureRemoteContext(profileKey: String) -> Bool {
             guard activeRemoteProfileKey != profileKey else { return false }
             activeRemoteProfileKey = profileKey
             remoteManifestDigests.removeAll()
             lastInspectedFormatIsV2 = nil
-            lastOverlayFresh = false
             return true
         }
 
@@ -161,25 +165,18 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             lastInspectedFormatIsV2
         }
 
-        func setOverlayFresh(_ value: Bool) {
-            lastOverlayFresh = value
-        }
-
-        func overlayFresh() -> Bool {
-            lastOverlayFresh
-        }
-
         func reset() {
             activeRemoteProfileKey = nil
             remoteManifestDigests.removeAll()
             lastInspectedFormatIsV2 = nil
-            lastOverlayFresh = false
         }
     }
 
     private let committedView: RepoCommittedView
     private let inflightTracker: OptimisticInflightTracker
     private let optimisticMutationLock = NSLock()
+    private var physicalPresenceOverlayFresh = false
+    private var physicalPresenceOverlayFreshMonths: Set<LibraryMonthKey> = []
     private let syncGate = SyncGate()
     private let state = MutableState()
 
@@ -226,14 +223,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         concurrencyCap: Int = 4
     ) async throws -> Bool {
         try await syncGate.withLock { [self] in
-            let fresh = try await refreshPhysicalPresenceOverlay(
+            try await refreshPhysicalPresenceOverlay(
                 client: client,
                 basePath: basePath,
                 fallback: fallback,
                 concurrencyCap: concurrencyCap
             )
-            await state.setOverlayFresh(fresh)
-            return fresh
         }
     }
 
@@ -265,13 +260,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         return try await syncGate.withLock { [self] in
             let revisionUnchanged = applyPhysicalPresenceOverlay(
                 probe.missingByMonth,
-                expectedRevision: captured.revision
+                expectedRevision: captured.revision,
+                allFresh: probe.fresh,
+                freshMonths: probe.freshMonths
             )
             if !revisionUnchanged {
                 syncLog.info("[SyncTiming] overlay handle captured stale revision; preserving previous overlay")
             }
             let overlayFresh = revisionUnchanged && probe.fresh
-            await state.setOverlayFresh(overlayFresh)
             // Stale handles may include newer commits; resume callers reject stale overlay freshness.
             return self.handleFromCurrentSnapshot(overlayFresh: overlayFresh)
         }
@@ -295,7 +291,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func fullSnapshot() -> RemoteLibrarySnapshot {
-        committedView.current()
+        optimisticMutationLock.withLock {
+            committedView.current()
+        }
     }
 
     private func syncIndexUnlocked(
@@ -326,21 +324,21 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             await state.setIsV2Repo(true)
             return try await syncIndexV2(client: client, profile: profile, eventStream: eventStream, onSyncProgress: onSyncProgress, syncStart: syncStart, preMaterialized: nil)
         case .v2WithV1Manifests:
-            await state.setOverlayFresh(false)
+            clearPhysicalPresenceOverlayFreshness()
             throw BackupCompatibilityError.requiresForegroundMigration
         case .v1:
             if alreadyV2 || expectV2 {
-                await state.setOverlayFresh(false)
+                clearPhysicalPresenceOverlayFreshness()
                 throw BackupCompatibilityError.requiresForegroundMigration
             }
             await state.setIsV2Repo(false)
-            await state.setOverlayFresh(false)
+            clearPhysicalPresenceOverlayFreshness()
         case .fresh:
             if alreadyV2 || expectV2 {
-                await state.setOverlayFresh(false)
+                clearPhysicalPresenceOverlayFreshness()
                 throw BackupCompatibilityError.damagedV2Repo
             }
-            await state.setOverlayFresh(false)
+            clearPhysicalPresenceOverlayFreshness()
         }
 
         let scanStart = CFAbsoluteTimeGetCurrent()
@@ -497,18 +495,15 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             output = try await materializer.materialize(expectedRepoID: expectedRepoID)
         }
         let priorOverlay = resetUncommittedAndLoadMaterialize(output)
-        var overlayFresh = false
         do {
-            overlayFresh = try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
+            _ = try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
         } catch is CancellationError {
             applyPhysicalPresenceOverlay(priorOverlay)
-            await state.setOverlayFresh(false)
             throw CancellationError()
         } catch {
             applyPhysicalPresenceOverlay(priorOverlay)
             syncLog.info("[SyncTiming] overlay refresh skipped: \(error.localizedDescription)")
         }
-        await state.setOverlayFresh(overlayFresh)
         committedView.markSynced(Date())
         onSyncProgress?(RemoteSyncProgress(current: output.state.months.count, total: output.state.months.count))
         let digest = committedView.counts()
@@ -542,6 +537,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             throw NSError(domain: "RemoteIndexSyncService", code: -60, userInfo: [
                 NSLocalizedDescriptionKey:
                     "verifyMonth(V1) refused: \(versionPath) exists — repo is V2; use RepoVerifyMonthService"
+            ])
+        }
+        if try await Self.hasAnyV2CommitOrSnapshotData(client: client, basePath: basePath) {
+            throw NSError(domain: "RemoteIndexSyncService", code: -61, userInfo: [
+                NSLocalizedDescriptionKey:
+                    "verifyMonth(V1) refused: V2 commit/snapshot data exists without version.json"
             ])
         }
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
@@ -722,6 +723,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     private func resetUncommittedAndLoadMaterialize(_ output: RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] {
         optimisticMutationLock.withLock {
             _ = inflightTracker.reset()
+            clearPhysicalPresenceOverlayFreshnessLocked()
             return committedView.loadFromMaterialize(output)
         }
     }
@@ -730,7 +732,27 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         optimisticMutationLock.withLock {
             _ = inflightTracker.reset()
             committedView.reset()
+            clearPhysicalPresenceOverlayFreshnessLocked()
         }
+    }
+
+    private func clearPhysicalPresenceOverlayFreshness() {
+        optimisticMutationLock.withLock {
+            clearPhysicalPresenceOverlayFreshnessLocked()
+        }
+    }
+
+    private func clearPhysicalPresenceOverlayFreshnessLocked() {
+        physicalPresenceOverlayFresh = false
+        physicalPresenceOverlayFreshMonths.removeAll()
+    }
+
+    private func setPhysicalPresenceOverlayFreshnessLocked(
+        allFresh: Bool,
+        freshMonths: Set<LibraryMonthKey>
+    ) {
+        physicalPresenceOverlayFresh = allFresh
+        physicalPresenceOverlayFreshMonths = freshMonths
     }
 
     func currentRepoIsV2() async -> Bool? {
@@ -742,7 +764,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func lastSyncOverlayFresh() async -> Bool {
-        await state.overlayFresh()
+        optimisticMutationLock.withLock {
+            physicalPresenceOverlayFresh
+        }
     }
 
     func committedAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
@@ -824,6 +848,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 assetResourceLinks: links,
                 physicallyMissingHashes: physicallyMissingHashes
             )
+            if physicallyMissingHashes == nil {
+                physicalPresenceOverlayFreshMonths.remove(month)
+                physicalPresenceOverlayFresh = false
+            } else {
+                physicalPresenceOverlayFreshMonths.insert(month)
+            }
         }
     }
 
@@ -840,8 +870,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func verifiedPhysicallyMissingHashes(for month: LibraryMonthKey) async -> Set<Data>? {
-        guard await state.overlayFresh() else { return nil }
-        return physicallyMissingHashes(for: month)
+        optimisticMutationLock.withLock {
+            guard physicalPresenceOverlayFreshMonths.contains(month) else { return nil }
+            return committedView.physicallyMissingHashes(for: month)
+        }
     }
 
     func physicallyMissingHashesForTest(month: LibraryMonthKey) -> Set<Data> {
@@ -879,7 +911,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         )
         let applied = applyPhysicalPresenceOverlay(
             probe.missingByMonth,
-            expectedRevision: captured.revision
+            expectedRevision: captured.revision,
+            allFresh: probe.fresh,
+            freshMonths: probe.freshMonths
         )
         if !applied {
             syncLog.info("[SyncTiming] overlay refresh captured stale revision; preserving previous overlay")
@@ -891,16 +925,20 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     @discardableResult
     private func applyPhysicalPresenceOverlay(
         _ missingByMonth: [LibraryMonthKey: Set<Data>],
-        expectedRevision: UInt64? = nil
+        expectedRevision: UInt64? = nil,
+        allFresh: Bool = false,
+        freshMonths: Set<LibraryMonthKey> = []
     ) -> Bool {
         optimisticMutationLock.withLock {
             if let expectedRevision,
                committedView.currentRevision() != expectedRevision {
+                clearPhysicalPresenceOverlayFreshnessLocked()
                 return false
             }
             for (month, hashes) in missingByMonth {
                 committedView.markPhysicallyMissing(month: month, hashes: hashes)
             }
+            setPhysicalPresenceOverlayFreshnessLocked(allFresh: allFresh, freshMonths: freshMonths)
             return true
         }
     }
@@ -913,7 +951,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         budget: OverlayProbeBudget?,
         staleFallbackPolicy: OverlayStaleFallbackPolicy,
         concurrencyCap: Int
-    ) async throws -> (fresh: Bool, missingByMonth: [LibraryMonthKey: Set<Data>]) {
+    ) async throws -> OverlayProbeResult {
         var resourcesByMonth: [LibraryMonthKey: [RemoteManifestResource]] = [:]
         for resource in snapshot.resources {
             let month = LibraryMonthKey(year: resource.year, month: resource.month)
@@ -923,6 +961,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         var iterator = resourcesByMonth.makeIterator()
         var anyFailure = false
         var missingByMonth: [LibraryMonthKey: Set<Data>] = [:]
+        var freshMonths: Set<LibraryMonthKey> = []
         try await withThrowingTaskGroup(of: (LibraryMonthKey, Result<OverlayMonthProbe, Error>).self) { group in
             for _ in 0..<effectiveCap {
                 guard let (month, resources) = iterator.next() else { break }
@@ -943,6 +982,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 switch result {
                 case .success(let probe):
                     if !probe.fresh { anyFailure = true }
+                    if probe.fresh { freshMonths.insert(month) }
                     var missing = probe.missingHashes
                     if !probe.inconclusiveHashes.isEmpty {
                         if let stale = fallback[month] {
@@ -979,7 +1019,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 }
             }
         }
-        return (!anyFailure, missingByMonth)
+        return OverlayProbeResult(
+            fresh: !anyFailure,
+            missingByMonth: missingByMonth,
+            freshMonths: freshMonths
+        )
     }
 
     private func probeMonthForMissing(
@@ -1092,6 +1136,26 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     private static func isNotFoundError(_ error: Error) -> Bool {
         isStorageNotFoundError(error)
+    }
+
+    private static func hasAnyV2CommitOrSnapshotData(
+        client: RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> Bool {
+        for path in [
+            RepoLayout.commitsDirectoryPath(base: basePath),
+            RepoLayout.snapshotsDirectoryPath(base: basePath)
+        ] {
+            do {
+                if !(try await client.list(path: path)).isEmpty {
+                    return true
+                }
+            } catch {
+                if isNotFoundError(error) { continue }
+                throw error
+            }
+        }
+        return false
     }
 
     private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {

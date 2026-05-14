@@ -9,6 +9,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .none }
     // POSIX-style: case-sensitive on the wire; the server FS may differ but we can't probe that cheaply.
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
     private nonisolated static let chunkSize = 32 * 1024
     // Citadel 0.12.1's listDirectory leaks server-side directory handles; recycle
     // the channel after N lists so the leak can't exhaust the server's budget.
@@ -358,7 +359,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         try Task.checkCancellation()
         do {
             try await move(from: sourcePath, to: destinationPath)
-            return .created
+            return .bestEffortRetry
         } catch {
             if Self.isAlreadyExists(error) {
                 return .alreadyExists

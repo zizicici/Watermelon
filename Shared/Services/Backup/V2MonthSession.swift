@@ -70,6 +70,7 @@ final class V2MonthSession: BackupMonthStore {
     /// Per-path granularity needed when multi-path hashes have only some paths missing.
     private var physicallyMissingPaths: Set<String>
     private var untrustedPhysicalPresencePaths: Set<String>
+    private var unavailablePhysicalPresencePaths: Set<String>
 
     // Existing remote files from start-of-month directory listing (collision rename input).
     private var remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata]
@@ -98,6 +99,7 @@ final class V2MonthSession: BackupMonthStore {
     /// Pinned when commit landed but snapshot write failed; drives standalone retry on next flush.
     private var pendingSnapshotRetrySeq: UInt64?
     private var pendingRebaselineOnly: Bool = false
+    let physicallyMissingHashesAreAuthoritative: Bool
     private let flushStateLock = NSLock()
     private var isFlushing = false
 
@@ -126,6 +128,7 @@ final class V2MonthSession: BackupMonthStore {
         self.existingFileNameSet = Set(remoteFilesByName.keys)
         self.stepLogger = stepLogger
         self.observedClockAtLoad = observedClockAtLoad
+        self.physicallyMissingHashesAreAuthoritative = verifiedMissingHashes != nil
 
         // Faithful projection; filtering here would leak into snapshot writes and break the covered-range invariant.
         var resourcesByPath: [String: RemoteManifestResource] = [:]
@@ -178,6 +181,7 @@ final class V2MonthSession: BackupMonthStore {
         self.resourcesByCollisionKey = resourcesByCollisionKey
         self.physicallyMissingPaths = physicallyMissingPaths
         self.untrustedPhysicalPresencePaths = untrustedPhysicalPresencePaths
+        self.unavailablePhysicalPresencePaths = physicallyMissingPaths.union(untrustedPhysicalPresencePaths)
         // Hash missing iff every path missing; overlay consumers use the hash set, in-session lookup uses paths.
         if physicallyMissingPaths.isEmpty {
             self.physicallyMissingHashes = []
@@ -341,9 +345,9 @@ final class V2MonthSession: BackupMonthStore {
     /// Lex-min of present paths for `hash`; nil if no path's file is on remote.
     private func anyPresentPath(forHash hash: Data) -> String? {
         guard let paths = pathsByHash[hash], !paths.isEmpty else { return nil }
-        let unavailable = physicallyMissingPaths.union(untrustedPhysicalPresencePaths)
-        let present = paths.subtracting(unavailable)
-        return present.min()
+        return paths.lazy
+            .filter { !unavailablePhysicalPresencePaths.contains($0) }
+            .min()
     }
 
     func existingFileNames() -> Set<String> {
@@ -407,6 +411,7 @@ final class V2MonthSession: BackupMonthStore {
         // Just wrote bytes; clear missing markers so findResourceByHash can re-resolve.
         physicallyMissingPaths.remove(resource.physicalRemotePath)
         untrustedPhysicalPresencePaths.remove(resource.physicalRemotePath)
+        unavailablePhysicalPresencePaths.remove(resource.physicalRemotePath)
         physicallyMissingHashes.remove(resource.contentHash)
         dirty = true
         return resource
@@ -499,7 +504,8 @@ final class V2MonthSession: BackupMonthStore {
         if !ignoreCancellation { try Task.checkCancellation() }
 
         let monthKey = LibraryMonthKey(year: year, month: month)
-        if let retrySeq = pendingSnapshotRetrySeq {
+        let hasPendingOps = !pendingV2AssetFingerprints.isEmpty || !pendingV2TombstoneFingerprints.isEmpty
+        if let retrySeq = pendingSnapshotRetrySeq, !hasPendingOps {
             do {
                 try await writeSnapshot(
                     services: services,
@@ -549,7 +555,6 @@ final class V2MonthSession: BackupMonthStore {
         }
 
         // Per-flush basis (not session-constant): tombstones must reflect our own intra-session adds, else replay would suppress them.
-        pendingSnapshotRetrySeq = nil
         let priorCovered = materializedCovered.merging(sessionWrittenCovered)
         var perWriterMaxSeq: [String: UInt64] = [:]
         for (writer, ranges) in priorCovered.rangesByWriter {

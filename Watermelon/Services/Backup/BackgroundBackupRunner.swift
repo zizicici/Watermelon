@@ -384,10 +384,12 @@ final class BackgroundBackupRunner {
                 continue
             }
 
-            assetProcessor.remoteIndexService.markPhysicallyMissingV2(
-                month: monthKey,
-                hashes: monthStore.physicallyMissingHashesSnapshot()
-            )
+            if monthStore.physicallyMissingHashesAreAuthoritative {
+                assetProcessor.remoteIndexService.markPhysicallyMissingV2(
+                    month: monthKey,
+                    hashes: monthStore.physicallyMissingHashesSnapshot()
+                )
+            }
 
             let fetchBatchSize = 500
             for batchStart in stride(from: 0, to: assetIDs.count, by: fetchBatchSize) {

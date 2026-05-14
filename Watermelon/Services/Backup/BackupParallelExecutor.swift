@@ -252,7 +252,9 @@ struct BackupParallelExecutor: Sendable {
                     resources: loadedSnapshot.resources,
                     assets: loadedSnapshot.assets,
                     links: loadedSnapshot.links,
-                    physicallyMissingHashes: monthStore.physicallyMissingHashesSnapshot()
+                    physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
+                        ? monthStore.physicallyMissingHashesSnapshot()
+                        : nil
                 )
 
                 eventStream.emitLog(
@@ -571,7 +573,11 @@ struct BackupParallelExecutor: Sendable {
                                         ),
                                         level: .warning
                                     )
-                                    emitCompleted()
+                                    eventStream.emit(.monthChanged(MonthChangeEvent(
+                                        year: monthKey.year,
+                                        month: monthKey.month,
+                                        action: .downloadIncomplete
+                                    )))
                                 case .failed(let failure):
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(

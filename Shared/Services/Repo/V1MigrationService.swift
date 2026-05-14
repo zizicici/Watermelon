@@ -70,7 +70,7 @@ actor V1MigrationService {
     func runPhase1(profileID: Int64, repoID: String, writerID: String, runID: String) async throws -> Int {
         // WebDAV/SMB/SFTP don't auto-create parents on PUT.
         try await bootstrap.ensureSubdirectories()
-        // Marker before any commit so a phase1 crash routes inspect back to `.v1`.
+        // Marker before any commit keeps interrupted migration visible to inspect.
         try await writeMigrationMarker(writerID: writerID, phase: .phase1, runID: runID)
 
         let allocator = SeqAllocator(database: database, profileID: profileID, repoID: repoID, initial: try await initialSeq(repoID: repoID, profileID: profileID))
@@ -724,11 +724,59 @@ actor V1MigrationService {
         try data.write(to: temp, options: .atomic)
         defer { try? FileManager.default.removeItem(at: temp) }
         if existingMeta == nil {
-            _ = try await client.atomicCreate(localURL: temp, remotePath: path, respectTaskCancellation: false)
+            let result = try await MetadataCreateGate.createWithStagingFallback(
+                client: client,
+                localURL: temp,
+                remotePath: path,
+                respectTaskCancellation: false
+            )
+            if case .alreadyExists = result {
+                throw NSError(domain: "V1MigrationService", code: -40, userInfo: [
+                    NSLocalizedDescriptionKey: "migration marker already exists at \(path)"
+                ])
+            }
         } else {
             // Overwrite in place — delete+create left a window where inspect could see no marker on a half-migrated repo.
             try await client.upload(localURL: temp, remotePath: path, respectTaskCancellation: false, onProgress: nil)
         }
+        try await verifyMigrationMarkerWrite(remotePath: path, localURL: temp)
+    }
+
+    private func verifyMigrationMarkerWrite(remotePath: String, localURL: URL) async throws {
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do {
+                if try await remoteFileMatchesLocal(remotePath: remotePath, localURL: localURL) {
+                    return
+                }
+                lastError = nil
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
+            }
+            if attempt + 1 < 3 {
+                try await Task.sleep(for: .milliseconds(200 * (1 << attempt)))
+            }
+        }
+
+        var userInfo: [String: Any] = [
+            NSLocalizedDescriptionKey: "migration marker bytes did not verify at \(remotePath)"
+        ]
+        if let lastError {
+            userInfo[NSUnderlyingErrorKey] = lastError
+        }
+        throw NSError(domain: "V1MigrationService", code: -41, userInfo: userInfo)
+    }
+
+    private func remoteFileMatchesLocal(remotePath: String, localURL: URL) async throws -> Bool {
+        let remoteURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("migration-marker-verify-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: remoteURL) }
+        try await client.download(remotePath: remotePath, localURL: remoteURL)
+        let localSize = try FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? Int64
+        guard let localSize else { return false }
+        return try localFilesEqual(localURL, remoteURL, expectedSize: localSize)
     }
 
     private func initialSeq(repoID: String, profileID: Int64) async throws -> UInt64 {
@@ -740,8 +788,65 @@ actor V1MigrationService {
 
     private static func shouldRetryMigrationCommitWrite(_ error: Error) -> Bool {
         if error is CancellationError { return false }
+        if case CommitLogWriter.WriteError.alreadyExists = error { return true }
         if case CommitLogWriter.WriteError.encodingFailed(_) = error { return false }
-        return true
+        if case CommitLogWriter.WriteError.ioFailure(let underlying) = error {
+            return isTransientMigrationCommitWriteError(underlying)
+        }
+        return isTransientMigrationCommitWriteError(error)
+    }
+
+    private static func isTransientMigrationCommitWriteError(_ error: Error) -> Bool {
+        if error is CancellationError { return false }
+        if isStorageNotFoundError(error) { return false }
+        if let storage = error as? RemoteStorageClientError {
+            switch storage {
+            case .notConnected, .unavailable:
+                return true
+            case .externalStorageUnavailable, .invalidConfiguration, .unsupportedStorageType(_):
+                return false
+            case .underlying(let underlying):
+                return isTransientMigrationCommitWriteError(underlying)
+            }
+        }
+        if SMBErrorClassifier.isConnectionUnavailable(error) ||
+            WebDAVErrorClassifier.isConnectionUnavailable(error) ||
+            S3ErrorClassifier.isConnectionUnavailable(error) ||
+            SFTPErrorClassifier.isConnectionUnavailable(error) {
+            return true
+        }
+        for nsError in nsErrorChain(error) {
+            if nsError.domain == WebDAVClient.errorDomain,
+               (500 ... 599).contains(nsError.code) || nsError.code == 408 || nsError.code == 429 {
+                return true
+            }
+            if nsError.domain == S3ErrorClassifier.errorDomain {
+                if let status = nsError.userInfo[S3ErrorClassifier.userInfoStatusCodeKey] as? Int,
+                   (500 ... 599).contains(status) || status == 408 || status == 429 {
+                    return true
+                }
+                if let serverCode = nsError.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String,
+                   serverCode == "InternalError" || serverCode == "SlowDown" || serverCode == "ServiceUnavailable" {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private static func nsErrorChain(_ error: Error) -> [NSError] {
+        var collected: [NSError] = []
+        var pending: [NSError] = [error as NSError]
+        var visited: Set<String> = []
+        while let current = pending.popLast() {
+            let key = "\(current.domain)#\(current.code)#\(ObjectIdentifier(current).hashValue)"
+            guard visited.insert(key).inserted else { continue }
+            collected.append(current)
+            if let underlying = current.userInfo[NSUnderlyingErrorKey] as? Error {
+                pending.append(underlying as NSError)
+            }
+        }
+        return collected
     }
 
     private static func isValidV2Hash(_ hash: Data) -> Bool {

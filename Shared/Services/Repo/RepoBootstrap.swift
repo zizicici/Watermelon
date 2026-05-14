@@ -433,7 +433,8 @@ actor RepoBootstrap {
             client: client,
             localURL: temp,
             remotePath: versionPath,
-            respectTaskCancellation: false
+            respectTaskCancellation: false,
+            finalizationPolicy: .requireExclusiveMove
         )
         switch result {
         case .created:

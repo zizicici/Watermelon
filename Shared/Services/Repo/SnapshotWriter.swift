@@ -110,10 +110,8 @@ actor SnapshotWriter {
             case .created:
                 break
             case .alreadyExists:
-                // Path includes writerID + runID, so this is not a peer race — bytes diverged
-                // post-move (external write or corruption between local hash and remote bytes).
                 throw WriteError.finalizationFailed(NSError(domain: "SnapshotWriter", code: 1, userInfo: [
-                    NSLocalizedDescriptionKey: "snapshot bytes diverged post-move at \(finalPath)"
+                    NSLocalizedDescriptionKey: "snapshot path already occupied at \(finalPath)"
                 ]))
             case .bestEffortRetry:
                 // Snapshot is derived from commit log (durable truth) — accepting an

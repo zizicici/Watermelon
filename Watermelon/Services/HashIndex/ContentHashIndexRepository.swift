@@ -1,8 +1,5 @@
 import Foundation
 import GRDB
-import os.log
-
-private let contentHashIndexLog = Logger(subsystem: "com.zizicici.watermelon", category: "ContentHashIndex")
 
 struct AssetResourceRoleSlot: Hashable, Sendable {
     let role: Int
@@ -64,7 +61,6 @@ struct LocalHashIndexStats: Sendable {
 final class ContentHashIndexRepository: @unchecked Sendable {
     // Under SQLITE_MAX_VARIABLE_NUMBER and small enough to keep prepared-statement cost flat.
     private static let idChunkSize = 400
-    private static let sha256DigestLength = 32
 
     private let databaseManager: DatabaseManager
 
@@ -492,18 +488,6 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
         let totalSize = instances.reduce(Int64(0)) { partial, instance in
             partial + instance.fileSize
-        }
-        if instances.allSatisfy({ $0.resourceHash.count == Self.sha256DigestLength }) {
-            let importedFingerprint = BackupAssetResourcePlanner.assetFingerprint(
-                resourceRoleSlotHashes: instances.map { instance in
-                    (role: instance.role, slot: instance.slot, contentHash: instance.resourceHash)
-                }
-            )
-            if importedFingerprint != remoteAssetFingerprint {
-                contentHashIndexLog.info("[HashIndex] fingerprint mismatch for \(assetLocalIdentifier, privacy: .private): preserving remote restore identity")
-            }
-        } else {
-            contentHashIndexLog.info("[HashIndex] legacy restore identity for \(assetLocalIdentifier, privacy: .private): preserving remote fingerprint without full local hashes")
         }
         try databaseManager.write { db in
             try Self.writeLocalAssetRow(

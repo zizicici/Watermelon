@@ -6,6 +6,7 @@ final actor S3Client: RemoteStorageClientProtocol {
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
     // S3 keys are byte-exact; `IMG.JPG` and `img.jpg` are distinct objects.
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
     static let errorDomain = S3ErrorClassifier.errorDomain
 
     struct Config: Sendable {

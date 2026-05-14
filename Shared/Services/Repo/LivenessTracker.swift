@@ -118,7 +118,7 @@ actor LivenessTracker {
             }
             do {
                 if let remoteTimestamp = try await existingHeartbeatTimestamp(remotePath: remotePath),
-                   remoteTimestamp >= timestampMs,
+                   remoteTimestamp > timestampMs,
                    !LivenessTracker.isStale(timestampMs: remoteTimestamp) {
                     try? await client.delete(path: stagingPath)
                     return

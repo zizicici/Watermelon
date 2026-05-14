@@ -692,6 +692,7 @@ enum State {
                 } else {
                     self.session.failResumePreparation()
                 }
+                self.activeTerminationIntent = .none
                 self.notifyObserversNow()
             }
         }

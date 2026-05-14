@@ -155,6 +155,14 @@ enum BackupV2RuntimeBuilder {
 
             if needsMigration {
                 await onMigrationStart?()
+                do {
+                    try await bootstrap.ensureVersionJSON(writerID: writerID)
+                } catch let error as RepoBootstrap.VersionConflict {
+                    if case .higherFormatVersion(_, _, let minApp) = error {
+                        throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
+                    }
+                    throw error
+                }
                 let processed = try await migration.runPhase1(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
                 do {
                     try await migration.runPhase2(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)

@@ -24,6 +24,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     // POSIX O_EXCL → kernel-enforced uniqueness per path, even across processes; no peer can win.
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .none }
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { nameCaseSensitivityState.value }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
     struct Config {
         let rootBookmarkData: Data
         let onBookmarkRefreshed: ((BookmarkRefreshPayload) -> Void)?

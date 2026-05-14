@@ -6,7 +6,6 @@ import Foundation
 /// The coordinator decides when and how to sequence scoped backup, remote sync and local refresh.
 @MainActor
 final class DownloadWorkflowHelper {
-
     struct Context: Sendable {
         let profile: ServerProfileRecord
         let password: String
@@ -74,7 +73,7 @@ final class DownloadWorkflowHelper {
 
     func cancel() {}
 
-    private static func writeHashIndex(
+    private nonisolated static func writeHashIndex(
         assetLocalIdentifier: String,
         remoteAssetFingerprint: Data,
         instances: [RemoteAssetResourceInstance],

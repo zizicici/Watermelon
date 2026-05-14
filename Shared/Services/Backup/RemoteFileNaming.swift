@@ -456,7 +456,12 @@ enum RemoteFileNaming {
                 return candidate
             }
         }
-        preconditionFailure("finite occupied set must leave at least one compact fallback name")
+        assertionFailure("remote filename fallback exhausted compact candidates")
+        let token = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+        if forceWriterIDSuffix, let writerID {
+            return writerIDSuffixedName(stem: "wm", ext: ext, writerID: writerID, escapeToken: token)
+        }
+        return "wm_\(token)" + extBudget
     }
 
     private static func emergencyStableToken(

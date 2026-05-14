@@ -41,6 +41,7 @@ protocol BackupMonthStore: AnyObject {
 
     /// V2-only physical-presence overlay; V1 returns empty.
     func physicallyMissingHashesSnapshot() -> Set<Data>
+    var physicallyMissingHashesAreAuthoritative: Bool { get }
 
     @discardableResult
     func flushToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta
@@ -48,6 +49,7 @@ protocol BackupMonthStore: AnyObject {
 
 extension MonthManifestStore: BackupMonthStore {
     var hasAnyAsset: Bool { !assetsByFingerprint.isEmpty }
+    var physicallyMissingHashesAreAuthoritative: Bool { true }
     func physicallyMissingHashesSnapshot() -> Set<Data> { [] }
 }
 

@@ -4,6 +4,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .unknown }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
     static let errorDomain = "WebDAVClient"
 
     struct Config {

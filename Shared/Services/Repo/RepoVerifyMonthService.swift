@@ -186,14 +186,15 @@ actor RepoVerifyMonthService {
                     )
                     // Transport errors must abort verify rather than be silently classified absent — a false absent here drives tombstone issuance against healthy bytes.
                     do {
-                        verifiedFileCount += 1
-                        verifiedByteCount += candidateSize
-                        if try await RemoteContentTrust.verifyHash(
+                        let verified = try await RemoteContentTrust.verifyHash(
                             client: clientRef,
                             remotePath: path,
                             expectedSize: candidate.size,
                             expectedHash: candidate.hash
-                        ) {
+                        )
+                        verifiedFileCount += 1
+                        verifiedByteCount += candidateSize
+                        if verified {
                             return .present
                         }
                     } catch is CancellationError {
