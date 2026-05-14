@@ -382,7 +382,7 @@ struct BackupRunPreparationService: Sendable {
                         links: remainingLinks
                     )
                 }
-                _ = try? await remoteIndexService.syncIndex(client: client, profile: profile)
+                _ = try await remoteIndexService.syncIndex(client: client, profile: profile)
                 await v2.shutdown()
             } catch {
                 await v2.shutdown()

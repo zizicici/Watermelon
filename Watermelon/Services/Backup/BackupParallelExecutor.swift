@@ -205,15 +205,12 @@ struct BackupParallelExecutor: Sendable {
                 let monthStore: any BackupMonthStore
                 do {
                     if let v2Services {
-                        // Seed conservatively; the session's fresh listing clears stale overlay misses.
-                        let priorMissing = remoteIndexService.physicallyMissingHashes(for: monthKey)
                         monthStore = try await V2MonthSession.loadOrCreate(
                             client: client,
                             basePath: profile.basePath,
                             year: monthKey.year,
                             month: monthKey.month,
                             v2Services: v2Services,
-                            seedMissingHashes: priorMissing,
                             stepLogger: { message in
                                 eventStream.emitLog(message, level: .error)
                             }
@@ -428,10 +425,19 @@ struct BackupParallelExecutor: Sendable {
                                             workerState.paused = true
                                             break
                                         }
-                                        // Connection-loss: don't keep burning per-asset processing cycles
-                                        // before the next per-asset handler notices.
                                         if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
-                                            throw error
+                                            clientReusable = false
+                                            monthFatalError = error
+                                            eventStream.emitLog(
+                                                String.localizedStringWithFormat(
+                                                    String(localized: "backup.parallel.flushManifestFailed"),
+                                                    workerID + 1,
+                                                    monthKey.text,
+                                                    profile.userFacingStorageErrorMessage(error)
+                                                ),
+                                                level: .error
+                                            )
+                                            break
                                         }
                                         eventStream.emitLog(
                                             String.localizedStringWithFormat(

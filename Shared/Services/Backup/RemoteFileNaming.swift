@@ -115,10 +115,16 @@ enum RemoteFileNaming {
     }
 
     static func clampStringToBytes(_ value: String, maxBytes: Int) -> String {
+        guard maxBytes > 0 else { return "_" }
         if value.utf8.count <= maxBytes { return value }
-        var result = value
-        while result.utf8.count > maxBytes && !result.isEmpty {
-            result.removeLast()
+        var result = ""
+        result.reserveCapacity(min(value.count, maxBytes))
+        var byteCount = 0
+        for scalar in value.unicodeScalars {
+            let scalarByteCount = String(scalar).utf8.count
+            guard byteCount + scalarByteCount <= maxBytes else { break }
+            result.unicodeScalars.append(scalar)
+            byteCount += scalarByteCount
         }
         return result.isEmpty ? "_" : result
     }
@@ -361,11 +367,26 @@ enum RemoteFileNaming {
                 return candidate
             }
         }
-        if forceWriterIDSuffix, let writerID {
-            return writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: stableToken)
+        let extendedSuffixLimit = 4096 + 256
+        for suffix in 4096..<extendedSuffixLimit {
+            let token = "\(stableToken)-\(String(suffix, radix: 36))"
+            let candidate: String
+            if forceWriterIDSuffix, let writerID {
+                candidate = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: token)
+            } else {
+                let stemBudget = max(maxLeafByteBudget - token.utf8.count - 1 - extBudget.utf8.count, 1)
+                candidate = clampStringToBytes(stem, maxBytes: stemBudget) + "_" + token + extBudget
+            }
+            if !collisionKeys.contains(collisionKey(for: candidate)) {
+                return candidate
+            }
         }
-        let stemBudget = max(maxLeafByteBudget - stableToken.utf8.count - 1 - extBudget.utf8.count, 1)
-        return clampStringToBytes(stem, maxBytes: stemBudget) + "_" + stableToken + extBudget
+        let token = "\(stableToken)-\(UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: ""))"
+        if forceWriterIDSuffix, let writerID {
+            return writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: token)
+        }
+        let stemBudget = max(maxLeafByteBudget - token.utf8.count - 1 - extBudget.utf8.count, 1)
+        return clampStringToBytes(stem, maxBytes: stemBudget) + "_" + token + extBudget
     }
 
     private static func emergencyStableToken(

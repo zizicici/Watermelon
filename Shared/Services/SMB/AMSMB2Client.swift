@@ -8,7 +8,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
     // SMB doesn't enforce O_EXCL across sessions; assume peers can win the same path.
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
-    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseInsensitive }
 
     private let config: SMBServerConfig
 

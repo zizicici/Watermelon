@@ -75,7 +75,7 @@ enum MetadataCreateGate {
                 ])
             }
             do {
-                guard try await verifyMatchesLocalWithRetries(
+                guard try await verifyMatchesLocal(
                     client: client,
                     remotePath: stagingPath,
                     localURL: localURL

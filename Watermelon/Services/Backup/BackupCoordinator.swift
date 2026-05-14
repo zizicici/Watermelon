@@ -133,13 +133,14 @@ final class BackupCoordinator: Sendable {
 
     func prepareResumeHandle(profile: ServerProfileRecord, password: String) async throws -> RemoteViewHandle {
         try await preparationService.withConnectedClient(profile: profile, password: password) { client in
-            // Resume isn't a cold start; transient LIST failure must preserve the prior overlay.
-            let priorOverlay = self.remoteIndexService.physicallyMissingSnapshot()
-            return try await self.remoteIndexService.syncOverlayAndCaptureHandle(
+            let handle = try await self.remoteIndexService.syncOverlayAndCaptureHandle(
                 client: client,
-                basePath: profile.basePath,
-                fallback: priorOverlay
+                basePath: profile.basePath
             )
+            guard handle.overlayFreshness == .fresh else {
+                throw RemoteViewHandleError.stalePhysicalPresenceOverlay
+            }
+            return handle
         }
     }
 

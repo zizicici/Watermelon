@@ -682,7 +682,8 @@ enum State {
                     level: .error
                 ))
                 // Transient drop must keep paused context; clearing it would force a full restart on the next resume tap.
-                if connection.profile.isConnectionUnavailableError(error) {
+                if connection.profile.isConnectionUnavailableError(error) ||
+                    error is RemoteViewHandleError {
                     self.session.cancelResume(
                         pausedMode: resumeContext.pausedMode,
                         pausedDisplayMode: resumeContext.pausedDisplayMode

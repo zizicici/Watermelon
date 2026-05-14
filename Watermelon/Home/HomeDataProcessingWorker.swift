@@ -299,17 +299,12 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
-    /// PHChange is only valid in the delegate's sync scope; extract pure values before async apply.
+    /// PHChange is only valid in the delegate's sync scope; keep extraction and apply atomic.
     func handlePhotoLibraryChange(
         _ change: PHChange,
         completion: @escaping (Set<LibraryMonthKey>) -> Void
     ) {
-        let extraction: (
-            scope: HomeLocalLibraryScope?,
-            revision: UInt64,
-            changes: [LibraryChangePayload.CollectionChange],
-            nextResults: [(Int, PHFetchResult<PHAsset>)]
-        ) = processingQueue.sync {
+        processingQueue.sync {
             var result: [LibraryChangePayload.CollectionChange] = []
             var nextResults: [(Int, PHFetchResult<PHAsset>)] = []
             result.reserveCapacity(self.trackedFetchResults.count)
@@ -353,17 +348,13 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 result.append(entry)
                 nextResults.append((index, nextFetchResult))
             }
-            return (
+            let extraction = (
                 scope: self.loadedScope,
                 revision: self.trackedFetchResultsRevision,
                 changes: result,
                 nextResults: nextResults
             )
-        }
-        guard !extraction.changes.isEmpty else { return }
-
-        processingQueue.async {
-            // Scope-changed between extract and apply: drop payload (collectionIndex no longer matches).
+            guard !extraction.changes.isEmpty else { return }
             guard self.loadedScope == extraction.scope,
                   self.trackedFetchResultsRevision == extraction.revision else { return }
             for (index, nextResult) in extraction.nextResults where self.trackedFetchResults.indices.contains(index) {

@@ -35,54 +35,38 @@ enum BackupV2RuntimeBuilder {
         let runID = RepoIdentity.newRunID()
         let bootstrap = RepoBootstrap(client: client, basePath: profile.basePath)
 
+        func resolveExistingV2RepoID() async throws -> String {
+            let storedRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
+            let remoteRepoID = try await bootstrap.loadRepoID()
+            if let storedRepoID, let remoteRepoID, storedRepoID != remoteRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: remoteRepoID)
+            }
+            if remoteRepoID == nil, storedRepoID == nil,
+               try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
+                throw BackupV2RuntimeBuildError.damagedV2Repo
+            }
+
+            let suggested = remoteRepoID ?? storedRepoID ?? UUID().uuidString.lowercased()
+            let resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggested, writerID: writerID)
+            if let storedRepoID, resolvedRepoID != storedRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: resolvedRepoID)
+            }
+            if let remoteRepoID, resolvedRepoID != remoteRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remoteRepoID, remote: resolvedRepoID)
+            }
+            return resolvedRepoID
+        }
+
         let resolvedRepoID: String
         switch inspection {
         case .unsupported(let minAppVersion):
             throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
         case .v2:
-            let remoteRepoID = try await bootstrap.loadRepoID()
-            let localRepoID: String?
-            if let remoteRepoID {
-                let matchingState = try await identity.loadRepoState(profileID: profileID, repoID: remoteRepoID)
-                localRepoID = matchingState?.repoID
-            } else {
-                localRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
-                if localRepoID == nil,
-                   try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
-                    throw BackupV2RuntimeBuildError.damagedV2Repo
-                }
-            }
-            let suggested = remoteRepoID ?? localRepoID ?? UUID().uuidString.lowercased()
-            resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggested, writerID: writerID)
-            if let remoteRepoID, resolvedRepoID != remoteRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remoteRepoID, remote: resolvedRepoID)
-            }
-            if remoteRepoID == nil, let localRepoID, resolvedRepoID != localRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: localRepoID, remote: resolvedRepoID)
-            }
+            resolvedRepoID = try await resolveExistingV2RepoID()
             // WebDAV/SMB/SFTP don't auto-create parents on PUT.
             try await bootstrap.ensureSubdirectories()
         case .v2WithPendingMigrationCleanup(_, let ownerWriterID):
-            let remoteRepoID = try await bootstrap.loadRepoID()
-            let localRepoID: String?
-            if let remoteRepoID {
-                let matchingState = try await identity.loadRepoState(profileID: profileID, repoID: remoteRepoID)
-                localRepoID = matchingState?.repoID
-            } else {
-                localRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
-                if localRepoID == nil,
-                   try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
-                    throw BackupV2RuntimeBuildError.damagedV2Repo
-                }
-            }
-            let suggested = remoteRepoID ?? localRepoID ?? UUID().uuidString.lowercased()
-            resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggested, writerID: writerID)
-            if let remoteRepoID, resolvedRepoID != remoteRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remoteRepoID, remote: resolvedRepoID)
-            }
-            if remoteRepoID == nil, let localRepoID, resolvedRepoID != localRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: localRepoID, remote: resolvedRepoID)
-            }
+            resolvedRepoID = try await resolveExistingV2RepoID()
             try await bootstrap.ensureSubdirectories()
             let cleanupBootstrap = RepoBootstrap(client: metadataClient, basePath: profile.basePath)
             let cleanup = V1MigrationService(

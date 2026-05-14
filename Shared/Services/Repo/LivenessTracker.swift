@@ -107,6 +107,17 @@ actor LivenessTracker {
             if !stagingStillExists, let lastFailure {
                 livenessLog.warning("[Liveness] staging vanished after failed move for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
             }
+            do {
+                if try await existingHeartbeatIsActive(remotePath: remotePath) {
+                    try? await client.delete(path: stagingPath)
+                    return
+                }
+            } catch is CancellationError {
+                try? await client.delete(path: stagingPath)
+                return
+            } catch {
+                livenessLog.warning("[Liveness] heartbeat probe failed after failed move for \(remotePath, privacy: .public), continuing fallback write: \(error.localizedDescription, privacy: .public)")
+            }
         }
         if Task.isCancelled {
             try? await client.delete(path: stagingPath)
@@ -143,6 +154,32 @@ actor LivenessTracker {
         if let lastFailure {
             livenessLog.warning("[Liveness] all write strategies failed for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func existingHeartbeatIsActive(remotePath: String) async throws -> Bool {
+        do {
+            guard let metadata = try await client.metadata(path: remotePath), !metadata.isDirectory else {
+                return false
+            }
+        } catch {
+            if isStorageNotFoundError(error) { return false }
+            throw error
+        }
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("liveness-existing-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        do {
+            try await client.download(remotePath: remotePath, localURL: temp)
+        } catch {
+            if isStorageNotFoundError(error) { return false }
+            throw error
+        }
+        guard let data = try? Data(contentsOf: temp),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ts = (dict["ts"] as? Int64) ?? (dict["ts"] as? Int).map(Int64.init) else {
+            return false
+        }
+        return !LivenessTracker.isStale(timestampMs: ts)
     }
 
     static func isStale(timestampMs: Int64, now: Date = Date()) -> Bool {

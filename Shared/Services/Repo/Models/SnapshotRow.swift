@@ -5,8 +5,7 @@ struct SnapshotHeader: Equatable, Sendable {
     let version: Int
     let scope: String
     let writerID: String
-    /// Empty means "legacy snapshot without repoID stamp" — accepted by materializer to
-    /// preserve forward compatibility but written empty by no current code path.
+    /// Empty means "legacy snapshot without repoID stamp"; resolved-repo materializers skip it.
     let repoID: String
     let covered: CoveredRanges
 }

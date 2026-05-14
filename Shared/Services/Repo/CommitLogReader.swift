@@ -63,7 +63,7 @@ actor CommitLogReader {
         // Mid-stream blank lines are corruption; only writer's trailing \n is benign.
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { sub -> String in
             var line = String(sub)
-            if line.hasSuffix("\r") {
+            while line.hasSuffix("\r") {
                 line.removeLast()
             }
             return line

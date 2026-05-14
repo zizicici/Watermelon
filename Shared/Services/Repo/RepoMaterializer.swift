@@ -3,8 +3,6 @@ import os.log
 
 private let materializerLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoMaterializer")
 
-// Empty-repoID snapshots are legacy baselines; accept them under the resolved repo.
-
 actor RepoMaterializer {
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
@@ -100,9 +98,15 @@ actor RepoMaterializer {
                                 materializerLog.warning("skip snapshot whose filename disagrees with header: \(candidate.filename, privacy: .public)")
                                 continue
                             }
-                            if let expected, !file.header.repoID.isEmpty, file.header.repoID != expected {
-                                materializerLog.warning("skip foreign-repo snapshot \(candidate.filename, privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expected, privacy: .public)")
-                                continue
+                            if let expected {
+                                guard !file.header.repoID.isEmpty else {
+                                    materializerLog.warning("skip unstamped legacy snapshot \(candidate.filename, privacy: .public) while materializing repo=\(expected, privacy: .public)")
+                                    continue
+                                }
+                                guard file.header.repoID == expected else {
+                                    materializerLog.warning("skip foreign-repo snapshot \(candidate.filename, privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expected, privacy: .public)")
+                                    continue
+                                }
                             }
                             return (month, file)
                         } catch let error as SnapshotReader.ReadError {
@@ -247,7 +251,7 @@ actor RepoMaterializer {
             let header = entry.file.header
             // Foreign-repoID commits exist when a profile re-points or a wiped-and-rewritten
             // remote leaves stale files; never replay them against the current repo state.
-            if let expectedRepoID, !header.repoID.isEmpty, header.repoID != expectedRepoID {
+            if let expectedRepoID, header.repoID != expectedRepoID {
                 materializerLog.warning("skip commit with mismatched repoID file=\(String(describing: entry.month), privacy: .public) header=\(header.repoID, privacy: .public) expected=\(expectedRepoID, privacy: .public)")
                 continue
             }

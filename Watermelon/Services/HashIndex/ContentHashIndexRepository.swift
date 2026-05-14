@@ -61,6 +61,7 @@ struct LocalHashIndexStats: Sendable {
 final class ContentHashIndexRepository: @unchecked Sendable {
     // Under SQLITE_MAX_VARIABLE_NUMBER and small enough to keep prepared-statement cost flat.
     private static let idChunkSize = 400
+    private static let sha256DigestLength = 32
 
     private let databaseManager: DatabaseManager
 
@@ -474,6 +475,11 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         remoteAssetFingerprint: Data,
         instances: [RemoteAssetResourceInstance]
     ) throws {
+        guard !instances.isEmpty,
+              instances.allSatisfy({ $0.resourceHash.count == Self.sha256DigestLength }) else {
+            try deleteIndexEntries(assetIDs: [assetLocalIdentifier])
+            return
+        }
         let records = instances.map { instance in
             LocalAssetResourceHashRecord(
                 role: instance.role,
@@ -485,12 +491,20 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         let totalSize = instances.reduce(Int64(0)) { partial, instance in
             partial + instance.fileSize
         }
+        let importedFingerprint = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: instances.map { instance in
+                (role: instance.role, slot: instance.slot, contentHash: instance.resourceHash)
+            }
+        )
+        let storedFingerprint = importedFingerprint == remoteAssetFingerprint
+            ? remoteAssetFingerprint
+            : importedFingerprint
         let signature = BackupAssetResourcePlanner.resourceSignature(
             roleSlots: instances.map { (role: $0.role, slot: $0.slot) }
         )
         try upsertAssetHashSnapshot(
             assetLocalIdentifier: assetLocalIdentifier,
-            assetFingerprint: remoteAssetFingerprint,
+            assetFingerprint: storedFingerprint,
             resources: records,
             totalFileSizeBytes: totalSize,
             modificationDateMs: nil,

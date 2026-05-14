@@ -655,10 +655,47 @@ extension AssetProcessor {
             if cancellationController?.isCancelled == true { throw CancellationError() }
             if profile.isConnectionUnavailableError(error) { throw error }
             if isStorageNotFoundError(error) { return .absent }
+            if Self.metadataProbeShouldPropagate(error) { throw error }
             if Self.metadataProbeCanRetryAtCreateBoundary(error) { return .absent }
             uploadLog.warning("metadata probe ambiguous for \(path, privacy: .public): \(String(describing: error), privacy: .public)")
             return .present(size: nil)
         }
+    }
+
+    private static func metadataProbeShouldPropagate(_ error: Error) -> Bool {
+        for nsError in nsErrorChain(error) {
+            if nsError.domain == WebDAVClient.errorDomain,
+               nsError.code == 401 || nsError.code == 403 {
+                return true
+            }
+            if nsError.domain == S3ErrorClassifier.errorDomain {
+                if let status = nsError.userInfo[S3ErrorClassifier.userInfoStatusCodeKey] as? Int,
+                   status == 401 || status == 403 {
+                    return true
+                }
+                if let serverCode = nsError.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String {
+                    switch serverCode {
+                    case "AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch", "AuthorizationHeaderMalformed":
+                        return true
+                    default:
+                        break
+                    }
+                }
+            }
+            if nsError.domain == NSCocoaErrorDomain,
+               nsError.code == NSFileReadNoPermissionError || nsError.code == NSFileWriteNoPermissionError {
+                return true
+            }
+            if nsError.domain == NSPOSIXErrorDomain,
+               nsError.code == Int(EACCES) || nsError.code == Int(EPERM) {
+                return true
+            }
+            let description = nsError.localizedDescription.uppercased()
+            if description.contains("STATUS_ACCESS_DENIED") || description.contains("0XC0000022") {
+                return true
+            }
+        }
+        return false
     }
 
     private static func metadataProbeCanRetryAtCreateBoundary(_ error: Error) -> Bool {

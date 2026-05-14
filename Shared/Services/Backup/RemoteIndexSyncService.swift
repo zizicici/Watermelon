@@ -3,6 +3,17 @@ import os.log
 
 private let syncLog = Logger(subsystem: "com.zizicici.watermelon", category: "SyncTiming")
 
+private enum PhysicalPresenceOverlayProbeError: LocalizedError {
+    case budgetExhausted(month: LibraryMonthKey, partialMissing: Set<Data>)
+
+    var errorDescription: String? {
+        switch self {
+        case .budgetExhausted(let month, _):
+            return "overlay probe budget exhausted for \(month.text)"
+        }
+    }
+}
+
 final class RemoteIndexSyncService: @unchecked Sendable {
     private static let overlayProbeMaxVerifiedFilesPerMonth = 64
     private static let overlayProbeMaxVerifiedBytesPerMonth: Int64 = 32 * 1024 * 1024
@@ -13,10 +24,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         private var preCancelledIDs: Set<UUID> = []
         private var preCancelledOrder: [UUID] = []
         private var registeredIDs: Set<UUID> = []
+        private var retiredIDs: Set<UUID> = []
+        private var retiredOrder: [UUID] = []
         private static let preCancelledIDsCap = 4096
+        private static let retiredIDsCap = 4096
 
         private func registerWaiter(id: UUID, continuation: CheckedContinuation<Void, Error>) {
             if consumePreCancelled(id) {
+                recordRetired(id)
                 continuation.resume(throwing: CancellationError())
                 return
             }
@@ -33,10 +48,24 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             if let idx = waiters.firstIndex(where: { $0.0 == id }) {
                 let (_, cont) = waiters.remove(at: idx)
                 registeredIDs.remove(id)
+                recordRetired(id)
                 cont.resume(throwing: CancellationError())
+            } else if retiredIDs.contains(id) {
+                return
             } else if !registeredIDs.contains(id) {
                 recordPreCancelled(id)
             }
+        }
+
+        private func recordRetired(_ id: UUID) {
+            if retiredIDs.contains(id) { return }
+            if retiredIDs.count >= Self.retiredIDsCap,
+               let oldest = retiredOrder.first {
+                retiredOrder.removeFirst()
+                retiredIDs.remove(oldest)
+            }
+            retiredIDs.insert(id)
+            retiredOrder.append(id)
         }
 
         private func recordPreCancelled(_ id: UUID) {
@@ -70,10 +99,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
         private func release(id: UUID) {
             registeredIDs.remove(id)
+            recordRetired(id)
             while !waiters.isEmpty {
                 let next = waiters.removeFirst()
                 if consumePreCancelled(next.0) {
                     registeredIDs.remove(next.0)
+                    recordRetired(next.0)
                     next.1.resume(throwing: CancellationError())
                     continue
                 }
@@ -199,22 +230,42 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
     }
 
-    /// Single syncGate hold so a concurrent syncIndex can't mutate read-model between overlay refresh and handle capture.
     func syncOverlayAndCaptureHandle(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        fallback: [LibraryMonthKey: Set<Data>] = [:],
+        fallback: [LibraryMonthKey: Set<Data>]? = nil,
         concurrencyCap: Int = 4
     ) async throws -> RemoteViewHandle {
-        try await syncGate.withLock { [self] in
-            let fresh = try await refreshPhysicalPresenceOverlay(
-                client: client,
-                basePath: basePath,
-                fallback: fallback,
-                concurrencyCap: concurrencyCap
-            )
-            await state.setOverlayFresh(fresh)
-            return self.handleFromCurrentSnapshot(overlayFresh: fresh)
+        let captured = try await syncGate.withLock { [self] in
+            optimisticMutationLock.withLock {
+                let current = committedView.currentSnapshotWithRevision()
+                return (
+                    revision: current.revision,
+                    snapshot: current.snapshot,
+                    fallback: fallback ?? current.snapshot.physicallyMissingHashesByMonth
+                )
+            }
+        }
+        let probe = try await probePhysicalPresenceOverlay(
+            snapshot: captured.snapshot,
+            client: client,
+            basePath: basePath,
+            fallback: captured.fallback,
+            concurrencyCap: concurrencyCap
+        )
+        return try await syncGate.withLock { [self] in
+            let currentRevision = optimisticMutationLock.withLock {
+                committedView.currentRevision()
+            }
+            let revisionUnchanged = currentRevision == captured.revision
+            if revisionUnchanged {
+                applyPhysicalPresenceOverlay(probe.missingByMonth)
+            } else {
+                syncLog.info("[SyncTiming] overlay handle captured stale revision; preserving previous overlay")
+            }
+            let overlayFresh = revisionUnchanged && probe.fresh
+            await state.setOverlayFresh(overlayFresh)
+            return self.handleFromCurrentSnapshot(overlayFresh: overlayFresh)
         }
     }
 
@@ -254,9 +305,15 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             resetCommittedViewAndUncommitted()
         }
 
-        let inspection = try await RemoteFormatCompatibilityService()
-            .inspectRemoteFormat(client: client, profile: profile)
         let alreadyV2 = await state.isV2Repo() == true
+        let inspection: RemoteFormatInspection
+        if expectV2 {
+            inspection = .v2(formatVersion: RepoLayout.currentSupportedFormatVersion)
+            await state.setIsV2Repo(true)
+        } else {
+            inspection = try await RemoteFormatCompatibilityService()
+                .inspectRemoteFormat(client: client, profile: profile)
+        }
         switch inspection {
         case .unsupported(let minAppVersion):
             throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
@@ -363,29 +420,35 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
 
         try Task.checkCancellation()
-        var appliedChangedMonths = 0
-        var appliedRemovedMonths = 0
-        for month in stagedMissingMonths.sorted() {
-            if committedView.removeMonth(month) {
-                appliedChangedMonths += 1
+        let appliedCounts = optimisticMutationLock.withLock { () -> (changed: Int, removed: Int) in
+            var changed = 0
+            var removed = 0
+            for month in stagedMissingMonths.sorted() {
+                if committedView.removeMonth(month) {
+                    changed += 1
+                }
             }
-        }
-        for month in stagedChangedMonths.keys.sorted() {
-            guard let snapshot = stagedChangedMonths[month] else { continue }
-            if committedView.replaceMonth(
-                month,
-                resources: snapshot.resources,
-                assets: snapshot.assets,
-                assetResourceLinks: snapshot.links
-            ) {
-                appliedChangedMonths += 1
+            for month in stagedChangedMonths.keys.sorted() {
+                guard let snapshot = stagedChangedMonths[month] else { continue }
+                if committedView.replaceMonth(
+                    month,
+                    resources: snapshot.resources,
+                    assets: snapshot.assets,
+                    assetResourceLinks: snapshot.links
+                ) {
+                    changed += 1
+                }
             }
+
+            for month in removedMonths.sorted() {
+                if committedView.removeMonth(month) {
+                    removed += 1
+                }
+            }
+            return (changed, removed)
         }
 
-        for month in removedMonths.sorted() {
-            if committedView.removeMonth(month) {
-                appliedRemovedMonths += 1
-            }
+        for _ in removedMonths.sorted() {
             processedMonthCount += 1
             onSyncProgress?(RemoteSyncProgress(current: processedMonthCount, total: totalMonthsToProcess))
         }
@@ -395,7 +458,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         committedView.markSynced(Date())
         let digest = committedView.counts()
         let totalElapsed = CFAbsoluteTimeGetCurrent() - syncStart
-        syncLog.info("[SyncTiming] Sync complete. Total: \(Self.ms(totalElapsed))s, changed: \(appliedChangedMonths), removed: \(appliedRemovedMonths)")
+        syncLog.info("[SyncTiming] Sync complete. Total: \(Self.ms(totalElapsed))s, changed: \(appliedCounts.changed), removed: \(appliedCounts.removed)")
 
         return digest
     }
@@ -433,15 +496,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         do {
             overlayFresh = try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
         } catch is CancellationError {
-            for (month, hashes) in priorOverlay {
-                committedView.markPhysicallyMissing(month: month, hashes: hashes)
-            }
+            applyPhysicalPresenceOverlay(priorOverlay)
             await state.setOverlayFresh(false)
             throw CancellationError()
         } catch {
-            for (month, hashes) in priorOverlay {
-                committedView.markPhysicallyMissing(month: month, hashes: hashes)
-            }
+            applyPhysicalPresenceOverlay(priorOverlay)
             syncLog.info("[SyncTiming] overlay refresh skipped: \(error.localizedDescription)")
         }
         await state.setOverlayFresh(overlayFresh)
@@ -609,6 +668,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     func recordCommittedFromFlushError(month: LibraryMonthKey, _ error: Error) {
         if case let V2MonthSession.FlushError.snapshotWriteFailed(assets, tombstones, _) = error {
             markCommittedV2(month: month, fingerprints: assets.union(tombstones))
+        } else {
+            syncLog.info("[SyncTiming] flush error before durable snapshot handoff for \(month.text): \(error.localizedDescription)")
         }
     }
 
@@ -656,10 +717,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func committedAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
-        Self.committedFingerprints(
-            from: committedView.current(),
-            subtractingInflight: inflightTracker
-        )
+        optimisticMutationLock.withLock {
+            Self.committedFingerprints(
+                from: committedView.current(),
+                subtractingInflight: inflightTracker
+            )
+        }
     }
 
     private static func committedFingerprints(
@@ -751,7 +814,35 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         concurrencyCap: Int = 4
     ) async throws -> Bool {
         try Task.checkCancellation()
-        let snapshot = committedView.current()
+        let snapshot = optimisticMutationLock.withLock {
+            committedView.current()
+        }
+        let probe = try await probePhysicalPresenceOverlay(
+            snapshot: snapshot,
+            client: client,
+            basePath: basePath,
+            fallback: fallback,
+            concurrencyCap: concurrencyCap
+        )
+        applyPhysicalPresenceOverlay(probe.missingByMonth)
+        return probe.fresh
+    }
+
+    private func applyPhysicalPresenceOverlay(_ missingByMonth: [LibraryMonthKey: Set<Data>]) {
+        optimisticMutationLock.withLock {
+            for (month, hashes) in missingByMonth {
+                committedView.markPhysicallyMissing(month: month, hashes: hashes)
+            }
+        }
+    }
+
+    private func probePhysicalPresenceOverlay(
+        snapshot: RemoteLibrarySnapshot,
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        fallback: [LibraryMonthKey: Set<Data>],
+        concurrencyCap: Int
+    ) async throws -> (fresh: Bool, missingByMonth: [LibraryMonthKey: Set<Data>]) {
         var resourcesByMonth: [LibraryMonthKey: [RemoteManifestResource]] = [:]
         for resource in snapshot.resources {
             let month = LibraryMonthKey(year: resource.year, month: resource.month)
@@ -760,6 +851,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         let effectiveCap = client.concurrencyMode == .serialOnly ? 1 : concurrencyCap
         var iterator = resourcesByMonth.makeIterator()
         var anyFailure = false
+        var missingByMonth: [LibraryMonthKey: Set<Data>] = [:]
         try await withThrowingTaskGroup(of: (LibraryMonthKey, Result<Set<Data>, Error>).self) { group in
             for _ in 0..<effectiveCap {
                 guard let (month, resources) = iterator.next() else { break }
@@ -779,15 +871,16 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 try Task.checkCancellation()
                 switch result {
                 case .success(let missing):
-                    committedView.markPhysicallyMissing(month: month, hashes: missing)
+                    missingByMonth[month] = missing
                 case .failure(let error):
                     anyFailure = true
                     if let stale = fallback[month] {
-                        committedView.markPhysicallyMissing(month: month, hashes: stale)
+                        missingByMonth[month] = stale
+                    } else if case let PhysicalPresenceOverlayProbeError.budgetExhausted(month: _, partialMissing: partialMissing) = error {
+                        missingByMonth[month] = partialMissing
                     } else {
-                        // Fail-closed: Home/health/restore read the overlay without gating on freshness, so a cold-start probe failure must not look healthy.
                         let allHashes = Set((resourcesByMonth[month] ?? []).map(\.contentHash))
-                        committedView.markPhysicallyMissing(month: month, hashes: allHashes)
+                        missingByMonth[month] = allHashes
                     }
                     syncLog.info("[SyncTiming] probe failed for \(month.text): \(error.localizedDescription)")
                 }
@@ -806,7 +899,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 }
             }
         }
-        return !anyFailure
+        return (!anyFailure, missingByMonth)
     }
 
     private func probeMonthForMissing(
@@ -868,10 +961,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                         verifiedByteCount + resource.fileSize > Self.overlayProbeMaxVerifiedBytesPerMonth {
                         if !loggedProbeBudgetExhausted {
                             loggedProbeBudgetExhausted = true
-                            syncLog.info("[SyncTiming] overlay probe budget exhausted for \(month.text); falling back to size-only for remaining small files")
+                            syncLog.info("[SyncTiming] overlay probe budget exhausted for \(month.text); preserving stale overlay")
                         }
-                        anyPresent = true
-                        break candidateScan
+                        throw PhysicalPresenceOverlayProbeError.budgetExhausted(month: month, partialMissing: missing)
                     }
                     let path = RemotePathBuilder.absolutePath(
                         basePath: basePath,

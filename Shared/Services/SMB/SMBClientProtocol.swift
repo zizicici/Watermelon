@@ -192,7 +192,7 @@ extension RemoteStorageClientProtocol {
         }
         try Task.checkCancellation()
         try await move(from: sourcePath, to: destinationPath)
-        return .created
+        return .bestEffortRetry
     }
 
     func disconnectSafely() async {

@@ -60,7 +60,7 @@ actor SnapshotReader {
     static func parse(text: String) throws -> SnapshotFile {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { sub -> String in
             var line = String(sub)
-            if line.hasSuffix("\r") {
+            while line.hasSuffix("\r") {
                 line.removeLast()
             }
             return line

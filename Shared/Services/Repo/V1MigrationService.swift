@@ -111,13 +111,23 @@ actor V1MigrationService {
             }
 
             let monthKey = LibraryMonthKey(year: scanned.year, month: scanned.month)
-            let resourcesByHash: [Data: RemoteManifestResource] = Dictionary(uniqueKeysWithValues: snapshot.resources.map { ($0.contentHash, $0) })
+            var resourcesByHash: [Data: RemoteManifestResource] = [:]
+            resourcesByHash.reserveCapacity(snapshot.resources.count)
+            for resource in snapshot.resources where Self.isValidV2Hash(resource.contentHash) {
+                resourcesByHash[resource.contentHash] = resource
+            }
             let linksByAssetFP: [Data: [RemoteAssetResourceLink]] = Dictionary(grouping: snapshot.links, by: { $0.assetFingerprint })
 
             var migrableAssets: [(asset: RemoteManifestAsset, resources: [CommitResourceEntry])] = []
             migrableAssets.reserveCapacity(snapshot.assets.count)
             var skippedAssetFailures: [String] = []
             for asset in snapshot.assets {
+                guard Self.isValidV2Hash(asset.assetFingerprint) else {
+                    let reason = "asset has invalid fingerprint length \(asset.assetFingerprint.count)"
+                    skippedAssetFailures.append(reason)
+                    v1MigrationLog.warning("V1 asset in \(scanned.year)-\(scanned.month) has invalid fingerprint length \(asset.assetFingerprint.count, privacy: .public)")
+                    continue
+                }
                 let links = linksByAssetFP[asset.assetFingerprint] ?? []
                 if links.isEmpty {
                     let reason = "asset \(asset.assetFingerprint.hexString) has no resource links"
@@ -128,9 +138,18 @@ actor V1MigrationService {
                 var resourcesForOp: [CommitResourceEntry] = []
                 resourcesForOp.reserveCapacity(links.count)
                 var missingResourceHash: Data?
+                var invalidResourceHash: Data?
                 for link in links {
+                    guard Self.isValidV2Hash(link.resourceHash) else {
+                        invalidResourceHash = link.resourceHash
+                        break
+                    }
                     guard let res = resourcesByHash[link.resourceHash] else {
                         missingResourceHash = link.resourceHash
+                        break
+                    }
+                    guard Self.isValidV2Hash(res.contentHash) else {
+                        invalidResourceHash = res.contentHash
                         break
                     }
                     resourcesForOp.append(CommitResourceEntry(
@@ -143,6 +162,12 @@ actor V1MigrationService {
                         slot: link.slot,
                         crypto: res.crypto
                     ))
+                }
+                if let invalidResourceHash {
+                    let reason = "asset \(asset.assetFingerprint.hexString) references invalid resource hash length \(invalidResourceHash.count)"
+                    skippedAssetFailures.append(reason)
+                    v1MigrationLog.warning("V1 asset \(asset.assetFingerprint.hexString, privacy: .public) in \(scanned.year)-\(scanned.month) references invalid resource hash length \(invalidResourceHash.count, privacy: .public)")
+                    continue
                 }
                 if let missingResourceHash {
                     let reason = "asset \(asset.assetFingerprint.hexString) references missing resource \(missingResourceHash.hexString)"
@@ -212,7 +237,9 @@ actor V1MigrationService {
                         resources: migrable.resources
                     )
                     pendingOps.append(CommitOp(opSeq: index, clock: clockCursor, body: .addAsset(body)))
-                    clockCursor &+= 1
+                    if index + 1 < migrableAssets.count {
+                        clockCursor += 1
+                    }
                 }
                 let seq = try await allocator.allocate()
                 let header = CommitHeader(
@@ -234,6 +261,13 @@ actor V1MigrationService {
                 } catch CommitLogWriter.WriteError.alreadyExists {
                     migrationAttempt += 1
                     if migrationAttempt >= migrationMaxRetries { throw CommitLogWriter.WriteError.alreadyExists }
+                    continue
+                } catch {
+                    migrationAttempt += 1
+                    if migrationAttempt >= migrationMaxRetries || !Self.shouldRetryMigrationCommitWrite(error) {
+                        throw error
+                    }
+                    v1MigrationLog.warning("V1 migration commit write failed for \(monthKey.text, privacy: .public), retrying with fresh clock/seq: \(error.localizedDescription, privacy: .public)")
                     continue
                 }
             }
@@ -338,7 +372,8 @@ actor V1MigrationService {
         do {
             try await client.download(remotePath: path, localURL: temp)
         } catch {
-            return .phase1
+            if isStorageNotFoundError(error) { return .phase1 }
+            throw error
         }
         let data = (try? Data(contentsOf: temp)) ?? Data()
         guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -618,6 +653,16 @@ actor V1MigrationService {
             return 0
         }
         return UInt64(bitPattern: row.lastSeq)
+    }
+
+    private static func shouldRetryMigrationCommitWrite(_ error: Error) -> Bool {
+        if error is CancellationError { return false }
+        if case CommitLogWriter.WriteError.encodingFailed(_) = error { return false }
+        return true
+    }
+
+    private static func isValidV2Hash(_ hash: Data) -> Bool {
+        hash.count == 32
     }
 
     private func initialClock(repoID: String, profileID: Int64) async throws -> UInt64 {

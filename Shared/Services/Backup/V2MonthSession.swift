@@ -15,15 +15,20 @@ final class V2MonthSession: BackupMonthStore {
     enum FlushError: Error {
         case snapshotWriteFailed(committedAssets: Set<Data>, committedTombstones: Set<Data>, underlying: Error)
 
-        /// Peels SnapshotWriter.finalizationFailed which wraps CancellationError.
+        /// Peels SnapshotWriter errors which can wrap CancellationError.
         var cancellationCause: CancellationError? {
             switch self {
             case .snapshotWriteFailed(_, _, let underlying):
                 if let cancel = underlying as? CancellationError { return cancel }
-                if let write = underlying as? SnapshotWriter.WriteError,
-                   case .finalizationFailed(let inner) = write,
-                   let cancel = inner as? CancellationError {
-                    return cancel
+                if let write = underlying as? SnapshotWriter.WriteError {
+                    switch write {
+                    case .ioFailure(let inner), .finalizationFailed(let inner):
+                        if let cancel = inner as? CancellationError {
+                            return cancel
+                        }
+                    case .verificationFailed:
+                        break
+                    }
                 }
                 return nil
             }
@@ -54,8 +59,9 @@ final class V2MonthSession: BackupMonthStore {
     private var linksByFingerprint: [Data: [RemoteAssetResourceLink]]
     /// `findResourceByHash` returns lex-min over present paths only; missing-path lookup would bind metadata to undownloadable bytes.
     private var pathsByHash: [Data: Set<String>]
-    /// Reverse leaf-name index: linear scan was N² per month under prepareUpload.
+    /// Reverse name indexes keep upload preparation from scanning every resource in a month.
     private var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
+    private var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
     private var collisionKeysCache: Set<String>?
     /// Session-scoped physical-missing set used for upsert/flush validation.
     /// Workers push it into `RepoCommittedView.physicallyMissingByMonth` for
@@ -91,6 +97,8 @@ final class V2MonthSession: BackupMonthStore {
     /// Pinned when commit landed but snapshot write failed; drives standalone retry on next flush.
     private var pendingSnapshotRetrySeq: UInt64?
     private var pendingRebaselineOnly: Bool = false
+    private let flushStateLock = NSLock()
+    private var isFlushing = false
 
     var hasAnyAsset: Bool { !assetsByFingerprint.isEmpty }
 
@@ -104,7 +112,6 @@ final class V2MonthSession: BackupMonthStore {
         materializedCovered: CoveredRanges,
         observedClockAtLoad: UInt64,
         remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata],
-        seedMissingHashes: Set<Data> = [],
         stepLogger: MonthManifestStepLogger? = nil
     ) {
         self.client = client
@@ -122,6 +129,7 @@ final class V2MonthSession: BackupMonthStore {
         var resourcesByPath: [String: RemoteManifestResource] = [:]
         var pathsByHash: [Data: Set<String>] = [:]
         var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
+        var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
         var physicallyMissingPaths: Set<String> = []
         let caseSensitive = client.backendNameCaseSensitivity == .caseSensitive
         func presenceKey(_ name: String) -> String {
@@ -156,27 +164,28 @@ final class V2MonthSession: BackupMonthStore {
             pathsByHash[row.contentHash, default: []].insert(row.physicalRemotePath)
             let leaf = (row.physicalRemotePath as NSString).lastPathComponent
             resourcesByLeafName[leaf, default: []].append(resource)
+            resourcesByCollisionKey[RemoteFileNaming.collisionKey(for: leaf), default: []].append(resource)
             if !isPresent {
                 physicallyMissingPaths.insert(row.physicalRemotePath)
-            }
-        }
-        for hash in seedMissingHashes {
-            if let paths = pathsByHash[hash] {
-                physicallyMissingPaths.formUnion(paths)
             }
         }
         self.resourcesByPath = resourcesByPath
         self.pathsByHash = pathsByHash
         self.resourcesByLeafName = resourcesByLeafName
+        self.resourcesByCollisionKey = resourcesByCollisionKey
         self.physicallyMissingPaths = physicallyMissingPaths
         // Hash missing iff every path missing; overlay consumers use the hash set, in-session lookup uses paths.
-        var refinedMissing: Set<Data> = []
-        for (hash, paths) in pathsByHash {
-            if paths.isSubset(of: physicallyMissingPaths) {
-                refinedMissing.insert(hash)
+        if physicallyMissingPaths.isEmpty {
+            self.physicallyMissingHashes = []
+        } else {
+            var refinedMissing: Set<Data> = []
+            for (hash, paths) in pathsByHash {
+                if paths.isSubset(of: physicallyMissingPaths) {
+                    refinedMissing.insert(hash)
+                }
             }
+            self.physicallyMissingHashes = refinedMissing
         }
-        self.physicallyMissingHashes = refinedMissing
 
         var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
         for row in materializedState.assets.values {
@@ -219,7 +228,6 @@ final class V2MonthSession: BackupMonthStore {
         year: Int,
         month: Int,
         v2Services: BackupV2RuntimeServices,
-        seedMissingHashes: Set<Data> = [],
         stepLogger: MonthManifestStepLogger? = nil
     ) async throws -> V2MonthSession {
         let monthKey = LibraryMonthKey(year: year, month: month)
@@ -268,7 +276,6 @@ final class V2MonthSession: BackupMonthStore {
             materializedCovered: materializedCovered,
             observedClockAtLoad: output.state.observedClock,
             remoteFilesByName: remoteFilesByName,
-            seedMissingHashes: seedMissingHashes,
             stepLogger: stepLogger
         )
         if output.corruptedSnapshotMonths.contains(monthKey),
@@ -316,12 +323,7 @@ final class V2MonthSession: BackupMonthStore {
         let candidates: [RemoteManifestResource]
         if client.backendNameCaseSensitivity == .caseInsensitive {
             let key = RemoteFileNaming.collisionKey(for: leafName)
-            candidates = resourcesByLeafName.values.flatMap { bucket in
-                bucket.filter { resource in
-                    let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-                    return RemoteFileNaming.collisionKey(for: leaf) == key
-                }
-            }
+            candidates = resourcesByCollisionKey[key] ?? []
         } else {
             candidates = resourcesByLeafName[leafName] ?? []
         }
@@ -386,12 +388,11 @@ final class V2MonthSession: BackupMonthStore {
             }
         }
         if let existing = resourcesByPath[resource.physicalRemotePath] {
-            removeLeafIndex(for: existing)
+            removeNameIndexes(for: existing)
         }
         resourcesByPath[resource.physicalRemotePath] = resource
         pathsByHash[resource.contentHash, default: []].insert(resource.physicalRemotePath)
-        let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-        resourcesByLeafName[leaf, default: []].append(resource)
+        addNameIndexes(for: resource)
         if !existingFileNameSet.contains(resource.logicalName) {
             existingFileNameSet.insert(resource.logicalName)
             collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: resource.logicalName))
@@ -403,14 +404,29 @@ final class V2MonthSession: BackupMonthStore {
         return resource
     }
 
-    private func removeLeafIndex(for resource: RemoteManifestResource) {
+    private func addNameIndexes(for resource: RemoteManifestResource) {
         let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-        guard var bucket = resourcesByLeafName[leaf] else { return }
-        bucket.removeAll { $0.physicalRemotePath == resource.physicalRemotePath }
-        if bucket.isEmpty {
-            resourcesByLeafName.removeValue(forKey: leaf)
+        resourcesByLeafName[leaf, default: []].append(resource)
+        resourcesByCollisionKey[RemoteFileNaming.collisionKey(for: leaf), default: []].append(resource)
+    }
+
+    private func removeNameIndexes(for resource: RemoteManifestResource) {
+        let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
+        if var bucket = resourcesByLeafName[leaf] {
+            bucket.removeAll { $0.physicalRemotePath == resource.physicalRemotePath }
+            if bucket.isEmpty {
+                resourcesByLeafName.removeValue(forKey: leaf)
+            } else {
+                resourcesByLeafName[leaf] = bucket
+            }
+        }
+        let collisionKey = RemoteFileNaming.collisionKey(for: leaf)
+        guard var foldedBucket = resourcesByCollisionKey[collisionKey] else { return }
+        foldedBucket.removeAll { $0.physicalRemotePath == resource.physicalRemotePath }
+        if foldedBucket.isEmpty {
+            resourcesByCollisionKey.removeValue(forKey: collisionKey)
         } else {
-            resourcesByLeafName[leaf] = bucket
+            resourcesByCollisionKey[collisionKey] = foldedBucket
         }
     }
 
@@ -472,6 +488,10 @@ final class V2MonthSession: BackupMonthStore {
 
     @discardableResult
     func flushToRemote(ignoreCancellation: Bool = false) async throws -> MonthManifestStore.FlushDelta {
+        guard beginFlush() else {
+            return .none
+        }
+        defer { endFlush() }
         guard dirty, let services = v2Services else {
             return .none
         }
@@ -651,6 +671,7 @@ final class V2MonthSession: BackupMonthStore {
         } catch {
             dirty = true
             pendingSnapshotRetrySeq = lastSeq
+            pendingRebaselineOnly = false
             throw FlushError.snapshotWriteFailed(
                 committedAssets: committedAssets,
                 committedTombstones: committedTombstones,
@@ -663,6 +684,20 @@ final class V2MonthSession: BackupMonthStore {
             committedV2AssetFingerprints: committedAssets,
             committedV2TombstoneFingerprints: committedTombstones
         )
+    }
+
+    private func beginFlush() -> Bool {
+        flushStateLock.lock()
+        defer { flushStateLock.unlock() }
+        if isFlushing { return false }
+        isFlushing = true
+        return true
+    }
+
+    private func endFlush() {
+        flushStateLock.withLock {
+            isFlushing = false
+        }
     }
 
     private func writeSnapshot(

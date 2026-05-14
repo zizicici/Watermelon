@@ -12,3 +12,14 @@ struct RemoteViewHandle: Sendable {
     let overlayFreshness: OverlayFreshness
     let producedAt: Date
 }
+
+enum RemoteViewHandleError: LocalizedError {
+    case stalePhysicalPresenceOverlay
+
+    var errorDescription: String? {
+        switch self {
+        case .stalePhysicalPresenceOverlay:
+            return "Remote file verification did not finish. Resume is still paused; try again."
+        }
+    }
+}

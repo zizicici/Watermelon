@@ -362,6 +362,9 @@ extension ServerProfileRecord {
         if let compat = error as? BackupCompatibilityError {
             return compat.errorDescription ?? error.localizedDescription
         }
+        if let remoteView = error as? RemoteViewHandleError {
+            return remoteView.errorDescription ?? error.localizedDescription
+        }
         if isExternalStorageUnavailableError(error) {
             return String(localized: "storage.error.externalUnavailable")
         }
