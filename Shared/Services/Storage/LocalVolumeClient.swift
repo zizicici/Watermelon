@@ -6,7 +6,7 @@ private let localVolumeLog = Logger(subsystem: "com.zizicici.watermelon", catego
 
 private final class LocalVolumeNameCaseSensitivityState: @unchecked Sendable {
     private let lock = NSLock()
-    private var current: BackendNameCaseSensitivity = .caseSensitive
+    private var current: BackendNameCaseSensitivity = .unknown
 
     var value: BackendNameCaseSensitivity {
         lock.withLock { current }
@@ -545,7 +545,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     private static func detectNameCaseSensitivity(for rootURL: URL) -> BackendNameCaseSensitivity {
         guard let values = try? rootURL.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]),
               let supportsCaseSensitiveNames = values.volumeSupportsCaseSensitiveNames else {
-            return .caseSensitive
+            return .unknown
         }
         return supportsCaseSensitiveNames ? .caseSensitive : .caseInsensitive
     }

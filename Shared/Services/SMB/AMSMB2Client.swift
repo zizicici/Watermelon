@@ -338,12 +338,16 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
         #if canImport(AMSMB2)
+        if try await metadata(path: destinationPath) != nil {
+            return .alreadyExists
+        }
+        try Task.checkCancellation()
         do {
             try await manager.moveItem(
                 atPath: RemotePathBuilder.normalizePath(sourcePath),
                 toPath: RemotePathBuilder.normalizePath(destinationPath)
             )
-            return .created
+            return .bestEffortRetry
         } catch {
             if SMBErrorClassifier.isNameCollision(error) {
                 return .alreadyExists

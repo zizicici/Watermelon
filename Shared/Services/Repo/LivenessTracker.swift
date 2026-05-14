@@ -103,8 +103,16 @@ actor LivenessTracker {
                 try? await client.delete(path: stagingPath)
                 return
             }
-            // S3 copy+delete failure can leave the bytes at remote after staging disappears.
-            let stagingStillExists = (try? await client.metadata(path: stagingPath))?.isDirectory == false
+            let stagingStillExists: Bool
+            do {
+                let stagingEntry = try await client.metadata(path: stagingPath)
+                stagingStillExists = stagingEntry?.isDirectory == false
+            } catch is CancellationError {
+                try? await client.delete(path: stagingPath)
+                return
+            } catch {
+                stagingStillExists = isStorageNotFoundError(error) ? false : true
+            }
             if !stagingStillExists, let lastFailure {
                 livenessLog.warning("[Liveness] staging vanished after failed move for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
             }

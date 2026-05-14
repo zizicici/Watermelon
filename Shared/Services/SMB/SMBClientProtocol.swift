@@ -55,6 +55,15 @@ enum DataPathOverwriteRisk: Sendable, Equatable {
 enum BackendNameCaseSensitivity: Sendable, Equatable {
     case caseSensitive
     case caseInsensitive
+    case unknown
+
+    var usesExactNameMatchingForPresence: Bool {
+        self != .caseInsensitive
+    }
+
+    var foldsCaseForCollisionAvoidance: Bool {
+        self != .caseSensitive
+    }
 }
 
 extension AtomicCreateResult {
@@ -156,7 +165,7 @@ extension RemoteStorageClientProtocol {
 
     var isSerialized: Bool { false }
 
-    /// Fail-closed: treat unknown backends as overwrite-risky and case-sensitive.
+    /// Fail-closed: treat uncustomized backends as overwrite-risky and exact-match.
     var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
 

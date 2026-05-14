@@ -6,6 +6,7 @@ enum VerifyMonthReportKind: String, Sendable {
     case allResourcesGone
     case metadataOnlyLeft
     case fingerprintMismatch
+    case verificationIncomplete
 }
 
 struct VerifyMonthReportItem: Sendable, Hashable {

@@ -517,7 +517,7 @@ enum RemoteFileNaming {
     static func nameKey(for fileName: String, caseSensitivity: BackendNameCaseSensitivity) -> String {
         switch caseSensitivity {
         case .caseSensitive: return fileName
-        case .caseInsensitive: return collisionKey(for: fileName)
+        case .caseInsensitive, .unknown: return collisionKey(for: fileName)
         }
     }
 

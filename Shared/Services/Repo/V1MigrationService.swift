@@ -497,6 +497,10 @@ actor V1MigrationService {
             }
         } catch {
             if isStorageNotFoundError(error) { return }
+            if S3Client.isMoveIfAbsentUnsupported(error) {
+                try await copySourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
+                return
+            }
             if let meta = try await metadataIfPresent(path: residuePath), !meta.isDirectory {
                 guard try await metadataIfPresent(path: sourcePath) != nil else { return }
                 if try await remoteFilesEqual(sourcePath, residuePath) {
@@ -515,16 +519,64 @@ actor V1MigrationService {
             basePath: basePath,
             remoteRelativePath: monthRel + "/" + Self.residueManifestFileName + ".\(UUID().uuidString)"
         )
-        switch try await client.moveIfAbsent(from: sourcePath, to: uniqueResiduePath) {
-        case .created:
+        do {
+            switch try await client.moveIfAbsent(from: sourcePath, to: uniqueResiduePath) {
+            case .created:
+                return
+            case .bestEffortRetry:
+                try await finishBestEffortResidueMove(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
+                return
+            case .alreadyExists:
+                throw NSError(domain: "V1MigrationService", code: -32, userInfo: [
+                    NSLocalizedDescriptionKey: "unique residue path already exists for \(sourcePath)"
+                ])
+            }
+        } catch {
+            if isStorageNotFoundError(error) { return }
+            if S3Client.isMoveIfAbsentUnsupported(error) {
+                try await copySourceToVerifiedResidue(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
+                return
+            }
+            throw error
+        }
+    }
+
+    private func copySourceToUniqueResidue(monthRel: String, sourcePath: String) async throws {
+        for _ in 0..<4 {
+            let uniqueResiduePath = RemotePathBuilder.absolutePath(
+                basePath: basePath,
+                remoteRelativePath: monthRel + "/" + Self.residueManifestFileName + ".\(UUID().uuidString)"
+            )
+            guard try await metadataIfPresent(path: uniqueResiduePath) == nil else { continue }
+            try await copySourceToVerifiedResidue(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
             return
-        case .bestEffortRetry:
-            try await finishBestEffortResidueMove(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
-            return
-        case .alreadyExists:
-            throw NSError(domain: "V1MigrationService", code: -32, userInfo: [
-                NSLocalizedDescriptionKey: "unique residue path already exists for \(sourcePath)"
-            ])
+        }
+        throw NSError(domain: "V1MigrationService", code: -34, userInfo: [
+            NSLocalizedDescriptionKey: "could not allocate unique residue path for \(sourcePath)"
+        ])
+    }
+
+    private func copySourceToVerifiedResidue(sourcePath: String, destinationPath: String) async throws {
+        guard try await metadataIfPresent(path: sourcePath) != nil else { return }
+        do {
+            try await client.copy(from: sourcePath, to: destinationPath)
+        } catch {
+            if isStorageNotFoundError(error) { return }
+            throw error
+        }
+        guard try await remoteFilesEqual(sourcePath, destinationPath) else {
+            try? await deleteIfPresent(path: destinationPath)
+            if try await metadataIfPresent(path: sourcePath) == nil { return }
+            throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: destinationPath)
+        }
+        do {
+            try await client.delete(path: sourcePath)
+        } catch {
+            if isStorageNotFoundError(error) { return }
+            throw error
+        }
+        guard try await metadataIfPresent(path: sourcePath) == nil else {
+            throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: destinationPath)
         }
     }
 

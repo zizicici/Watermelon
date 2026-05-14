@@ -505,18 +505,46 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         } else {
             contentHashIndexLog.info("[HashIndex] legacy restore identity for \(assetLocalIdentifier, privacy: .private): preserving remote fingerprint without full local hashes")
         }
-        let signature = BackupAssetResourcePlanner.resourceSignature(
-            roleSlots: instances.map { (role: $0.role, slot: $0.slot) }
-        )
-        try upsertAssetHashSnapshot(
-            assetLocalIdentifier: assetLocalIdentifier,
-            assetFingerprint: remoteAssetFingerprint,
-            resources: records,
-            totalFileSizeBytes: totalSize,
-            modificationDateMs: nil,
-            selectionVersion: BackupAssetResourcePlanner.currentSelectionVersion,
-            resourceSignature: signature
-        )
+        try databaseManager.write { db in
+            try Self.writeLocalAssetRow(
+                db,
+                assetLocalIdentifier: assetLocalIdentifier,
+                assetFingerprint: remoteAssetFingerprint,
+                resourceCount: records.count,
+                totalFileSizeBytes: totalSize,
+                modificationDateMs: nil,
+                selectionVersion: nil,
+                resourceSignature: nil
+            )
+            try db.execute(
+                sql: "UPDATE local_assets SET selectionVersion = 0, resourceSignature = NULL WHERE assetLocalIdentifier = ?",
+                arguments: [assetLocalIdentifier]
+            )
+            try db.execute(
+                sql: "DELETE FROM local_asset_resources WHERE assetLocalIdentifier = ?",
+                arguments: [assetLocalIdentifier]
+            )
+            for resource in records {
+                try db.execute(
+                    sql: """
+                    INSERT INTO local_asset_resources (
+                        assetLocalIdentifier,
+                        role,
+                        slot,
+                        contentHash,
+                        fileSize
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        assetLocalIdentifier,
+                        resource.role,
+                        resource.slot,
+                        resource.contentHash,
+                        resource.fileSize
+                    ]
+                )
+            }
+        }
     }
 
     func deleteIndexEntries(assetIDs: [String]) throws {

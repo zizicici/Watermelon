@@ -113,6 +113,7 @@ enum MetadataCreateGate {
                 try? await client.delete(path: stagingPath)
                 throw error
             }
+            try? await client.delete(path: stagingPath)
             do {
                 guard try await verifyMatchesLocalWithRetries(
                     client: client,

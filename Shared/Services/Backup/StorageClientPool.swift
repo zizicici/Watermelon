@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let storageClientPoolLog = Logger(subsystem: "com.zizicici.watermelon", category: "StorageClientPool")
 
 actor StorageClientPool {
     private let maxConnections: Int
@@ -26,10 +29,12 @@ actor StorageClientPool {
 
     func seedConnectedClient(_ client: any RemoteStorageClientProtocol) async {
         if isShutdown {
+            storageClientPoolLog.warning("[StorageClientPool] dropping seeded client after shutdown")
             await client.disconnect()
             return
         }
         guard createdConnections + pendingConnectionStarts < maxConnections else {
+            storageClientPoolLog.warning("[StorageClientPool] dropping seeded client because pool is at capacity")
             await client.disconnect()
             return
         }

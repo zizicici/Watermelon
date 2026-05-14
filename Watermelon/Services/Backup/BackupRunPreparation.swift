@@ -18,6 +18,7 @@ struct BackupRunPreparationService: Sendable {
     private let remoteIndexService: RemoteIndexSyncService
     private let databaseManager: DatabaseManager
     private let formatCompatibilityService = RemoteFormatCompatibilityService()
+    private static let maxProfileLessVersionFileBytes: Int64 = 64 * 1024
 
     init(
         photoLibraryService: PhotoLibraryService,
@@ -286,8 +287,12 @@ struct BackupRunPreparationService: Sendable {
         basePath: String
     ) async throws -> RemoteFormatInspection {
         let versionPath = RepoLayout.versionFilePath(base: basePath)
-        guard let meta = try await client.metadata(path: versionPath), !meta.isDirectory else {
+        guard let meta = try await client.metadata(path: versionPath) else {
             return .v1
+        }
+        guard !meta.isDirectory,
+              meta.size <= Self.maxProfileLessVersionFileBytes else {
+            throw BackupCompatibilityError.damagedV2Repo
         }
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("verify-version-\(UUID().uuidString).json")

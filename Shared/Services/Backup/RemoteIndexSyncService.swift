@@ -263,13 +263,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             concurrencyCap: concurrencyCap
         )
         return try await syncGate.withLock { [self] in
-            let currentRevision = optimisticMutationLock.withLock {
-                committedView.currentRevision()
-            }
-            let revisionUnchanged = currentRevision == captured.revision
-            if revisionUnchanged {
-                applyPhysicalPresenceOverlay(probe.missingByMonth)
-            } else {
+            let revisionUnchanged = applyPhysicalPresenceOverlay(
+                probe.missingByMonth,
+                expectedRevision: captured.revision
+            )
+            if !revisionUnchanged {
                 syncLog.info("[SyncTiming] overlay handle captured stale revision; preserving previous overlay")
             }
             let overlayFresh = revisionUnchanged && probe.fresh
@@ -587,7 +585,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         let remoteFileNames = entries
             .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
             .map(\.name)
-        let caseSensitive = client.backendNameCaseSensitivity == .caseSensitive
+        let caseSensitive = client.backendNameCaseSensitivity.usesExactNameMatchingForPresence
         func presenceKey(_ name: String) -> String {
             caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
         }
@@ -864,11 +862,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         concurrencyCap: Int = 4
     ) async throws -> Bool {
         try Task.checkCancellation()
-        let snapshot = optimisticMutationLock.withLock {
-            committedView.current()
+        let captured = optimisticMutationLock.withLock {
+            committedView.currentSnapshotWithRevision()
         }
         let probe = try await probePhysicalPresenceOverlay(
-            snapshot: snapshot,
+            snapshot: captured.snapshot,
             client: client,
             basePath: basePath,
             fallback: fallback,
@@ -879,15 +877,31 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             staleFallbackPolicy: .preserveFallback,
             concurrencyCap: concurrencyCap
         )
-        applyPhysicalPresenceOverlay(probe.missingByMonth)
+        let applied = applyPhysicalPresenceOverlay(
+            probe.missingByMonth,
+            expectedRevision: captured.revision
+        )
+        if !applied {
+            syncLog.info("[SyncTiming] overlay refresh captured stale revision; preserving previous overlay")
+            return false
+        }
         return probe.fresh
     }
 
-    private func applyPhysicalPresenceOverlay(_ missingByMonth: [LibraryMonthKey: Set<Data>]) {
+    @discardableResult
+    private func applyPhysicalPresenceOverlay(
+        _ missingByMonth: [LibraryMonthKey: Set<Data>],
+        expectedRevision: UInt64? = nil
+    ) -> Bool {
         optimisticMutationLock.withLock {
+            if let expectedRevision,
+               committedView.currentRevision() != expectedRevision {
+                return false
+            }
             for (month, hashes) in missingByMonth {
                 committedView.markPhysicallyMissing(month: month, hashes: hashes)
             }
+            return true
         }
     }
 
@@ -993,7 +1007,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
         try Task.checkCancellation()
         // Folding on a case-sensitive backend would equate IMG.JPG/img.jpg as one file.
-        let caseSensitive = client.backendNameCaseSensitivity == .caseSensitive
+        let caseSensitive = client.backendNameCaseSensitivity.usesExactNameMatchingForPresence
         func presenceKey(_ name: String) -> String {
             caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
         }

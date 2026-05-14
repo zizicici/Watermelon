@@ -411,6 +411,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
     /// Call from processingQueue after any write that touched localIndex / remoteIndex / loadedScope.
     private func publishSnapshotOnProcessingQueue() {
+        dispatchPrecondition(condition: .onQueue(processingQueue))
         let allMonths = localIndex.allMonths.union(remoteIndex.allMonths)
         var rows: [LibraryMonthKey: HomeMonthRow] = [:]
         var ids: [LibraryMonthKey: Set<String>] = [:]

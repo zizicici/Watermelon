@@ -78,6 +78,7 @@ final class RestoreService {
                     throw CancellationError()
                 } catch {
                     if restoredItem != nil {
+                        // Hash-index callback failure after a save leaves the restored asset without durable backup identity.
                         throw error
                     }
                     print("[RestoreService] onItemCompleted \(index + 1)/\(items.count) failed: \(error.localizedDescription)")

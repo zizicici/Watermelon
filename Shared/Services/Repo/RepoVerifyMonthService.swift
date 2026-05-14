@@ -1,6 +1,9 @@
 import Foundation
 
 actor RepoVerifyMonthService {
+    private static let contentTrustMaxVerifiedFilesPerMonth = 64
+    private static let contentTrustMaxVerifiedBytesPerMonth: Int64 = 32 * 1024 * 1024
+
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
     private let expectedRepoID: String?
@@ -8,6 +11,25 @@ actor RepoVerifyMonthService {
     private struct TombstonePlan {
         let tombstones: [(item: VerifyMonthReportItem, reason: CommitTombstoneBody.Reason)]
         let perWriterMaxSeq: [String: UInt64]
+    }
+
+    private enum PresenceProbeResult: Sendable {
+        case present
+        case absent
+        case inconclusive
+    }
+
+    private struct PresenceSnapshot: Sendable {
+        let presentHashes: Set<Data>
+        let inconclusiveHashes: Set<Data>
+
+        func isPresent(_ hash: Data) -> Bool {
+            presentHashes.contains(hash)
+        }
+
+        func hasInconclusiveResource(in links: [SnapshotAssetResourceRow]) -> Bool {
+            links.contains { inconclusiveHashes.contains($0.resourceHash) }
+        }
     }
 
     init(client: any RemoteStorageClientProtocol, basePath: String, expectedRepoID: String? = nil) {
@@ -23,16 +45,24 @@ actor RepoVerifyMonthService {
             return VerifyMonthReport(month: month, items: [])
         }
 
-        let isResourceAvailable = try await materializedPresencePredicate(month: month, state: state)
+        let presence = try await materializedPresenceSnapshot(month: month, state: state)
         let linksByFingerprint = Dictionary(grouping: state.assetResources.values, by: \.assetFingerprint)
 
         var items: [VerifyMonthReportItem] = []
         for fp in state.assets.keys {
             let links = linksByFingerprint[fp] ?? []
+            if presence.hasInconclusiveResource(in: links) {
+                items.append(VerifyMonthReportItem(
+                    kind: .verificationIncomplete,
+                    assetFingerprint: fp,
+                    detail: "content trust budget exhausted before all listed same-size resources were verified"
+                ))
+                continue
+            }
             let state = RemoteAssetIntegrityClassifier.classify(
                 assetFingerprint: fp,
                 links: links,
-                isResourceAvailable: isResourceAvailable
+                isResourceAvailable: { presence.isPresent($0) }
             )
             switch state {
             case .healthy: continue
@@ -72,26 +102,32 @@ actor RepoVerifyMonthService {
         return VerifyMonthReport(month: month, items: items)
     }
 
-    private func materializedPresencePredicate(
+    private func materializedPresenceSnapshot(
         month: LibraryMonthKey,
         state: RepoMonthState
-    ) async throws -> (Data) -> Bool {
-        let probe = try await contentTrustPresencePredicate(month: month, state: state)
+    ) async throws -> PresenceSnapshot {
+        let probe = try await contentTrustPresenceProbe(month: month, state: state)
         let hashes = Set(state.resources.values.map(\.contentHash))
         var present: Set<Data> = []
+        var inconclusive: Set<Data> = []
         for hash in hashes {
             try Task.checkCancellation()
-            if try await probe(hash) {
+            switch try await probe(hash) {
+            case .present:
                 present.insert(hash)
+            case .absent:
+                break
+            case .inconclusive:
+                inconclusive.insert(hash)
             }
         }
-        return { present.contains($0) }
+        return PresenceSnapshot(presentHashes: present, inconclusiveHashes: inconclusive)
     }
 
-    private func contentTrustPresencePredicate(
+    private func contentTrustPresenceProbe(
         month: LibraryMonthKey,
         state: RepoMonthState
-    ) async throws -> (Data) async throws -> Bool {
+    ) async throws -> (Data) async throws -> PresenceProbeResult {
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
         let entries: [RemoteStorageEntry]
@@ -99,11 +135,11 @@ actor RepoVerifyMonthService {
             entries = try await client.list(path: monthAbsolutePath)
         } catch {
             if isStorageNotFoundError(error) {
-                return { _ in false }
+                return { _ in .absent }
             }
             throw error
         }
-        let caseSensitive = client.backendNameCaseSensitivity == .caseSensitive
+        let caseSensitive = client.backendNameCaseSensitivity.usesExactNameMatchingForPresence
         func presenceKey(_ name: String) -> String {
             caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
         }
@@ -127,26 +163,38 @@ actor RepoVerifyMonthService {
         }
         let clientRef = client
         let basePathRef = basePath
+        var verifiedFileCount = 0
+        var verifiedByteCount: Int64 = 0
         return { hash in
-            guard let candidates = expectationsByHash[hash], !candidates.isEmpty else { return false }
+            guard let candidates = expectationsByHash[hash], !candidates.isEmpty else { return .absent }
             for candidate in candidates {
                 let listed = entriesByKey[candidate.key] ?? []
                 let sizeMatches = listed.filter { $0.size == candidate.size }
                 if sizeMatches.isEmpty { continue }
                 for match in sizeMatches {
+                    let candidateSize = max(candidate.size, 0)
+                    let wouldExceedByteBudget = verifiedByteCount >
+                        Self.contentTrustMaxVerifiedBytesPerMonth - candidateSize
+                    let budgetExceeded = verifiedFileCount >= Self.contentTrustMaxVerifiedFilesPerMonth ||
+                        wouldExceedByteBudget
+                    if budgetExceeded {
+                        return .inconclusive
+                    }
                     let path = RemotePathBuilder.absolutePath(
                         basePath: basePathRef,
                         remoteRelativePath: monthRelativePath + "/" + match.name
                     )
                     // Transport errors must abort verify rather than be silently classified absent — a false absent here drives tombstone issuance against healthy bytes.
                     do {
+                        verifiedFileCount += 1
+                        verifiedByteCount += candidateSize
                         if try await RemoteContentTrust.verifyHash(
                             client: clientRef,
                             remotePath: path,
                             expectedSize: candidate.size,
                             expectedHash: candidate.hash
                         ) {
-                            return true
+                            return .present
                         }
                     } catch is CancellationError {
                         throw CancellationError()
@@ -156,7 +204,7 @@ actor RepoVerifyMonthService {
                     }
                 }
             }
-            return false
+            return .absent
         }
     }
 
@@ -182,7 +230,7 @@ actor RepoVerifyMonthService {
                 freshLinksByFP[ar.assetFingerprint, default: []].append(ar)
             }
 
-            let isResourceAvailable = try await materializedPresencePredicate(month: month, state: monthState)
+            let presence = try await materializedPresenceSnapshot(month: month, state: monthState)
 
             let coveredAtObservation = fresh.coveredByMonth[month] ?? .empty
             var perWriterMaxSeq: [String: UInt64] = [:]
@@ -193,10 +241,13 @@ actor RepoVerifyMonthService {
             var stillEligible: [VerifyMonthReportItem] = []
             for item in eligible {
                 let links = freshLinksByFP[item.assetFingerprint] ?? []
+                if presence.hasInconclusiveResource(in: links) {
+                    continue
+                }
                 let state = RemoteAssetIntegrityClassifier.classify(
                     assetFingerprint: item.assetFingerprint,
                     links: links,
-                    isResourceAvailable: isResourceAvailable
+                    isResourceAvailable: { presence.isPresent($0) }
                 )
                 if state.allowsCleanup {
                     stillEligible.append(item)
@@ -209,7 +260,7 @@ actor RepoVerifyMonthService {
                     return (item, .manifestOrphan)
                 case .allResourcesGone:
                     return (item, .verifyFailed)
-                case .partiallyMissing, .fingerprintMismatch:
+                case .partiallyMissing, .fingerprintMismatch, .verificationIncomplete:
                     assertionFailure("allowsCleanup must filter \(item.kind)")
                     return nil
                 }

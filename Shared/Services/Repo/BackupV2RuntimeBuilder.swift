@@ -35,31 +35,44 @@ enum BackupV2RuntimeBuilder {
         let runID = RepoIdentity.newRunID()
         let bootstrap = RepoBootstrap(client: client, basePath: profile.basePath)
 
+        func checkedExistingV2DataRepoID(storedRepoID: String?) async throws -> String? {
+            let dataRepoIDs = try await Self.existingRepoIDsInV2Data(client: client, basePath: profile.basePath)
+            guard !dataRepoIDs.isEmpty else {
+                if try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
+                    throw BackupV2RuntimeBuildError.damagedV2Repo
+                }
+                return nil
+            }
+            guard dataRepoIDs.count == 1, let dataRepoID = dataRepoIDs.first else {
+                throw BackupV2RuntimeBuildError.damagedV2Repo
+            }
+            if let storedRepoID, storedRepoID != dataRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: dataRepoID)
+            }
+            return dataRepoID
+        }
+
         func resolveExistingV2RepoID() async throws -> String {
             let storedRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
             let remoteRepoID = try await bootstrap.loadRepoID()
             if let storedRepoID, let remoteRepoID, storedRepoID != remoteRepoID {
                 throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: remoteRepoID)
             }
+            var dataRepoID: String?
             if remoteRepoID == nil {
-                let dataRepoIDs = try await Self.existingRepoIDsInV2Data(client: client, basePath: profile.basePath)
-                if !dataRepoIDs.isEmpty {
-                    guard let storedRepoID, dataRepoIDs == Set([storedRepoID]) else {
-                        throw BackupV2RuntimeBuildError.damagedV2Repo
-                    }
-                } else if storedRepoID == nil,
-                          try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
-                    throw BackupV2RuntimeBuildError.damagedV2Repo
-                }
+                dataRepoID = try await checkedExistingV2DataRepoID(storedRepoID: storedRepoID)
             }
 
-            let suggested = remoteRepoID ?? storedRepoID ?? UUID().uuidString.lowercased()
+            let suggested = remoteRepoID ?? dataRepoID ?? storedRepoID ?? UUID().uuidString.lowercased()
             let resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggested, writerID: writerID)
             if let storedRepoID, resolvedRepoID != storedRepoID {
                 throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: resolvedRepoID)
             }
             if let remoteRepoID, resolvedRepoID != remoteRepoID {
                 throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remoteRepoID, remote: resolvedRepoID)
+            }
+            if let dataRepoID, resolvedRepoID != dataRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: dataRepoID, remote: resolvedRepoID)
             }
             return resolvedRepoID
         }
@@ -103,10 +116,24 @@ enum BackupV2RuntimeBuilder {
             }
             // Canonical repoID must land before phase 1 so commits are stamped with the remote-canonical id.
             let storedRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
-            let suggestedRepoID = storedRepoID ?? UUID().uuidString.lowercased()
+            let remoteRepoID = try await bootstrap.loadRepoID()
+            if let storedRepoID, let remoteRepoID, storedRepoID != remoteRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: remoteRepoID)
+            }
+            let dataRepoID = try await checkedExistingV2DataRepoID(storedRepoID: storedRepoID)
+            if let remoteRepoID, let dataRepoID, remoteRepoID != dataRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: dataRepoID, remote: remoteRepoID)
+            }
+            let suggestedRepoID = remoteRepoID ?? dataRepoID ?? storedRepoID ?? UUID().uuidString.lowercased()
             resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggestedRepoID, writerID: writerID)
             if let storedRepoID, resolvedRepoID != storedRepoID {
                 throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: resolvedRepoID)
+            }
+            if let remoteRepoID, resolvedRepoID != remoteRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remoteRepoID, remote: resolvedRepoID)
+            }
+            if let dataRepoID, resolvedRepoID != dataRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: dataRepoID, remote: resolvedRepoID)
             }
             let state = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: resolvedRepoID, writerID: writerID)
             let migration = V1MigrationService(

@@ -136,7 +136,7 @@ extension AssetProcessor {
         let forceWriterIDSuffix = client.dataPathOverwriteRisk == .perKey && writerID != nil
         let nameCaseSensitivity = client.backendNameCaseSensitivity
         var occupiedNameKeys: Set<String>
-        if nameCaseSensitivity == .caseInsensitive {
+        if nameCaseSensitivity.foldsCaseForCollisionAvoidance {
             occupiedNameKeys = monthStore.existingCollisionKeys()
         } else {
             occupiedNameKeys = monthStore.existingFileNames()

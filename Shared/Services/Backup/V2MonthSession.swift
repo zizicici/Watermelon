@@ -8,16 +8,16 @@ private let v2SessionLog = Logger(subsystem: "com.zizicici.watermelon", category
 /// per-month per-worker; `flushToRemote` writes the commit + snapshot files for
 /// pending changes.
 final class V2MonthSession: BackupMonthStore {
-    /// Raised when commit write succeeded but the subsequent snapshot write failed.
-    /// Carries the fingerprints that ARE durable on remote — caller MUST update
-    /// inflight-tracker state with them before re-throwing, otherwise the executor
-    /// treats them as un-flushed and resume planner double-counts.
     enum FlushError: Error {
+        case concurrentFlushRejected
+        /// Commit landed; caller must mark these fingerprints committed before rethrowing.
         case snapshotWriteFailed(committedAssets: Set<Data>, committedTombstones: Set<Data>, underlying: Error)
 
         /// Peels SnapshotWriter errors which can wrap CancellationError.
         var cancellationCause: CancellationError? {
             switch self {
+            case .concurrentFlushRejected:
+                return nil
             case .snapshotWriteFailed(_, _, let underlying):
                 if let cancel = underlying as? CancellationError { return cancel }
                 if let write = underlying as? SnapshotWriter.WriteError {
@@ -69,6 +69,7 @@ final class V2MonthSession: BackupMonthStore {
     private var physicallyMissingHashes: Set<Data>
     /// Per-path granularity needed when multi-path hashes have only some paths missing.
     private var physicallyMissingPaths: Set<String>
+    private var untrustedPhysicalPresencePaths: Set<String>
 
     // Existing remote files from start-of-month directory listing (collision rename input).
     private var remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata]
@@ -132,7 +133,8 @@ final class V2MonthSession: BackupMonthStore {
         var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
         var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
         var physicallyMissingPaths: Set<String> = []
-        let caseSensitive = client.backendNameCaseSensitivity == .caseSensitive
+        var untrustedPhysicalPresencePaths: Set<String> = []
+        let caseSensitive = client.backendNameCaseSensitivity.usesExactNameMatchingForPresence
         func presenceKey(_ name: String) -> String {
             caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
         }
@@ -144,11 +146,14 @@ final class V2MonthSession: BackupMonthStore {
             let logicalName = (row.physicalRemotePath as NSString).lastPathComponent
             let key = presenceKey(logicalName)
             let listedSizeMatches = sizesByPresenceKey[key]?.contains(row.fileSize) == true
-            let isPresent: Bool
             if let verifiedMissingHashes {
-                isPresent = listedSizeMatches && !verifiedMissingHashes.contains(row.contentHash)
+                if !listedSizeMatches || verifiedMissingHashes.contains(row.contentHash) {
+                    physicallyMissingPaths.insert(row.physicalRemotePath)
+                }
+            } else if listedSizeMatches {
+                untrustedPhysicalPresencePaths.insert(row.physicalRemotePath)
             } else {
-                isPresent = listedSizeMatches
+                physicallyMissingPaths.insert(row.physicalRemotePath)
             }
             let resource = RemoteManifestResource(
                 year: year,
@@ -166,15 +171,13 @@ final class V2MonthSession: BackupMonthStore {
             let leaf = (row.physicalRemotePath as NSString).lastPathComponent
             resourcesByLeafName[leaf, default: []].append(resource)
             resourcesByCollisionKey[RemoteFileNaming.collisionKey(for: leaf), default: []].append(resource)
-            if !isPresent {
-                physicallyMissingPaths.insert(row.physicalRemotePath)
-            }
         }
         self.resourcesByPath = resourcesByPath
         self.pathsByHash = pathsByHash
         self.resourcesByLeafName = resourcesByLeafName
         self.resourcesByCollisionKey = resourcesByCollisionKey
         self.physicallyMissingPaths = physicallyMissingPaths
+        self.untrustedPhysicalPresencePaths = untrustedPhysicalPresencePaths
         // Hash missing iff every path missing; overlay consumers use the hash set, in-session lookup uses paths.
         if physicallyMissingPaths.isEmpty {
             self.physicallyMissingHashes = []
@@ -324,7 +327,7 @@ final class V2MonthSession: BackupMonthStore {
             .last
             .map(String.init) ?? logicalName
         let candidates: [RemoteManifestResource]
-        if client.backendNameCaseSensitivity == .caseInsensitive {
+        if client.backendNameCaseSensitivity.foldsCaseForCollisionAvoidance {
             let key = RemoteFileNaming.collisionKey(for: leafName)
             candidates = resourcesByCollisionKey[key] ?? []
         } else {
@@ -338,7 +341,8 @@ final class V2MonthSession: BackupMonthStore {
     /// Lex-min of present paths for `hash`; nil if no path's file is on remote.
     private func anyPresentPath(forHash hash: Data) -> String? {
         guard let paths = pathsByHash[hash], !paths.isEmpty else { return nil }
-        let present = paths.subtracting(physicallyMissingPaths)
+        let unavailable = physicallyMissingPaths.union(untrustedPhysicalPresencePaths)
+        let present = paths.subtracting(unavailable)
         return present.min()
     }
 
@@ -402,6 +406,7 @@ final class V2MonthSession: BackupMonthStore {
         }
         // Just wrote bytes; clear missing markers so findResourceByHash can re-resolve.
         physicallyMissingPaths.remove(resource.physicalRemotePath)
+        untrustedPhysicalPresencePaths.remove(resource.physicalRemotePath)
         physicallyMissingHashes.remove(resource.contentHash)
         dirty = true
         return resource
@@ -443,17 +448,10 @@ final class V2MonthSession: BackupMonthStore {
         // body with empty resources[] and the snapshot covering that seq would
         // break `state == fold(covered)`.
         for link in links {
-            guard pathsByHash[link.resourceHash]?.isEmpty == false else {
+            guard anyPresentPath(forHash: link.resourceHash) != nil else {
                 throw NSError(
                     domain: "V2MonthSession",
                     code: -11,
-                    userInfo: [NSLocalizedDescriptionKey: String(localized: "backup.manifest.error.missingResourceHash")]
-                )
-            }
-            if physicallyMissingHashes.contains(link.resourceHash) {
-                throw NSError(
-                    domain: "V2MonthSession",
-                    code: -12,
                     userInfo: [NSLocalizedDescriptionKey: String(localized: "backup.manifest.error.missingResourceHash")]
                 )
             }
@@ -492,11 +490,7 @@ final class V2MonthSession: BackupMonthStore {
     @discardableResult
     func flushToRemote(ignoreCancellation: Bool = false) async throws -> MonthManifestStore.FlushDelta {
         guard beginFlush() else {
-            throw NSError(
-                domain: "V2MonthSession",
-                code: -20,
-                userInfo: [NSLocalizedDescriptionKey: "Concurrent V2 month flush rejected"]
-            )
+            throw FlushError.concurrentFlushRejected
         }
         defer { endFlush() }
         guard dirty, let services = v2Services else {
@@ -505,18 +499,40 @@ final class V2MonthSession: BackupMonthStore {
         if !ignoreCancellation { try Task.checkCancellation() }
 
         let monthKey = LibraryMonthKey(year: year, month: month)
+        if let retrySeq = pendingSnapshotRetrySeq {
+            do {
+                try await writeSnapshot(
+                    services: services,
+                    month: monthKey,
+                    ownCommitSeq: retrySeq,
+                    ignoreCancellation: ignoreCancellation
+                )
+                pendingSnapshotRetrySeq = nil
+                pendingRebaselineOnly = false
+                if pendingV2AssetFingerprints.isEmpty, pendingV2TombstoneFingerprints.isEmpty {
+                    dirty = false
+                    return .none
+                }
+            } catch {
+                throw FlushError.snapshotWriteFailed(
+                    committedAssets: [],
+                    committedTombstones: [],
+                    underlying: error
+                )
+            }
+        }
+
         let opCount = pendingV2AssetFingerprints.count + pendingV2TombstoneFingerprints.count
         if opCount == 0 {
             // dirty + no ops = stranded snapshot retry from a prior failure or a rebaseline request.
-            if pendingSnapshotRetrySeq != nil || pendingRebaselineOnly, let services = v2Services {
+            if pendingRebaselineOnly, let services = v2Services {
                 do {
                     try await writeSnapshot(
                         services: services,
                         month: monthKey,
-                        ownCommitSeq: pendingSnapshotRetrySeq,
+                        ownCommitSeq: nil,
                         ignoreCancellation: ignoreCancellation
                     )
-                    pendingSnapshotRetrySeq = nil
                     pendingRebaselineOnly = false
                     dirty = false
                 } catch {
@@ -799,6 +815,8 @@ extension ServerProfileRecord {
             switch next {
             case let flush as V2MonthSession.FlushError:
                 switch flush {
+                case .concurrentFlushRejected:
+                    break
                 case .snapshotWriteFailed(_, _, let underlying):
                     pending.append(underlying)
                 }
