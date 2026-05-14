@@ -3,10 +3,9 @@ import os.log
 
 private let bootstrapLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoBootstrap")
 
-/// Identity = writer-unique claim file at `.watermelon/identity/<wid>.json`.
-/// Canonical repoID = lex-min `(created_at_ms, writerID)` over all claims.
-/// Race-free because each writer's claim is exclusive and lex-min is
-/// deterministic. `repo.json` is a legacy/cache pointer; claims dir wins.
+/// Finalized identity lives at `.watermelon/repo-identity.json`.
+/// Before finalization, claims elect lex-min `(created_at_ms, writerID)`.
+/// `repo.json` is a legacy/cache pointer.
 actor RepoBootstrap {
     enum BootstrapError: Error {
         case ioFailure(Error)
@@ -28,10 +27,11 @@ actor RepoBootstrap {
         // (version.json present + no claim) → sync routes to `.v2` and immediately
         // throws "missing repo.json" since no claim/identity exists.
         let suggested = UUID().uuidString.lowercased()
-        let resolvedID = try await ensureRepoJSON(repoID: suggested, writerID: writerID)
+        var resolvedID = try await ensureRepoJSON(repoID: suggested, writerID: writerID)
         try await ensureSubdirectories()
+        resolvedID = try await ensureIdentityFinalization(repoID: resolvedID, writerID: writerID)
         try await ensureVersionJSON(writerID: writerID)
-        return resolvedID
+        return try await ensureRepoJSON(repoID: resolvedID, writerID: writerID)
     }
 
     // WebDAV/SMB/SFTP don't auto-create parents on PUT.
@@ -48,14 +48,24 @@ actor RepoBootstrap {
         try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
         try await client.createDirectory(path: RepoLayout.identityDirectoryPath(base: basePath))
 
+        let finalizedRepoID = try await loadFinalizedRepoID()
+
         // Non-empty self claim might be canonical; only 0-byte is safe to overwrite.
         try await healZeroByteSelfClaim(writerID: writerID)
 
-        let claimElection = try await canonicalClaimElection(ignoringCorruptSelfClaimFor: writerID)
+        let claimElection: ClaimElectionResult
+        if finalizedRepoID == nil {
+            claimElection = try await canonicalClaimElection(ignoringCorruptSelfClaimFor: writerID)
+        } else {
+            claimElection = ClaimElectionResult(repoID: nil, ignoredSelfCorrupt: false)
+        }
         let existingCanonical = claimElection.repoID
         let suggested: String
         let isElectingFresh: Bool
-        if let existingCanonical {
+        if let finalizedRepoID {
+            suggested = finalizedRepoID
+            isElectingFresh = false
+        } else if let existingCanonical {
             suggested = existingCanonical
             isElectingFresh = false
         } else if case .found(let legacyID) = try await loadRepoJSONStrict() {
@@ -75,10 +85,16 @@ actor RepoBootstrap {
         let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         try await writeIdentityClaim(repoID: suggested, writerID: writerID, createdAtMs: createdAtMs)
 
-        var canonical = try await canonicalRepoIDFromClaims() ?? suggested
-        // Re-poll on fresh election; a concurrent first writer could publish a lower lex-min claim right after ours.
-        if isElectingFresh {
-            canonical = try await stabilizeFreshElection(initial: canonical)
+        let refreshedFinalizedRepoID = try await loadFinalizedRepoID()
+        var canonical: String
+        if let refreshedFinalizedRepoID {
+            canonical = refreshedFinalizedRepoID
+        } else {
+            canonical = try await canonicalRepoIDFromClaims() ?? suggested
+            // Re-poll on fresh election; a concurrent first writer could publish a lower lex-min claim right after ours.
+            if isElectingFresh {
+                canonical = try await stabilizeFreshElection(initial: canonical)
+            }
         }
 
         // Stale-claim hazard: if a peer's claim later disappears, our claim becomes canonical again and would flip us back to `suggested`.
@@ -86,13 +102,85 @@ actor RepoBootstrap {
             try await writeIdentityClaim(repoID: canonical, writerID: writerID, createdAtMs: createdAtMs)
         }
 
-        // repo.json is a read-cache; claims/ is authoritative.
+        // repo.json is a read-cache; finalized identity/claims are authoritative.
         do {
             try await writeRepoJSONCache(canonical: canonical, writerID: writerID, createdAtMs: createdAtMs)
         } catch {
             bootstrapLog.warning("[RepoBootstrap] repo.json cache write failed: \(error.localizedDescription, privacy: .public)")
         }
         return canonical
+    }
+
+    @discardableResult
+    func ensureIdentityFinalization(repoID: String, writerID: String) async throws -> String {
+        try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
+        if let finalized = try await loadFinalizedRepoID() {
+            return finalized
+        }
+
+        let markerPath = RepoLayout.identityFinalizationFilePath(base: basePath)
+        let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let dict: [String: Any] = [
+            "v": 1,
+            "repo_id": repoID,
+            "format_version": RepoLayout.formatVersion,
+            "created_at_ms": createdAtMs,
+            "created_by_writer": writerID
+        ]
+        let temp = try makeTempJSON(dict: dict, prefix: "repo-identity-final")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let markerSize = (try? FileManager.default.attributesOfItem(atPath: temp.path)[.size] as? Int64) ?? 0
+        let canCreateWithoutOverwrite =
+            client.atomicCreateGuarantee(forFileSize: markerSize, remotePath: markerPath) == .exclusive ||
+            client.moveIfAbsentGuarantee == .exclusive
+        guard canCreateWithoutOverwrite else {
+            if let finalized = try await loadFinalizedRepoID() {
+                return finalized
+            }
+            throw MetadataCreateGate.Error.nonExclusiveFinalization(remotePath: markerPath)
+        }
+
+        let result = try await MetadataCreateGate.createWithStagingFallback(
+            client: client,
+            localURL: temp,
+            remotePath: markerPath,
+            respectTaskCancellation: false,
+            finalizationPolicy: .requireExclusiveMove
+        )
+        switch result {
+        case .created:
+            return repoID
+        case .alreadyExists, .bestEffortRetry:
+            if let finalized = try await loadFinalizedRepoID() {
+                return finalized
+            }
+            throw BootstrapError.ioFailure(NSError(
+                domain: "RepoBootstrap",
+                code: 11,
+                userInfo: [NSLocalizedDescriptionKey: "repo identity finalization at \(markerPath) raced but no readable marker exists"]
+            ))
+        }
+    }
+
+    func loadFinalizedRepoID() async throws -> String? {
+        let markerPath = RepoLayout.identityFinalizationFilePath(base: basePath)
+        guard let meta = try await client.metadata(path: markerPath), !meta.isDirectory else {
+            return nil
+        }
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("repo-identity-final-read-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        try await client.download(remotePath: markerPath, localURL: temp)
+        let data = try Data(contentsOf: temp)
+        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let repoID = dict["repo_id"] as? String, !repoID.isEmpty else {
+            throw BootstrapError.ioFailure(NSError(
+                domain: "RepoBootstrap",
+                code: 12,
+                userInfo: [NSLocalizedDescriptionKey: "repo identity finalization marker at \(markerPath) is malformed"]
+            ))
+        }
+        return repoID
     }
 
     private func loadRepoJSONStrict() async throws -> RepoIDLoad {
@@ -153,17 +241,16 @@ actor RepoBootstrap {
     }
 
     private func stabilizeFreshElection(initial: String) async throws -> String {
-        var current = initial
         let maxRounds = 6
         let interval: Duration = .milliseconds(250)
-        for _ in 0..<maxRounds {
+        for round in 0..<maxRounds {
             try await Task.sleep(for: interval)
             try Task.checkCancellation()
-            let observed = try await canonicalRepoIDFromClaims() ?? current
-            if observed == current { return current }
-            current = observed
+            if round + 1 < maxRounds {
+                _ = try? await canonicalRepoIDFromClaims()
+            }
         }
-        return current
+        return try await canonicalRepoIDFromClaims() ?? initial
     }
 
     private enum ExistingClaimClassification {
@@ -429,6 +516,17 @@ actor RepoBootstrap {
         ]
         let temp = try makeTempJSON(dict: versionDict, prefix: "repo-version")
         defer { try? FileManager.default.removeItem(at: temp) }
+        let versionSize = (try? FileManager.default.attributesOfItem(atPath: temp.path)[.size] as? Int64) ?? 0
+        let canCreateWithoutOverwrite =
+            client.atomicCreateGuarantee(forFileSize: versionSize, remotePath: versionPath) == .exclusive ||
+            client.moveIfAbsentGuarantee == .exclusive
+        guard canCreateWithoutOverwrite else {
+            if let meta = try await client.metadata(path: versionPath), !meta.isDirectory {
+                try await verifyVersionCompatible()
+                return
+            }
+            throw MetadataCreateGate.Error.nonExclusiveFinalization(remotePath: versionPath)
+        }
         let result = try await MetadataCreateGate.createWithStagingFallback(
             client: client,
             localURL: temp,
@@ -499,8 +597,11 @@ actor RepoBootstrap {
         case found(String)
     }
 
-    /// Claims dir is authoritative; repo.json is legacy fallback only.
+    /// Finalized identity is authoritative; claims remain the pre-finalization election.
     func loadRepoIDStrict() async throws -> RepoIDLoad {
+        if let finalized = try await loadFinalizedRepoID() {
+            return .found(finalized)
+        }
         if let canonical = try await canonicalRepoIDFromClaims() {
             return .found(canonical)
         }

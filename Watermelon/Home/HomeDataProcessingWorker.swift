@@ -481,7 +481,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     func matchedCount(for month: LibraryMonthKey) -> Int {
         // Only fingerprint-matched assets count here. Assets with matching content hashes but
         // no fingerprint (hash preflight without a subsequent upload) show as unbacked until
-        // AssetProcessor or writeHashIndex stamps a fingerprint onto them.
+        // AssetProcessor or a local hash rebuild stamps a fingerprint onto them.
         publishedLock.withLock {
             guard published.hasActiveConnection else { return 0 }
             return published.matchedCounts[month] ?? 0

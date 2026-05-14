@@ -33,6 +33,7 @@ final class DownloadWorkflowHelper {
             return .success(restoredCount: 0, skippedIncompleteCount: skippedIncompleteCount)
         }
 
+        let hashIndexBuildService = dependencies.localHashIndexBuildService
         let hashIndexRepository = dependencies.hashIndexRepository
 
         do {
@@ -48,10 +49,10 @@ final class DownloadWorkflowHelper {
                 password: context.password,
                 onItemCompleted: { _, _, restoredItem in
                     if let restoredItem {
-                        try await Self.writeHashIndex(
+                        try await Self.rebuildVerifiedLocalHashIndex(
                             assetLocalIdentifier: restoredItem.asset.localIdentifier,
                             remoteAssetFingerprint: restoredItem.identity,
-                            instances: restoredItem.asset.importedInstances,
+                            buildService: hashIndexBuildService,
                             repository: hashIndexRepository
                         )
                         await onItemRestored(restoredItem.asset.localIdentifier)
@@ -73,19 +74,30 @@ final class DownloadWorkflowHelper {
 
     func cancel() {}
 
-    private nonisolated static func writeHashIndex(
+    private nonisolated static func rebuildVerifiedLocalHashIndex(
         assetLocalIdentifier: String,
         remoteAssetFingerprint: Data,
-        instances: [RemoteAssetResourceInstance],
+        buildService: LocalHashIndexBuildService,
         repository: ContentHashIndexRepository
     ) async throws {
-        try await Task.detached(priority: .utility) {
-            try repository.writeHashIndex(
-                assetLocalIdentifier: assetLocalIdentifier,
-                remoteAssetFingerprint: remoteAssetFingerprint,
-                instances: instances
-            )
+        let result = try await buildService.buildIndex(
+            for: [assetLocalIdentifier],
+            workerCount: 1,
+            allowNetworkAccess: false
+        )
+        guard result.readyAssetIDs.contains(assetLocalIdentifier) else {
+            throw NSError(domain: "DownloadWorkflowHelper", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "restored asset local hash verification did not complete"
+            ])
+        }
+        let records = try await Task.detached(priority: .utility) {
+            try repository.fetchAssetFingerprintRecords(assetIDs: [assetLocalIdentifier])
         }.value
+        guard records[assetLocalIdentifier]?.fingerprint == remoteAssetFingerprint else {
+            throw NSError(domain: "DownloadWorkflowHelper", code: -2, userInfo: [
+                NSLocalizedDescriptionKey: "restored asset bytes do not match the remote asset fingerprint"
+            ])
+        }
     }
 }
 

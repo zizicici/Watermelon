@@ -469,68 +469,6 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
-    func writeHashIndex(
-        assetLocalIdentifier: String,
-        remoteAssetFingerprint: Data,
-        instances: [RemoteAssetResourceInstance]
-    ) throws {
-        guard !instances.isEmpty else {
-            try deleteIndexEntries(assetIDs: [assetLocalIdentifier])
-            return
-        }
-        let records = instances.map { instance in
-            LocalAssetResourceHashRecord(
-                role: instance.role,
-                slot: instance.slot,
-                contentHash: instance.resourceHash,
-                fileSize: instance.fileSize
-            )
-        }
-        let totalSize = instances.reduce(Int64(0)) { partial, instance in
-            partial + instance.fileSize
-        }
-        try databaseManager.write { db in
-            try Self.writeLocalAssetRow(
-                db,
-                assetLocalIdentifier: assetLocalIdentifier,
-                assetFingerprint: remoteAssetFingerprint,
-                resourceCount: records.count,
-                totalFileSizeBytes: totalSize,
-                modificationDateMs: nil,
-                selectionVersion: nil,
-                resourceSignature: nil
-            )
-            try db.execute(
-                sql: "UPDATE local_assets SET selectionVersion = 0, resourceSignature = NULL WHERE assetLocalIdentifier = ?",
-                arguments: [assetLocalIdentifier]
-            )
-            try db.execute(
-                sql: "DELETE FROM local_asset_resources WHERE assetLocalIdentifier = ?",
-                arguments: [assetLocalIdentifier]
-            )
-            for resource in records {
-                try db.execute(
-                    sql: """
-                    INSERT INTO local_asset_resources (
-                        assetLocalIdentifier,
-                        role,
-                        slot,
-                        contentHash,
-                        fileSize
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    arguments: [
-                        assetLocalIdentifier,
-                        resource.role,
-                        resource.slot,
-                        resource.contentHash,
-                        resource.fileSize
-                    ]
-                )
-            }
-        }
-    }
-
     func deleteIndexEntries(assetIDs: [String]) throws {
         guard !assetIDs.isEmpty else { return }
         try databaseManager.write { db in

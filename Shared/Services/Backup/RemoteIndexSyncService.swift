@@ -103,10 +103,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         private func acquire(id: UUID) async throws {
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                    Task { await self.registerWaiter(id: id, continuation: cont) }
+                    Task(priority: Task.currentPriority) { await self.registerWaiter(id: id, continuation: cont) }
                 }
             } onCancel: {
-                Task { await self.cancelWaiter(id: id) }
+                Task(priority: Task.currentPriority) { await self.cancelWaiter(id: id) }
             }
         }
 
@@ -553,7 +553,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         // Pre-check distinguishes "manifest gone" (drop stale cache entry) from "download failed" (error); `loadManifestDirect` collapses both into nil.
         guard let metadata = try await client.metadata(path: manifestPath),
               !metadata.isDirectory else {
-            _ = committedView.removeMonth(month)
+            optimisticMutationLock.withLock {
+                _ = committedView.removeMonth(month)
+            }
             return
         }
 
@@ -606,12 +608,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             try await store.flushToRemote()
         }
         let snapshot = store.unsortedSnapshot()
-        _ = committedView.replaceMonth(
-            month,
-            resources: snapshot.resources,
-            assets: snapshot.assets,
-            assetResourceLinks: snapshot.links
-        )
+        optimisticMutationLock.withLock {
+            _ = committedView.replaceMonth(
+                month,
+                resources: snapshot.resources,
+                assets: snapshot.assets,
+                assetResourceLinks: snapshot.links
+            )
+        }
         syncLog.info("[verify] \(month.text): internal=\(internalResult.removedAssetCount)+\(internalResult.removedOrphanLinkCount)L, listing=\(listingResult.removedAssetCount)+\(listingResult.removedOrphanLinkCount)L")
     }
 

@@ -364,6 +364,13 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             if Self.isAlreadyExists(error) {
                 return .alreadyExists
             }
+            do {
+                if try await metadata(path: destinationPath) != nil {
+                    return .alreadyExists
+                }
+            } catch {
+                // Preserve the rename failure; the re-check only closes missed collision classifiers.
+            }
             throw error
         }
     }

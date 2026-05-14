@@ -4,6 +4,7 @@ enum RepoLayout {
     static let watermelonDirectory = ".watermelon"
     static let repoFileName = "repo.json"
     static let versionFileName = "version.json"
+    static let identityFinalizationFileName = "repo-identity.json"
     static let snapshotsDirectory = "snapshots"
     static let commitsDirectory = "commits"
     static let livenessDirectory = "liveness"
@@ -27,6 +28,10 @@ enum RepoLayout {
 
     static func versionFilePath(base: String) -> String {
         normalize(joining: [base, watermelonDirectory, versionFileName])
+    }
+
+    static func identityFinalizationFilePath(base: String) -> String {
+        normalize(joining: [base, watermelonDirectory, identityFinalizationFileName])
     }
 
     static func snapshotsDirectoryPath(base: String) -> String {

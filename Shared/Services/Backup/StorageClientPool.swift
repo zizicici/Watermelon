@@ -17,6 +17,7 @@ actor StorageClientPool {
     private var retiredWaiterIDs: Set<UUID> = []
     private var retiredWaiterOrder: [UUID] = []
     private static let retiredWaiterIDsCap = 4096
+    private static let maxConsecutiveReplacementConnectFailures = 2
     private var isShutdown = false
 
     init(
@@ -196,8 +197,9 @@ actor StorageClientPool {
         idleClients.append(client)
     }
 
-    /// Drives a fresh connect for the next live waiter; retries past pre-cancelled or connect-failing waiters so they don't starve.
+    /// Drives a fresh connect for the next live waiter without storming a persistently failing backend.
     private func passSlotToLiveWaiter() async {
+        var consecutiveConnectFailures = 0
         while let (waiterID, waiter) = popNextWaiter() {
             if consumePreCancelled(waiterID) {
                 recordRetiredWaiter(waiterID)
@@ -238,10 +240,26 @@ actor StorageClientPool {
                 }
                 recordRetiredWaiter(waiterID)
                 waiter.resume(throwing: error)
+                consecutiveConnectFailures += 1
+                if consecutiveConnectFailures >= Self.maxConsecutiveReplacementConnectFailures {
+                    failQueuedWaiters(error)
+                    break
+                }
                 continue
             }
         }
         createdConnections = max(createdConnections - 1, 0)
+    }
+
+    private func failQueuedWaiters(_ error: Error) {
+        while let (waiterID, waiter) = popNextWaiter() {
+            recordRetiredWaiter(waiterID)
+            if consumePreCancelled(waiterID) {
+                waiter.resume(throwing: CancellationError())
+            } else {
+                waiter.resume(throwing: error)
+            }
+        }
     }
 
     func shutdown() async {

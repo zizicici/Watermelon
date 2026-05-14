@@ -124,7 +124,8 @@ enum MetadataCreateGate {
                     return .alreadyExists
                 }
                 if case .bestEffortRetry = finalization,
-                   finalizationPolicy == .requireExclusiveMove {
+                   finalizationPolicy == .requireExclusiveMove,
+                   client.moveIfAbsentGuarantee != .exclusive {
                     try? await client.delete(path: stagingPath)
                     throw Error.nonExclusiveFinalization(remotePath: remotePath)
                 }

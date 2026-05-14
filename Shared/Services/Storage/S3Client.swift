@@ -36,6 +36,13 @@ final actor S3Client: RemoteStorageClientProtocol {
     // Buffer below the 10000-part hard ceiling.
     private static let multipartTargetParts: Int64 = 9_000
     private static let probeKeyPrefix = ".watermelon_probe_"
+    private static let conditionalCopyProbeSlotCount = 8
+    private static func conditionalCopyProbeSourceName(slot: Int) -> String {
+        ".watermelon_probe_copyIfAbsent_\(slot)_source"
+    }
+    private static func conditionalCopyProbeDestinationName(slot: Int) -> String {
+        ".watermelon_probe_copyIfAbsent_\(slot)_destination"
+    }
 
     static func partSize(forFileSize size: Int64) -> Int64 {
         let baseline = multipartPartSize
@@ -172,9 +179,46 @@ final actor S3Client: RemoteStorageClientProtocol {
         return key(forPath: absolute)
     }
 
+    nonisolated private func makeProbeKey(named name: String) -> String {
+        let absolute = RemotePathBuilder.absolutePath(
+            basePath: config.basePath,
+            remoteRelativePath: name
+        )
+        return key(forPath: absolute)
+    }
+
     private func putEmptyObject(at url: URL) async throws {
         let req = signedRequest(method: "PUT", url: url, bodyHash: .empty)
         _ = try await performMetadata(req, from: Data())
+    }
+
+    private func putEmptyObjectIfAbsent(at url: URL) async throws -> AtomicCreateResult {
+        let req = signedRequest(
+            method: "PUT",
+            url: url,
+            additionalHeaders: ["If-None-Match": "*"],
+            bodyHash: .empty
+        )
+        do {
+            _ = try await performMetadata(req, from: Data())
+            return .created
+        } catch {
+            if Self.isPreconditionFailed(error) {
+                return .alreadyExists
+            }
+            throw error
+        }
+    }
+
+    private func objectExists(at url: URL) async throws -> Bool {
+        let req = signedRequest(method: "HEAD", url: url, bodyHash: .empty)
+        do {
+            _ = try await performMetadata(req)
+            return true
+        } catch {
+            if Self.isNotFoundError(error) { return false }
+            throw error
+        }
     }
 
     private func serverSideCopy(sourceKey: String, destinationURL: URL) async throws {
@@ -220,55 +264,72 @@ final actor S3Client: RemoteStorageClientProtocol {
         case .unknown:
             break
         }
-        let sourceKey = makeProbeKey()
-        let destinationKey = makeProbeKey()
-        let sourceURL = try makeURL(key: sourceKey, query: [])
-        let destinationURL = try makeURL(key: destinationKey, query: [])
-        var orphans: Set<URL> = []
-        do {
-            try await putEmptyObject(at: sourceURL)
-            orphans.insert(sourceURL)
-            try await putEmptyObject(at: destinationURL)
-            orphans.insert(destinationURL)
-            let result = try await serverSideCopyIfAbsent(
-                sourceKey: sourceKey,
-                destinationKey: destinationKey
-            )
-            switch result {
-            case .alreadyExists:
-                conditionalCopyIfAbsentSupport = .supported
-            case .created, .bestEffortRetry:
-                conditionalCopyIfAbsentSupport = .unsupported
-            }
-        } catch {
-            if Self.isConditionalCopyUnsupported(error) {
-                conditionalCopyIfAbsentSupport = .unsupported
-            } else {
-                await withTaskGroup(of: Void.self) { group in
-                    for url in orphans {
-                        group.addTask { [self] in
-                            let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
-                            _ = try? await performMetadata(req)
-                        }
-                    }
+        for slot in 0..<Self.conditionalCopyProbeSlotCount {
+            let sourceKey = makeProbeKey(named: Self.conditionalCopyProbeSourceName(slot: slot))
+            let destinationKey = makeProbeKey(named: Self.conditionalCopyProbeDestinationName(slot: slot))
+            let sourceURL = try makeURL(key: sourceKey, query: [])
+            let destinationURL = try makeURL(key: destinationKey, query: [])
+            var orphans: Set<URL> = []
+            do {
+                if try await objectExists(at: sourceURL) == false,
+                   case .created = try await putEmptyObjectIfAbsent(at: sourceURL) {
+                    orphans.insert(sourceURL)
+                }
+                try Task.checkCancellation()
+
+                guard try await objectExists(at: destinationURL) == false else {
+                    await deleteProbeObjects(orphans)
+                    continue
+                }
+                try Task.checkCancellation()
+
+                guard case .created = try await putEmptyObjectIfAbsent(at: destinationURL) else {
+                    await deleteProbeObjects(orphans)
+                    continue
+                }
+                orphans.insert(destinationURL)
+                try Task.checkCancellation()
+
+                let result = try await serverSideCopyIfAbsent(
+                    sourceKey: sourceKey,
+                    destinationKey: destinationKey
+                )
+                try Task.checkCancellation()
+                switch result {
+                case .alreadyExists:
+                    conditionalCopyIfAbsentSupport = .supported
+                case .created, .bestEffortRetry:
+                    conditionalCopyIfAbsentSupport = .unsupported
+                }
+                await deleteProbeObjects(orphans)
+                return conditionalCopyIfAbsentSupport == .supported
+            } catch {
+                await deleteProbeObjects(orphans)
+                if Self.isConditionalCopyUnsupported(error) {
+                    conditionalCopyIfAbsentSupport = .unsupported
+                    return false
                 }
                 throw error
             }
         }
+        return false
+    }
+
+    private func deleteObject(at url: URL) async throws {
+        let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
+        _ = try await performMetadata(req)
+    }
+
+    private func deleteProbeObjects(_ urls: Set<URL>) async {
+        guard !urls.isEmpty else { return }
         await withTaskGroup(of: Void.self) { group in
-            for url in orphans {
+            for url in urls {
                 group.addTask { [self] in
                     let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
                     _ = try? await performMetadata(req)
                 }
             }
         }
-        return conditionalCopyIfAbsentSupport == .supported
-    }
-
-    private func deleteObject(at url: URL) async throws {
-        let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
-        _ = try await performMetadata(req)
     }
 
     func storageCapacity() async throws -> RemoteStorageCapacity? {

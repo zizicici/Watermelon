@@ -51,7 +51,7 @@ enum DataPathOverwriteRisk: Sendable, Equatable {
     case none
 }
 
-/// Claim case-insensitive only when the backend is known to alias names by case.
+/// Unknown backends use exact presence and folded collision keys.
 enum BackendNameCaseSensitivity: Sendable, Equatable {
     case caseSensitive
     case caseInsensitive

@@ -272,13 +272,6 @@ actor V1MigrationService {
                 }
             }
 
-            // Quarantine before snapshot — a snapshot-write failure with the V1 manifest still in place would commit duplicates on retry.
-            try await quarantineV1ResidueManifest(
-                year: scanned.year,
-                month: scanned.month,
-                sourcePath: scanned.manifestAbsolutePath
-            )
-
             let finalSeq = migrationHeader.seq
             var state = RepoMonthState.empty
             for op in ops {
@@ -340,6 +333,11 @@ actor V1MigrationService {
                 runID: runID,
                 respectTaskCancellation: false
             )
+            try await quarantineV1ResidueManifest(
+                year: scanned.year,
+                month: scanned.month,
+                sourcePath: scanned.manifestAbsolutePath
+            )
             processed += 1
         }
         return processed
@@ -359,6 +357,7 @@ actor V1MigrationService {
     }
 
     func runPhase3Cleanup(writerID: String, runID: String) async throws {
+        try await bootstrap.ensureVersionJSON(writerID: writerID)
         try await runPhase3(writerID: writerID, runID: runID)
     }
 
@@ -375,12 +374,22 @@ actor V1MigrationService {
             if isStorageNotFoundError(error) { return .phase1 }
             throw error
         }
-        let data = (try? Data(contentsOf: temp)) ?? Data()
+        let data: Data
+        do {
+            data = try Data(contentsOf: temp)
+        } catch {
+            v1MigrationLog.warning("migration marker at \(path, privacy: .public) could not be read locally; treating as phase1: \(error.localizedDescription, privacy: .public)")
+            return .phase1
+        }
         guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            v1MigrationLog.warning("migration marker at \(path, privacy: .public) is unparseable; treating as phase1")
             return .phase1
         }
         if let phaseRaw = dict["phase"] as? Int, let phase = MigrationPhase(rawValue: phaseRaw) {
             return phase
+        }
+        if dict["phase"] != nil {
+            v1MigrationLog.warning("migration marker at \(path, privacy: .public) has unknown phase; treating as phase1")
         }
         return .phase1
     }
@@ -837,10 +846,9 @@ actor V1MigrationService {
     private static func nsErrorChain(_ error: Error) -> [NSError] {
         var collected: [NSError] = []
         var pending: [NSError] = [error as NSError]
-        var visited: Set<String> = []
+        var visited: Set<ObjectIdentifier> = []
         while let current = pending.popLast() {
-            let key = "\(current.domain)#\(current.code)#\(ObjectIdentifier(current).hashValue)"
-            guard visited.insert(key).inserted else { continue }
+            guard visited.insert(ObjectIdentifier(current)).inserted else { continue }
             collected.append(current)
             if let underlying = current.userInfo[NSUnderlyingErrorKey] as? Error {
                 pending.append(underlying as NSError)

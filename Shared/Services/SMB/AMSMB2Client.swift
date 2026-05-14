@@ -6,10 +6,9 @@ import AMSMB2
 
 final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
-    // SMB doesn't enforce O_EXCL across sessions; assume peers can win the same path.
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseInsensitive }
-    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
 
     private let config: SMBServerConfig
 
@@ -348,10 +347,17 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
                 atPath: RemotePathBuilder.normalizePath(sourcePath),
                 toPath: RemotePathBuilder.normalizePath(destinationPath)
             )
-            return .bestEffortRetry
+            return .created
         } catch {
             if SMBErrorClassifier.isNameCollision(error) {
                 return .alreadyExists
+            }
+            do {
+                if try await metadata(path: destinationPath) != nil {
+                    return .alreadyExists
+                }
+            } catch {
+                // Preserve the rename failure; the re-check only closes missed collision classifiers.
             }
             throw error
         }

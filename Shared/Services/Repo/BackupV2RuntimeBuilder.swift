@@ -78,6 +78,7 @@ enum BackupV2RuntimeBuilder {
         }
 
         let resolvedRepoID: String
+        var wroteV2DataBeforeFinalRepoCheck = false
         switch inspection {
         case .unsupported(let minAppVersion):
             throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
@@ -96,7 +97,21 @@ enum BackupV2RuntimeBuilder {
                 identity: identity,
                 bootstrap: cleanupBootstrap
             )
-            try await cleanup.runPhase3Cleanup(writerID: ownerWriterID, runID: runID)
+            let cleanupFinalizedRepoID = try await bootstrap.ensureIdentityFinalization(repoID: resolvedRepoID, writerID: writerID)
+            if cleanupFinalizedRepoID != resolvedRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: cleanupFinalizedRepoID)
+            }
+            do {
+                try await cleanup.runPhase3Cleanup(writerID: ownerWriterID, runID: runID)
+            } catch let error as RepoBootstrap.VersionConflict {
+                switch error {
+                case .higherFormatVersion(_, _, let minApp),
+                     .mismatchedFormatVersion(_, _, let minApp):
+                    throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
+                case .unreadable:
+                    throw error
+                }
+            }
         case .fresh:
             do {
                 resolvedRepoID = try await bootstrap.initializeFreshRepo(writerID: writerID)
@@ -135,6 +150,10 @@ enum BackupV2RuntimeBuilder {
             if let dataRepoID, resolvedRepoID != dataRepoID {
                 throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: dataRepoID, remote: resolvedRepoID)
             }
+            let finalizedMigrationRepoID = try await bootstrap.ensureIdentityFinalization(repoID: resolvedRepoID, writerID: writerID)
+            if finalizedMigrationRepoID != resolvedRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: finalizedMigrationRepoID)
+            }
             let state = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: resolvedRepoID, writerID: writerID)
             let migration = V1MigrationService(
                 client: client,
@@ -163,7 +182,12 @@ enum BackupV2RuntimeBuilder {
                     }
                     throw error
                 }
+                let preMigrationRepoID = try await bootstrap.ensureRepoJSON(repoID: resolvedRepoID, writerID: writerID)
+                if preMigrationRepoID != resolvedRepoID {
+                    throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: preMigrationRepoID)
+                }
                 let processed = try await migration.runPhase1(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
+                wroteV2DataBeforeFinalRepoCheck = true
                 do {
                     try await migration.runPhase2(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
                 } catch let error as RepoBootstrap.VersionConflict {
@@ -174,6 +198,21 @@ enum BackupV2RuntimeBuilder {
                 }
                 try await migration.runPhase3(writerID: writerID, runID: runID)
                 await onMigrationComplete?(processed)
+            }
+        }
+
+        let finalizedRepoID = try await bootstrap.ensureIdentityFinalization(repoID: resolvedRepoID, writerID: writerID)
+        if finalizedRepoID != resolvedRepoID {
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: finalizedRepoID)
+        }
+        if wroteV2DataBeforeFinalRepoCheck {
+            if let currentRepoID = try await bootstrap.loadRepoID(), currentRepoID != resolvedRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: currentRepoID)
+            }
+        } else {
+            let confirmedRepoID = try await bootstrap.ensureRepoJSON(repoID: resolvedRepoID, writerID: writerID)
+            if confirmedRepoID != resolvedRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: confirmedRepoID)
             }
         }
 

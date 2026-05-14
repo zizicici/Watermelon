@@ -110,7 +110,7 @@ enum RemoteFileNaming {
 
     static func composeLeaf(stem: String, ext: String, reservedSuffixBytes: Int) -> String {
         let availableBytes = maxLeafByteBudget - max(reservedSuffixBytes, 0)
-        guard availableBytes > 0 else { return "" }
+        guard availableBytes > 0 else { return "_" }
         let extPortion = ext.isEmpty ? "" : "." + ext
         let extMaxBytes = extPortion.isEmpty ? 0 : min(maxLeafByteBudget / 2, max(availableBytes - 1, 0))
         let extBudget = extMaxBytes > 0 ? clampStringToBytes(extPortion, maxBytes: extMaxBytes) : ""
@@ -457,11 +457,18 @@ enum RemoteFileNaming {
             }
         }
         assertionFailure("remote filename fallback exhausted compact candidates")
-        let token = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
-        if forceWriterIDSuffix, let writerID {
-            return writerIDSuffixedName(stem: "wm", ext: ext, writerID: writerID, escapeToken: token)
+        while true {
+            let token = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            let candidate: String
+            if forceWriterIDSuffix, let writerID {
+                candidate = writerIDSuffixedName(stem: "wm", ext: ext, writerID: writerID, escapeToken: token)
+            } else {
+                candidate = "wm_\(token)" + extBudget
+            }
+            if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
+                return candidate
+            }
         }
-        return "wm_\(token)" + extBudget
     }
 
     private static func emergencyStableToken(
