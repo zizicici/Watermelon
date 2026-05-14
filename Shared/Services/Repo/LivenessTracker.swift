@@ -52,16 +52,15 @@ actor LivenessTracker {
 
     private func tick() async {
         let timestampMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let body: [String: Any] = ["ts": timestampMs]
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("liveness-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
-        do {
+        func writeHeartbeat(timestampMs: Int64) throws {
+            let body: [String: Any] = ["ts": timestampMs]
+            let data = try JSONSerialization.data(withJSONObject: body)
             try data.write(to: temp, options: .atomic)
-        } catch {
-            return
         }
+        do { try writeHeartbeat(timestampMs: timestampMs) } catch { return }
         let remotePath = RepoLayout.livenessFilePath(base: basePath, writerID: writerID)
         // Staging + rename instead of delete-then-create: keeps a file at remotePath
         // throughout the swap. Peer's listOtherActiveWriters sweep gate can't see us
@@ -117,9 +116,7 @@ actor LivenessTracker {
                 livenessLog.warning("[Liveness] staging vanished after failed move for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
             }
             do {
-                if let remoteTimestamp = try await existingHeartbeatTimestamp(remotePath: remotePath),
-                   remoteTimestamp > timestampMs,
-                   !LivenessTracker.isStale(timestampMs: remoteTimestamp) {
+                if try await hasNewerLiveHeartbeat(remotePath: remotePath, timestampMs: timestampMs) {
                     try? await client.delete(path: stagingPath)
                     return
                 }
@@ -134,6 +131,22 @@ actor LivenessTracker {
             try? await client.delete(path: stagingPath)
             return
         }
+        let uploadTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
+        do {
+            if try await hasNewerLiveHeartbeat(remotePath: remotePath, timestampMs: uploadTimestampMs) {
+                try? await client.delete(path: stagingPath)
+                return
+            }
+        } catch is CancellationError {
+            try? await client.delete(path: stagingPath)
+            return
+        } catch {
+            livenessLog.warning("[Liveness] heartbeat probe failed before fallback upload for \(remotePath, privacy: .public), continuing fallback write: \(error.localizedDescription, privacy: .public)")
+        }
+        do { try writeHeartbeat(timestampMs: uploadTimestampMs) } catch {
+            try? await client.delete(path: stagingPath)
+            return
+        }
         do {
             try await client.upload(localURL: temp, remotePath: remotePath, respectTaskCancellation: true, onProgress: nil)
             try? await client.delete(path: stagingPath)
@@ -145,6 +158,22 @@ actor LivenessTracker {
             lastFailure = error
         }
         if Task.isCancelled {
+            try? await client.delete(path: stagingPath)
+            return
+        }
+        let atomicTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
+        do {
+            if try await hasNewerLiveHeartbeat(remotePath: remotePath, timestampMs: atomicTimestampMs) {
+                try? await client.delete(path: stagingPath)
+                return
+            }
+        } catch is CancellationError {
+            try? await client.delete(path: stagingPath)
+            return
+        } catch {
+            livenessLog.warning("[Liveness] heartbeat probe failed before fallback atomic create for \(remotePath, privacy: .public), continuing fallback write: \(error.localizedDescription, privacy: .public)")
+        }
+        do { try writeHeartbeat(timestampMs: atomicTimestampMs) } catch {
             try? await client.delete(path: stagingPath)
             return
         }
@@ -163,6 +192,13 @@ actor LivenessTracker {
         if let lastFailure {
             livenessLog.warning("[Liveness] all write strategies failed for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func hasNewerLiveHeartbeat(remotePath: String, timestampMs: Int64) async throws -> Bool {
+        guard let remoteTimestamp = try await existingHeartbeatTimestamp(remotePath: remotePath) else {
+            return false
+        }
+        return remoteTimestamp > timestampMs && !LivenessTracker.isStale(timestampMs: remoteTimestamp)
     }
 
     private func existingHeartbeatTimestamp(remotePath: String) async throws -> Int64? {

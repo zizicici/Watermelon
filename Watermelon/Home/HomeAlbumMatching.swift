@@ -13,8 +13,7 @@ struct RemoteAlbumItem {
     let representative: RemoteManifestResource
     let mediaKind: AlbumMediaKind
     let contentHashes: [Data]
-    /// Single source for restorability — UI uses `isIncomplete`, download
-    /// uses `isRestorable`. The two diverge on `.partiallyMissing`.
+    /// Single source for restorability — downloads require a full-fingerprint match.
     let integrityState: AssetIntegrityState
     let missingResourceCount: Int
 

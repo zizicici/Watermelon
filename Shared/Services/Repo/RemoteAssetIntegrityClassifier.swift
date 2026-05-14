@@ -9,13 +9,11 @@ enum AssetIntegrityState: Sendable, Equatable {
     case phantom
     case fingerprintMismatch(recomputed: Data)
 
-    /// The asset can be downloaded into Photos and yield a viewable result.
-    /// `partiallyMissing` is allowed only when at least one non-metadata role survives;
-    /// `metadataOnlyLeft` is unrestorable by definition (just edit history).
+    /// The asset can be downloaded into Photos and pass full-fingerprint verification.
     var allowsRestore: Bool {
         switch self {
-        case .healthy, .partiallyMissing: return true
-        case .metadataOnlyLeft, .fullyMissing, .phantom, .fingerprintMismatch: return false
+        case .healthy: return true
+        case .partiallyMissing, .metadataOnlyLeft, .fullyMissing, .phantom, .fingerprintMismatch: return false
         }
     }
 

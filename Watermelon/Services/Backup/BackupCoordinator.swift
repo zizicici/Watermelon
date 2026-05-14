@@ -133,14 +133,20 @@ final class BackupCoordinator: Sendable {
 
     func prepareResumeHandle(profile: ServerProfileRecord, password: String) async throws -> RemoteViewHandle {
         try await preparationService.withConnectedClient(profile: profile, password: password) { client in
-            let handle = try await self.remoteIndexService.syncOverlayAndCaptureHandle(
-                client: client,
-                basePath: profile.basePath
-            )
-            guard handle.overlayFreshness == .fresh else {
-                throw RemoteViewHandleError.stalePhysicalPresenceOverlay
+            let maxAttempts = 3
+            for attempt in 1...maxAttempts {
+                let handle = try await self.remoteIndexService.syncOverlayAndCaptureHandle(
+                    client: client,
+                    basePath: profile.basePath
+                )
+                if handle.overlayFreshness == .fresh {
+                    return handle
+                }
+                if attempt < maxAttempts {
+                    try Task.checkCancellation()
+                }
             }
-            return handle
+            throw RemoteViewHandleError.stalePhysicalPresenceOverlay
         }
     }
 

@@ -576,7 +576,7 @@ struct BackupParallelExecutor: Sendable {
                                     eventStream.emit(.monthChanged(MonthChangeEvent(
                                         year: monthKey.year,
                                         month: monthKey.month,
-                                        action: .downloadIncomplete
+                                        action: .downloadIncomplete(message)
                                     )))
                                 case .failed(let failure):
                                     eventStream.emitLog(

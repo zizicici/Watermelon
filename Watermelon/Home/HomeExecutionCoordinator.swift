@@ -743,7 +743,7 @@ final class HomeExecutionCoordinator {
                     month.displayText,
                     skippedIncompleteCount
                 )
-                session.failDownloadMonth(month, reason: reason)
+                session.markDownloadIncompleteMonth(month, reason: reason)
                 appendWarningLog(reason)
                 refreshTerminalStatus(notifyState: false)
                 notifyStateChanged()
@@ -791,8 +791,13 @@ final class HomeExecutionCoordinator {
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadStartMonth"), month.displayText))
             case .completed:
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadDoneMonth"), month.displayText))
-            case .downloadIncomplete:
-                break
+            case .downloadIncomplete(let message):
+                let wasTerminal = session.monthPlans[month]?.isTerminal == true
+                session.markDownloadIncompleteMonth(month, reason: message)
+                guard !wasTerminal else { break }
+                appendWarningLog(message)
+                refreshTerminalStatus(notifyState: false)
+                notifyStateChanged()
             }
         case .started(let totalAssets):
             setStatusText(phaseStatusText() ?? String(localized: "home.execution.uploading"))

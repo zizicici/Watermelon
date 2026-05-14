@@ -54,6 +54,8 @@ struct BackupSessionState {
     var completedAssetIDsForResume: Set<String> = []
     var startedMonths = Set<LibraryMonthKey>()
     var completedMonths = Set<LibraryMonthKey>()
+    var downloadIncompleteMonths = Set<LibraryMonthKey>()
+    var downloadIncompleteMessagesByMonth: [LibraryMonthKey: String] = [:]
     var processedCountByMonth: [LibraryMonthKey: Int] = [:]
     var failedCountByMonth: [LibraryMonthKey: Int] = [:]
 
@@ -78,6 +80,8 @@ struct BackupSessionState {
             total: total,
             startedMonths: startedMonths,
             completedMonths: completedMonths,
+            downloadIncompleteMonths: downloadIncompleteMonths,
+            downloadIncompleteMessagesByMonth: downloadIncompleteMessagesByMonth,
             processedCountByMonth: processedCountByMonth,
             failedCountByMonth: failedCountByMonth
         )
@@ -113,6 +117,8 @@ struct BackupSessionState {
         if shouldResetSessionItems {
             startedMonths.removeAll()
             completedMonths.removeAll()
+            downloadIncompleteMonths.removeAll()
+            downloadIncompleteMessagesByMonth.removeAll()
             processedCountByMonth.removeAll()
             failedCountByMonth.removeAll()
         }
@@ -201,13 +207,16 @@ struct BackupSessionState {
     }
 
     mutating func completeResumeWithoutPendingWork() {
+        let resumedRunMode = currentRunMode
         controlPhase = .idle
         lastPausedRunMode = nil
         lastPausedDisplayRunMode = nil
         currentRunMode = .full
         pendingRunConfiguration = nil
         state = .completed
-        statusText = String(localized: "backup.session.completed")
+        completedAssetIDsForResume.removeAll()
+        let failedCount = max(failed, failedCountByMonth.values.reduce(0, +))
+        statusText = completedStatusText(runMode: resumedRunMode, failedCount: failedCount)
     }
 
     mutating func completeResumeLaunchSucceeded(displayMode: BackupRunMode) {
@@ -288,10 +297,17 @@ struct BackupSessionState {
             switch change.action {
             case .started:
                 startedMonths.insert(monthKey)
+                completedMonths.remove(monthKey)
+                downloadIncompleteMonths.remove(monthKey)
+                downloadIncompleteMessagesByMonth.removeValue(forKey: monthKey)
             case .completed:
                 completedMonths.insert(monthKey)
-            case .downloadIncomplete:
-                break
+                downloadIncompleteMonths.remove(monthKey)
+                downloadIncompleteMessagesByMonth.removeValue(forKey: monthKey)
+            case .downloadIncomplete(let message):
+                completedMonths.remove(monthKey)
+                downloadIncompleteMonths.insert(monthKey)
+                downloadIncompleteMessagesByMonth[monthKey] = message
             }
             return BackupSessionReductionOutcome(shouldStop: false, notification: .throttled)
 
@@ -397,15 +413,20 @@ struct BackupSessionState {
         pendingRunConfiguration = nil
         state = .completed
         completedAssetIDsForResume.removeAll()
-        switch (runMode.isRetry, result.failed == 0) {
+        statusText = completedStatusText(runMode: runMode, failedCount: result.failed)
+    }
+
+    private func completedStatusText(runMode: BackupRunMode, failedCount: Int) -> String {
+        let completedWithoutWarnings = failedCount == 0 && downloadIncompleteMonths.isEmpty
+        switch (runMode.isRetry, completedWithoutWarnings) {
         case (true, true):
-            statusText = String(localized: "backup.session.retryCompleted")
+            return String(localized: "backup.session.retryCompleted")
         case (true, false):
-            statusText = String(localized: "backup.session.retryCompletedPartial")
+            return String(localized: "backup.session.retryCompletedPartial")
         case (false, true):
-            statusText = String(localized: "backup.session.backupCompleted")
+            return String(localized: "backup.session.backupCompleted")
         case (false, false):
-            statusText = String(localized: "backup.session.backupCompletedPartial")
+            return String(localized: "backup.session.backupCompletedPartial")
         }
     }
 

@@ -206,8 +206,12 @@ struct HomeExecutionSession {
 
     mutating func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) -> UploadResultOutcome {
         switch result {
-        case .completed(let failedCountByMonth):
+        case .completed(let failedCountByMonth, let downloadIncompleteMonths, let downloadIncompleteMessagesByMonth):
             uploadPhaseCompleted = true
+            markDownloadIncompleteMonths(
+                downloadIncompleteMonths,
+                messagesByMonth: downloadIncompleteMessagesByMonth
+            )
             for (month, failedCount) in failedCountByMonth where failedCount > 0 {
                 monthPlans[month]?.apply(.partiallyFailed(count: failedCount))
             }
@@ -278,6 +282,10 @@ struct HomeExecutionSession {
         monthPlans[month]?.apply(.failed(reason: reason))
     }
 
+    mutating func markDownloadIncompleteMonth(_ month: LibraryMonthKey, reason: String) {
+        monthPlans[month]?.apply(.failed(reason: reason))
+    }
+
     func phaseLabel(for month: LibraryMonthKey) -> String {
         monthPlans[month]?.needsUpload == true ? String(localized: "home.execution.phaseComplement") : String(localized: "home.execution.phaseDownload")
     }
@@ -337,6 +345,16 @@ struct HomeExecutionSession {
             let phase = monthPlans[month]?.phase
             guard phase != .uploadDone && phase != .completed && phase != .partiallyFailed else { continue }
             monthPlans[month]?.apply(.failed(reason: reason))
+        }
+    }
+
+    private mutating func markDownloadIncompleteMonths(
+        _ months: Set<LibraryMonthKey>,
+        messagesByMonth: [LibraryMonthKey: String]
+    ) {
+        let fallback = String(localized: "home.execution.partialFailed")
+        for month in months {
+            monthPlans[month]?.apply(.failed(reason: messagesByMonth[month] ?? fallback))
         }
     }
 

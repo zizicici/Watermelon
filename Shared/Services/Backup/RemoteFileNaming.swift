@@ -179,13 +179,17 @@ enum RemoteFileNaming {
             )
         } catch {
             assertionFailure(error.localizedDescription)
-            return emergencyFallbackName(
-                baseName: baseName,
-                writerID: writerID,
-                forceWriterIDSuffix: forceWriterIDSuffix,
-                occupiedKeys: nameKeySet(from: occupiedNames, caseSensitivity: caseSensitivity),
-                caseSensitivity: caseSensitivity
-            )
+            do {
+                return try emergencyFallbackName(
+                    baseName: baseName,
+                    writerID: writerID,
+                    forceWriterIDSuffix: forceWriterIDSuffix,
+                    occupiedKeys: nameKeySet(from: occupiedNames, caseSensitivity: caseSensitivity),
+                    caseSensitivity: caseSensitivity
+                )
+            } catch {
+                preconditionFailure(error.localizedDescription)
+            }
         }
     }
 
@@ -220,13 +224,17 @@ enum RemoteFileNaming {
             )
         } catch {
             assertionFailure(error.localizedDescription)
-            return emergencyFallbackName(
-                baseName: baseName,
-                writerID: writerID,
-                forceWriterIDSuffix: forceWriterIDSuffix,
-                occupiedKeys: collisionKeys,
-                caseSensitivity: .caseInsensitive
-            )
+            do {
+                return try emergencyFallbackName(
+                    baseName: baseName,
+                    writerID: writerID,
+                    forceWriterIDSuffix: forceWriterIDSuffix,
+                    occupiedKeys: collisionKeys,
+                    caseSensitivity: .caseInsensitive
+                )
+            } catch {
+                preconditionFailure(error.localizedDescription)
+            }
         }
     }
 
@@ -377,7 +385,7 @@ enum RemoteFileNaming {
         forceWriterIDSuffix: Bool,
         occupiedKeys: Set<String>,
         caseSensitivity: BackendNameCaseSensitivity
-    ) -> String {
+    ) throws -> String {
         let nsName = baseName as NSString
         let ext = nsName.pathExtension
         let stem = nsName.deletingPathExtension
@@ -457,7 +465,7 @@ enum RemoteFileNaming {
             }
         }
         assertionFailure("remote filename fallback exhausted compact candidates")
-        while true {
+        for _ in 0..<64 {
             let token = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
             let candidate: String
             if forceWriterIDSuffix, let writerID {
@@ -469,6 +477,7 @@ enum RemoteFileNaming {
                 return candidate
             }
         }
+        throw ResolutionError.exhausted(stem: stem, collisionCount: occupiedKeys.count)
     }
 
     private static func emergencyStableToken(

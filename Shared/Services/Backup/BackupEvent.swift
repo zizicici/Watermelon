@@ -17,6 +17,6 @@ struct MonthChangeEvent: Sendable {
     enum MonthAction: Sendable {
         case started
         case completed
-        case downloadIncomplete
+        case downloadIncomplete(String)
     }
 }

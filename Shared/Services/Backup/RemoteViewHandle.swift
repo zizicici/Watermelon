@@ -15,11 +15,14 @@ struct RemoteViewHandle: Sendable {
 
 enum RemoteViewHandleError: LocalizedError {
     case stalePhysicalPresenceOverlay
+    case unknownRepositoryFormat
 
     var errorDescription: String? {
         switch self {
         case .stalePhysicalPresenceOverlay:
             return "Remote file verification did not finish. Resume is still paused; try again."
+        case .unknownRepositoryFormat:
+            return "Remote repository format was not identified. Resume is still paused; try again."
         }
     }
 }

@@ -166,6 +166,7 @@ actor RepoVerifyMonthService {
         var verifiedFileCount = 0
         var verifiedByteCount: Int64 = 0
         return { hash in
+            var sawInconclusive = false
             guard let candidates = expectationsByHash[hash], !candidates.isEmpty else { return .absent }
             for candidate in candidates {
                 let listed = entriesByKey[candidate.key] ?? []
@@ -186,16 +187,23 @@ actor RepoVerifyMonthService {
                     )
                     // Transport errors must abort verify rather than be silently classified absent — a false absent here drives tombstone issuance against healthy bytes.
                     do {
-                        let verified = try await RemoteContentTrust.verifyHash(
+                        switch try await RemoteContentTrust.verifyHashResult(
                             client: clientRef,
                             remotePath: path,
                             expectedSize: candidate.size,
                             expectedHash: candidate.hash
-                        )
-                        verifiedFileCount += 1
-                        verifiedByteCount += candidateSize
-                        if verified {
+                        ) {
+                        case .matched:
+                            verifiedFileCount += 1
+                            verifiedByteCount += candidateSize
                             return .present
+                        case .mismatched:
+                            verifiedFileCount += 1
+                            verifiedByteCount += candidateSize
+                        case .noContent:
+                            continue
+                        case .inconclusive:
+                            sawInconclusive = true
                         }
                     } catch is CancellationError {
                         throw CancellationError()
@@ -205,6 +213,7 @@ actor RepoVerifyMonthService {
                     }
                 }
             }
+            if sawInconclusive { return .inconclusive }
             return .absent
         }
     }

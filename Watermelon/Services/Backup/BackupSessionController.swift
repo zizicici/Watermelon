@@ -33,6 +33,8 @@ enum State {
         let total: Int
         let startedMonths: Set<LibraryMonthKey>
         let completedMonths: Set<LibraryMonthKey>
+        let downloadIncompleteMonths: Set<LibraryMonthKey>
+        let downloadIncompleteMessagesByMonth: [LibraryMonthKey: String]
         let processedCountByMonth: [LibraryMonthKey: Int]
         let failedCountByMonth: [LibraryMonthKey: Int]
     }
@@ -599,9 +601,11 @@ enum State {
                     password: connection.password
                 )
                 try Task.checkCancellation()
-                let isV2 = await self.backupCoordinator.currentRepoIsV2()
+                guard let isV2 = await self.backupCoordinator.currentRepoIsV2() else {
+                    throw RemoteViewHandleError.unknownRepositoryFormat
+                }
                 let dedupMode: BackupResumeDedupMode
-                if isV2 == true {
+                if isV2 {
                     let handle = try await self.backupCoordinator.prepareResumeHandle(
                         profile: connection.profile,
                         password: connection.password

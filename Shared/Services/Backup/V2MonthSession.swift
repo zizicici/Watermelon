@@ -181,7 +181,7 @@ final class V2MonthSession: BackupMonthStore {
         self.resourcesByCollisionKey = resourcesByCollisionKey
         self.physicallyMissingPaths = physicallyMissingPaths
         self.untrustedPhysicalPresencePaths = untrustedPhysicalPresencePaths
-        self.unavailablePhysicalPresencePaths = physicallyMissingPaths.union(untrustedPhysicalPresencePaths)
+        self.unavailablePhysicalPresencePaths = physicallyMissingPaths
         // Hash missing iff every path missing; overlay consumers use the hash set, in-session lookup uses paths.
         if physicallyMissingPaths.isEmpty {
             self.physicallyMissingHashes = []

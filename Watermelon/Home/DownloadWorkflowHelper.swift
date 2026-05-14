@@ -18,9 +18,7 @@ final class DownloadWorkflowHelper {
     }
 
     /// Downloads remote-only items via RestoreService and writes hash index per item.
-    /// Filters on `isRestorable` (classifier `allowsRestore`) — `partiallyMissing`
-    /// can still restore the primary content, so the broader `isIncomplete` flag
-    /// would over-skip otherwise-recoverable items.
+    /// Filters on `isRestorable` so post-save verification can compare full fingerprints.
     func downloadItems(
         _ remoteItems: [RemoteAlbumItem],
         context: Context,

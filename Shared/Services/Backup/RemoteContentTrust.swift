@@ -2,30 +2,58 @@ import CryptoKit
 import Foundation
 
 enum RemoteContentTrust {
+    enum HashVerificationResult: Sendable, Equatable {
+        case matched
+        case mismatched
+        case noContent
+        case inconclusive
+    }
+
     static func verifyHash(
         client: any RemoteStorageClientProtocol,
         remotePath: String,
         expectedSize: Int64,
         expectedHash: Data
     ) async throws -> Bool {
+        try await verifyHashResult(
+            client: client,
+            remotePath: remotePath,
+            expectedSize: expectedSize,
+            expectedHash: expectedHash
+        ) == .matched
+    }
+
+    static func verifyHashResult(
+        client: any RemoteStorageClientProtocol,
+        remotePath: String,
+        expectedSize: Int64,
+        expectedHash: Data
+    ) async throws -> HashVerificationResult {
         do {
             guard let metadata = try await client.metadata(path: remotePath), !metadata.isDirectory else {
-                return false
+                return .noContent
             }
             guard metadata.size == expectedSize else {
-                return false
+                return .noContent
             }
         } catch {
-            if isStorageNotFoundError(error) { return false }
+            if isStorageNotFoundError(error) { return .noContent }
             throw error
         }
         try Task.checkCancellation()
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote-content-verify-\(UUID().uuidString).bin")
         defer { try? FileManager.default.removeItem(at: temp) }
-        try await client.download(remotePath: remotePath, localURL: temp)
+        do {
+            try await client.download(remotePath: remotePath, localURL: temp)
+        } catch {
+            if isStorageNotFoundError(error) { return .inconclusive }
+            throw error
+        }
         try Task.checkCancellation()
         return try hashDownloadedFile(localURL: temp, expectedSize: expectedSize, expectedHash: expectedHash, remotePath: remotePath)
+            ? .matched
+            : .mismatched
     }
 
     private static func hashDownloadedFile(

@@ -1103,21 +1103,29 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                         remoteRelativePath: monthRel + "/" + match.name
                     )
                     do {
-                        verifiedFileCount += 1
-                        verifiedByteCount += resource.fileSize
-                        if try await RemoteContentTrust.verifyHash(
+                        switch try await RemoteContentTrust.verifyHashResult(
                             client: client,
                             remotePath: path,
                             expectedSize: resource.fileSize,
                             expectedHash: hash
                         ) {
+                        case .matched:
+                            verifiedFileCount += 1
+                            verifiedByteCount += resource.fileSize
                             anyPresent = true
                             break candidateScan
+                        case .mismatched:
+                            verifiedFileCount += 1
+                            verifiedByteCount += resource.fileSize
+                        case .noContent:
+                            continue
+                        case .inconclusive:
+                            inconclusive = true
                         }
                     } catch is CancellationError {
                         throw CancellationError()
                     } catch {
-                        // Not-found = continue probing alternates; transport/truncation throws so overlay refresh records the month as inconclusive rather than falsely healthy.
+                        // Transport/truncation keeps the month inconclusive rather than falsely healthy.
                         if isStorageNotFoundError(error) { continue }
                         throw error
                     }

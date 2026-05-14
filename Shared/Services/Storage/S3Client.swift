@@ -36,12 +36,11 @@ final actor S3Client: RemoteStorageClientProtocol {
     // Buffer below the 10000-part hard ceiling.
     private static let multipartTargetParts: Int64 = 9_000
     private static let probeKeyPrefix = ".watermelon_probe_"
-    private static let conditionalCopyProbeSlotCount = 8
-    private static func conditionalCopyProbeSourceName(slot: Int) -> String {
-        ".watermelon_probe_copyIfAbsent_\(slot)_source"
-    }
-    private static func conditionalCopyProbeDestinationName(slot: Int) -> String {
-        ".watermelon_probe_copyIfAbsent_\(slot)_destination"
+    private static let conditionalCopyProbeAttemptCount = 8
+    private static let conditionalCopyProbePrefix = ".watermelon_probe_copyIfAbsent_"
+    private static let conditionalCopyProbeCleanupAge: TimeInterval = 3600
+    private static func conditionalCopyProbeName(runID: String, suffix: String) -> String {
+        "\(conditionalCopyProbePrefix)\(runID)_\(suffix)"
     }
 
     static func partSize(forFileSize size: Int64) -> Int64 {
@@ -264,17 +263,22 @@ final actor S3Client: RemoteStorageClientProtocol {
         case .unknown:
             break
         }
-        for slot in 0..<Self.conditionalCopyProbeSlotCount {
-            let sourceKey = makeProbeKey(named: Self.conditionalCopyProbeSourceName(slot: slot))
-            let destinationKey = makeProbeKey(named: Self.conditionalCopyProbeDestinationName(slot: slot))
+        try await cleanupOrphanedConditionalCopyProbes()
+        for _ in 0..<Self.conditionalCopyProbeAttemptCount {
+            let runID = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            let sourceKey = makeProbeKey(named: Self.conditionalCopyProbeName(runID: runID, suffix: "source"))
+            let destinationKey = makeProbeKey(named: Self.conditionalCopyProbeName(runID: runID, suffix: "destination"))
             let sourceURL = try makeURL(key: sourceKey, query: [])
             let destinationURL = try makeURL(key: destinationKey, query: [])
             var orphans: Set<URL> = []
             do {
-                if try await objectExists(at: sourceURL) == false,
-                   case .created = try await putEmptyObjectIfAbsent(at: sourceURL) {
-                    orphans.insert(sourceURL)
+                guard try await objectExists(at: sourceURL) == false else {
+                    continue
                 }
+                guard case .created = try await putEmptyObjectIfAbsent(at: sourceURL) else {
+                    continue
+                }
+                orphans.insert(sourceURL)
                 try Task.checkCancellation()
 
                 guard try await objectExists(at: destinationURL) == false else {
@@ -312,7 +316,38 @@ final actor S3Client: RemoteStorageClientProtocol {
                 throw error
             }
         }
-        return false
+        throw Self.internalError("could not allocate temporary S3 conditional-copy probe objects")
+    }
+
+    private func cleanupOrphanedConditionalCopyProbes() async throws {
+        try Task.checkCancellation()
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await list(path: config.basePath)
+        } catch {
+            if Task.isCancelled || error is CancellationError {
+                throw error
+            }
+            return
+        }
+        let cutoff = Date().addingTimeInterval(-Self.conditionalCopyProbeCleanupAge)
+        for entry in entries where Self.isConditionalCopyProbeEntry(entry, olderThan: cutoff) {
+            try Task.checkCancellation()
+            do {
+                try await delete(path: entry.path)
+            } catch {
+                if Task.isCancelled || error is CancellationError {
+                    throw error
+                }
+            }
+        }
+    }
+
+    nonisolated private static func isConditionalCopyProbeEntry(_ entry: RemoteStorageEntry, olderThan cutoff: Date) -> Bool {
+        guard !entry.isDirectory, entry.size == 0 else { return false }
+        guard let modificationDate = entry.modificationDate, modificationDate <= cutoff else { return false }
+        guard entry.name.hasPrefix(conditionalCopyProbePrefix) else { return false }
+        return entry.name.hasSuffix("_source") || entry.name.hasSuffix("_destination")
     }
 
     private func deleteObject(at url: URL) async throws {
