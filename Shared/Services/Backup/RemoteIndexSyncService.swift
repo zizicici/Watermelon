@@ -3,20 +3,17 @@ import os.log
 
 private let syncLog = Logger(subsystem: "com.zizicici.watermelon", category: "SyncTiming")
 
-private enum PhysicalPresenceOverlayProbeError: LocalizedError {
-    case budgetExhausted(month: LibraryMonthKey, partialMissing: Set<Data>)
-
-    var errorDescription: String? {
-        switch self {
-        case .budgetExhausted(let month, _):
-            return "overlay probe budget exhausted for \(month.text)"
-        }
-    }
-}
-
 final class RemoteIndexSyncService: @unchecked Sendable {
     private static let overlayProbeMaxVerifiedFilesPerMonth = 64
     private static let overlayProbeMaxVerifiedBytesPerMonth: Int64 = 32 * 1024 * 1024
+
+    private struct OverlayMonthProbe: Sendable {
+        let month: LibraryMonthKey
+        let missingHashes: Set<Data>
+        let inconclusiveHashes: Set<Data>
+
+        var fresh: Bool { inconclusiveHashes.isEmpty }
+    }
 
     private actor SyncGate {
         private var isLocked = false
@@ -796,6 +793,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
     }
 
+    func verifiedPhysicallyMissingHashes(for month: LibraryMonthKey) async -> Set<Data>? {
+        guard await state.overlayFresh() else { return nil }
+        return physicallyMissingHashes(for: month)
+    }
+
     func physicallyMissingHashesForTest(month: LibraryMonthKey) -> Set<Data> {
         physicallyMissingHashes(for: month)
     }
@@ -852,14 +854,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         var iterator = resourcesByMonth.makeIterator()
         var anyFailure = false
         var missingByMonth: [LibraryMonthKey: Set<Data>] = [:]
-        try await withThrowingTaskGroup(of: (LibraryMonthKey, Result<Set<Data>, Error>).self) { group in
+        try await withThrowingTaskGroup(of: (LibraryMonthKey, Result<OverlayMonthProbe, Error>).self) { group in
             for _ in 0..<effectiveCap {
                 guard let (month, resources) = iterator.next() else { break }
                 group.addTask { [self] in
                     try Task.checkCancellation()
                     do {
-                        let (m, missing) = try await probeMonthForMissing(client: client, basePath: basePath, month: month, resources: resources)
-                        return (m, .success(missing))
+                        let probe = try await probeMonthForMissing(client: client, basePath: basePath, month: month, resources: resources)
+                        return (probe.month, .success(probe))
                     } catch is CancellationError {
                         throw CancellationError()
                     } catch {
@@ -870,14 +872,17 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             while let (month, result) = try await group.next() {
                 try Task.checkCancellation()
                 switch result {
-                case .success(let missing):
+                case .success(let probe):
+                    if !probe.fresh { anyFailure = true }
+                    var missing = probe.missingHashes
+                    if let stale = fallback[month], !probe.inconclusiveHashes.isEmpty {
+                        missing.formUnion(stale.intersection(probe.inconclusiveHashes))
+                    }
                     missingByMonth[month] = missing
                 case .failure(let error):
                     anyFailure = true
                     if let stale = fallback[month] {
                         missingByMonth[month] = stale
-                    } else if case let PhysicalPresenceOverlayProbeError.budgetExhausted(month: _, partialMissing: partialMissing) = error {
-                        missingByMonth[month] = partialMissing
                     } else {
                         let allHashes = Set((resourcesByMonth[month] ?? []).map(\.contentHash))
                         missingByMonth[month] = allHashes
@@ -888,8 +893,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                     group.addTask { [self] in
                         try Task.checkCancellation()
                         do {
-                            let (m, missing) = try await probeMonthForMissing(client: client, basePath: basePath, month: nextMonth, resources: nextResources)
-                            return (m, .success(missing))
+                            let probe = try await probeMonthForMissing(client: client, basePath: basePath, month: nextMonth, resources: nextResources)
+                            return (probe.month, .success(probe))
                         } catch is CancellationError {
                             throw CancellationError()
                         } catch {
@@ -907,7 +912,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         basePath: String,
         month: LibraryMonthKey,
         resources: [RemoteManifestResource]
-    ) async throws -> (LibraryMonthKey, Set<Data>) {
+    ) async throws -> OverlayMonthProbe {
         try Task.checkCancellation()
         let monthRel = String(format: "%04d/%02d", month.year, month.month)
         let monthAbs = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRel)
@@ -916,7 +921,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             entries = try await client.list(path: monthAbs)
         } catch {
             if isStorageNotFoundError(error) {
-                return (month, Set(resources.map(\.contentHash)))
+                return OverlayMonthProbe(
+                    month: month,
+                    missingHashes: Set(resources.map(\.contentHash)),
+                    inconclusiveHashes: []
+                )
             }
             throw error
         }
@@ -938,32 +947,29 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         for resource in resources {
             resourcesByHash[resource.contentHash, default: []].append(resource)
         }
-        let smallLimit = RemoteContentTrust.overlayProbeSmallFileLimitBytes
         var verifiedFileCount = 0
         var verifiedByteCount: Int64 = 0
         var loggedProbeBudgetExhausted = false
-        var missing: Set<Data> = []
+        var missingHashes: Set<Data> = []
+        var inconclusiveHashes: Set<Data> = []
         for (hash, group) in resourcesByHash {
             var anyPresent = false
+            var inconclusive = false
             candidateScan: for resource in group {
                 try Task.checkCancellation()
                 let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
                 guard let listed = entriesByKey[presenceKey(leaf)] else { continue }
                 let sizeMatches = listed.filter { $0.size == resource.fileSize }
                 if sizeMatches.isEmpty { continue }
-                // Small files require content verification; size-only would dedup peer-overwritten bytes via BackupResumePlanner.
-                if resource.fileSize >= smallLimit {
-                    anyPresent = true
-                    break
-                }
                 for match in sizeMatches {
                     if verifiedFileCount >= Self.overlayProbeMaxVerifiedFilesPerMonth ||
                         verifiedByteCount + resource.fileSize > Self.overlayProbeMaxVerifiedBytesPerMonth {
                         if !loggedProbeBudgetExhausted {
                             loggedProbeBudgetExhausted = true
-                            syncLog.info("[SyncTiming] overlay probe budget exhausted for \(month.text); preserving stale overlay")
+                            syncLog.info("[SyncTiming] overlay probe budget exhausted for \(month.text); leaving unverified resources inconclusive")
                         }
-                        throw PhysicalPresenceOverlayProbeError.budgetExhausted(month: month, partialMissing: missing)
+                        inconclusive = true
+                        break candidateScan
                     }
                     let path = RemotePathBuilder.absolutePath(
                         basePath: basePath,
@@ -990,9 +996,19 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                     }
                 }
             }
-            if !anyPresent { missing.insert(hash) }
+            if anyPresent {
+                continue
+            } else if inconclusive {
+                inconclusiveHashes.insert(hash)
+            } else {
+                missingHashes.insert(hash)
+            }
         }
-        return (month, missing)
+        return OverlayMonthProbe(
+            month: month,
+            missingHashes: missingHashes,
+            inconclusiveHashes: inconclusiveHashes
+        )
     }
 
     private static func isNotFoundError(_ error: Error) -> Bool {

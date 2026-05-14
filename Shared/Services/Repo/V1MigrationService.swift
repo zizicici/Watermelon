@@ -338,7 +338,7 @@ actor V1MigrationService {
                 month: monthKey,
                 lamport: lamport,
                 runID: runID,
-                respectTaskCancellation: true
+                respectTaskCancellation: false
             )
             processed += 1
         }

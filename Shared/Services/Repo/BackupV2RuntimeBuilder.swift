@@ -41,9 +41,16 @@ enum BackupV2RuntimeBuilder {
             if let storedRepoID, let remoteRepoID, storedRepoID != remoteRepoID {
                 throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: remoteRepoID)
             }
-            if remoteRepoID == nil, storedRepoID == nil,
-               try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
-                throw BackupV2RuntimeBuildError.damagedV2Repo
+            if remoteRepoID == nil {
+                let dataRepoIDs = try await Self.existingRepoIDsInV2Data(client: client, basePath: profile.basePath)
+                if !dataRepoIDs.isEmpty {
+                    guard let storedRepoID, dataRepoIDs == Set([storedRepoID]) else {
+                        throw BackupV2RuntimeBuildError.damagedV2Repo
+                    }
+                } else if storedRepoID == nil,
+                          try await format.hasAnyV2CommitOrSnapshotData(client: client, basePath: profile.basePath) {
+                    throw BackupV2RuntimeBuildError.damagedV2Repo
+                }
             }
 
             let suggested = remoteRepoID ?? storedRepoID ?? UUID().uuidString.lowercased()
@@ -197,6 +204,50 @@ enum BackupV2RuntimeBuilder {
             initialMaterializeOutput: InitialMaterializeOutputBox(initialMaterialize),
             sweepTask: sweepTask
         )
+    }
+
+    private static func existingRepoIDsInV2Data(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> Set<String> {
+        let effectiveClient = wrapIfSerial(client)
+        let commitReader = CommitLogReader(client: effectiveClient, basePath: basePath)
+        let snapshotReader = SnapshotReader(client: effectiveClient, basePath: basePath)
+        async let commitFilenames = commitReader.listCommitFilenames()
+        async let snapshotFilenames = snapshotReader.listSnapshotFilenames()
+        var repoIDs: Set<String> = []
+        for filename in try await commitFilenames {
+            guard RepoLayout.parseCommitFilename(filename) != nil else { continue }
+            do {
+                let file = try await commitReader.read(filename: filename)
+                repoIDs.insert(file.header.repoID)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch is CommitLogReader.ReadError {
+                throw BackupV2RuntimeBuildError.damagedV2Repo
+            } catch {
+                if isStorageNotFoundError(error) { continue }
+                throw error
+            }
+        }
+        for filename in try await snapshotFilenames {
+            guard RepoLayout.parseSnapshotFilename(filename) != nil else { continue }
+            do {
+                let file = try await snapshotReader.read(filename: filename)
+                guard !file.header.repoID.isEmpty else {
+                    throw BackupV2RuntimeBuildError.damagedV2Repo
+                }
+                repoIDs.insert(file.header.repoID)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch is SnapshotReader.ReadError {
+                throw BackupV2RuntimeBuildError.damagedV2Repo
+            } catch {
+                if isStorageNotFoundError(error) { continue }
+                throw error
+            }
+        }
+        return repoIDs
     }
 
 }

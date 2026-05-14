@@ -13,6 +13,7 @@ struct UploadPreparation {
     let skipReason: String?
     let forceWriterIDSuffix: Bool
     let retryBaseFileName: String
+    let nameCaseSensitivity: BackendNameCaseSensitivity
 }
 
 struct UploadRetryOutcome {
@@ -133,13 +134,22 @@ extension AssetProcessor {
         let writerID = monthStore.v2Services?.writerID
         let runID = monthStore.v2Services?.runID
         let forceWriterIDSuffix = client.dataPathOverwriteRisk == .perKey && writerID != nil
-        var collisionKeys = monthStore.existingCollisionKeys()
-        let baseCollides = collisionKeys.contains(RemoteFileNaming.collisionKey(for: baseFileName))
+        let nameCaseSensitivity = client.backendNameCaseSensitivity
+        var occupiedNameKeys: Set<String>
+        if nameCaseSensitivity == .caseInsensitive {
+            occupiedNameKeys = monthStore.existingCollisionKeys()
+        } else {
+            occupiedNameKeys = monthStore.existingFileNames()
+        }
+        func nameKey(_ name: String) -> String {
+            RemoteFileNaming.nameKey(for: name, caseSensitivity: nameCaseSensitivity)
+        }
+        let baseCollides = occupiedNameKeys.contains(nameKey(baseFileName))
 
         var claimCandidates: [(name: String, knownSize: Int64?)] = []
         var claimCandidateKeys = Set<String>()
         func appendClaimCandidate(_ name: String, knownSize: Int64?) {
-            let key = RemoteFileNaming.collisionKey(for: name)
+            let key = nameKey(name)
             guard !claimCandidateKeys.contains(key) else { return }
             claimCandidateKeys.insert(key)
             claimCandidates.append((name, knownSize))
@@ -161,8 +171,8 @@ extension AssetProcessor {
                 candidates = [RemoteFileNaming.writerIDSuffixedName(baseName: baseFileName, writerID: writerID)]
             }
             for candidate in candidates {
-                let key = RemoteFileNaming.collisionKey(for: candidate)
-                if collisionKeys.contains(key) {
+                let key = nameKey(candidate)
+                if occupiedNameKeys.contains(key) {
                     let manifestSize = monthStore.findByFileName(candidate)?.fileSize
                         ?? monthStore.remoteFileSize(named: candidate)
                     appendClaimCandidate(candidate, knownSize: manifestSize)
@@ -184,7 +194,7 @@ extension AssetProcessor {
                 case .present(let size): remoteSize = size
                 }
                 // Block from target selection — different content at this path must not be overwritten.
-                collisionKeys.insert(key)
+                occupiedNameKeys.insert(key)
                 attemptedFileNames.insert(candidate)
                 appendClaimCandidate(candidate, knownSize: remoteSize)
             }
@@ -241,10 +251,11 @@ extension AssetProcessor {
                let writerID, let runID {
                 let runCandidate = RemoteFileNaming.writerIDRunIDSuffixedName(baseName: baseFileName, writerID: writerID, runID: runID)
                 retryBaseFileName = runCandidate
-                if collisionKeys.contains(RemoteFileNaming.collisionKey(for: runCandidate)) {
+                if occupiedNameKeys.contains(nameKey(runCandidate)) {
                     targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
                         baseName: runCandidate,
-                        collisionKeys: collisionKeys
+                        occupiedKeys: occupiedNameKeys,
+                        caseSensitivity: nameCaseSensitivity
                     )
                 } else {
                     targetFileName = runCandidate
@@ -252,7 +263,8 @@ extension AssetProcessor {
             } else {
                 targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
                     baseName: baseFileName,
-                    collisionKeys: collisionKeys,
+                    occupiedKeys: occupiedNameKeys,
+                    caseSensitivity: nameCaseSensitivity,
                     writerID: writerID,
                     forceWriterIDSuffix: forceWriterIDSuffix
                 )
@@ -273,7 +285,8 @@ extension AssetProcessor {
             attemptedFileNames: attemptedFileNames,
             skipReason: skipReason,
             forceWriterIDSuffix: forceWriterIDSuffix,
-            retryBaseFileName: retryBaseFileName
+            retryBaseFileName: retryBaseFileName,
+            nameCaseSensitivity: nameCaseSensitivity
         )
     }
 
@@ -519,18 +532,30 @@ extension AssetProcessor {
         monthStore: any BackupMonthStore,
         profile: ServerProfileRecord
     ) throws {
-        var occupiedNames = monthStore.existingFileNames()
-        occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
-        occupiedNames.insert(uploadPreparation.targetFileName)
+        let nameCaseSensitivity = uploadPreparation.nameCaseSensitivity
+        var occupiedNameKeys = RemoteFileNaming.nameKeySet(
+            from: monthStore.existingFileNames(),
+            caseSensitivity: nameCaseSensitivity
+        )
+        occupiedNameKeys.formUnion(RemoteFileNaming.nameKeySet(
+            from: uploadPreparation.attemptedFileNames,
+            caseSensitivity: nameCaseSensitivity
+        ))
+        occupiedNameKeys.insert(RemoteFileNaming.nameKey(
+            for: uploadPreparation.targetFileName,
+            caseSensitivity: nameCaseSensitivity
+        ))
         if uploadPreparation.retryBaseFileName != uploadPreparation.baseFileName {
             uploadPreparation.targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
                 baseName: uploadPreparation.retryBaseFileName,
-                occupiedNames: occupiedNames
+                occupiedKeys: occupiedNameKeys,
+                caseSensitivity: nameCaseSensitivity
             )
         } else {
             uploadPreparation.targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
                 baseName: uploadPreparation.baseFileName,
-                occupiedNames: occupiedNames,
+                occupiedKeys: occupiedNameKeys,
+                caseSensitivity: nameCaseSensitivity,
                 writerID: monthStore.v2Services?.writerID,
                 forceWriterIDSuffix: uploadPreparation.forceWriterIDSuffix
             )

@@ -3,7 +3,7 @@ import Foundation
 final actor WebDAVClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
-    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseInsensitive }
     static let errorDomain = "WebDAVClient"
 
     struct Config {

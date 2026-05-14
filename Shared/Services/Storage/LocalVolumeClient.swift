@@ -3,12 +3,26 @@ import os.log
 
 private let localVolumeLog = Logger(subsystem: "com.zizicici.watermelon", category: "LocalVolumeClient")
 
+private final class LocalVolumeNameCaseSensitivityState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: BackendNameCaseSensitivity = .caseSensitive
+
+    var value: BackendNameCaseSensitivity {
+        lock.withLock { current }
+    }
+
+    func update(_ value: BackendNameCaseSensitivity) {
+        lock.withLock { current = value }
+    }
+}
+
 final actor LocalVolumeClient: RemoteStorageClientProtocol {
+    private let nameCaseSensitivityState = LocalVolumeNameCaseSensitivityState()
+
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     // POSIX O_EXCL → kernel-enforced uniqueness per path, even across processes; no peer can win.
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .none }
-    // External volumes can be exFAT/APFS (insensitive default) or HFS+/APFS-case-sensitive. Claiming case-sensitive trades a missed-presence re-upload for the worse failure mode: a false "present" verdict binding the manifest to bytes under the wrong case.
-    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { nameCaseSensitivityState.value }
     struct Config {
         let rootBookmarkData: Data
         let onBookmarkRefreshed: ((BookmarkRefreshPayload) -> Void)?
@@ -70,6 +84,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         guard resolved.url.startAccessingSecurityScopedResource() else {
             throw RemoteStorageClientError.externalStorageUnavailable
         }
+        nameCaseSensitivityState.update(Self.detectNameCaseSensitivity(for: resolved.url))
         rootURL = resolved.url
         isAccessing = true
     }
@@ -511,6 +526,14 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             return "/"
         }
         return RemotePathBuilder.normalizePath(suffix)
+    }
+
+    private static func detectNameCaseSensitivity(for rootURL: URL) -> BackendNameCaseSensitivity {
+        guard let values = try? rootURL.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]),
+              let supportsCaseSensitiveNames = values.volumeSupportsCaseSensitiveNames else {
+            return .caseSensitive
+        }
+        return supportsCaseSensitiveNames ? .caseSensitive : .caseInsensitive
     }
 
     private func mapStorageError(_ error: Error) -> Error {

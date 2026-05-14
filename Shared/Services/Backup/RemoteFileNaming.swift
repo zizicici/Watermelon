@@ -107,9 +107,12 @@ enum RemoteFileNaming {
     static let writerIDSuffixReserveBytes = 16
 
     static func composeLeaf(stem: String, ext: String, reservedSuffixBytes: Int) -> String {
+        let availableBytes = maxLeafByteBudget - max(reservedSuffixBytes, 0)
+        guard availableBytes > 0 else { return "" }
         let extPortion = ext.isEmpty ? "" : "." + ext
-        let extBudget = clampStringToBytes(extPortion, maxBytes: maxLeafByteBudget / 2)
-        let remaining = max(maxLeafByteBudget - reservedSuffixBytes - extBudget.utf8.count, 1)
+        let extMaxBytes = extPortion.isEmpty ? 0 : min(maxLeafByteBudget / 2, max(availableBytes - 1, 0))
+        let extBudget = extMaxBytes > 0 ? clampStringToBytes(extPortion, maxBytes: extMaxBytes) : ""
+        let remaining = max(availableBytes - extBudget.utf8.count, 1)
         let clampedStem = clampStringToBytes(stem, maxBytes: remaining)
         return clampedStem + extBudget
     }
@@ -160,6 +163,7 @@ enum RemoteFileNaming {
     static func resolveNextAvailableName(
         baseName: String,
         occupiedNames: Set<String>,
+        caseSensitivity: BackendNameCaseSensitivity = .caseInsensitive,
         writerID: String? = nil,
         forceWriterIDSuffix: Bool = false
     ) -> String {
@@ -167,6 +171,7 @@ enum RemoteFileNaming {
             return try resolveNextAvailableNameOrThrow(
                 baseName: baseName,
                 occupiedNames: occupiedNames,
+                caseSensitivity: caseSensitivity,
                 writerID: writerID,
                 forceWriterIDSuffix: forceWriterIDSuffix
             )
@@ -176,7 +181,8 @@ enum RemoteFileNaming {
                 baseName: baseName,
                 writerID: writerID,
                 forceWriterIDSuffix: forceWriterIDSuffix,
-                collisionKeys: collisionKeySet(from: occupiedNames)
+                occupiedKeys: nameKeySet(from: occupiedNames, caseSensitivity: caseSensitivity),
+                caseSensitivity: caseSensitivity
             )
         }
     }
@@ -184,12 +190,14 @@ enum RemoteFileNaming {
     static func resolveNextAvailableNameOrThrow(
         baseName: String,
         occupiedNames: Set<String>,
+        caseSensitivity: BackendNameCaseSensitivity = .caseInsensitive,
         writerID: String? = nil,
         forceWriterIDSuffix: Bool = false
     ) throws -> String {
         try resolveNextAvailableNameOrThrow(
             baseName: baseName,
-            collisionKeys: collisionKeySet(from: occupiedNames),
+            occupiedKeys: nameKeySet(from: occupiedNames, caseSensitivity: caseSensitivity),
+            caseSensitivity: caseSensitivity,
             writerID: writerID,
             forceWriterIDSuffix: forceWriterIDSuffix
         )
@@ -214,7 +222,8 @@ enum RemoteFileNaming {
                 baseName: baseName,
                 writerID: writerID,
                 forceWriterIDSuffix: forceWriterIDSuffix,
-                collisionKeys: collisionKeys
+                occupiedKeys: collisionKeys,
+                caseSensitivity: .caseInsensitive
             )
         }
     }
@@ -225,20 +234,48 @@ enum RemoteFileNaming {
         writerID: String? = nil,
         forceWriterIDSuffix: Bool = false
     ) throws -> String {
+        try resolveNextAvailableNameOrThrow(
+            baseName: baseName,
+            occupiedKeys: collisionKeys,
+            caseSensitivity: .caseInsensitive,
+            writerID: writerID,
+            forceWriterIDSuffix: forceWriterIDSuffix
+        )
+    }
+
+    static func resolveNextAvailableNameOrThrow(
+        baseName: String,
+        occupiedKeys: Set<String>,
+        caseSensitivity: BackendNameCaseSensitivity,
+        writerID: String? = nil,
+        forceWriterIDSuffix: Bool = false
+    ) throws -> String {
         let nsName = baseName as NSString
         let ext = nsName.pathExtension
         let stem = nsName.deletingPathExtension
 
         if forceWriterIDSuffix, let writerID {
-            return try resolveWithWriterIDSuffix(stem: stem, ext: ext, writerID: writerID, collisionKeys: collisionKeys)
+            return try resolveWithWriterIDSuffix(
+                stem: stem,
+                ext: ext,
+                writerID: writerID,
+                occupiedKeys: occupiedKeys,
+                caseSensitivity: caseSensitivity
+            )
         }
 
-        guard collisionKeys.contains(collisionKey(for: baseName)) else {
+        guard occupiedKeys.contains(nameKey(for: baseName, caseSensitivity: caseSensitivity)) else {
             return baseName
         }
 
         if let writerID {
-            return try resolveWithWriterIDSuffix(stem: stem, ext: ext, writerID: writerID, collisionKeys: collisionKeys)
+            return try resolveWithWriterIDSuffix(
+                stem: stem,
+                ext: ext,
+                writerID: writerID,
+                occupiedKeys: occupiedKeys,
+                caseSensitivity: caseSensitivity
+            )
         }
 
         let extPortion = ext.isEmpty ? "" : "." + ext
@@ -251,7 +288,7 @@ enum RemoteFileNaming {
             let stemBudget = max(maxLeafByteBudget - suffixStr.utf8.count - extBudget.utf8.count, 1)
             let clampedStem = clampStringToBytes(stem, maxBytes: stemBudget)
             let candidate = clampedStem + suffixStr + extBudget
-            if !collisionKeys.contains(collisionKey(for: candidate)) {
+            if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
                 return candidate
             }
             suffix += 1
@@ -261,31 +298,38 @@ enum RemoteFileNaming {
             let escape = String(UUID().uuidString.lowercased().prefix(8))
             let stemBudget = max(maxLeafByteBudget - escape.utf8.count - 1 - extBudget.utf8.count, 1)
             let candidate = clampStringToBytes(stem, maxBytes: stemBudget) + "_" + escape + extBudget
-            if !collisionKeys.contains(collisionKey(for: candidate)) {
+            if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
                 return candidate
             }
         }
-        if let widened = widenedUUIDFallback(stem: stem, ext: ext, extBudget: extBudget, collisionKeys: collisionKeys) {
+        if let widened = widenedUUIDFallback(
+            stem: stem,
+            ext: ext,
+            extBudget: extBudget,
+            occupiedKeys: occupiedKeys,
+            caseSensitivity: caseSensitivity
+        ) {
             return widened
         }
-        throw ResolutionError.exhausted(stem: stem, collisionCount: collisionKeys.count)
+        throw ResolutionError.exhausted(stem: stem, collisionCount: occupiedKeys.count)
     }
 
     private static func resolveWithWriterIDSuffix(
         stem: String,
         ext: String,
         writerID: String,
-        collisionKeys: Set<String>
+        occupiedKeys: Set<String>,
+        caseSensitivity: BackendNameCaseSensitivity
     ) throws -> String {
         let basicCandidate = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID)
-        if !collisionKeys.contains(collisionKey(for: basicCandidate)) {
+        if !occupiedKeys.contains(nameKey(for: basicCandidate, caseSensitivity: caseSensitivity)) {
             return basicCandidate
         }
         let maxSuffix = 10_000
         var suffix = 1
         while suffix <= maxSuffix {
             let candidate = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, numericSuffix: suffix)
-            if !collisionKeys.contains(collisionKey(for: candidate)) {
+            if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
                 return candidate
             }
             suffix += 1
@@ -294,16 +338,16 @@ enum RemoteFileNaming {
         for _ in 0..<32 {
             let escape = String(UUID().uuidString.lowercased().prefix(8))
             let candidate = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: escape)
-            if !collisionKeys.contains(collisionKey(for: candidate)) {
+            if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
                 return candidate
             }
         }
         let fullEscape = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
         let widened = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: fullEscape)
-        if !collisionKeys.contains(collisionKey(for: widened)) {
+        if !occupiedKeys.contains(nameKey(for: widened, caseSensitivity: caseSensitivity)) {
             return widened
         }
-        throw ResolutionError.exhausted(stem: stem, collisionCount: collisionKeys.count)
+        throw ResolutionError.exhausted(stem: stem, collisionCount: occupiedKeys.count)
     }
 
     /// Last-resort: full 32-hex UUID makes collision astronomically improbable; still verified before return.
@@ -311,13 +355,14 @@ enum RemoteFileNaming {
         stem: String,
         ext: String,
         extBudget: String,
-        collisionKeys: Set<String>
+        occupiedKeys: Set<String>,
+        caseSensitivity: BackendNameCaseSensitivity
     ) -> String? {
         for _ in 0..<8 {
             let escape = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
             let stemBudget = max(maxLeafByteBudget - escape.utf8.count - 1 - extBudget.utf8.count, 1)
             let candidate = clampStringToBytes(stem, maxBytes: stemBudget) + "_" + escape + extBudget
-            if !collisionKeys.contains(collisionKey(for: candidate)) {
+            if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
                 return candidate
             }
         }
@@ -328,7 +373,8 @@ enum RemoteFileNaming {
         baseName: String,
         writerID: String?,
         forceWriterIDSuffix: Bool,
-        collisionKeys: Set<String>
+        occupiedKeys: Set<String>,
+        caseSensitivity: BackendNameCaseSensitivity
     ) -> String {
         let nsName = baseName as NSString
         let ext = nsName.pathExtension
@@ -344,7 +390,7 @@ enum RemoteFileNaming {
                 let stemBudget = max(maxLeafByteBudget - token.utf8.count - 1 - extBudget.utf8.count, 1)
                 candidate = clampStringToBytes(stem, maxBytes: stemBudget) + "_" + token + extBudget
             }
-            if !collisionKeys.contains(collisionKey(for: candidate)) {
+            if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
                 return candidate
             }
         }
@@ -352,7 +398,7 @@ enum RemoteFileNaming {
             baseName: baseName,
             writerID: writerID,
             forceWriterIDSuffix: forceWriterIDSuffix,
-            collisionKeys: collisionKeys
+            occupiedKeys: occupiedKeys
         )
         for suffix in 0..<4096 {
             let token = suffix == 0 ? stableToken : "\(stableToken)-\(String(suffix, radix: 36))"
@@ -363,7 +409,7 @@ enum RemoteFileNaming {
                 let stemBudget = max(maxLeafByteBudget - token.utf8.count - 1 - extBudget.utf8.count, 1)
                 candidate = clampStringToBytes(stem, maxBytes: stemBudget) + "_" + token + extBudget
             }
-            if !collisionKeys.contains(collisionKey(for: candidate)) {
+            if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
                 return candidate
             }
         }
@@ -377,25 +423,34 @@ enum RemoteFileNaming {
                 let stemBudget = max(maxLeafByteBudget - token.utf8.count - 1 - extBudget.utf8.count, 1)
                 candidate = clampStringToBytes(stem, maxBytes: stemBudget) + "_" + token + extBudget
             }
-            if !collisionKeys.contains(collisionKey(for: candidate)) {
+            if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
                 return candidate
             }
         }
-        let token = "\(stableToken)-\(UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: ""))"
-        if forceWriterIDSuffix, let writerID {
-            return writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: token)
+        var suffix = extendedSuffixLimit
+        while true {
+            let token = "\(stableToken)-\(String(suffix, radix: 36))"
+            let candidate: String
+            if forceWriterIDSuffix, let writerID {
+                candidate = writerIDSuffixedName(stem: stem, ext: ext, writerID: writerID, escapeToken: token)
+            } else {
+                let stemBudget = max(maxLeafByteBudget - token.utf8.count - 1 - extBudget.utf8.count, 1)
+                candidate = clampStringToBytes(stem, maxBytes: stemBudget) + "_" + token + extBudget
+            }
+            if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
+                return candidate
+            }
+            suffix += 1
         }
-        let stemBudget = max(maxLeafByteBudget - token.utf8.count - 1 - extBudget.utf8.count, 1)
-        return clampStringToBytes(stem, maxBytes: stemBudget) + "_" + token + extBudget
     }
 
     private static func emergencyStableToken(
         baseName: String,
         writerID: String?,
         forceWriterIDSuffix: Bool,
-        collisionKeys: Set<String>
+        occupiedKeys: Set<String>
     ) -> String {
-        let seed = ([baseName, writerID ?? "", forceWriterIDSuffix ? "1" : "0"] + collisionKeys.sorted())
+        let seed = ([baseName, writerID ?? "", forceWriterIDSuffix ? "1" : "0"] + occupiedKeys.sorted())
             .joined(separator: "\n")
         let digest = SHA256.hash(data: Data(seed.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
@@ -403,6 +458,17 @@ enum RemoteFileNaming {
 
     static func collisionKeySet(from fileNames: Set<String>) -> Set<String> {
         Set(fileNames.map(collisionKey(for:)))
+    }
+
+    static func nameKey(for fileName: String, caseSensitivity: BackendNameCaseSensitivity) -> String {
+        switch caseSensitivity {
+        case .caseSensitive: return fileName
+        case .caseInsensitive: return collisionKey(for: fileName)
+        }
+    }
+
+    static func nameKeySet(from fileNames: Set<String>, caseSensitivity: BackendNameCaseSensitivity) -> Set<String> {
+        Set(fileNames.map { nameKey(for: $0, caseSensitivity: caseSensitivity) })
     }
 
     /// Canonical writerID-suffixed name (no numeric tiebreaker); used by orphan-reuse probe.

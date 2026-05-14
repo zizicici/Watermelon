@@ -125,7 +125,6 @@ actor RepoVerifyMonthService {
                 hash: resource.contentHash
             ))
         }
-        let smallLimit = RemoteContentTrust.defaultSmallFileLimitBytes
         let clientRef = client
         let basePathRef = basePath
         return { hash in
@@ -134,9 +133,6 @@ actor RepoVerifyMonthService {
                 let listed = entriesByKey[candidate.key] ?? []
                 let sizeMatches = listed.filter { $0.size == candidate.size }
                 if sizeMatches.isEmpty { continue }
-                if candidate.size >= smallLimit {
-                    return true
-                }
                 for match in sizeMatches {
                     let path = RemotePathBuilder.absolutePath(
                         basePath: basePathRef,

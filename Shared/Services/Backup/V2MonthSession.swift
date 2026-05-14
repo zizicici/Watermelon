@@ -112,6 +112,7 @@ final class V2MonthSession: BackupMonthStore {
         materializedCovered: CoveredRanges,
         observedClockAtLoad: UInt64,
         remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata],
+        verifiedMissingHashes: Set<Data>? = nil,
         stepLogger: MonthManifestStepLogger? = nil
     ) {
         self.client = client
@@ -142,12 +143,12 @@ final class V2MonthSession: BackupMonthStore {
         for row in materializedState.resources.values {
             let logicalName = (row.physicalRemotePath as NSString).lastPathComponent
             let key = presenceKey(logicalName)
-            // Size mismatch = stale/truncated; treat as missing so the worker re-uploads.
+            let listedSizeMatches = sizesByPresenceKey[key]?.contains(row.fileSize) == true
             let isPresent: Bool
-            if let listedSizes = sizesByPresenceKey[key] {
-                isPresent = listedSizes.contains(row.fileSize)
+            if let verifiedMissingHashes {
+                isPresent = listedSizeMatches && !verifiedMissingHashes.contains(row.contentHash)
             } else {
-                isPresent = false
+                isPresent = listedSizeMatches
             }
             let resource = RemoteManifestResource(
                 year: year,
@@ -228,6 +229,7 @@ final class V2MonthSession: BackupMonthStore {
         year: Int,
         month: Int,
         v2Services: BackupV2RuntimeServices,
+        verifiedMissingHashes: Set<Data>? = nil,
         stepLogger: MonthManifestStepLogger? = nil
     ) async throws -> V2MonthSession {
         let monthKey = LibraryMonthKey(year: year, month: month)
@@ -276,6 +278,7 @@ final class V2MonthSession: BackupMonthStore {
             materializedCovered: materializedCovered,
             observedClockAtLoad: output.state.observedClock,
             remoteFilesByName: remoteFilesByName,
+            verifiedMissingHashes: verifiedMissingHashes,
             stepLogger: stepLogger
         )
         if output.corruptedSnapshotMonths.contains(monthKey),
@@ -489,7 +492,11 @@ final class V2MonthSession: BackupMonthStore {
     @discardableResult
     func flushToRemote(ignoreCancellation: Bool = false) async throws -> MonthManifestStore.FlushDelta {
         guard beginFlush() else {
-            return .none
+            throw NSError(
+                domain: "V2MonthSession",
+                code: -20,
+                userInfo: [NSLocalizedDescriptionKey: "Concurrent V2 month flush rejected"]
+            )
         }
         defer { endFlush() }
         guard dirty, let services = v2Services else {

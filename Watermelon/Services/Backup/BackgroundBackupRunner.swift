@@ -353,12 +353,14 @@ final class BackgroundBackupRunner {
 
             let monthStore: any BackupMonthStore
             do {
+                let verifiedMissingHashes = await assetProcessor.remoteIndexService.verifiedPhysicallyMissingHashes(for: monthKey)
                 monthStore = try await V2MonthSession.loadOrCreate(
                     client: client,
                     basePath: profile.basePath,
                     year: monthKey.year,
                     month: monthKey.month,
                     v2Services: v2Services,
+                    verifiedMissingHashes: verifiedMissingHashes,
                     stepLogger: { message in
                         eventStream.emitLog(message, level: .error)
                     }

@@ -2,9 +2,6 @@ import CryptoKit
 import Foundation
 
 enum RemoteContentTrust {
-    static let defaultSmallFileLimitBytes: Int64 = 5 * 1024 * 1024
-    static let overlayProbeSmallFileLimitBytes: Int64 = 512 * 1024
-
     static func verifyHash(
         client: any RemoteStorageClientProtocol,
         remotePath: String,
@@ -28,14 +25,7 @@ enum RemoteContentTrust {
         defer { try? FileManager.default.removeItem(at: temp) }
         try await client.download(remotePath: remotePath, localURL: temp)
         try Task.checkCancellation()
-        let hashTask = Task.detached(priority: .utility) {
-            try Self.hashDownloadedFile(localURL: temp, expectedSize: expectedSize, expectedHash: expectedHash, remotePath: remotePath)
-        }
-        return try await withTaskCancellationHandler {
-            try await hashTask.value
-        } onCancel: {
-            hashTask.cancel()
-        }
+        return try hashDownloadedFile(localURL: temp, expectedSize: expectedSize, expectedHash: expectedHash, remotePath: remotePath)
     }
 
     private static func hashDownloadedFile(
