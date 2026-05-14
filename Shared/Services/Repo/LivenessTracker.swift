@@ -51,7 +51,8 @@ actor LivenessTracker {
     }
 
     private func tick() async {
-        let body: [String: Any] = ["ts": Int64(Date().timeIntervalSince1970 * 1000)]
+        let timestampMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let body: [String: Any] = ["ts": timestampMs]
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("liveness-\(UUID().uuidString).json")
@@ -108,7 +109,9 @@ actor LivenessTracker {
                 livenessLog.warning("[Liveness] staging vanished after failed move for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
             }
             do {
-                if try await existingHeartbeatIsActive(remotePath: remotePath) {
+                if let remoteTimestamp = try await existingHeartbeatTimestamp(remotePath: remotePath),
+                   remoteTimestamp >= timestampMs,
+                   !LivenessTracker.isStale(timestampMs: remoteTimestamp) {
                     try? await client.delete(path: stagingPath)
                     return
                 }
@@ -148,21 +151,19 @@ actor LivenessTracker {
         } catch {
             lastFailure = error
         }
-        if stagingCreated {
-            try? await client.delete(path: stagingPath)
-        }
+        try? await client.delete(path: stagingPath)
         if let lastFailure {
             livenessLog.warning("[Liveness] all write strategies failed for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
         }
     }
 
-    private func existingHeartbeatIsActive(remotePath: String) async throws -> Bool {
+    private func existingHeartbeatTimestamp(remotePath: String) async throws -> Int64? {
         do {
             guard let metadata = try await client.metadata(path: remotePath), !metadata.isDirectory else {
-                return false
+                return nil
             }
         } catch {
-            if isStorageNotFoundError(error) { return false }
+            if isStorageNotFoundError(error) { return nil }
             throw error
         }
         let temp = FileManager.default.temporaryDirectory
@@ -171,15 +172,15 @@ actor LivenessTracker {
         do {
             try await client.download(remotePath: remotePath, localURL: temp)
         } catch {
-            if isStorageNotFoundError(error) { return false }
+            if isStorageNotFoundError(error) { return nil }
             throw error
         }
         guard let data = try? Data(contentsOf: temp),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let ts = (dict["ts"] as? Int64) ?? (dict["ts"] as? Int).map(Int64.init) else {
-            return false
+            return nil
         }
-        return !LivenessTracker.isStale(timestampMs: ts)
+        return ts
     }
 
     static func isStale(timestampMs: Int64, now: Date = Date()) -> Bool {

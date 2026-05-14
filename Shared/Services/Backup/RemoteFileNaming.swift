@@ -2,6 +2,8 @@ import CryptoKit
 import Foundation
 
 enum RemoteFileNaming {
+    private static let emergencyStableTokenOccupiedKeyLimit = 256
+
     enum ResolutionError: LocalizedError {
         case exhausted(stem: String, collisionCount: Int)
 
@@ -427,8 +429,8 @@ enum RemoteFileNaming {
                 return candidate
             }
         }
-        var suffix = extendedSuffixLimit
-        while true {
+        let finalSuffixLimit = extendedSuffixLimit + 10_000
+        for suffix in extendedSuffixLimit..<finalSuffixLimit {
             let token = "\(stableToken)-\(String(suffix, radix: 36))"
             let candidate: String
             if forceWriterIDSuffix, let writerID {
@@ -440,8 +442,21 @@ enum RemoteFileNaming {
             if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
                 return candidate
             }
-            suffix += 1
         }
+        let compactStableToken = String(stableToken.prefix(16))
+        for discriminator in 0...occupiedKeys.count {
+            let token = "\(String(discriminator, radix: 36))-\(compactStableToken)"
+            let candidate: String
+            if forceWriterIDSuffix, let writerID {
+                candidate = writerIDSuffixedName(stem: "wm", ext: ext, writerID: writerID, escapeToken: token)
+            } else {
+                candidate = "wm_\(token)" + extBudget
+            }
+            if !occupiedKeys.contains(nameKey(for: candidate, caseSensitivity: caseSensitivity)) {
+                return candidate
+            }
+        }
+        preconditionFailure("finite occupied set must leave at least one compact fallback name")
     }
 
     private static func emergencyStableToken(
@@ -450,10 +465,49 @@ enum RemoteFileNaming {
         forceWriterIDSuffix: Bool,
         occupiedKeys: Set<String>
     ) -> String {
-        let seed = ([baseName, writerID ?? "", forceWriterIDSuffix ? "1" : "0"] + occupiedKeys.sorted())
-            .joined(separator: "\n")
-        let digest = SHA256.hash(data: Data(seed.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        var hasher = SHA256()
+        for part in [baseName, writerID ?? "", forceWriterIDSuffix ? "1" : "0"] {
+            hasher.update(data: Data(part.utf8))
+            hasher.update(data: Data("\n".utf8))
+        }
+        hasher.update(data: Data("occupied_count=\(occupiedKeys.count)\n".utf8))
+        for key in emergencyStableTokenOccupiedKeys(occupiedKeys) {
+            hasher.update(data: Data(key.utf8))
+            hasher.update(data: Data("\n".utf8))
+        }
+        return Data(hasher.finalize()).hexString
+    }
+
+    private static func emergencyStableTokenOccupiedKeys(_ occupiedKeys: Set<String>) -> [String] {
+        let limit = min(occupiedKeys.count, emergencyStableTokenOccupiedKeyLimit)
+        guard limit > 0 else { return [] }
+        var sample: [(digest: String, key: String)] = []
+        sample.reserveCapacity(limit)
+        for key in occupiedKeys {
+            let digest = Data(SHA256.hash(data: Data(key.utf8))).hexString
+            let entry = (digest: digest, key: key)
+            if sample.count < limit {
+                sample.append(entry)
+                if sample.count == limit {
+                    sample.sort(by: emergencyStableTokenSamplePrecedes)
+                }
+            } else if emergencyStableTokenSamplePrecedes(entry, sample[limit - 1]) {
+                sample[limit - 1] = entry
+                sample.sort(by: emergencyStableTokenSamplePrecedes)
+            }
+        }
+        if sample.count < limit {
+            sample.sort(by: emergencyStableTokenSamplePrecedes)
+        }
+        return sample.map(\.key)
+    }
+
+    private static func emergencyStableTokenSamplePrecedes(
+        _ lhs: (digest: String, key: String),
+        _ rhs: (digest: String, key: String)
+    ) -> Bool {
+        if lhs.digest != rhs.digest { return lhs.digest < rhs.digest }
+        return lhs.key < rhs.key
     }
 
     static func collisionKeySet(from fileNames: Set<String>) -> Set<String> {

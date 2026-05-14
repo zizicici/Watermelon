@@ -571,21 +571,28 @@ struct BackupParallelExecutor: Sendable {
                                         ),
                                         level: .warning
                                     )
-                                case .failed(let message):
+                                    emitCompleted()
+                                case .failed(let failure):
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(
                                             String(localized: "backup.parallel.finalizationFailed"),
                                             workerID + 1,
                                             monthKey.text,
-                                            message
+                                            failure.message
                                         ),
                                         level: .error
                                     )
                                     // Surface as fatal so Home and the worker agree the month failed.
+                                    var userInfo: [String: Any] = [
+                                        NSLocalizedDescriptionKey: "onMonthUploaded failed: \(failure.message)"
+                                    ]
+                                    if let underlyingError = failure.underlyingError {
+                                        userInfo[NSUnderlyingErrorKey] = underlyingError
+                                    }
                                     monthFatalError = NSError(
                                         domain: "BackupParallelExecutor",
                                         code: -201,
-                                        userInfo: [NSLocalizedDescriptionKey: "onMonthUploaded failed: \(message)"]
+                                        userInfo: userInfo
                                     )
                                 case .cancelled:
                                     workerState.paused = true

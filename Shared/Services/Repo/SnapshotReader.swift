@@ -59,11 +59,9 @@ actor SnapshotReader {
 
     static func parse(text: String) throws -> SnapshotFile {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { sub -> String in
-            var line = String(sub)
-            while line.hasSuffix("\r") {
-                line.removeLast()
-            }
-            return line
+            let line = String(sub)
+            let end = line.lastIndex(where: { $0 != "\r" }).map { line.index(after: $0) } ?? line.startIndex
+            return String(line[..<end])
         }
         while let last = lines.last, last.isEmpty { lines.removeLast() }
         guard !lines.isEmpty else { throw ReadError.missingHeader }

@@ -15,9 +15,11 @@ final class OptimisticInflightTracker: @unchecked Sendable {
     }
 
     /// Callers pass the asset/tombstone union from `FlushDelta`.
-    func markCommitted(month: LibraryMonthKey, fingerprints: Set<Data>) {
+    func markCommitted(month: LibraryMonthKey, fingerprints: Set<Data>) -> Bool {
         lock.withLock {
+            let previous = assetFingerprintsByMonth[month] ?? []
             assetFingerprintsByMonth.subtract(fingerprints, from: month)
+            return previous != (assetFingerprintsByMonth[month] ?? [])
         }
     }
 
@@ -27,9 +29,11 @@ final class OptimisticInflightTracker: @unchecked Sendable {
         return block(snapshot)
     }
 
-    func reset() {
+    func reset() -> Set<LibraryMonthKey> {
         lock.withLock {
+            let months = assetFingerprintsByMonth.months
             assetFingerprintsByMonth.removeAll()
+            return months
         }
     }
 }

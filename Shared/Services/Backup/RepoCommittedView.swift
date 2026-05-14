@@ -101,7 +101,11 @@ final class RepoCommittedView: @unchecked Sendable {
         )
     }
     func fileNames(for month: LibraryMonthKey) -> Set<String> { cache.fileNames(for: month) }
-    func counts() -> RemoteIndexSyncDigest { cache.counts() }
+    func counts() -> RemoteIndexSyncDigest {
+        missingLock.lock()
+        defer { missingLock.unlock() }
+        return cache.counts(physicallyMissingByMonth: physicallyMissingSnapshotMapLocked())
+    }
     func currentLastSyncedAt() -> Date? { cache.currentLastSyncedAt() }
 
     private func physicallyMissingSnapshotMapLocked() -> [LibraryMonthKey: Set<Data>] {
@@ -122,9 +126,9 @@ final class RepoCommittedView: @unchecked Sendable {
     func loadFromMaterialize(_ output: RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] {
         missingLock.lock()
         defer { missingLock.unlock() }
-        cache.reset()
-        // Capture + clear must be atomic so a concurrent markPhysicallyMissing is preserved by the caller.
         let priorOverlay = physicallyMissingSnapshotMapLocked()
+        var preservedOverlay: [LibraryMonthKey: Set<Data>] = [:]
+        cache.reset()
         physicallyMissingByMonth.removeAll()
         for (month, monthState) in output.state.months {
             let resources = monthState.resources.values.map { row -> RemoteManifestResource in
@@ -164,8 +168,16 @@ final class RepoCommittedView: @unchecked Sendable {
                 )
             }
             _ = cache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: links)
+            let stillPresent = Set(resources.map(\.contentHash))
+            if let previous = priorOverlay[month] {
+                let refined = previous.intersection(stillPresent)
+                if !refined.isEmpty {
+                    physicallyMissingByMonth.set(refined, for: month)
+                    preservedOverlay[month] = refined
+                }
+            }
         }
-        return priorOverlay
+        return preservedOverlay
     }
 
     @discardableResult
@@ -220,6 +232,10 @@ final class RepoCommittedView: @unchecked Sendable {
         defer { missingLock.unlock() }
         cache.reset()
         physicallyMissingByMonth.removeAll()
+    }
+
+    func markMonthsChanged(_ months: Set<LibraryMonthKey>) {
+        cache.markMonthsChanged(months)
     }
 
     func applyOptimisticUpsert(asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]?) {

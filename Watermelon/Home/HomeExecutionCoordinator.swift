@@ -674,7 +674,7 @@ final class HomeExecutionCoordinator {
             setErrorStatus(message, log: String(format: String(localized: "home.execution.log.downloadFailed"), phaseLabel, month.displayText, message))
             notifyStateChanged()
             onAlert?(String(format: String(localized: "home.execution.log.phaseFailed"), phaseLabel), String(format: String(localized: "home.execution.log.phaseFailedDetail"), month.displayText, message))
-            return .failed(message)
+            return .failed(BackupFinalizationFailure(message: message))
         }
 
         let assetIDs = dataAccess.localAssetIDs(month)
@@ -755,12 +755,12 @@ final class HomeExecutionCoordinator {
             refreshTerminalStatus(notifyState: false)
             notifyStateChanged()
             return .success
-        case .failed(let message):
-            session.failDownloadMonth(month, reason: message)
-            setErrorStatus(message, log: String(format: String(localized: "home.execution.log.downloadFailed"), phaseLabel, month.displayText, message))
+        case .failed(let failure):
+            session.failDownloadMonth(month, reason: failure.message)
+            setErrorStatus(failure.message, log: String(format: String(localized: "home.execution.log.downloadFailed"), phaseLabel, month.displayText, failure.message))
             notifyStateChanged()
-            onAlert?(String(format: String(localized: "home.execution.log.phaseFailed"), phaseLabel), String(format: String(localized: "home.execution.log.phaseFailedDetail"), month.displayText, message))
-            return .failed(message)
+            onAlert?(String(format: String(localized: "home.execution.log.phaseFailed"), phaseLabel), String(format: String(localized: "home.execution.log.phaseFailedDetail"), month.displayText, failure.message))
+            return .failed(BackupFinalizationFailure(message: failure.message, underlyingError: failure.underlyingError))
         case .cancelled:
             return .cancelled
         }

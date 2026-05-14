@@ -222,7 +222,7 @@ final class BackgroundBackupRunner {
 
         do {
             let preMaterialized = await v2Services.initialMaterializeOutput.peek()
-            // expectV2 pins routing so a lingering V1 manifest can't drag this sync down the V1 path.
+            // expectV2 rejects lingering V1 data instead of routing backup sync through V1.
             _ = try await assetProcessor.remoteIndexService.syncIndex(
                 client: client,
                 profile: profile,

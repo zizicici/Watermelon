@@ -234,9 +234,7 @@ enum BackupV2RuntimeBuilder {
             guard RepoLayout.parseSnapshotFilename(filename) != nil else { continue }
             do {
                 let file = try await snapshotReader.read(filename: filename)
-                guard !file.header.repoID.isEmpty else {
-                    throw BackupV2RuntimeBuildError.damagedV2Repo
-                }
+                if file.header.repoID.isEmpty { continue }
                 repoIDs.insert(file.header.repoID)
             } catch is CancellationError {
                 throw CancellationError()

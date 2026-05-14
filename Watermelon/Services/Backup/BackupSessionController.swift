@@ -443,6 +443,7 @@ enum State {
         iCloudPhotoBackupMode: ICloudPhotoBackupMode,
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) -> UInt64? {
+        activeTerminationIntent = .none
         let runToken = runDriver.startRun(
             profile: profile,
             password: password,

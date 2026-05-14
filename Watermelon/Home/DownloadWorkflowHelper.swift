@@ -68,7 +68,7 @@ final class DownloadWorkflowHelper {
             if Task.isCancelled { return .cancelled }
             let message = context.profile.userFacingStorageErrorMessage(error)
             print("[DownloadWorkflowHelper] download FAILED: itemCount=\(toRestore.count), reason=\(message)")
-            return .failed(message)
+            return .failed(DownloadMonthFailure(message: message, underlyingError: error))
         }
     }
 
@@ -92,6 +92,11 @@ final class DownloadWorkflowHelper {
 
 enum DownloadMonthResult {
     case success(restoredCount: Int, skippedIncompleteCount: Int)
-    case failed(String)
+    case failed(DownloadMonthFailure)
     case cancelled
+}
+
+struct DownloadMonthFailure {
+    let message: String
+    let underlyingError: Error?
 }

@@ -30,11 +30,21 @@ enum BackupTerminationIntent: Sendable {
     case stop
 }
 
+struct BackupFinalizationFailure: @unchecked Sendable {
+    let message: String
+    let underlyingError: Error?
+
+    init(message: String, underlyingError: Error? = nil) {
+        self.message = message
+        self.underlyingError = underlyingError
+    }
+}
+
 enum BackupMonthFinalizationResult: Sendable {
     case success
     /// Upload OK, inline download skipped items; the upload run must not treat this as fatal.
     case downloadIncomplete(String)
-    case failed(String)
+    case failed(BackupFinalizationFailure)
     case cancelled
 }
 

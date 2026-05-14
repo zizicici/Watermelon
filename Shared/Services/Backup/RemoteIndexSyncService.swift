@@ -7,6 +7,16 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     private static let overlayProbeMaxVerifiedFilesPerMonth = 64
     private static let overlayProbeMaxVerifiedBytesPerMonth: Int64 = 32 * 1024 * 1024
 
+    private struct OverlayProbeBudget: Sendable {
+        let maxVerifiedFilesPerMonth: Int
+        let maxVerifiedBytesPerMonth: Int64
+    }
+
+    private enum OverlayStaleFallbackPolicy: Sendable {
+        case failClosedWhenMissingFallback
+        case preserveFallback
+    }
+
     private struct OverlayMonthProbe: Sendable {
         let month: LibraryMonthKey
         let missingHashes: Set<Data>
@@ -248,6 +258,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             client: client,
             basePath: basePath,
             fallback: captured.fallback,
+            budget: nil,
+            staleFallbackPolicy: .failClosedWhenMissingFallback,
             concurrencyCap: concurrencyCap
         )
         return try await syncGate.withLock { [self] in
@@ -262,6 +274,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             }
             let overlayFresh = revisionUnchanged && probe.fresh
             await state.setOverlayFresh(overlayFresh)
+            // Stale handles may include newer commits; resume callers reject stale overlay freshness.
             return self.handleFromCurrentSnapshot(overlayFresh: overlayFresh)
         }
     }
@@ -303,20 +316,17 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
 
         let alreadyV2 = await state.isV2Repo() == true
-        let inspection: RemoteFormatInspection
-        if expectV2 {
-            inspection = .v2(formatVersion: RepoLayout.currentSupportedFormatVersion)
-            await state.setIsV2Repo(true)
-        } else {
-            inspection = try await RemoteFormatCompatibilityService()
-                .inspectRemoteFormat(client: client, profile: profile)
-        }
+        let inspection = try await RemoteFormatCompatibilityService()
+            .inspectRemoteFormat(client: client, profile: profile)
         switch inspection {
         case .unsupported(let minAppVersion):
             throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
-        case .v2, .v2WithPendingMigrationCleanup:
+        case .v2:
             await state.setIsV2Repo(true)
             return try await syncIndexV2(client: client, profile: profile, eventStream: eventStream, onSyncProgress: onSyncProgress, syncStart: syncStart, preMaterialized: preMaterialized)
+        case .v2WithPendingMigrationCleanup:
+            await state.setIsV2Repo(true)
+            return try await syncIndexV2(client: client, profile: profile, eventStream: eventStream, onSyncProgress: onSyncProgress, syncStart: syncStart, preMaterialized: nil)
         case .v2WithV1Manifests:
             await state.setOverlayFresh(false)
             throw BackupCompatibilityError.requiresForegroundMigration
@@ -619,11 +629,29 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func remoteMonthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
-        committedView.monthRawData(for: month)
+        optimisticMutationLock.withLock {
+            guard let delta = committedView.monthRawData(for: month) else { return nil }
+            let uncommitted = inflightTracker.readUncommittedAssets { $0[month] ?? [] }
+            return Self.filterHomeFacingDelta(delta, excludingAssetFingerprints: uncommitted)
+        }
     }
 
     func currentState(since revision: UInt64?) -> RemoteLibrarySnapshotState {
-        committedView.state(since: revision)
+        optimisticMutationLock.withLock {
+            let state = committedView.state(since: revision)
+            let uncommitted = inflightTracker.readUncommittedAssets { $0 }
+            guard !uncommitted.isEmpty else { return state }
+            return RemoteLibrarySnapshotState(
+                revision: state.revision,
+                isFullSnapshot: state.isFullSnapshot,
+                monthDeltas: state.monthDeltas.map { delta in
+                    Self.filterHomeFacingDelta(
+                        delta,
+                        excludingAssetFingerprints: uncommitted[delta.month] ?? []
+                    )
+                }
+            )
+        }
     }
 
     func makeOptimisticAssetWriter() -> OptimisticAssetWriter {
@@ -671,14 +699,20 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     func markCommittedV2(month: LibraryMonthKey, fingerprints: Set<Data>) {
+        guard !fingerprints.isEmpty else { return }
         optimisticMutationLock.withLock {
-            inflightTracker.markCommitted(month: month, fingerprints: fingerprints)
+            if inflightTracker.markCommitted(month: month, fingerprints: fingerprints) {
+                committedView.markMonthsChanged([month])
+            }
         }
     }
 
     func resetUncommittedV2() {
         optimisticMutationLock.withLock {
-            inflightTracker.reset()
+            let months = inflightTracker.reset()
+            if !months.isEmpty {
+                committedView.markMonthsChanged(months)
+            }
         }
     }
 
@@ -689,14 +723,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     private func resetUncommittedAndLoadMaterialize(_ output: RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] {
         optimisticMutationLock.withLock {
-            inflightTracker.reset()
+            _ = inflightTracker.reset()
             return committedView.loadFromMaterialize(output)
         }
     }
 
     private func resetCommittedViewAndUncommitted() {
         optimisticMutationLock.withLock {
-            inflightTracker.reset()
+            _ = inflightTracker.reset()
             committedView.reset()
         }
     }
@@ -720,6 +754,20 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 subtractingInflight: inflightTracker
             )
         }
+    }
+
+    private static func filterHomeFacingDelta(
+        _ delta: RemoteLibraryMonthDelta,
+        excludingAssetFingerprints: Set<Data>
+    ) -> RemoteLibraryMonthDelta {
+        guard !excludingAssetFingerprints.isEmpty else { return delta }
+        return RemoteLibraryMonthDelta(
+            month: delta.month,
+            resources: delta.resources,
+            assets: delta.assets.filter { !excludingAssetFingerprints.contains($0.assetFingerprint) },
+            assetResourceLinks: delta.assetResourceLinks.filter { !excludingAssetFingerprints.contains($0.assetFingerprint) },
+            physicallyMissingHashes: delta.physicallyMissingHashes
+        )
     }
 
     private static func committedFingerprints(
@@ -824,6 +872,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             client: client,
             basePath: basePath,
             fallback: fallback,
+            budget: OverlayProbeBudget(
+                maxVerifiedFilesPerMonth: Self.overlayProbeMaxVerifiedFilesPerMonth,
+                maxVerifiedBytesPerMonth: Self.overlayProbeMaxVerifiedBytesPerMonth
+            ),
+            staleFallbackPolicy: .preserveFallback,
             concurrencyCap: concurrencyCap
         )
         applyPhysicalPresenceOverlay(probe.missingByMonth)
@@ -843,6 +896,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         fallback: [LibraryMonthKey: Set<Data>],
+        budget: OverlayProbeBudget?,
+        staleFallbackPolicy: OverlayStaleFallbackPolicy,
         concurrencyCap: Int
     ) async throws -> (fresh: Bool, missingByMonth: [LibraryMonthKey: Set<Data>]) {
         var resourcesByMonth: [LibraryMonthKey: [RemoteManifestResource]] = [:]
@@ -860,7 +915,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 group.addTask { [self] in
                     try Task.checkCancellation()
                     do {
-                        let probe = try await probeMonthForMissing(client: client, basePath: basePath, month: month, resources: resources)
+                        let probe = try await probeMonthForMissing(client: client, basePath: basePath, month: month, resources: resources, budget: budget)
                         return (probe.month, .success(probe))
                     } catch is CancellationError {
                         throw CancellationError()
@@ -875,17 +930,23 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 case .success(let probe):
                     if !probe.fresh { anyFailure = true }
                     var missing = probe.missingHashes
-                    if let stale = fallback[month], !probe.inconclusiveHashes.isEmpty {
-                        missing.formUnion(stale.intersection(probe.inconclusiveHashes))
+                    if !probe.inconclusiveHashes.isEmpty {
+                        if let stale = fallback[month] {
+                            missing.formUnion(stale.intersection(probe.inconclusiveHashes))
+                        } else if case .failClosedWhenMissingFallback = staleFallbackPolicy {
+                            missing.formUnion(probe.inconclusiveHashes)
+                        }
                     }
                     missingByMonth[month] = missing
                 case .failure(let error):
                     anyFailure = true
                     if let stale = fallback[month] {
                         missingByMonth[month] = stale
-                    } else {
+                    } else if case .failClosedWhenMissingFallback = staleFallbackPolicy {
                         let allHashes = Set((resourcesByMonth[month] ?? []).map(\.contentHash))
                         missingByMonth[month] = allHashes
+                    } else {
+                        missingByMonth[month] = []
                     }
                     syncLog.info("[SyncTiming] probe failed for \(month.text): \(error.localizedDescription)")
                 }
@@ -893,7 +954,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                     group.addTask { [self] in
                         try Task.checkCancellation()
                         do {
-                            let probe = try await probeMonthForMissing(client: client, basePath: basePath, month: nextMonth, resources: nextResources)
+                            let probe = try await probeMonthForMissing(client: client, basePath: basePath, month: nextMonth, resources: nextResources, budget: budget)
                             return (probe.month, .success(probe))
                         } catch is CancellationError {
                             throw CancellationError()
@@ -911,7 +972,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         month: LibraryMonthKey,
-        resources: [RemoteManifestResource]
+        resources: [RemoteManifestResource],
+        budget: OverlayProbeBudget?
     ) async throws -> OverlayMonthProbe {
         try Task.checkCancellation()
         let monthRel = String(format: "%04d/%02d", month.year, month.month)
@@ -962,14 +1024,17 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 let sizeMatches = listed.filter { $0.size == resource.fileSize }
                 if sizeMatches.isEmpty { continue }
                 for match in sizeMatches {
-                    if verifiedFileCount >= Self.overlayProbeMaxVerifiedFilesPerMonth ||
-                        verifiedByteCount + resource.fileSize > Self.overlayProbeMaxVerifiedBytesPerMonth {
-                        if !loggedProbeBudgetExhausted {
-                            loggedProbeBudgetExhausted = true
-                            syncLog.info("[SyncTiming] overlay probe budget exhausted for \(month.text); leaving unverified resources inconclusive")
+                    if let budget {
+                        let budgetExceeded = verifiedFileCount >= budget.maxVerifiedFilesPerMonth ||
+                            verifiedByteCount + resource.fileSize > budget.maxVerifiedBytesPerMonth
+                        if budgetExceeded {
+                            if !loggedProbeBudgetExhausted {
+                                loggedProbeBudgetExhausted = true
+                                syncLog.info("[SyncTiming] overlay probe budget exhausted for \(month.text); leaving unverified resources inconclusive")
+                            }
+                            inconclusive = true
+                            break candidateScan
                         }
-                        inconclusive = true
-                        break candidateScan
                     }
                     let path = RemotePathBuilder.absolutePath(
                         basePath: basePath,

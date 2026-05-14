@@ -154,8 +154,9 @@ struct RemoteFormatCompatibilityService: Sendable {
                     if let cleanup = markerStates.first(where: { $0.isCleanupSafe }) {
                         return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: cleanup.writerID)
                     }
-                    if !markerStates.isEmpty {
-                        return .v2WithV1Manifests(formatVersion: formatVersion)
+                    if let residue = markerStates.first {
+                        // With no V1 manifests left, any marker only represents cleanup residue.
+                        return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: residue.writerID)
                     }
                     return .v2(formatVersion: formatVersion)
                 }

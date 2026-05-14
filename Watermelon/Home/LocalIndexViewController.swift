@@ -344,9 +344,7 @@ final class LocalIndexViewController: UIViewController {
             var newest: Date?
             for asset in phAssets {
                 guard let row = validRaw[asset.localIdentifier] else { continue }
-                if let mtime = asset.modificationDate, mtime > row.updatedAt {
-                    continue
-                }
+                guard Self.canTrustIndexedRow(row, for: asset) else { continue }
                 totalSize += row.totalFileSizeBytes
                 indexedCount += 1
                 if let n = newest {
@@ -362,6 +360,18 @@ final class LocalIndexViewController: UIViewController {
                 lastUpdatedAt: newest
             )
         }
+    }
+
+    private nonisolated static func canTrustIndexedRow(_ row: IndexedAssetRow, for asset: PHAsset) -> Bool {
+        if let mtime = asset.modificationDate, mtime > row.updatedAt { return false }
+        guard row.selectionVersion >= BackupAssetResourcePlanner.currentSelectionVersion,
+              let cachedSignature = row.resourceSignature else {
+            return false
+        }
+        let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
+            from: PHAssetResource.assetResources(for: asset)
+        )
+        return cachedSignature == BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered)
     }
 
     private func handleIncrementalTap() {

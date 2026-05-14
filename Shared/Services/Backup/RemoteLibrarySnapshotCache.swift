@@ -717,11 +717,37 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         lock.withLock { allKnownMonthsLocked() }
     }
 
-    func counts() -> RemoteIndexSyncDigest {
+    func counts(physicallyMissingByMonth: [LibraryMonthKey: Set<Data>] = [:]) -> RemoteIndexSyncDigest {
         lock.withLock {
-            let resources = resourcesByMonth.values.reduce(0) { $0 + $1.count }
-            let assets = assetsByMonth.values.reduce(0) { $0 + $1.count }
-            let links = linksByMonth.values.reduce(0) { $0 + $1.count }
+            if physicallyMissingByMonth.isEmpty {
+                let resources = resourcesByMonth.values.reduce(0) { $0 + $1.count }
+                let assets = assetsByMonth.values.reduce(0) { $0 + $1.count }
+                let links = linksByMonth.values.reduce(0) { $0 + $1.count }
+                return RemoteIndexSyncDigest(
+                    resourceCount: resources,
+                    assetCount: assets,
+                    linkCount: links
+                )
+            }
+            var resources = 0
+            var assets = 0
+            var links = 0
+            for month in allKnownMonthsLocked() {
+                let missing = physicallyMissingByMonth[month] ?? []
+                if missing.isEmpty {
+                    resources += resourcesByMonth[month]?.count ?? 0
+                    assets += assetsByMonth[month]?.count ?? 0
+                    links += linksByMonth[month]?.count ?? 0
+                    continue
+                }
+                resources += (resourcesByMonth[month] ?? [:]).values
+                    .filter { !missing.contains($0.contentHash) }
+                    .count
+                assets += computeMonthStatsAdjustedLocked(for: month, missing: missing)?.assetCount ?? 0
+                links += (linksByMonth[month] ?? [:]).values
+                    .filter { !missing.contains($0.resourceHash) }
+                    .count
+            }
             return RemoteIndexSyncDigest(
                 resourceCount: resources,
                 assetCount: assets,

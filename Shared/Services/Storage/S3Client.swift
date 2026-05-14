@@ -66,6 +66,7 @@ final actor S3Client: RemoteStorageClientProtocol {
     private let session: URLSession
     private let transferSession: URLSession
     private var activeMultipartUploads: Set<MultipartUploadHandle> = []
+    private var conditionalCopyIfAbsentIsSupported = false
 
     init(config: Config) {
         self.config = config
@@ -138,6 +139,15 @@ final actor S3Client: RemoteStorageClientProtocol {
             try await serverSideCopy(sourceKey: keyA, destinationURL: urlB)
             orphans.insert(urlB)
 
+            let copyIfAbsentResult = try await serverSideCopyIfAbsent(
+                sourceKey: keyA,
+                destinationKey: keyB
+            )
+            guard case .alreadyExists = copyIfAbsentResult else {
+                throw Self.internalError("S3 endpoint did not enforce If-None-Match for CopyObject")
+            }
+            conditionalCopyIfAbsentIsSupported = true
+
             async let delA: Void = deleteObject(at: urlA)
             async let delB: Void = deleteObject(at: urlB)
             try await delA
@@ -200,6 +210,47 @@ final actor S3Client: RemoteStorageClientProtocol {
                 return .alreadyExists
             }
             throw error
+        }
+    }
+
+    private func ensureConditionalCopyIfAbsentSupported() async throws {
+        guard !conditionalCopyIfAbsentIsSupported else { return }
+        let sourceKey = makeProbeKey()
+        let destinationKey = makeProbeKey()
+        let sourceURL = try makeURL(key: sourceKey, query: [])
+        let destinationURL = try makeURL(key: destinationKey, query: [])
+        var orphans: Set<URL> = []
+        do {
+            try await putEmptyObject(at: sourceURL)
+            orphans.insert(sourceURL)
+            try await putEmptyObject(at: destinationURL)
+            orphans.insert(destinationURL)
+            let result = try await serverSideCopyIfAbsent(
+                sourceKey: sourceKey,
+                destinationKey: destinationKey
+            )
+            guard case .alreadyExists = result else {
+                throw Self.internalError("S3 endpoint did not enforce If-None-Match for CopyObject")
+            }
+            conditionalCopyIfAbsentIsSupported = true
+        } catch {
+            await withTaskGroup(of: Void.self) { group in
+                for url in orphans {
+                    group.addTask { [self] in
+                        let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
+                        _ = try? await performMetadata(req)
+                    }
+                }
+            }
+            throw error
+        }
+        await withTaskGroup(of: Void.self) { group in
+            for url in orphans {
+                group.addTask { [self] in
+                    let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
+                    _ = try? await performMetadata(req)
+                }
+            }
         }
     }
 
@@ -586,12 +637,17 @@ final actor S3Client: RemoteStorageClientProtocol {
             throw Self.internalError("S3 moveIfAbsent is unsupported for objects larger than 5 GiB")
         }
 
+        try await ensureConditionalCopyIfAbsentSupported()
         let result = try await serverSideCopyIfAbsent(sourceKey: sourceKey, destinationKey: destinationKey)
         guard case .created = result else {
             return result
         }
-        try await delete(path: sourcePath)
-        return .created
+        do {
+            try await delete(path: sourcePath)
+            return .created
+        } catch {
+            return .bestEffortRetry
+        }
     }
 
     func copy(from sourcePath: String, to destinationPath: String) async throws {

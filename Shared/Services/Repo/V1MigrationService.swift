@@ -482,7 +482,10 @@ actor V1MigrationService {
         guard try await metadataIfPresent(path: sourcePath) != nil else { return }
         do {
             switch try await client.moveIfAbsent(from: sourcePath, to: residuePath) {
-            case .created, .bestEffortRetry:
+            case .created:
+                return
+            case .bestEffortRetry:
+                try await finishBestEffortResidueMove(sourcePath: sourcePath, destinationPath: residuePath)
                 return
             case .alreadyExists:
                 if try await remoteFilesEqual(sourcePath, residuePath) {
@@ -513,13 +516,39 @@ actor V1MigrationService {
             remoteRelativePath: monthRel + "/" + Self.residueManifestFileName + ".\(UUID().uuidString)"
         )
         switch try await client.moveIfAbsent(from: sourcePath, to: uniqueResiduePath) {
-        case .created, .bestEffortRetry:
+        case .created:
+            return
+        case .bestEffortRetry:
+            try await finishBestEffortResidueMove(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
             return
         case .alreadyExists:
             throw NSError(domain: "V1MigrationService", code: -32, userInfo: [
                 NSLocalizedDescriptionKey: "unique residue path already exists for \(sourcePath)"
             ])
         }
+    }
+
+    private func finishBestEffortResidueMove(sourcePath: String, destinationPath: String) async throws {
+        guard try await metadataIfPresent(path: sourcePath) != nil else { return }
+        guard try await remoteFilesEqual(sourcePath, destinationPath) else {
+            if try await metadataIfPresent(path: sourcePath) == nil { return }
+            throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: destinationPath)
+        }
+        do {
+            try await client.delete(path: sourcePath)
+        } catch {
+            if isStorageNotFoundError(error) { return }
+            throw error
+        }
+        guard try await metadataIfPresent(path: sourcePath) == nil else {
+            throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: destinationPath)
+        }
+    }
+
+    private func residueMoveIncompleteError(sourcePath: String, destinationPath: String) -> NSError {
+        NSError(domain: "V1MigrationService", code: -33, userInfo: [
+            NSLocalizedDescriptionKey: "V1 manifest quarantine incomplete: source still visible at \(sourcePath) after moving to \(destinationPath)"
+        ])
     }
 
     private static func isResidueManifestName(_ name: String) -> Bool {
@@ -585,6 +614,8 @@ actor V1MigrationService {
         }
         do {
             return try localFilesEqual(lhsURL, rhsURL, expectedSize: lhsMeta.size)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             return false
         }

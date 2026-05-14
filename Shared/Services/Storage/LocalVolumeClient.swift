@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import os.log
 
 private let localVolumeLog = Logger(subsystem: "com.zizicici.watermelon", category: "LocalVolumeClient")
@@ -444,7 +445,20 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             let destinationURL = try remoteFileURL(forRemotePath: destinationPath, rootURL: root)
             let destinationParent = destinationURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: destinationParent, withIntermediateDirectories: true)
-            try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+            let result = sourceURL.path.withCString { source in
+                destinationURL.path.withCString { destination in
+                    renamex_np(source, destination, UInt32(RENAME_EXCL))
+                }
+            }
+            guard result == 0 else {
+                let code = errno
+                if code == EEXIST {
+                    return .alreadyExists
+                }
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [
+                    NSLocalizedDescriptionKey: String(cString: strerror(code))
+                ])
+            }
             return .created
         } catch {
             let nsError = error as NSError

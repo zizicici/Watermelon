@@ -1,5 +1,8 @@
 import Foundation
 import GRDB
+import os.log
+
+private let contentHashIndexLog = Logger(subsystem: "com.zizicici.watermelon", category: "ContentHashIndex")
 
 struct AssetResourceRoleSlot: Hashable, Sendable {
     let role: Int
@@ -475,8 +478,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         remoteAssetFingerprint: Data,
         instances: [RemoteAssetResourceInstance]
     ) throws {
-        guard !instances.isEmpty,
-              instances.allSatisfy({ $0.resourceHash.count == Self.sha256DigestLength }) else {
+        guard !instances.isEmpty else {
             try deleteIndexEntries(assetIDs: [assetLocalIdentifier])
             return
         }
@@ -491,20 +493,24 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         let totalSize = instances.reduce(Int64(0)) { partial, instance in
             partial + instance.fileSize
         }
-        let importedFingerprint = BackupAssetResourcePlanner.assetFingerprint(
-            resourceRoleSlotHashes: instances.map { instance in
-                (role: instance.role, slot: instance.slot, contentHash: instance.resourceHash)
+        if instances.allSatisfy({ $0.resourceHash.count == Self.sha256DigestLength }) {
+            let importedFingerprint = BackupAssetResourcePlanner.assetFingerprint(
+                resourceRoleSlotHashes: instances.map { instance in
+                    (role: instance.role, slot: instance.slot, contentHash: instance.resourceHash)
+                }
+            )
+            if importedFingerprint != remoteAssetFingerprint {
+                contentHashIndexLog.info("[HashIndex] fingerprint mismatch for \(assetLocalIdentifier, privacy: .private): preserving remote restore identity")
             }
-        )
-        let storedFingerprint = importedFingerprint == remoteAssetFingerprint
-            ? remoteAssetFingerprint
-            : importedFingerprint
+        } else {
+            contentHashIndexLog.info("[HashIndex] legacy restore identity for \(assetLocalIdentifier, privacy: .private): preserving remote fingerprint without full local hashes")
+        }
         let signature = BackupAssetResourcePlanner.resourceSignature(
             roleSlots: instances.map { (role: $0.role, slot: $0.slot) }
         )
         try upsertAssetHashSnapshot(
             assetLocalIdentifier: assetLocalIdentifier,
-            assetFingerprint: storedFingerprint,
+            assetFingerprint: remoteAssetFingerprint,
             resources: records,
             totalFileSizeBytes: totalSize,
             modificationDateMs: nil,
