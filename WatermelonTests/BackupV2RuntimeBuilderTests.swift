@@ -26,9 +26,11 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
 
     func testFreshRepo_bootstrapsAndInvokesCallback() async throws {
         let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         try await client.createDirectory(path: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await metadataClient.connect()
         let profile = try insertProfile()
 
@@ -104,11 +106,13 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
 
     func testV2Repo_localIDMatchesRemote_succeeds() async throws {
         let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         let canonicalRepoID = "canonical-repo-id"
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await metadataClient.connect()
         let profile = try insertProfile()
 
@@ -161,9 +165,11 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     /// version.json exists but repo.json was lost.
     func testV2Repo_halfBootstrap_repoMissing_isHealedByEnsureRepoJSON() async throws {
         let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         try await client.createDirectory(path: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await metadataClient.connect()
         let profile = try insertProfile()
 
@@ -179,6 +185,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         try await client.delete(path: RepoLayout.repoFilePath(base: basePath))
 
         let metadataClient2 = InMemoryRemoteStorageClient()
+        metadataClient2.setMoveIfAbsentGuarantee(.exclusive)
         try await metadataClient2.connect()
         let secondRun = try await BackupV2RuntimeBuilder.build(
             client: client,

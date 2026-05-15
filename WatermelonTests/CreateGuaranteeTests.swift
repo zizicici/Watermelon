@@ -66,4 +66,90 @@ final class CreateGuaranteeTests: XCTestCase {
         )
         XCTAssertEqual(result, .created)
     }
+
+    /// Probe says yes → finalization uses `moveIfAbsent`, not the copy fallback. Even
+    /// with `.overwritePossible` static guarantee, the runtime probe can promote it
+    /// (S3 endpoint with conditional CopyObject support, WebDAV server honoring `Overwrite: F`).
+    func testCreateWithStagingFallback_probeYes_usesMoveIfAbsent() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setMoveIfAbsentGuarantee(.overwritePossible)
+        await client.setExclusiveMoveProbeOverride(true)
+        await client.setAtomicCreateMode(.bestEffort)
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("payload".utf8).write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let result = try await MetadataCreateGate.createWithStagingFallback(
+            client: client,
+            localURL: tmp,
+            remotePath: "/repo/.watermelon/commits/probe-yes.jsonl",
+            respectTaskCancellation: false,
+            finalizationPolicy: .allowBestEffort
+        )
+        XCTAssertEqual(result, .created)
+        // Staging side-path got cleaned up.
+        let stagingExists = await client.snapshotFiles().keys.contains(where: { $0.contains(".staging-") })
+        XCTAssertFalse(stagingExists, "staging path must be cleaned up after success")
+    }
+
+    /// Probe says no + `.allowBestEffort` → falls through to `bestEffortCopyIfAbsent` instead
+    /// of throwing. The previous design used a post-throw S3-specific error classifier; the
+    /// probe-first design routes directly without try/catch on a vendor error string.
+    func testCreateWithStagingFallback_probeNo_allowBestEffort_fallsThroughToCopy() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setMoveIfAbsentGuarantee(.overwritePossible)
+        await client.setExclusiveMoveProbeOverride(false)
+        await client.setAtomicCreateMode(.bestEffort)
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("payload".utf8).write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let result = try await MetadataCreateGate.createWithStagingFallback(
+            client: client,
+            localURL: tmp,
+            remotePath: "/repo/.watermelon/commits/probe-no-bestEffort.jsonl",
+            respectTaskCancellation: false,
+            finalizationPolicy: .allowBestEffort
+        )
+        XCTAssertEqual(result, .created)
+        let downloadURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: downloadURL) }
+        try await client.download(remotePath: "/repo/.watermelon/commits/probe-no-bestEffort.jsonl", localURL: downloadURL)
+        XCTAssertEqual(try Data(contentsOf: downloadURL), Data("payload".utf8))
+    }
+
+    /// Probe says no + `.requireExclusiveMove` → throws upfront, before `moveIfAbsent` is
+    /// even attempted. Identity finalization (repo-identity.json, version.json) refuses
+    /// non-exclusive backends to keep peer overwrites from corrupting repo identity.
+    func testCreateWithStagingFallback_probeNo_requireExclusive_throws() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setMoveIfAbsentGuarantee(.overwritePossible)
+        await client.setExclusiveMoveProbeOverride(false)
+        await client.setAtomicCreateMode(.bestEffort)
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data("payload".utf8).write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        do {
+            _ = try await MetadataCreateGate.createWithStagingFallback(
+                client: client,
+                localURL: tmp,
+                remotePath: "/repo/.watermelon/repo-identity.json",
+                respectTaskCancellation: false,
+                finalizationPolicy: .requireExclusiveMove
+            )
+            XCTFail("expected nonExclusiveFinalization")
+        } catch MetadataCreateGate.Error.nonExclusiveFinalization(let path) {
+            XCTAssertEqual(path, "/repo/.watermelon/repo-identity.json")
+        }
+        // Staging cleanup ran on the throw path.
+        let stagingExists = await client.snapshotFiles().keys.contains(where: { $0.contains(".staging-") })
+        XCTAssertFalse(stagingExists, "staging path must be cleaned up after throw")
+    }
 }

@@ -16,7 +16,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         try await client.connect()
         await client.injectFile(path: remotePath, data: bytes)
 
-        let race = await AssetProcessor.detectRemoteContentRace(
+        let race = try await AssetProcessor.detectRemoteContentRace(
             client: client,
             remotePath: remotePath,
             expectedSize: Int64(bytes.count),
@@ -32,7 +32,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         try await client.connect()
         await client.injectFile(path: remotePath, data: theirBytes)
 
-        let race = await AssetProcessor.detectRemoteContentRace(
+        let race = try await AssetProcessor.detectRemoteContentRace(
             client: client,
             remotePath: remotePath,
             expectedSize: 256,
@@ -51,7 +51,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         try await client.connect()
         await client.injectFile(path: remotePath, data: theirBytes)
 
-        let race = await AssetProcessor.detectRemoteContentRace(
+        let race = try await AssetProcessor.detectRemoteContentRace(
             client: client,
             remotePath: remotePath,
             expectedSize: Int64(ourBytes.count),
@@ -68,7 +68,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         await client.injectFile(path: remotePath, data: bytes)
         await client.injectMetadataError(.transport, for: remotePath)
 
-        let race = await AssetProcessor.detectRemoteContentRace(
+        let race = try await AssetProcessor.detectRemoteContentRace(
             client: client,
             remotePath: remotePath,
             expectedSize: Int64(bytes.count),
@@ -83,7 +83,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         try await client.connect()
         // Nothing injected at remotePath — metadata returns nil.
 
-        let race = await AssetProcessor.detectRemoteContentRace(
+        let race = try await AssetProcessor.detectRemoteContentRace(
             client: client,
             remotePath: remotePath,
             expectedSize: 256,
@@ -100,7 +100,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         await client.injectFile(path: remotePath, data: bytes)
         await client.injectDownloadError(.transport, for: remotePath)
 
-        let race = await AssetProcessor.detectRemoteContentRace(
+        let race = try await AssetProcessor.detectRemoteContentRace(
             client: client,
             remotePath: remotePath,
             expectedSize: Int64(bytes.count),

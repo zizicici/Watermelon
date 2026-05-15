@@ -121,11 +121,6 @@ final class BackupCoordinator: Sendable {
         remoteIndexService.currentState(since: revision)
     }
 
-    /// Per-month is load-bearing — a flat set would let writer A mask writer B's pending fp on shared content.
-    func backedUpAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
-        remoteIndexService.committedAssetFingerprintsByMonth()
-    }
-
     /// `nil` until the first sync identifies the format; callers must not collapse nil to V1.
     func currentRepoIsV2() async -> Bool? {
         await remoteIndexService.currentRepoIsV2()
@@ -149,9 +144,5 @@ final class BackupCoordinator: Sendable {
             }
             throw RemoteViewHandleError.stalePhysicalPresenceOverlay
         }
-    }
-
-    func lastSyncOverlayFresh() async -> Bool {
-        await remoteIndexService.lastSyncOverlayFresh()
     }
 }

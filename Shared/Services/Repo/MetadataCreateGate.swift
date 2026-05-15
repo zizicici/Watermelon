@@ -102,27 +102,28 @@ enum MetadataCreateGate {
                 throw Error.stagingVerificationFailed(remotePath: stagingPath, underlying: error)
             }
             do {
-                if finalizationPolicy == .requireExclusiveMove,
-                   client.moveIfAbsentGuarantee != .exclusive {
-                    let supportsExclusiveMove = try await client.supportsExclusiveMoveIfAbsent(forDestinationPath: remotePath)
-                    if !supportsExclusiveMove {
-                        try? await client.delete(path: stagingPath)
-                        throw Error.nonExclusiveFinalization(remotePath: remotePath)
-                    }
+                // Probe before the call. Backends with `.exclusive` guarantee skip the probe (the flag is the answer);
+                // anything else asks the backend at runtime so vendor-specific failure modes don't leak back here as error classification.
+                let supportsExclusiveMove: Bool
+                if client.moveIfAbsentGuarantee == .exclusive {
+                    supportsExclusiveMove = true
+                } else {
+                    supportsExclusiveMove = try await client.supportsExclusiveMoveIfAbsent(forDestinationPath: remotePath)
                 }
                 let finalization: AtomicCreateResult
-                do {
+                if supportsExclusiveMove {
                     finalization = try await client.moveIfAbsent(from: stagingPath, to: remotePath)
-                } catch {
-                    if finalizationPolicy == .allowBestEffort,
-                       S3Client.isMoveIfAbsentUnsupported(error) {
+                } else {
+                    switch finalizationPolicy {
+                    case .requireExclusiveMove:
+                        try? await client.delete(path: stagingPath)
+                        throw Error.nonExclusiveFinalization(remotePath: remotePath)
+                    case .allowBestEffort:
                         finalization = try await bestEffortCopyIfAbsent(
                             client: client,
                             stagingPath: stagingPath,
                             remotePath: remotePath
                         )
-                    } else {
-                        throw error
                     }
                 }
                 if case .alreadyExists = finalization {

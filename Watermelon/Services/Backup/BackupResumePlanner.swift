@@ -137,7 +137,9 @@ final class BackupResumePlanner {
     private static func runDetached<T: Sendable>(
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        let task = Task.detached(priority: .userInitiated, operation: operation)
+        let task = Task.detached(priority: .userInitiated) {
+            try await operation()
+        }
         return try await withTaskCancellationHandler {
             try await task.value
         } onCancel: {

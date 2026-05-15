@@ -9,6 +9,7 @@ final class RepoBootstrapVersionTests: XCTestCase {
 
     func testFreshRepo_writesBothJSONFiles() async throws {
         let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         let bootstrap = RepoBootstrap(client: client, basePath: basePath)
 

@@ -255,6 +255,10 @@ final actor S3Client: RemoteStorageClientProtocol {
         }
     }
 
+    func supportsExclusiveMoveIfAbsent(forDestinationPath _: String) async throws -> Bool {
+        try await conditionalCopyIfAbsentSupported()
+    }
+
     private func conditionalCopyIfAbsentSupported() async throws -> Bool {
         switch conditionalCopyIfAbsentSupport {
         case .supported:
@@ -719,17 +723,6 @@ final actor S3Client: RemoteStorageClientProtocol {
             return true
         }
         return false
-    }
-
-    nonisolated static func isMoveIfAbsentUnsupported(_ error: Error) -> Bool {
-        if let storage = error as? RemoteStorageClientError, case .underlying(let inner) = storage {
-            return isMoveIfAbsentUnsupported(inner)
-        }
-        let ns = error as NSError
-        guard ns.domain == errorDomain, ns.code == -1 else { return false }
-        let description = ns.userInfo[NSLocalizedDescriptionKey] as? String ?? ns.localizedDescription
-        return description.contains("S3 endpoint does not support safe moveIfAbsent")
-            || description.contains("S3 moveIfAbsent is unsupported")
     }
 
     func setModificationDate(_: Date, forPath _: String) async throws {}

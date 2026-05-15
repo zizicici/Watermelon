@@ -277,8 +277,20 @@
 3. `list / metadata / exists`
 4. `upload / download / move / copy / delete / createDirectory`
 5. `setModificationDate`
+6. `atomicCreate / moveIfAbsent` — 原子写入对，与 `MetadataCreateGate` 配合做 commit/snapshot/repo.json/version.json 的安全落盘
 
-协议扩展默认提供 `shouldSetModificationDate / shouldLimitUploadRetries / directReadURL / disconnectSafely`。
+能力位（ADT，调用方按值分支，不查 backend 类型）：
+
+- `atomicCreateGuarantee(forFileSize:remotePath:)` —— 直接 `atomicCreate` 返回 `.exclusive` 还是 `.overwritePossible`。S3 在 multipart 阈值以下是 `.exclusive`（`If-None-Match: *` PUT），multipart 是 `.overwritePossible`
+- `moveIfAbsentGuarantee` —— `moveIfAbsent` 默认能力。LocalVolume / SMB / S3-conditional 是 `.exclusive`；WebDAV / SFTP 是 `.overwritePossible`
+- `supportsExclusiveMoveIfAbsent(forDestinationPath:)` async —— runtime probe，覆盖静态 `moveIfAbsentGuarantee`。S3 forward 到 `conditionalCopyIfAbsentSupported()`（首次跑探测、actor 缓存）；WebDAV forward 到 `Overwrite: F` 探测；其它 backend 默认 `(moveIfAbsentGuarantee == .exclusive)`
+- `dataPathOverwriteRisk` —— `.perKey`（S3 / WebDAV / SMB）vs `.none`（LocalVolume / SFTP），上传路径决定是否强加 `~widN` 后缀
+- `backendNameCaseSensitivity` —— `.caseSensitive` / `.caseInsensitive` / `.unknown`，`presenceKey(for:)` extension 折叠
+- `concurrencyMode` —— `.concurrent` vs `.serialOnly`（SMB / SFTP），`SerialOperationsClient` 包裹
+
+`MetadataCreateGate.createWithStagingFallback` 是这些能力位的统一消费者：先看 `atomicCreateGuarantee`（`.exclusive` → 直接 atomicCreate；`.overwritePossible` → UUID staging + 验证 + move），再看 `moveIfAbsentGuarantee` + runtime probe 决定 finalization 路径（exclusive moveIfAbsent vs `bestEffortCopyIfAbsent` 兜底 vs 抛 `nonExclusiveFinalization`）。
+
+协议扩展默认提供 `shouldSetModificationDate / shouldLimitUploadRetries / directReadURL / disconnectSafely / supportsExclusiveMoveIfAbsent`（默认 `moveIfAbsentGuarantee == .exclusive`）。
 
 当前实现：
 

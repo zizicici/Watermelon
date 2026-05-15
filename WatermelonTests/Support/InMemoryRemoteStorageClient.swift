@@ -1,4 +1,5 @@
 import Foundation
+import os
 @testable import Watermelon
 
 /// Fake `RemoteStorageClientProtocol` for V2 backup tests.
@@ -330,6 +331,48 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
             code: NSFileNoSuchFileError,
             userInfo: [NSLocalizedDescriptionKey: "no such file"]
         ))
+    }
+
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee {
+        moveIfAbsentGuaranteeBox.withLock { $0 }
+    }
+    /// Default mirrors the protocol's fail-closed `.overwritePossible` so the gate exercises probe + finalization branches.
+    /// Tests modeling LocalVolume / S3-conditional opt into `.exclusive` via `setMoveIfAbsentGuarantee`.
+    private nonisolated let moveIfAbsentGuaranteeBox = OSAllocatedUnfairLock(initialState: CreateGuarantee.overwritePossible)
+
+    /// Lets per-test scenarios swap `.exclusive` ↔ `.overwritePossible` to exercise the gate's two finalization paths.
+    nonisolated func setMoveIfAbsentGuarantee(_ guarantee: CreateGuarantee) {
+        moveIfAbsentGuaranteeBox.withLock { $0 = guarantee }
+    }
+
+    func supportsExclusiveMoveIfAbsent(forDestinationPath _: String) async throws -> Bool {
+        if let probe = exclusiveMoveProbeOverride { return probe }
+        return moveIfAbsentGuarantee == .exclusive
+    }
+
+    private var exclusiveMoveProbeOverride: Bool?
+
+    /// Overrides the runtime probe so the gate can be tested with "probe says yes/no" independently of the static guarantee.
+    func setExclusiveMoveProbeOverride(_ value: Bool?) {
+        exclusiveMoveProbeOverride = value
+    }
+
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        let src = Self.normalize(sourcePath)
+        let dst = Self.normalize(destinationPath)
+        if files[dst] != nil {
+            return .alreadyExists
+        }
+        guard let data = files.removeValue(forKey: src) else {
+            throw RemoteStorageClientError.underlying(NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileNoSuchFileError,
+                userInfo: [NSLocalizedDescriptionKey: "no such file"]
+            ))
+        }
+        files[dst] = data
+        ensureDirectoryChain(for: dst)
+        return .created
     }
 
     func copy(from sourcePath: String, to destinationPath: String) async throws {

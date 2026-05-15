@@ -776,31 +776,27 @@ extension AssetProcessor {
         expectedHash: Data,
         cancellationController: BackupCancellationController?
     ) async throws -> Bool {
-        do {
-            return try await Self.detectRemoteContentRace(
-                client: client,
-                remotePath: remotePath,
-                expectedSize: expectedSize,
-                expectedHash: expectedHash,
-                cancellationController: cancellationController
-            )
-        } catch {
-            if error is CancellationError || Task.isCancelled || cancellationController?.isCancelled == true {
-                throw CancellationError()
-            }
-            if profile.isConnectionUnavailableError(error) {
-                throw error
-            }
-            return true
-        }
+        try await Self.detectRemoteContentRace(
+            client: client,
+            remotePath: remotePath,
+            expectedSize: expectedSize,
+            expectedHash: expectedHash,
+            cancellationController: cancellationController,
+            isConnectionUnavailable: profile.isConnectionUnavailableError
+        )
     }
 
+    /// Semantics are inverted from "trusting": any non-cancellation failure → race assumed
+    /// so the caller falls back to collision rename. Cancellation propagates as `CancellationError`.
+    /// `isConnectionUnavailable` lets callers (wrapper) re-throw transport errors that should
+    /// kill the session instead of being treated as "race".
     static func detectRemoteContentRace(
         client: RemoteStorageClientProtocol,
         remotePath: String,
         expectedSize: Int64,
         expectedHash: Data,
-        cancellationController: BackupCancellationController?
+        cancellationController: BackupCancellationController?,
+        isConnectionUnavailable: (Error) -> Bool = { _ in false }
     ) async throws -> Bool {
         try cancellationController?.throwIfCancelled()
         try Task.checkCancellation()
@@ -811,7 +807,8 @@ extension AssetProcessor {
             if error is CancellationError || Task.isCancelled || cancellationController?.isCancelled == true {
                 throw CancellationError()
             }
-            throw error
+            if isConnectionUnavailable(error) { throw error }
+            return true
         }
         guard let entry else { return true }
         guard !entry.isDirectory else { return true }
@@ -831,7 +828,8 @@ extension AssetProcessor {
             if error is CancellationError || Task.isCancelled || cancellationController?.isCancelled == true {
                 throw CancellationError()
             }
-            throw error
+            if isConnectionUnavailable(error) { throw error }
+            return true
         }
     }
 

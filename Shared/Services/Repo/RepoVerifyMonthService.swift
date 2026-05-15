@@ -139,13 +139,10 @@ actor RepoVerifyMonthService {
             }
             throw error
         }
-        let caseSensitive = client.backendNameCaseSensitivity.usesExactNameMatchingForPresence
-        func presenceKey(_ name: String) -> String {
-            caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
-        }
+        let nameCase = client.backendNameCaseSensitivity
         var entriesByKey: [String: [(size: Int64, name: String)]] = [:]
         for entry in entries where !entry.isDirectory {
-            entriesByKey[presenceKey(entry.name), default: []].append((entry.size, entry.name))
+            entriesByKey[nameCase.presenceKey(for: entry.name), default: []].append((entry.size, entry.name))
         }
         struct Expected: Sendable {
             let key: String
@@ -156,7 +153,7 @@ actor RepoVerifyMonthService {
         for resource in state.resources.values {
             let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
             expectationsByHash[resource.contentHash, default: []].append(Expected(
-                key: presenceKey(leaf),
+                key: nameCase.presenceKey(for: leaf),
                 size: resource.fileSize,
                 hash: resource.contentHash
             ))

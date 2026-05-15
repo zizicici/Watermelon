@@ -60,6 +60,7 @@ final class V1MigrationServiceTests: XCTestCase {
 
     func testPhase2WritesVersionJSONAndMarksMigrationCompleted() async throws {
         let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
 
         // Pre-write repo.json (production builder writes it before phase1; tests stand in).

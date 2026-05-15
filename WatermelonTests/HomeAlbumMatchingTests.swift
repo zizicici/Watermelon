@@ -52,7 +52,8 @@ final class HomeAlbumMatchingTests: XCTestCase {
         )
         let item = try? XCTUnwrap(items.first)
         XCTAssertEqual(item?.integrityState, .partiallyMissing(missingHashes: [secondaryHash]))
-        XCTAssertEqual(item?.isRestorable, true, "primary content survives → restore")
+        XCTAssertEqual(item?.isRestorable, false,
+                       "partial loss blocks restore; full-fingerprint post-save verify can't pass on a subset")
         XCTAssertEqual(item?.isIncomplete, true, "incomplete badge still shown")
     }
 
@@ -138,13 +139,13 @@ final class HomeAlbumMatchingTests: XCTestCase {
             physicallyMissingHashesByMonth: [LibraryMonthKey(year: year, month: month): [missingHash]]
         )
         let item = try? XCTUnwrap(items.first)
-        XCTAssertEqual(item?.isRestorable, true,
-                       "partiallyMissing must remain restorable for the surviving slot")
+        XCTAssertEqual(item?.isRestorable, false,
+                       "partiallyMissing blocks restore; surviving slot alone can't satisfy full-fingerprint post-save verify")
         let hashesInInstances = Set((item?.instances ?? []).map(\.resourceHash))
         XCTAssertFalse(hashesInInstances.contains(missingHash),
                        "missing hash must not enter instances — restore would throw on it")
         XCTAssertTrue(hashesInInstances.contains(presentHash),
-                      "present hash must still be restorable")
+                      "present hash must still appear in instances for diagnostic display")
     }
 
     /// An asset whose ONLY hash is overlayed gets filtered out at the

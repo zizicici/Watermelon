@@ -110,8 +110,8 @@ final class RemoteAssetIntegrityClassifierTests: XCTestCase {
             return
         }
         XCTAssertEqual(missing, [h2])
-        XCTAssertTrue(state.allowsRestore,
-                      "partial loss with at least one viewable role can still restore")
+        XCTAssertFalse(state.allowsRestore,
+                       "partial loss blocks restore; full-fingerprint post-save verify can't pass on a subset")
         XCTAssertFalse(state.allowsCleanup,
                        "partial loss may be transient; do not auto-tombstone")
     }

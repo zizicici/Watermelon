@@ -97,11 +97,14 @@ final class SnapshotRowMapperTests: XCTestCase {
         XCTAssertEqual(header.repoID, "")
     }
 
-    func testHeaderAcceptsEmptyRepoIDAsLegacy() throws {
+    func testHeaderRejectsExplicitEmptyRepoID() {
+        // Field-absent legacy snapshots are tolerated; explicit empty string is corruption.
         let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"","covered":{}}"#
-        let row = try SnapshotRowMapper.decodeLine(raw)
-        guard case .header(let header) = row else { XCTFail("expected header"); return }
-        XCTAssertEqual(header.repoID, "")
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
+            guard case SnapshotWireError.malformed = err else {
+                XCTFail("expected .malformed, got \(err)"); return
+            }
+        }
     }
 
     func testHeaderRejectsEmptyWriterID() {

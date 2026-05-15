@@ -594,13 +594,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         let remoteFileNames = entries
             .filter { !$0.isDirectory && $0.name != MonthManifestStore.manifestFileName }
             .map(\.name)
-        let caseSensitive = client.backendNameCaseSensitivity.usesExactNameMatchingForPresence
-        func presenceKey(_ name: String) -> String {
-            caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
-        }
-        let remotePresenceKeys = Set(remoteFileNames.map(presenceKey))
+        let nameCase = client.backendNameCaseSensitivity
+        let remotePresenceKeys = Set(remoteFileNames.map { nameCase.presenceKey(for: $0) })
         let listingMissing = store.existingFileNames().filter { name in
-            !remotePresenceKeys.contains(presenceKey(name))
+            !remotePresenceKeys.contains(nameCase.presenceKey(for: name))
         }
         let listingResult = try store.reconcileMonth(missingFileNames: Set(listingMissing))
 
@@ -771,12 +768,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     func markIsV2() async {
         await state.setIsV2Repo(true)
-    }
-
-    func lastSyncOverlayFresh() async -> Bool {
-        optimisticMutationLock.withLock {
-            physicalPresenceOverlayFresh
-        }
     }
 
     func committedAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
@@ -1061,17 +1052,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
         try Task.checkCancellation()
         // Folding on a case-sensitive backend would equate IMG.JPG/img.jpg as one file.
-        let caseSensitive = client.backendNameCaseSensitivity.usesExactNameMatchingForPresence
-        func presenceKey(_ name: String) -> String {
-            caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
-        }
+        let nameCase = client.backendNameCaseSensitivity
         struct ListedFile {
             let name: String
             let size: Int64
         }
         var entriesByKey: [String: [ListedFile]] = [:]
         for entry in entries where !entry.isDirectory {
-            entriesByKey[presenceKey(entry.name), default: []].append(ListedFile(name: entry.name, size: entry.size))
+            entriesByKey[nameCase.presenceKey(for: entry.name), default: []].append(ListedFile(name: entry.name, size: entry.size))
         }
         var resourcesByHash: [Data: [RemoteManifestResource]] = [:]
         for resource in resources {
@@ -1088,7 +1076,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             candidateScan: for resource in group {
                 try Task.checkCancellation()
                 let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-                guard let listed = entriesByKey[presenceKey(leaf)] else { continue }
+                guard let listed = entriesByKey[nameCase.presenceKey(for: leaf)] else { continue }
                 let sizeMatches = listed.filter { $0.size == resource.fileSize }
                 if sizeMatches.isEmpty { continue }
                 for match in sizeMatches {

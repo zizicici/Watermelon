@@ -37,7 +37,7 @@ final class ContractsAreNotBypassedTests: XCTestCase {
         // OptimisticInflightTracker's mutation entry points
         let tracker = OptimisticInflightTracker()
         let _: (LibraryMonthKey, Set<Data>) -> Void = tracker.markUncommittedAssets
-        let _: () -> Void = tracker.reset
+        let _: () -> Set<LibraryMonthKey> = tracker.reset
 
         // Optimistic-cache writes go through the writer handle so cache + inflight
         // can't drift apart. RemoteIndexSyncService no longer exposes raw

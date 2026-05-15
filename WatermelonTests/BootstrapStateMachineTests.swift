@@ -139,7 +139,8 @@ final class BootstrapStateMachineTests: XCTestCase {
         await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
 
         let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
-        XCTAssertEqual(outcome, .v1, "marker + V1 manifests → resume V1")
+        XCTAssertEqual(outcome, .v2WithV1Manifests(formatVersion: RepoLayout.formatVersion),
+                       "marker + V1 manifests after V2 sentinel → V2-with-V1-residue forces foreground migration")
     }
 
     /// Marker without V1 data must not strand a healthy V2 repo in migration mode.

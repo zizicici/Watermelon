@@ -492,6 +492,10 @@ actor V1MigrationService {
         }
         // Peer-deletion between scan and quarantine must not abort the whole phase.
         guard try await metadataIfPresent(path: sourcePath) != nil else { return }
+        if try await !backendSupportsExclusiveMoveIfAbsent(forDestinationPath: residuePath) {
+            try await copySourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
+            return
+        }
         do {
             switch try await client.moveIfAbsent(from: sourcePath, to: residuePath) {
             case .created:
@@ -509,10 +513,6 @@ actor V1MigrationService {
             }
         } catch {
             if isStorageNotFoundError(error) { return }
-            if S3Client.isMoveIfAbsentUnsupported(error) {
-                try await copySourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
-                return
-            }
             if let meta = try await metadataIfPresent(path: residuePath), !meta.isDirectory {
                 guard try await metadataIfPresent(path: sourcePath) != nil else { return }
                 if try await remoteFilesEqual(sourcePath, residuePath) {
@@ -531,6 +531,10 @@ actor V1MigrationService {
             basePath: basePath,
             remoteRelativePath: monthRel + "/" + Self.residueManifestFileName + ".\(UUID().uuidString)"
         )
+        if try await !backendSupportsExclusiveMoveIfAbsent(forDestinationPath: uniqueResiduePath) {
+            try await copySourceToVerifiedResidue(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
+            return
+        }
         do {
             switch try await client.moveIfAbsent(from: sourcePath, to: uniqueResiduePath) {
             case .created:
@@ -545,12 +549,13 @@ actor V1MigrationService {
             }
         } catch {
             if isStorageNotFoundError(error) { return }
-            if S3Client.isMoveIfAbsentUnsupported(error) {
-                try await copySourceToVerifiedResidue(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
-                return
-            }
             throw error
         }
+    }
+
+    private func backendSupportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool {
+        if client.moveIfAbsentGuarantee == .exclusive { return true }
+        return try await client.supportsExclusiveMoveIfAbsent(forDestinationPath: path)
     }
 
     private func copySourceToUniqueResidue(monthRel: String, sourcePath: String) async throws {

@@ -415,7 +415,7 @@ final class V2FlushTests: XCTestCase {
         XCTAssertThrowsError(try store2.upsertAsset(newAsset, links: [newLink])) { err in
             let nsError = err as NSError
             XCTAssertEqual(nsError.domain, "V2MonthSession")
-            XCTAssertEqual(nsError.code, -12, "must throw fail-fast on physicallyMissing link")
+            XCTAssertEqual(nsError.code, -11, "must throw fail-fast on physicallyMissing link")
         }
     }
 

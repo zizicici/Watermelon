@@ -137,17 +137,14 @@ final class V2MonthSession: BackupMonthStore {
         var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
         var physicallyMissingPaths: Set<String> = []
         var untrustedPhysicalPresencePaths: Set<String> = []
-        let caseSensitive = client.backendNameCaseSensitivity.usesExactNameMatchingForPresence
-        func presenceKey(_ name: String) -> String {
-            caseSensitive ? name : RemoteFileNaming.collisionKey(for: name)
-        }
+        let nameCase = client.backendNameCaseSensitivity
         var sizesByPresenceKey: [String: Set<Int64>] = [:]
         for (name, meta) in remoteFilesByName {
-            sizesByPresenceKey[presenceKey(name), default: []].insert(meta.size)
+            sizesByPresenceKey[nameCase.presenceKey(for: name), default: []].insert(meta.size)
         }
         for row in materializedState.resources.values {
             let logicalName = (row.physicalRemotePath as NSString).lastPathComponent
-            let key = presenceKey(logicalName)
+            let key = nameCase.presenceKey(for: logicalName)
             let listedSizeMatches = sizesByPresenceKey[key]?.contains(row.fileSize) == true
             if let verifiedMissingHashes {
                 if !listedSizeMatches || verifiedMissingHashes.contains(row.contentHash) {
@@ -346,7 +343,7 @@ final class V2MonthSession: BackupMonthStore {
     private func anyPresentPath(forHash hash: Data) -> String? {
         guard let paths = pathsByHash[hash], !paths.isEmpty else { return nil }
         return paths.lazy
-            .filter { !unavailablePhysicalPresencePaths.contains($0) }
+            .filter { !self.unavailablePhysicalPresencePaths.contains($0) }
             .min()
     }
 
