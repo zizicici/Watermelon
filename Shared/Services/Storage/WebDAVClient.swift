@@ -5,6 +5,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .unknown }
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
+    // Reverse-proxy / CDN caching can stale-cache `PROPFIND` / `GET` responses past a peer's tick interval.
+    nonisolated var livenessConsistencyGraceSeconds: TimeInterval { 30 }
     static let errorDomain = "WebDAVClient"
 
     struct Config {

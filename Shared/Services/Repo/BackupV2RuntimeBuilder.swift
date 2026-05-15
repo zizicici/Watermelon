@@ -222,18 +222,26 @@ enum BackupV2RuntimeBuilder {
         var sweepTask: Task<Void, Never>? = nil
         if runMaintenanceTasks {
             await liveness.start()
-            if let otherActive = try? await liveness.listOtherActiveWriters() {
-                var activeWriters = Set(otherActive)
-                activeWriters.insert(writerID)
-                sweepTask = Task(priority: .utility) { [activeWriters] in
-                    _ = await OrphanMetadataCleanup.sweep(
-                        client: metadataClient,
-                        directories: OrphanMetadataCleanup.standardSweepDirectories(basePath: profile.basePath),
-                        activeWriters: activeWriters,
-                        ageThresholdSeconds: 3600,
-                        now: Date()
-                    )
+            // Sweep only on a determinate peer view — `isComplete == false` means at
+            // least one peer is `.unknown` and we'd risk deleting an active peer's
+            // staging files. Next bootstrap retries.
+            do {
+                let view = try await liveness.snapshotPeerStatuses()
+                if view.isComplete {
+                    var protectedWriters = view.sweepProtectionSet
+                    protectedWriters.insert(writerID)
+                    sweepTask = Task(priority: .utility) { [protectedWriters] in
+                        _ = await OrphanMetadataCleanup.sweep(
+                            client: metadataClient,
+                            directories: OrphanMetadataCleanup.standardSweepDirectories(basePath: profile.basePath),
+                            activeWriters: protectedWriters,
+                            ageThresholdSeconds: 3600,
+                            now: Date()
+                        )
+                    }
                 }
+            } catch {
+                // List-level failure → no view at all; skip sweep (same as the prior `try?` behavior).
             }
         }
 

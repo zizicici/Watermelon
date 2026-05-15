@@ -13,6 +13,40 @@ actor LivenessTracker {
     static let heartbeatInterval: TimeInterval = 30
     static let staleThreshold: TimeInterval = 5 * 60
 
+    /// Explicit per-peer status — the value-type replacement for "is this writerID
+    /// in the active set?". Caller MUST treat `.unknown` as not-cleanup-safe
+    /// (peer might still be active, we just couldn't tell).
+    enum PeerStatus: Sendable, Equatable {
+        case active(lastSeenMs: Int64)
+        case stale(lastSeenMs: Int64)
+        case unknown(reason: UnknownReason)
+
+        enum UnknownReason: Sendable, Equatable {
+            /// Transient transport / parse error after the per-peer retry budget.
+            case readFailed
+            /// File 404'd, but the backend has post-write visibility lag (R2/MinIO/WebDAV-behind-cache).
+            /// The peer may have just written and we're seeing pre-write state.
+            case vanishedWithinGrace
+        }
+    }
+
+    /// Cleanup gate: `OrphanMetadataCleanup.sweep` may only run when `isComplete`.
+    /// Partial views (any unknown peer) must NOT trigger sweep — otherwise sweep
+    /// would delete an active peer's `.staging-*` files.
+    struct ActiveWritersView: Sendable, Equatable {
+        let activePeerIDs: Set<String>
+        let stalePeerIDs: Set<String>
+        let unknownPeerIDs: Set<String>
+
+        static let empty = ActiveWritersView(activePeerIDs: [], stalePeerIDs: [], unknownPeerIDs: [])
+
+        var isComplete: Bool { unknownPeerIDs.isEmpty }
+
+        /// What sweep must treat as "still active" — unions active + unknown, because
+        /// an unknown peer might still be alive (we just couldn't confirm).
+        var sweepProtectionSet: Set<String> { activePeerIDs.union(unknownPeerIDs) }
+    }
+
     init(client: any RemoteStorageClientProtocol, basePath: String, writerID: String, isLocalVolume: Bool) {
         self.client = client
         self.basePath = basePath
@@ -51,6 +85,7 @@ actor LivenessTracker {
     }
 
     private func tick() async {
+        // MARK: Phase A — write heartbeat to local temp
         let timestampMs = Int64(Date().timeIntervalSince1970 * 1000)
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("liveness-\(UUID().uuidString).json")
@@ -63,11 +98,13 @@ actor LivenessTracker {
         do { try writeHeartbeat(timestampMs: timestampMs) } catch { return }
         let remotePath = RepoLayout.livenessFilePath(base: basePath, writerID: writerID)
         // Staging + rename instead of delete-then-create: keeps a file at remotePath
-        // throughout the swap. Peer's listOtherActiveWriters sweep gate can't see us
+        // throughout the swap. Peer's snapshotPeerStatuses sweep gate can't see us
         // as inactive during the brief window between the old delete and the new create.
         let stagingPath = remotePath + ".staging-\(UUID().uuidString).tmp"
         var lastFailure: Error?
         var stagingCreated = false
+
+        // MARK: Phase B — publish via staging+move
         // Cancellation must surface so shutdown's stopAndWait can unblock past atomicCreate.
         do {
             _ = try await client.atomicCreate(
@@ -116,7 +153,7 @@ actor LivenessTracker {
                 livenessLog.warning("[Liveness] staging vanished after failed move for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
             }
             do {
-                if try await hasNewerLiveHeartbeat(remotePath: remotePath, timestampMs: timestampMs) {
+                if try await concurrentWriterClaimedRemoteHeartbeat(remotePath: remotePath, timestampMs: timestampMs) {
                     try? await client.delete(path: stagingPath)
                     return
                 }
@@ -131,6 +168,8 @@ actor LivenessTracker {
             try? await client.delete(path: stagingPath)
             return
         }
+
+        // MARK: Phase C — exclusive atomic-create fallback (only when backend gives exclusive guarantee)
         let heartbeatSize = (try? FileManager.default.attributesOfItem(atPath: temp.path)[.size] as? Int64) ?? 0
         guard client.atomicCreateGuarantee(forFileSize: heartbeatSize, remotePath: remotePath) == .exclusive else {
             try? await client.delete(path: stagingPath)
@@ -140,7 +179,7 @@ actor LivenessTracker {
             return
         }
         do {
-            if try await hasNewerLiveHeartbeat(remotePath: remotePath, timestampMs: timestampMs) {
+            if try await concurrentWriterClaimedRemoteHeartbeat(remotePath: remotePath, timestampMs: timestampMs) {
                 try? await client.delete(path: stagingPath)
                 return
             }
@@ -150,6 +189,8 @@ actor LivenessTracker {
         } catch {
             livenessLog.warning("[Liveness] heartbeat probe failed before fallback atomic create for \(remotePath, privacy: .public), continuing exclusive create: \(error.localizedDescription, privacy: .public)")
         }
+
+        // MARK: Phase D — overwrite renewal (only when dataPathOverwriteRisk == .none)
         // Cancellation must surface here too so stopAndWait can unblock during shutdown.
         do {
             let createResult = try await client.atomicCreate(localURL: temp, remotePath: remotePath, respectTaskCancellation: true)
@@ -160,7 +201,7 @@ actor LivenessTracker {
                 }
                 let renewalTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
                 do {
-                    if try await hasNewerLiveHeartbeat(remotePath: remotePath, timestampMs: renewalTimestampMs) {
+                    if try await concurrentWriterClaimedRemoteHeartbeat(remotePath: remotePath, timestampMs: renewalTimestampMs) {
                         try? await client.delete(path: stagingPath)
                         return
                     }
@@ -190,7 +231,11 @@ actor LivenessTracker {
         }
     }
 
-    private func hasNewerLiveHeartbeat(remotePath: String, timestampMs: Int64) async throws -> Bool {
+    /// Same-writerID concurrency defense: another instance running under our writerID
+    /// has just published a fresher (and not-yet-stale) heartbeat. If true, we yield
+    /// — don't overwrite their newer write with our older timestamp. This is NOT a
+    /// peer-staleness check; peer detection lives in `snapshotPeerStatuses`.
+    private func concurrentWriterClaimedRemoteHeartbeat(remotePath: String, timestampMs: Int64) async throws -> Bool {
         guard let remoteTimestamp = try await existingHeartbeatTimestamp(remotePath: remotePath) else {
             return false
         }
@@ -218,18 +263,31 @@ actor LivenessTracker {
         return try readHeartbeatTimestamp(from: temp, remotePath: remotePath)
     }
 
-    static func isStale(timestampMs: Int64, now: Date = Date()) -> Bool {
+    static func isStale(
+        timestampMs: Int64,
+        now: Date = Date(),
+        gracePeriodSec: TimeInterval = 0
+    ) -> Bool {
         let timestamp = Date(timeIntervalSince1970: TimeInterval(timestampMs) / 1000)
         let age = now.timeIntervalSince(timestamp)
-        return age > staleThreshold
+        return age > staleThreshold + gracePeriodSec
     }
 
-    /// Throws when activity cannot be determined; caller skips orphan cleanup.
-    func listOtherActiveWriters() async throws -> [String] {
-        guard !isLocalVolume else { return [] }
+    /// Classifies every peer heartbeat into `PeerStatus` and returns a view the
+    /// builder can gate on. The whole-directory `client.list` failure still throws
+    /// (no view at all) — caller skips cleanup. Per-peer indeterminate reads land
+    /// as `.unknown` so they show up in `unknownPeerIDs` and block `isComplete`.
+    func snapshotPeerStatuses() async throws -> ActiveWritersView {
+        guard !isLocalVolume else { return .empty }
         let dir = RepoLayout.livenessDirectoryPath(base: basePath)
         let entries = try await client.list(path: dir)
-        var active: [String] = []
+        let now = Date()
+        let gracePeriodSec = client.livenessConsistencyGraceSeconds
+
+        var active: Set<String> = []
+        var stale: Set<String> = []
+        var unknown: Set<String> = []
+
         for entry in entries {
             guard !entry.isDirectory,
                   let parsed = RepoLayout.parseLivenessFilename(entry.name),
@@ -237,43 +295,85 @@ actor LivenessTracker {
             let path = RepoLayout.normalize(joining: [
                 basePath, RepoLayout.watermelonDirectory, RepoLayout.livenessDirectory, entry.name
             ])
-            let temp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("liveness-fetch-\(UUID().uuidString).json")
-            defer { try? FileManager.default.removeItem(at: temp) }
-            // Single retry to ride out transient transport — without it, a momentary
-            // blip on one peer's file marks them inactive, and sweep can delete their
-            // still-active staging. Cancellation must surface, not be swallowed.
-            var downloaded = false
-            var heartbeatVanished = false
-            var lastDownloadError: Error?
-            for attempt in 0..<2 {
-                do {
-                    try await client.download(remotePath: path, localURL: temp)
-                    downloaded = true
-                    break
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    if isStorageNotFoundError(error) {
-                        heartbeatVanished = true
-                        break
-                    }
-                    lastDownloadError = error
-                    if attempt == 0 {
-                        try? await Task.sleep(for: .milliseconds(200))
-                    }
-                }
+            // nil = confidently gone (404 under strong-consistency backend); peer drops out of all 3 sets.
+            guard let status = try await classifyPeerHeartbeat(path: path, now: now, gracePeriodSec: gracePeriodSec) else {
+                continue
             }
-            if heartbeatVanished { continue }
-            if !downloaded {
-                throw heartbeatReadInconclusiveError(remotePath: path, underlying: lastDownloadError)
-            }
-            let ts = try readHeartbeatTimestamp(from: temp, remotePath: path)
-            if !LivenessTracker.isStale(timestampMs: ts) {
-                active.append(parsed)
+            switch status {
+            case .active:
+                active.insert(parsed)
+            case .stale:
+                stale.insert(parsed)
+            case .unknown:
+                unknown.insert(parsed)
             }
         }
-        return active
+        return ActiveWritersView(activePeerIDs: active, stalePeerIDs: stale, unknownPeerIDs: unknown)
+    }
+
+    /// Single retry on transient transport — without it, a momentary blip on one
+    /// peer's file marks them inactive and sweep can delete their still-active staging.
+    /// Cancellation must surface, not be swallowed.
+    ///
+    /// Returns `.unknown(.vanishedWithinGrace)` for 404s on backends with grace > 0,
+    /// since post-write visibility lag can make a freshly-renewed peer's file 404 briefly.
+    /// Returns nil (peer omitted) when grace = 0 and we got a confident 404 — that
+    /// peer is genuinely gone.
+    private func classifyPeerHeartbeat(
+        path: String,
+        now: Date,
+        gracePeriodSec: TimeInterval
+    ) async throws -> PeerStatus? {
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("liveness-fetch-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        var downloaded = false
+        var heartbeatVanished = false
+        var lastDownloadError: Error?
+        for attempt in 0..<2 {
+            do {
+                try await client.download(remotePath: path, localURL: temp)
+                downloaded = true
+                break
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if isStorageNotFoundError(error) {
+                    heartbeatVanished = true
+                    break
+                }
+                lastDownloadError = error
+                if attempt == 0 {
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+            }
+        }
+        if heartbeatVanished {
+            // Under grace, 404 might mean "writer just renewed and we read pre-write state."
+            if gracePeriodSec > 0 {
+                livenessLog.warning("[Liveness] peer heartbeat at \(path, privacy: .public) 404 within \(gracePeriodSec, privacy: .public)s grace; marking unknown")
+                return .unknown(reason: .vanishedWithinGrace)
+            }
+            return nil
+        }
+        if !downloaded {
+            if let lastDownloadError {
+                livenessLog.warning("[Liveness] peer heartbeat at \(path, privacy: .public) marked unknown after retry: \(lastDownloadError.localizedDescription, privacy: .public)")
+            }
+            return .unknown(reason: .readFailed)
+        }
+        let ts: Int64
+        do {
+            ts = try readHeartbeatTimestamp(from: temp, remotePath: path)
+        } catch {
+            livenessLog.warning("[Liveness] peer heartbeat at \(path, privacy: .public) marked unknown: parse failed (\(error.localizedDescription, privacy: .public))")
+            return .unknown(reason: .readFailed)
+        }
+        if LivenessTracker.isStale(timestampMs: ts, now: now, gracePeriodSec: gracePeriodSec) {
+            return .stale(lastSeenMs: ts)
+        }
+        return .active(lastSeenMs: ts)
     }
 
     private func readHeartbeatTimestamp(from url: URL, remotePath: String) throws -> Int64 {
@@ -285,15 +385,5 @@ actor LivenessTracker {
             ])
         }
         return ts
-    }
-
-    private func heartbeatReadInconclusiveError(remotePath: String, underlying: Error?) -> NSError {
-        var userInfo: [String: Any] = [
-            NSLocalizedDescriptionKey: "heartbeat at \(remotePath) could not be downloaded"
-        ]
-        if let underlying {
-            userInfo[NSUnderlyingErrorKey] = underlying
-        }
-        return NSError(domain: "LivenessTracker", code: -2, userInfo: userInfo)
     }
 }

@@ -144,6 +144,12 @@ protocol RemoteStorageClientProtocol: Sendable {
     var dataPathOverwriteRisk: DataPathOverwriteRisk { get }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { get }
     var concurrencyMode: ClientConcurrencyMode { get }
+    /// Seconds added to the heartbeat stale threshold to absorb backend read-after-write
+    /// lag. `0` for strong-consistency backends (LocalVolume, SMB, SFTP, AWS S3 since
+    /// 2020). `>0` for S3-compatible behind eventual-consistency proxies (R2, MinIO,
+    /// B2) or WebDAV behind reverse-proxy / CDN caches. Used by `LivenessTracker` to
+    /// distinguish "peer truly gone" from "peer just wrote but write not yet visible."
+    var livenessConsistencyGraceSeconds: TimeInterval { get }
     /// Composing wrappers transitively expose this so `wrapIfSerial` doesn't double-wrap.
     var isSerialized: Bool { get }
     func setModificationDate(_ date: Date, forPath path: String) async throws
@@ -171,6 +177,7 @@ extension RemoteStorageClientProtocol {
     var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
+    var livenessConsistencyGraceSeconds: TimeInterval { 0 }
 
     func supportsExclusiveMoveIfAbsent(forDestinationPath _: String) async throws -> Bool {
         moveIfAbsentGuarantee == .exclusive

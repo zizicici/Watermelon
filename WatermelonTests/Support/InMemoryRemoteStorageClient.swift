@@ -40,6 +40,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var listErrorByPath: [String: InjectedError] = [:]
     private var metadataErrorByPath: [String: InjectedError] = [:]
     private var downloadErrorByPath: [String: InjectedError] = [:]
+    private var persistentDownloadErrorByPath: [String: InjectedError] = [:]
     private var uploadErrorByPath: [String: InjectedError] = [:]
     private var injectedMtimes: [String: Date] = [:]
 
@@ -108,6 +109,16 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func injectDownloadError(_ error: InjectedError, for path: String) {
         downloadErrorByPath[Self.normalize(path)] = error
+    }
+
+    /// Persists across attempts — every `download` for this path throws until
+    /// `clearPersistentDownloadError` is called. Use for testing retry-loop exhaustion.
+    func injectPersistentDownloadError(_ error: InjectedError, for path: String) {
+        persistentDownloadErrorByPath[Self.normalize(path)] = error
+    }
+
+    func clearPersistentDownloadError(for path: String) {
+        persistentDownloadErrorByPath.removeValue(forKey: Self.normalize(path))
     }
 
     func injectUploadError(_ error: InjectedError, for path: String) {
@@ -283,6 +294,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func download(remotePath: String, localURL: URL) async throws {
         let key = Self.normalize(remotePath)
+        if let stuck = persistentDownloadErrorByPath[key] {
+            throw Self.translate(stuck)
+        }
         if let err = downloadErrorByPath.removeValue(forKey: key) {
             throw Self.translate(err)
         }
@@ -343,6 +357,16 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     /// Lets per-test scenarios swap `.exclusive` ↔ `.overwritePossible` to exercise the gate's two finalization paths.
     nonisolated func setMoveIfAbsentGuarantee(_ guarantee: CreateGuarantee) {
         moveIfAbsentGuaranteeBox.withLock { $0 = guarantee }
+    }
+
+    nonisolated var livenessConsistencyGraceSeconds: TimeInterval {
+        livenessGraceBox.withLock { $0 }
+    }
+    private nonisolated let livenessGraceBox = OSAllocatedUnfairLock(initialState: TimeInterval(0))
+
+    /// Lets per-test scenarios simulate eventually-consistent backends (R2/MinIO/WebDAV-behind-cache).
+    nonisolated func setLivenessConsistencyGrace(_ seconds: TimeInterval) {
+        livenessGraceBox.withLock { $0 = seconds }
     }
 
     func supportsExclusiveMoveIfAbsent(forDestinationPath _: String) async throws -> Bool {

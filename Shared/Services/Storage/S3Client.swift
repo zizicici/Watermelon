@@ -8,6 +8,8 @@ final actor S3Client: RemoteStorageClientProtocol {
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     // Conditional CopyObject support is endpoint-specific and probed asynchronously.
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
+    // Covers R2/MinIO/B2 and other non-strongly-consistent S3-compatible endpoints; AWS S3 itself is strong-consistent since 2020 but conservative grace is cheap.
+    nonisolated var livenessConsistencyGraceSeconds: TimeInterval { 30 }
     static let errorDomain = S3ErrorClassifier.errorDomain
 
     struct Config: Sendable {
