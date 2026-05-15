@@ -77,6 +77,20 @@ enum BackupV2RuntimeBuilder {
             return resolvedRepoID
         }
 
+        func buildMigrationSources() async throws -> V1MigrationService.RepoIdentitySources {
+            let stored = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
+            let remote = try await bootstrap.loadRepoID()
+            if let stored, let remote, stored != remote {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: stored, remote: remote)
+            }
+            let data = try await checkedExistingV2DataRepoID(storedRepoID: stored)
+            if let remote, let data, remote != data {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: data, remote: remote)
+            }
+            let suggested = remote ?? data ?? stored ?? UUID().uuidString.lowercased()
+            return V1MigrationService.RepoIdentitySources(stored: stored, remote: remote, data: data, suggested: suggested)
+        }
+
         let resolvedRepoID: String
         var wroteV2DataBeforeFinalRepoCheck = false
         switch inspection {
@@ -86,8 +100,7 @@ enum BackupV2RuntimeBuilder {
             resolvedRepoID = try await resolveExistingV2RepoID()
             // WebDAV/SMB/SFTP don't auto-create parents on PUT.
             try await bootstrap.ensureSubdirectories()
-        case .v2WithPendingMigrationCleanup(_, let ownerWriterID):
-            resolvedRepoID = try await resolveExistingV2RepoID()
+        case .v2WithPendingMigrationCleanup:
             try await bootstrap.ensureSubdirectories()
             let cleanupBootstrap = RepoBootstrap(client: metadataClient, basePath: profile.basePath)
             let cleanup = V1MigrationService(
@@ -97,12 +110,16 @@ enum BackupV2RuntimeBuilder {
                 identity: identity,
                 bootstrap: cleanupBootstrap
             )
-            let cleanupFinalizedRepoID = try await bootstrap.ensureIdentityFinalization(repoID: resolvedRepoID, writerID: writerID)
-            if cleanupFinalizedRepoID != resolvedRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: cleanupFinalizedRepoID)
-            }
+            let sources = try await buildMigrationSources()
             do {
-                try await cleanup.runPhase3Cleanup(writerID: ownerWriterID, runID: runID)
+                let outcome = try await cleanup.run(
+                    profileID: profileID,
+                    inspection: inspection,
+                    writerID: writerID,
+                    runID: runID,
+                    sources: sources
+                )
+                resolvedRepoID = outcome.resolvedRepoID
             } catch let error as RepoBootstrap.VersionConflict {
                 switch error {
                 case .higherFormatVersion(_, _, let minApp),
@@ -129,32 +146,6 @@ enum BackupV2RuntimeBuilder {
             guard allowMigration else {
                 throw BackupV2RuntimeBuildError.requiresForegroundMigration
             }
-            // Canonical repoID must land before phase 1 so commits are stamped with the remote-canonical id.
-            let storedRepoID = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
-            let remoteRepoID = try await bootstrap.loadRepoID()
-            if let storedRepoID, let remoteRepoID, storedRepoID != remoteRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: remoteRepoID)
-            }
-            let dataRepoID = try await checkedExistingV2DataRepoID(storedRepoID: storedRepoID)
-            if let remoteRepoID, let dataRepoID, remoteRepoID != dataRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: dataRepoID, remote: remoteRepoID)
-            }
-            let suggestedRepoID = remoteRepoID ?? dataRepoID ?? storedRepoID ?? UUID().uuidString.lowercased()
-            resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggestedRepoID, writerID: writerID)
-            if let storedRepoID, resolvedRepoID != storedRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: resolvedRepoID)
-            }
-            if let remoteRepoID, resolvedRepoID != remoteRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remoteRepoID, remote: resolvedRepoID)
-            }
-            if let dataRepoID, resolvedRepoID != dataRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: dataRepoID, remote: resolvedRepoID)
-            }
-            let finalizedMigrationRepoID = try await bootstrap.ensureIdentityFinalization(repoID: resolvedRepoID, writerID: writerID)
-            if finalizedMigrationRepoID != resolvedRepoID {
-                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: finalizedMigrationRepoID)
-            }
-            let state = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: resolvedRepoID, writerID: writerID)
             let migration = V1MigrationService(
                 client: client,
                 basePath: profile.basePath,
@@ -162,42 +153,27 @@ enum BackupV2RuntimeBuilder {
                 identity: identity,
                 bootstrap: bootstrap
             )
-            let needsMigration: Bool
-            if state.migrationCompleted != 1 {
-                needsMigration = true
-            } else if try await migration.ownsMigrationMarker(writerID: writerID) {
-                needsMigration = true
-            } else {
-                let lingering = try await migration.scanV1Months()
-                needsMigration = !lingering.isEmpty
-            }
-
-            if needsMigration {
-                await onMigrationStart?()
-                do {
-                    try await bootstrap.ensureVersionJSON(writerID: writerID)
-                } catch let error as RepoBootstrap.VersionConflict {
-                    if case .higherFormatVersion(_, _, let minApp) = error {
-                        throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
-                    }
+            let sources = try await buildMigrationSources()
+            do {
+                let outcome = try await migration.run(
+                    profileID: profileID,
+                    inspection: inspection,
+                    writerID: writerID,
+                    runID: runID,
+                    sources: sources,
+                    onMigrationStart: onMigrationStart,
+                    onMigrationComplete: onMigrationComplete
+                )
+                resolvedRepoID = outcome.resolvedRepoID
+                wroteV2DataBeforeFinalRepoCheck = outcome.v2DataWritten
+            } catch let error as RepoBootstrap.VersionConflict {
+                switch error {
+                case .higherFormatVersion(_, _, let minApp),
+                     .mismatchedFormatVersion(_, _, let minApp):
+                    throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
+                case .unreadable:
                     throw error
                 }
-                let preMigrationRepoID = try await bootstrap.ensureRepoJSON(repoID: resolvedRepoID, writerID: writerID)
-                if preMigrationRepoID != resolvedRepoID {
-                    throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: preMigrationRepoID)
-                }
-                let processed = try await migration.runPhase1(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
-                wroteV2DataBeforeFinalRepoCheck = true
-                do {
-                    try await migration.runPhase2(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
-                } catch let error as RepoBootstrap.VersionConflict {
-                    if case .higherFormatVersion(_, _, let minApp) = error {
-                        throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
-                    }
-                    throw error
-                }
-                try await migration.runPhase3(writerID: writerID, runID: runID)
-                await onMigrationComplete?(processed)
             }
         }
 

@@ -58,7 +58,7 @@ final class V1MigrationServiceTests: XCTestCase {
         }
     }
 
-    func testPhase2WritesVersionJSONAndMarksMigrationCompleted() async throws {
+    func testPublishVersionAndMarkProfileMigrated_writesVersionJSONAndFlipsCompleted() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
@@ -72,13 +72,14 @@ final class V1MigrationServiceTests: XCTestCase {
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
-        try await service.runPhase2(profileID: profileID, repoID: "r", writerID: "w", runID: "run-001")
+        try await service.ensureVersionPublished(writerID: "w")
+        try await service.markProfileMigrated(profileID: profileID, repoID: "r", writerID: "w", runID: "run-001")
 
         let exists = await client.hasFile(RepoLayout.versionFilePath(base: basePath))
-        XCTAssertTrue(exists, "phase2 must write version.json")
+        XCTAssertTrue(exists, "ensureVersionPublished must write version.json")
 
         let state = try await identity.loadRepoState(profileID: profileID, repoID: "r")
-        XCTAssertEqual(state?.migrationCompleted, 1, "phase2 must mark migration complete")
+        XCTAssertEqual(state?.migrationCompleted, 1, "markProfileMigrated must flip the flag")
     }
 
     /// End-to-end phase1: V1 manifest → V2 commits/snapshots → re-materialize equals input.
@@ -244,7 +245,142 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertFalse(afterCleanup, "phase3 must remove marker so routing flips to .v2")
     }
 
+    // MARK: - verifyFinalState
+
+    func testVerifyFinalState_succeedsAfterCleanRun() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        // No V1 manifests, no marker for "w" — verify's two assertions both hold trivially.
+        let service = makeService(client: client)
+        try await service.verifyFinalState(cleanedWriterID: "w")
+    }
+
+    func testVerifyFinalState_failsWhenV1ResidueRemains() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2024, month: 5)
+
+        let service = makeService(client: client)
+        do {
+            try await service.verifyFinalState(cleanedWriterID: "w")
+            XCTFail("verify must reject when V1 manifest still visible")
+        } catch V1MigrationService.MigrationError.verifyFailed {
+            // expected
+        }
+    }
+
+    /// Peer markers from prior aborted runs are the next inspection's job, not verify's.
+    /// Treating any-marker-exists as failure would loop full migrations on partial state.
+    func testVerifyFinalState_ignoresPeerMarkers() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await injectMigrationMarker(client: client, writerID: "peer-writer", phase: 1)
+
+        let service = makeService(client: client)
+        try await service.verifyFinalState(cleanedWriterID: "w")
+    }
+
+    // MARK: - run() integration
+
+    func testRun_v1Inspection_executesFullPathAndFlipsMigrationCompleted() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+
+        let assetFP = TestFixtures.fingerprint(0xA1)
+        let contentHash = TestFixtures.fingerprint(0xB1)
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: assetFP, resourceHash: contentHash, logicalName: "IMG_run1.HEIC"
+        )
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 6)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        let sources = V1MigrationService.RepoIdentitySources(stored: nil, remote: nil, data: nil, suggested: "r")
+        let outcome = try await service.run(
+            profileID: profileID,
+            inspection: .v1,
+            writerID: "w",
+            runID: "run-1",
+            sources: sources
+        )
+
+        XCTAssertTrue(outcome.v2DataWritten, "v1 path with non-empty scan must write V2 data")
+        XCTAssertEqual(outcome.migratedMonthCount, 1)
+        XCTAssertEqual(outcome.resolvedRepoID, "r")
+
+        let state = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        XCTAssertEqual(state?.migrationCompleted, 1, "full migration path must mark profile migrated")
+
+        let versionExists = await client.hasFile(RepoLayout.versionFilePath(base: basePath))
+        XCTAssertTrue(versionExists)
+        let markerExists = await client.hasFile(RepoLayout.migrationMarkerPath(base: basePath, writerID: "w"))
+        XCTAssertFalse(markerExists, "phase3 cleanup must remove our own marker")
+        let residueScan = try await service.scanV1Months()
+        XCTAssertTrue(residueScan.isEmpty, "phase1 must quarantine the V1 manifest")
+    }
+
+    /// Cleanup-only path takes over a peer's incomplete migration. Critical asymmetry:
+    /// `markProfileMigrated` is NOT called (preserves pre-refactor behavior — the cleanup writer
+    /// is not the migrating writer, so its profile's `migrationCompleted` stays 0).
+    func testRun_v2WithPendingMigrationCleanup_skipsPhase1AndPreservesMigrationCompletedFlag() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+
+        // Set the v2 stage: repo.json + version.json + a peer's stale phase1 marker.
+        try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "r", writerID: "peer")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "peer")
+        try await injectMigrationMarker(client: client, writerID: "peer", phase: 1)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        let sources = V1MigrationService.RepoIdentitySources(stored: nil, remote: "r", data: nil, suggested: "r")
+        let outcome = try await service.run(
+            profileID: profileID,
+            inspection: .v2WithPendingMigrationCleanup(formatVersion: RepoLayout.formatVersion, ownerWriterID: "peer"),
+            writerID: "w",
+            runID: "cleanup-run-1",
+            sources: sources
+        )
+
+        XCTAssertFalse(outcome.v2DataWritten, "cleanup path must not write V2 data")
+        XCTAssertEqual(outcome.migratedMonthCount, 0)
+
+        // Peer marker must be gone after phase3(owner).
+        let peerMarker = await client.hasFile(RepoLayout.migrationMarkerPath(base: basePath, writerID: "peer"))
+        XCTAssertFalse(peerMarker)
+
+        // Critical asymmetry preservation: cleanup writer's profile keeps migrationCompleted=0.
+        // (XCTAssertEqual on optional vs Int catches state==nil as well — `!= 1` would let nil pass.)
+        let state = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        XCTAssertEqual(state?.migrationCompleted, 0,
+                       "cleanup-only path must leave migrationCompleted at 0 (pre-refactor behavior)")
+    }
+
     // MARK: - Helpers
+
+    private func injectMigrationMarker(client: InMemoryRemoteStorageClient, writerID: String, phase: Int) async throws {
+        let dict: [String: Any] = [
+            "v": 2,
+            "writer_id": writerID,
+            "run_id": "test-run",
+            "phase": phase,
+            "started_at_ms": Int64(0),
+            "last_step_at_ms": Int64(0)
+        ]
+        let data = try JSONSerialization.data(withJSONObject: dict)
+        await client.injectFile(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID), data: data)
+    }
 
     private func makeService(
         client: InMemoryRemoteStorageClient,

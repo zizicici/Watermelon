@@ -7,12 +7,36 @@ actor V1MigrationService {
     enum MigrationError: Error {
         case ioFailure(Error)
         case noProfileID
+        case verifyFailed(reason: String)
     }
 
     struct ScannedV1Month: Sendable {
         let year: Int
         let month: Int
         let manifestAbsolutePath: String
+    }
+
+    /// Per-call claim decision derived from `RemoteFormatInspection`. Distinguishes
+    /// "we run full migration" from "we finalize a peer's incomplete migration".
+    enum MigrationClaim: Sendable {
+        case fullMigration
+        case cleanupOnly(ownerWriterID: String)
+        case noWorkNeeded
+    }
+
+    /// Bundles the three sources of repoID truth (DB, remote `.watermelon/repo.json`,
+    /// existing V2 commit/snapshot data) that `publishIdentity` reconciles against.
+    struct RepoIdentitySources: Sendable {
+        let stored: String?
+        let remote: String?
+        let data: String?
+        let suggested: String
+    }
+
+    struct MigrationOutcome: Sendable {
+        let resolvedRepoID: String
+        let migratedMonthCount: Int
+        let v2DataWritten: Bool
     }
 
     static let residueManifestFileName = ".watermelon_manifest.legacy-residue.sqlite"
@@ -346,9 +370,39 @@ actor V1MigrationService {
         return processed
     }
 
-    func runPhase2(profileID: Int64, repoID: String, writerID: String, runID: String) async throws {
+    /// FSM step: publish identity. Resolves the canonical repoID across the
+    /// 3 known sources (DB / `.watermelon/repo.json` / V2 commit-snapshot data)
+    /// and stamps an identity claim. Idempotent.
+    func publishIdentity(sources: RepoIdentitySources, writerID: String) async throws -> String {
+        let resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: sources.suggested, writerID: writerID)
+        if let stored = sources.stored, resolvedRepoID != stored {
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: stored, remote: resolvedRepoID)
+        }
+        if let remote = sources.remote, resolvedRepoID != remote {
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remote, remote: resolvedRepoID)
+        }
+        if let data = sources.data, resolvedRepoID != data {
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: data, remote: resolvedRepoID)
+        }
+        let finalizedRepoID = try await bootstrap.ensureIdentityFinalization(repoID: resolvedRepoID, writerID: writerID)
+        if finalizedRepoID != resolvedRepoID {
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: finalizedRepoID)
+        }
+        return resolvedRepoID
+    }
+
+    /// FSM step: publish version (infrastructure). Idempotent — both full
+    /// migration and cleanup paths call this; cleanup keeps `migrationCompleted`
+    /// at its current value (see `markProfileMigrated`).
+    func ensureVersionPublished(writerID: String) async throws {
         try await bootstrap.ensureVersionJSON(writerID: writerID)
         try await bootstrap.ensureSubdirectories()
+    }
+
+    /// FSM step: mark this profile migrated. Full-migration path only —
+    /// cleanup path intentionally leaves `migrationCompleted=0` (preserves
+    /// pre-refactor behavior where a peer's cleanup run never set the flag).
+    func markProfileMigrated(profileID: Int64, repoID: String, writerID: String, runID: String) async throws {
         try await identity.setMigrationCompleted(profileID: profileID, repoID: repoID)
         try await writeMigrationMarker(writerID: writerID, phase: .phase2, runID: runID)
     }
@@ -359,9 +413,84 @@ actor V1MigrationService {
         try await deleteIfPresent(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID))
     }
 
-    func runPhase3Cleanup(writerID: String, runID: String) async throws {
-        try await bootstrap.ensureVersionJSON(writerID: writerID)
-        try await runPhase3(writerID: writerID, runID: runID)
+    /// FSM step: verify final state. Post-condition guard — re-list base and
+    /// assert (a) no V1 manifest visible, (b) the writer we just cleaned has
+    /// no surviving marker. Intentionally does NOT check `anyMigrationMarkerExists`
+    /// (peer markers from prior aborted runs are the next inspection's job) nor
+    /// `migrationCompleted` (cleanup-only path doesn't set it).
+    func verifyFinalState(cleanedWriterID: String) async throws {
+        let lingering = try await scanV1Months()
+        if !lingering.isEmpty {
+            throw MigrationError.verifyFailed(reason: "V1 manifest still visible at \(lingering.count) month(s)")
+        }
+        if try await ownsMigrationMarker(writerID: cleanedWriterID) {
+            throw MigrationError.verifyFailed(reason: "migration marker for \(cleanedWriterID) still visible")
+        }
+    }
+
+    /// 8-step FSM entry: detect (input `inspection`) → claim → publishIdentity →
+    /// ensureVersionPublished → runPhase1 (full) → markProfileMigrated (full) →
+    /// runPhase3 → verifyFinalState. Cleanup-only path skips phase1 +
+    /// markProfileMigrated and uses the peer's writerID for marker cleanup.
+    func run(
+        profileID: Int64,
+        inspection: RemoteFormatInspection,
+        writerID: String,
+        runID: String,
+        sources: RepoIdentitySources,
+        onMigrationStart: (() async -> Void)? = nil,
+        onMigrationComplete: ((Int) async -> Void)? = nil
+    ) async throws -> MigrationOutcome {
+        let claim: MigrationClaim
+        switch inspection {
+        case .v1, .v2WithV1Manifests:
+            claim = .fullMigration
+        case .v2WithPendingMigrationCleanup(_, let ownerWriterID):
+            claim = .cleanupOnly(ownerWriterID: ownerWriterID)
+        case .fresh, .v2, .unsupported:
+            claim = .noWorkNeeded
+        }
+
+        let resolvedRepoID = try await publishIdentity(sources: sources, writerID: writerID)
+
+        var migratedCount = 0
+        var v2DataWritten = false
+        var cleanedWriterID = writerID
+
+        switch claim {
+        case .fullMigration:
+            let state = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: resolvedRepoID, writerID: writerID)
+            let needsMigration: Bool
+            if state.migrationCompleted != 1 {
+                needsMigration = true
+            } else if try await ownsMigrationMarker(writerID: writerID) {
+                needsMigration = true
+            } else {
+                needsMigration = !(try await scanV1Months()).isEmpty
+            }
+            if needsMigration {
+                await onMigrationStart?()
+                try await ensureVersionPublished(writerID: writerID)
+                migratedCount = try await runPhase1(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
+                v2DataWritten = true
+                try await markProfileMigrated(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
+                try await runPhase3(writerID: writerID, runID: runID)
+                await onMigrationComplete?(migratedCount)
+            }
+        case .cleanupOnly(let ownerWriterID):
+            cleanedWriterID = ownerWriterID
+            try await ensureVersionPublished(writerID: ownerWriterID)
+            try await runPhase3(writerID: ownerWriterID, runID: runID)
+        case .noWorkNeeded:
+            break
+        }
+
+        try await verifyFinalState(cleanedWriterID: cleanedWriterID)
+        return MigrationOutcome(
+            resolvedRepoID: resolvedRepoID,
+            migratedMonthCount: migratedCount,
+            v2DataWritten: v2DataWritten
+        )
     }
 
     /// Pre-phase markers (no `phase` field) report `.phase1`; phase1 is idempotent.
