@@ -78,24 +78,31 @@ final class DownloadWorkflowHelper {
         buildService: LocalHashIndexBuildService,
         repository: ContentHashIndexRepository
     ) async throws {
-        let result = try await buildService.buildIndex(
-            for: [assetLocalIdentifier],
-            workerCount: 1,
-            allowNetworkAccess: false
-        )
-        guard result.readyAssetIDs.contains(assetLocalIdentifier) else {
-            throw NSError(domain: "DownloadWorkflowHelper", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "restored asset local hash verification did not complete"
-            ])
+        for attempt in 0..<3 {
+            try Task.checkCancellation()
+            let result = try await buildService.buildIndex(
+                for: [assetLocalIdentifier],
+                workerCount: 1,
+                allowNetworkAccess: false
+            )
+            if result.readyAssetIDs.contains(assetLocalIdentifier) {
+                let records = try await Task.detached(priority: .utility) {
+                    try repository.fetchAssetFingerprintRecords(assetIDs: [assetLocalIdentifier])
+                }.value
+                guard records[assetLocalIdentifier]?.fingerprint == remoteAssetFingerprint else {
+                    throw NSError(domain: "DownloadWorkflowHelper", code: -2, userInfo: [
+                        NSLocalizedDescriptionKey: "restored asset bytes do not match the remote asset fingerprint"
+                    ])
+                }
+                return
+            }
+            if attempt + 1 < 3 {
+                try await Task.sleep(for: .milliseconds(500))
+            }
         }
-        let records = try await Task.detached(priority: .utility) {
-            try repository.fetchAssetFingerprintRecords(assetIDs: [assetLocalIdentifier])
-        }.value
-        guard records[assetLocalIdentifier]?.fingerprint == remoteAssetFingerprint else {
-            throw NSError(domain: "DownloadWorkflowHelper", code: -2, userInfo: [
-                NSLocalizedDescriptionKey: "restored asset bytes do not match the remote asset fingerprint"
-            ])
-        }
+        throw NSError(domain: "DownloadWorkflowHelper", code: -1, userInfo: [
+            NSLocalizedDescriptionKey: "restored asset local hash verification did not complete"
+        ])
     }
 }
 

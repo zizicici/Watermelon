@@ -103,7 +103,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         private func acquire(id: UUID) async throws {
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                    Task(priority: Task.currentPriority) { await self.registerWaiter(id: id, continuation: cont) }
+                    registerWaiter(id: id, continuation: cont)
                 }
             } onCancel: {
                 Task(priority: Task.currentPriority) { await self.cancelWaiter(id: id) }
@@ -533,7 +533,13 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 throw error
             }
         }
-        if let meta = versionMeta, !meta.isDirectory {
+        if let meta = versionMeta {
+            guard !meta.isDirectory else {
+                throw NSError(domain: "RemoteIndexSyncService", code: -62, userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "verifyMonth(V1) refused: \(versionPath) is a directory"
+                ])
+            }
             throw NSError(domain: "RemoteIndexSyncService", code: -60, userInfo: [
                 NSLocalizedDescriptionKey:
                     "verifyMonth(V1) refused: \(versionPath) exists — repo is V2; use RepoVerifyMonthService"

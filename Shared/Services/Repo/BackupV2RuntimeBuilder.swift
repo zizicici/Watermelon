@@ -58,9 +58,9 @@ enum BackupV2RuntimeBuilder {
             if let storedRepoID, let remoteRepoID, storedRepoID != remoteRepoID {
                 throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: remoteRepoID)
             }
-            var dataRepoID: String?
-            if remoteRepoID == nil {
-                dataRepoID = try await checkedExistingV2DataRepoID(storedRepoID: storedRepoID)
+            let dataRepoID = try await checkedExistingV2DataRepoID(storedRepoID: storedRepoID)
+            if let remoteRepoID, let dataRepoID, remoteRepoID != dataRepoID {
+                throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remoteRepoID, remote: dataRepoID)
             }
 
             let suggested = remoteRepoID ?? dataRepoID ?? storedRepoID ?? UUID().uuidString.lowercased()

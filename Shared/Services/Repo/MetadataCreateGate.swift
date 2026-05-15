@@ -84,7 +84,7 @@ enum MetadataCreateGate {
                 ])
             }
             do {
-                guard try await verifyMatchesLocal(
+                guard try await verifyMatchesLocalWithRetries(
                     client: client,
                     remotePath: stagingPath,
                     localURL: localURL
@@ -101,13 +101,30 @@ enum MetadataCreateGate {
                 try? await client.delete(path: stagingPath)
                 throw Error.stagingVerificationFailed(remotePath: stagingPath, underlying: error)
             }
-            if finalizationPolicy == .requireExclusiveMove,
-               client.moveIfAbsentGuarantee != .exclusive {
-                try? await client.delete(path: stagingPath)
-                throw Error.nonExclusiveFinalization(remotePath: remotePath)
-            }
             do {
-                let finalization = try await client.moveIfAbsent(from: stagingPath, to: remotePath)
+                if finalizationPolicy == .requireExclusiveMove,
+                   client.moveIfAbsentGuarantee != .exclusive {
+                    let supportsExclusiveMove = try await client.supportsExclusiveMoveIfAbsent(forDestinationPath: remotePath)
+                    if !supportsExclusiveMove {
+                        try? await client.delete(path: stagingPath)
+                        throw Error.nonExclusiveFinalization(remotePath: remotePath)
+                    }
+                }
+                let finalization: AtomicCreateResult
+                do {
+                    finalization = try await client.moveIfAbsent(from: stagingPath, to: remotePath)
+                } catch {
+                    if finalizationPolicy == .allowBestEffort,
+                       S3Client.isMoveIfAbsentUnsupported(error) {
+                        finalization = try await bestEffortCopyIfAbsent(
+                            client: client,
+                            stagingPath: stagingPath,
+                            remotePath: remotePath
+                        )
+                    } else {
+                        throw error
+                    }
+                }
                 if case .alreadyExists = finalization {
                     do {
                         if try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL) {
@@ -153,6 +170,23 @@ enum MetadataCreateGate {
         }
     }
 
+    private static func bestEffortCopyIfAbsent(
+        client: any RemoteStorageClientProtocol,
+        stagingPath: String,
+        remotePath: String
+    ) async throws -> AtomicCreateResult {
+        if try await client.metadata(path: remotePath) != nil {
+            return .alreadyExists
+        }
+        try await client.copy(from: stagingPath, to: remotePath)
+        do {
+            try await client.delete(path: stagingPath)
+            return .bestEffortRetry
+        } catch {
+            return .bestEffortRetry
+        }
+    }
+
     private static func verifyMatchesLocalWithRetries(
         client: any RemoteStorageClientProtocol,
         remotePath: String,
@@ -161,7 +195,12 @@ enum MetadataCreateGate {
         var lastError: Swift.Error?
         for attempt in 0..<3 {
             do {
-                return try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL)
+                if try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL) {
+                    return true
+                }
+                if attempt + 1 < 3 {
+                    try await Task.sleep(for: .milliseconds(200 * (1 << attempt)))
+                }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {

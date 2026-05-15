@@ -422,8 +422,10 @@ struct BackupParallelExecutor: Sendable {
                                                 .union(delta.committedV2TombstoneFingerprints)
                                         )
                                     } catch {
-                                        // Record-committed even on cancel: commit may be durable.
-                                        remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
+                                        if let flushError = error as? V2MonthSession.FlushError,
+                                           case .snapshotWriteFailed = flushError {
+                                            remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
+                                        }
                                         if error is CancellationError
                                             || (error as? V2MonthSession.FlushError)?.cancellationCause != nil {
                                             workerState.paused = true
@@ -643,8 +645,10 @@ struct BackupParallelExecutor: Sendable {
                             }
                         }
                     } catch {
-                        // Record-committed before cancel peel: commit may be durable even on cancel.
-                        remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
+                        if let flushError = error as? V2MonthSession.FlushError,
+                           case .snapshotWriteFailed = flushError {
+                            remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
+                        }
                         if error is CancellationError || (error as? V2MonthSession.FlushError)?.cancellationCause != nil {
                             workerState.paused = true
                             break

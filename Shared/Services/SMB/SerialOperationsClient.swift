@@ -130,6 +130,11 @@ final class SerialOperationsClient: RemoteStorageClientProtocol, @unchecked Send
 
     func shouldSetModificationDate() -> Bool { underlying.shouldSetModificationDate() }
     func shouldLimitUploadRetries(for error: Error) -> Bool { underlying.shouldLimitUploadRetries(for: error) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool {
+        try await queue.run {
+            try await self.underlying.supportsExclusiveMoveIfAbsent(forDestinationPath: destinationPath)
+        }
+    }
     func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
         underlying.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
     }

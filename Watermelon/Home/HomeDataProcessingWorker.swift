@@ -304,12 +304,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         _ change: PHChange,
         completion: @escaping (Set<LibraryMonthKey>) -> Void
     ) {
-        let extraction: (
-            scope: HomeLocalLibraryScope,
-            revision: UInt64,
-            changes: [LibraryChangePayload.CollectionChange],
-            nextResults: [(Int, PHFetchResult<PHAsset>)]
-        )? = processingQueue.sync {
+        let changedMonths: Set<LibraryMonthKey>? = processingQueue.sync {
             var result: [LibraryChangePayload.CollectionChange] = []
             var nextResults: [(Int, PHFetchResult<PHAsset>)] = []
             result.reserveCapacity(self.trackedFetchResults.count)
@@ -353,32 +348,23 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 result.append(entry)
                 nextResults.append((index, nextFetchResult))
             }
-            guard !result.isEmpty, let scope = self.loadedScope else { return nil }
-            return (
-                scope: scope,
-                revision: self.trackedFetchResultsRevision,
-                changes: result,
-                nextResults: nextResults
-            )
-        }
-        guard let extraction else { return }
-        processingQueue.async {
-            guard self.loadedScope == extraction.scope,
-                  self.trackedFetchResultsRevision == extraction.revision else { return }
-            for (index, nextResult) in extraction.nextResults where self.trackedFetchResults.indices.contains(index) {
+            guard !result.isEmpty, self.loadedScope != nil else { return nil }
+            for (index, nextResult) in nextResults where self.trackedFetchResults.indices.contains(index) {
                 self.trackedFetchResults[index] = nextResult
             }
             self.trackedFetchResultsRevision &+= 1
             let changedMonths = self.localIndex.applyChange(
-                LibraryChangePayload(collectionChanges: extraction.changes),
+                LibraryChangePayload(collectionChanges: result),
                 fingerprintsForIDs: self.fetchFingerprintsForIDs,
                 remoteFingerprintsForMonth: self.remoteFingerprintsForMonth
             )
-            guard !changedMonths.isEmpty else { return }
+            guard !changedMonths.isEmpty else { return Set<LibraryMonthKey>() }
             self.publishSnapshotOnProcessingQueue()
-            DispatchQueue.main.async {
-                completion(changedMonths)
-            }
+            return changedMonths
+        }
+        guard let changedMonths, !changedMonths.isEmpty else { return }
+        DispatchQueue.main.async {
+            completion(changedMonths)
         }
     }
 

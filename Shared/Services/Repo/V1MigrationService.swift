@@ -80,6 +80,8 @@ actor V1MigrationService {
 
         let months = try await scanV1Months()
         var processed = 0
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        var existingV2Output: RepoMaterializer.MaterializeOutput?
 
         for scanned in months {
             try Task.checkCancellation()
@@ -178,10 +180,11 @@ actor V1MigrationService {
                 migrableAssets.append((asset, resourcesForOp))
             }
             if !migrableAssets.isEmpty {
-                let existing = try await RepoMaterializer(client: client, basePath: basePath)
-                    .materializeMonth(monthKey, expectedRepoID: repoID)
+                if existingV2Output == nil {
+                    existingV2Output = try await materializer.materialize(expectedRepoID: repoID)
+                }
                 let existingFingerprints: Set<Data>
-                if let existingAssets = existing.state.months[monthKey]?.assets {
+                if let existingAssets = existingV2Output?.state.months[monthKey]?.assets {
                     existingFingerprints = Set(existingAssets.keys)
                 } else {
                     existingFingerprints = []

@@ -124,16 +124,23 @@ actor LivenessTracker {
                 try? await client.delete(path: stagingPath)
                 return
             } catch {
-                livenessLog.warning("[Liveness] heartbeat probe failed after failed move for \(remotePath, privacy: .public), continuing fallback write: \(error.localizedDescription, privacy: .public)")
+                livenessLog.warning("[Liveness] heartbeat probe failed after failed move for \(remotePath, privacy: .public), continuing exclusive fallback: \(error.localizedDescription, privacy: .public)")
             }
         }
         if Task.isCancelled {
             try? await client.delete(path: stagingPath)
             return
         }
-        let uploadTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let heartbeatSize = (try? FileManager.default.attributesOfItem(atPath: temp.path)[.size] as? Int64) ?? 0
+        guard client.atomicCreateGuarantee(forFileSize: heartbeatSize, remotePath: remotePath) == .exclusive else {
+            try? await client.delete(path: stagingPath)
+            if let lastFailure {
+                livenessLog.warning("[Liveness] exclusive fallback unavailable after failed heartbeat write for \(remotePath, privacy: .public): \(lastFailure.localizedDescription, privacy: .public)")
+            }
+            return
+        }
         do {
-            if try await hasNewerLiveHeartbeat(remotePath: remotePath, timestampMs: uploadTimestampMs) {
+            if try await hasNewerLiveHeartbeat(remotePath: remotePath, timestampMs: timestampMs) {
                 try? await client.delete(path: stagingPath)
                 return
             }
@@ -141,45 +148,34 @@ actor LivenessTracker {
             try? await client.delete(path: stagingPath)
             return
         } catch {
-            livenessLog.warning("[Liveness] heartbeat probe failed before fallback upload for \(remotePath, privacy: .public), continuing fallback write: \(error.localizedDescription, privacy: .public)")
-        }
-        do { try writeHeartbeat(timestampMs: uploadTimestampMs) } catch {
-            try? await client.delete(path: stagingPath)
-            return
-        }
-        do {
-            try await client.upload(localURL: temp, remotePath: remotePath, respectTaskCancellation: true, onProgress: nil)
-            try? await client.delete(path: stagingPath)
-            return
-        } catch is CancellationError {
-            try? await client.delete(path: stagingPath)
-            return
-        } catch {
-            lastFailure = error
-        }
-        if Task.isCancelled {
-            try? await client.delete(path: stagingPath)
-            return
-        }
-        let atomicTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
-        do {
-            if try await hasNewerLiveHeartbeat(remotePath: remotePath, timestampMs: atomicTimestampMs) {
-                try? await client.delete(path: stagingPath)
-                return
-            }
-        } catch is CancellationError {
-            try? await client.delete(path: stagingPath)
-            return
-        } catch {
-            livenessLog.warning("[Liveness] heartbeat probe failed before fallback atomic create for \(remotePath, privacy: .public), continuing fallback write: \(error.localizedDescription, privacy: .public)")
-        }
-        do { try writeHeartbeat(timestampMs: atomicTimestampMs) } catch {
-            try? await client.delete(path: stagingPath)
-            return
+            livenessLog.warning("[Liveness] heartbeat probe failed before fallback atomic create for \(remotePath, privacy: .public), continuing exclusive create: \(error.localizedDescription, privacy: .public)")
         }
         // Cancellation must surface here too so stopAndWait can unblock during shutdown.
         do {
-            _ = try await client.atomicCreate(localURL: temp, remotePath: remotePath, respectTaskCancellation: true)
+            let createResult = try await client.atomicCreate(localURL: temp, remotePath: remotePath, respectTaskCancellation: true)
+            if case .alreadyExists = createResult {
+                guard client.dataPathOverwriteRisk == .none else {
+                    try? await client.delete(path: stagingPath)
+                    return
+                }
+                let renewalTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
+                do {
+                    if try await hasNewerLiveHeartbeat(remotePath: remotePath, timestampMs: renewalTimestampMs) {
+                        try? await client.delete(path: stagingPath)
+                        return
+                    }
+                } catch is CancellationError {
+                    try? await client.delete(path: stagingPath)
+                    return
+                } catch {
+                    livenessLog.warning("[Liveness] heartbeat probe failed before overwrite renewal for \(remotePath, privacy: .public), continuing renewal: \(error.localizedDescription, privacy: .public)")
+                }
+                do { try writeHeartbeat(timestampMs: renewalTimestampMs) } catch {
+                    try? await client.delete(path: stagingPath)
+                    return
+                }
+                try await client.upload(localURL: temp, remotePath: remotePath, respectTaskCancellation: true, onProgress: nil)
+            }
             try? await client.delete(path: stagingPath)
             return
         } catch is CancellationError {
@@ -219,12 +215,7 @@ actor LivenessTracker {
             if isStorageNotFoundError(error) { return nil }
             throw error
         }
-        guard let data = try? Data(contentsOf: temp),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let ts = (dict["ts"] as? Int64) ?? (dict["ts"] as? Int).map(Int64.init) else {
-            return nil
-        }
-        return ts
+        return try readHeartbeatTimestamp(from: temp, remotePath: remotePath)
     }
 
     static func isStale(timestampMs: Int64, now: Date = Date()) -> Bool {
@@ -233,12 +224,7 @@ actor LivenessTracker {
         return age > staleThreshold
     }
 
-    /// Throws on list infrastructure failure — caller (OrphanMetadataCleanup gate)
-    /// MUST treat that as "can't determine activity" and skip sweep. Per-entry
-    /// errors (single peer's file gone / unparseable) are logged + skipped: one bad
-    /// peer file mustn't trigger self-DoS by aborting every sweep until manual
-    /// cleanup. Fail-open is reserved for the list call itself; per-entry tolerance
-    /// stays local to that entry.
+    /// Throws when activity cannot be determined; caller skips orphan cleanup.
     func listOtherActiveWriters() async throws -> [String] {
         guard !isLocalVolume else { return [] }
         let dir = RepoLayout.livenessDirectoryPath(base: basePath)
@@ -258,6 +244,8 @@ actor LivenessTracker {
             // blip on one peer's file marks them inactive, and sweep can delete their
             // still-active staging. Cancellation must surface, not be swallowed.
             var downloaded = false
+            var heartbeatVanished = false
+            var lastDownloadError: Error?
             for attempt in 0..<2 {
                 do {
                     try await client.download(remotePath: path, localURL: temp)
@@ -266,23 +254,46 @@ actor LivenessTracker {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
+                    if isStorageNotFoundError(error) {
+                        heartbeatVanished = true
+                        break
+                    }
+                    lastDownloadError = error
                     if attempt == 0 {
                         try? await Task.sleep(for: .milliseconds(200))
                     }
                 }
             }
-            if !downloaded { continue }
-            guard let data = try? Data(contentsOf: temp),
-                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let ts = (dict["ts"] as? Int64) ?? (dict["ts"] as? Int).map(Int64.init) else {
-                // One bad peer file (schema drift / partial sync / external edit)
-                // must not block sweep forever. Treat as inactive and continue.
-                continue
+            if heartbeatVanished { continue }
+            if !downloaded {
+                throw heartbeatReadInconclusiveError(remotePath: path, underlying: lastDownloadError)
             }
+            let ts = try readHeartbeatTimestamp(from: temp, remotePath: path)
             if !LivenessTracker.isStale(timestampMs: ts) {
                 active.append(parsed)
             }
         }
         return active
+    }
+
+    private func readHeartbeatTimestamp(from url: URL, remotePath: String) throws -> Int64 {
+        let data = try Data(contentsOf: url)
+        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ts = (dict["ts"] as? Int64) ?? (dict["ts"] as? Int).map(Int64.init) else {
+            throw NSError(domain: "LivenessTracker", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "heartbeat at \(remotePath) is unreadable"
+            ])
+        }
+        return ts
+    }
+
+    private func heartbeatReadInconclusiveError(remotePath: String, underlying: Error?) -> NSError {
+        var userInfo: [String: Any] = [
+            NSLocalizedDescriptionKey: "heartbeat at \(remotePath) could not be downloaded"
+        ]
+        if let underlying {
+            userInfo[NSUnderlyingErrorKey] = underlying
+        }
+        return NSError(domain: "LivenessTracker", code: -2, userInfo: userInfo)
     }
 }

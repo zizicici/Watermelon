@@ -6,7 +6,8 @@ final actor S3Client: RemoteStorageClientProtocol {
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
     // S3 keys are byte-exact; `IMG.JPG` and `img.jpg` are distinct objects.
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
-    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    // Conditional CopyObject support is endpoint-specific and probed asynchronously.
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
     static let errorDomain = S3ErrorClassifier.errorDomain
 
     struct Config: Sendable {
@@ -265,6 +266,7 @@ final actor S3Client: RemoteStorageClientProtocol {
         }
         try await cleanupOrphanedConditionalCopyProbes()
         for _ in 0..<Self.conditionalCopyProbeAttemptCount {
+            try Task.checkCancellation()
             let runID = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
             let sourceKey = makeProbeKey(named: Self.conditionalCopyProbeName(runID: runID, suffix: "source"))
             let destinationKey = makeProbeKey(named: Self.conditionalCopyProbeName(runID: runID, suffix: "destination"))
@@ -287,19 +289,25 @@ final actor S3Client: RemoteStorageClientProtocol {
                 }
                 try Task.checkCancellation()
 
-                guard case .created = try await putEmptyObjectIfAbsent(at: destinationURL) else {
-                    await deleteProbeObjects(orphans)
-                    continue
-                }
-                orphans.insert(destinationURL)
-                try Task.checkCancellation()
-
-                let result = try await serverSideCopyIfAbsent(
+                let firstCopy = try await serverSideCopyIfAbsent(
                     sourceKey: sourceKey,
                     destinationKey: destinationKey
                 )
                 try Task.checkCancellation()
-                switch result {
+                switch firstCopy {
+                case .created, .bestEffortRetry:
+                    orphans.insert(destinationURL)
+                case .alreadyExists:
+                    await deleteProbeObjects(orphans)
+                    continue
+                }
+
+                let secondCopy = try await serverSideCopyIfAbsent(
+                    sourceKey: sourceKey,
+                    destinationKey: destinationKey
+                )
+                try Task.checkCancellation()
+                switch secondCopy {
                 case .alreadyExists:
                     conditionalCopyIfAbsentSupport = .supported
                 case .created, .bestEffortRetry:

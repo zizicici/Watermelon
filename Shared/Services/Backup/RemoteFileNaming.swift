@@ -116,7 +116,12 @@ enum RemoteFileNaming {
         let extBudget = extMaxBytes > 0 ? clampStringToBytes(extPortion, maxBytes: extMaxBytes) : ""
         let remaining = max(availableBytes - extBudget.utf8.count, 1)
         let clampedStem = clampStringToBytes(stem, maxBytes: remaining)
-        return clampedStem + extBudget
+        let result = clampedStem + extBudget
+        if result.hasSuffix(".") {
+            let trimmed = String(result.dropLast())
+            return trimmed.isEmpty ? "_" : trimmed
+        }
+        return result
     }
 
     static func clampStringToBytes(_ value: String, maxBytes: Int) -> String {

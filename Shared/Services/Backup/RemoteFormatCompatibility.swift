@@ -306,8 +306,18 @@ struct RemoteFormatCompatibilityService: Sendable {
             basePath: profile.basePath,
             remoteRelativePath: "\(WatermelonRemoteFormat.markerDirectoryName)/\(WatermelonRemoteFormat.versionFileName)"
         )
-        guard let entry = try await client.metadata(path: absolutePath), !entry.isDirectory else {
+        let entry: RemoteStorageEntry?
+        do {
+            entry = try await client.metadata(path: absolutePath)
+        } catch {
+            if isNotFoundError(error) { return .absent }
+            throw error
+        }
+        guard let entry else {
             return .absent
+        }
+        guard !entry.isDirectory else {
+            throw BackupCompatibilityError.damagedV2Repo
         }
         try await client.download(remotePath: absolutePath, localURL: tempURL)
         let data = try Data(contentsOf: tempURL)

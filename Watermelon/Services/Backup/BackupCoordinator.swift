@@ -144,6 +144,7 @@ final class BackupCoordinator: Sendable {
                 }
                 if attempt < maxAttempts {
                     try Task.checkCancellation()
+                    try await Task.sleep(for: .milliseconds(500))
                 }
             }
             throw RemoteViewHandleError.stalePhysicalPresenceOverlay

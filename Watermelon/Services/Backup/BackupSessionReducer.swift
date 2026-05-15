@@ -203,6 +203,8 @@ struct BackupSessionState {
         controlPhase = .resuming
         currentRunMode = pausedDisplayMode
         statusText = String(localized: "backup.session.resuming")
+        downloadIncompleteMonths.removeAll()
+        downloadIncompleteMessagesByMonth.removeAll()
         return BackupSessionResumeContext(pausedMode: pausedMode, pausedDisplayMode: pausedDisplayMode)
     }
 

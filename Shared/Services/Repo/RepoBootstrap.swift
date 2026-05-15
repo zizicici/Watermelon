@@ -11,6 +11,8 @@ actor RepoBootstrap {
         case ioFailure(Error)
     }
 
+    private static let postCreateReadRetryAttempts = 5
+
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
 
@@ -129,16 +131,6 @@ actor RepoBootstrap {
         ]
         let temp = try makeTempJSON(dict: dict, prefix: "repo-identity-final")
         defer { try? FileManager.default.removeItem(at: temp) }
-        let markerSize = (try? FileManager.default.attributesOfItem(atPath: temp.path)[.size] as? Int64) ?? 0
-        let canCreateWithoutOverwrite =
-            client.atomicCreateGuarantee(forFileSize: markerSize, remotePath: markerPath) == .exclusive ||
-            client.moveIfAbsentGuarantee == .exclusive
-        guard canCreateWithoutOverwrite else {
-            if let finalized = try await loadFinalizedRepoID() {
-                return finalized
-            }
-            throw MetadataCreateGate.Error.nonExclusiveFinalization(remotePath: markerPath)
-        }
 
         let result = try await MetadataCreateGate.createWithStagingFallback(
             client: client,
@@ -149,9 +141,16 @@ actor RepoBootstrap {
         )
         switch result {
         case .created:
-            return repoID
+            if let finalized = try await loadFinalizedRepoIDWithRetries() {
+                return finalized
+            }
+            throw BootstrapError.ioFailure(NSError(
+                domain: "RepoBootstrap",
+                code: 11,
+                userInfo: [NSLocalizedDescriptionKey: "repo identity finalization at \(markerPath) was written but no readable marker exists"]
+            ))
         case .alreadyExists, .bestEffortRetry:
-            if let finalized = try await loadFinalizedRepoID() {
+            if let finalized = try await loadFinalizedRepoIDWithRetries() {
                 return finalized
             }
             throw BootstrapError.ioFailure(NSError(
@@ -164,7 +163,7 @@ actor RepoBootstrap {
 
     func loadFinalizedRepoID() async throws -> String? {
         let markerPath = RepoLayout.identityFinalizationFilePath(base: basePath)
-        guard let meta = try await client.metadata(path: markerPath), !meta.isDirectory else {
+        guard try await metadataFileIfPresent(path: markerPath, description: "repo identity finalization marker", code: 13) != nil else {
             return nil
         }
         let temp = FileManager.default.temporaryDirectory
@@ -188,7 +187,7 @@ actor RepoBootstrap {
             .appendingPathComponent("repo-load-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
         let path = RepoLayout.repoFilePath(base: basePath)
-        guard let metadata = try await client.metadata(path: path), !metadata.isDirectory else {
+        guard try await metadataFileIfPresent(path: path, description: "repo identity cache", code: 14) != nil else {
             return .absent
         }
         try await client.download(remotePath: path, localURL: temp)
@@ -202,7 +201,7 @@ actor RepoBootstrap {
 
     private func writeIdentityClaim(repoID: String, writerID: String, createdAtMs: Int64) async throws {
         let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
-        if let meta = try await client.metadata(path: claimPath), !meta.isDirectory {
+        if try await metadataFileIfPresent(path: claimPath, description: "identity claim", code: 15) != nil {
             switch try await classifyExistingClaim(claimPath: claimPath, writerID: writerID, suggestedRepoID: repoID) {
             case .ours:
                 return
@@ -228,7 +227,7 @@ actor RepoBootstrap {
     /// Only 0-byte (atomicCreate half-failed) is safe to clear; any other content might be canonical.
     private func healZeroByteSelfClaim(writerID: String) async throws {
         let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
-        guard let meta = try await client.metadata(path: claimPath), !meta.isDirectory else { return }
+        guard let meta = try await metadataFileIfPresent(path: claimPath, description: "identity claim", code: 16) else { return }
         if meta.size > 0 { return }
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("self-claim-preflight-\(UUID().uuidString).json")
@@ -247,7 +246,11 @@ actor RepoBootstrap {
             try await Task.sleep(for: interval)
             try Task.checkCancellation()
             if round + 1 < maxRounds {
-                _ = try? await canonicalRepoIDFromClaims()
+                do {
+                    _ = try await canonicalRepoIDFromClaims()
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {}
             }
         }
         return try await canonicalRepoIDFromClaims() ?? initial
@@ -375,6 +378,13 @@ actor RepoBootstrap {
             if isNotFoundError(error) { return ClaimElectionResult(repoID: nil, ignoredSelfCorrupt: false) }
             throw error
         }
+        if let malformedDirectory = entries.first(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
+            throw malformedMetadataDirectoryError(
+                path: RepoLayout.normalize(joining: [dir, malformedDirectory.name]),
+                description: "identity claim",
+                code: 17
+            )
+        }
         let claimEntries = entries.filter { !$0.isDirectory && $0.name.hasSuffix(".json") }
         // .serialOnly backends (SMB/SFTP via raw client here) violate single-connection
         // contract if we fan out via TaskGroup. Sequential fallback for those.
@@ -436,7 +446,7 @@ actor RepoBootstrap {
             if isNotFoundError(error) { return .none }
             throw error
         }
-        let data = (try? Data(contentsOf: temp)) ?? Data()
+        let data = try Data(contentsOf: temp)
         let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         // Filename must be a `<writerID>.json` shape; payload's writer_id must match —
         // otherwise a stray .json with a forged older timestamp could win election.
@@ -491,6 +501,54 @@ actor RepoBootstrap {
         isStorageNotFoundError(error)
     }
 
+    private func loadFinalizedRepoIDWithRetries() async throws -> String? {
+        var lastError: Error?
+        for attempt in 0..<Self.postCreateReadRetryAttempts {
+            do {
+                if let finalized = try await loadFinalizedRepoID() {
+                    return finalized
+                }
+                lastError = nil
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
+            }
+            if attempt + 1 < Self.postCreateReadRetryAttempts {
+                try await sleepBeforePostCreateReadRetry(attempt: attempt)
+            }
+        }
+        if let lastError { throw lastError }
+        return nil
+    }
+
+    private func sleepBeforePostCreateReadRetry(attempt: Int) async throws {
+        try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
+    }
+
+    private func metadataFileIfPresent(path: String, description: String, code: Int) async throws -> RemoteStorageEntry? {
+        let metadata: RemoteStorageEntry?
+        do {
+            metadata = try await client.metadata(path: path)
+        } catch {
+            if isNotFoundError(error) { return nil }
+            throw error
+        }
+        guard let metadata else { return nil }
+        guard !metadata.isDirectory else {
+            throw malformedMetadataDirectoryError(path: path, description: description, code: code)
+        }
+        return metadata
+    }
+
+    private func malformedMetadataDirectoryError(path: String, description: String, code: Int) -> BootstrapError {
+        BootstrapError.ioFailure(NSError(
+            domain: "RepoBootstrap",
+            code: code,
+            userInfo: [NSLocalizedDescriptionKey: "\(description) at \(path) is a directory"]
+        ))
+    }
+
     enum VersionConflict: Error {
         case higherFormatVersion(remote: Int, local: Int, minAppVersion: String?)
         case unreadable(Error?)
@@ -501,9 +559,9 @@ actor RepoBootstrap {
         try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
 
         let versionPath = RepoLayout.versionFilePath(base: basePath)
-        // atomicCreate on .overwritePossible backends would clobber a future-format peer.
-        if let meta = try await client.metadata(path: versionPath), !meta.isDirectory {
-            try await verifyVersionCompatible()
+        // Existing version metadata wins; creation only starts after a confirmed absent precheck.
+        if try await metadataFileIfPresent(path: versionPath, description: "version manifest", code: 18) != nil {
+            try await verifyVersionCompatibleWithRetries()
             return
         }
 
@@ -516,17 +574,6 @@ actor RepoBootstrap {
         ]
         let temp = try makeTempJSON(dict: versionDict, prefix: "repo-version")
         defer { try? FileManager.default.removeItem(at: temp) }
-        let versionSize = (try? FileManager.default.attributesOfItem(atPath: temp.path)[.size] as? Int64) ?? 0
-        let canCreateWithoutOverwrite =
-            client.atomicCreateGuarantee(forFileSize: versionSize, remotePath: versionPath) == .exclusive ||
-            client.moveIfAbsentGuarantee == .exclusive
-        guard canCreateWithoutOverwrite else {
-            if let meta = try await client.metadata(path: versionPath), !meta.isDirectory {
-                try await verifyVersionCompatible()
-                return
-            }
-            throw MetadataCreateGate.Error.nonExclusiveFinalization(remotePath: versionPath)
-        }
         let result = try await MetadataCreateGate.createWithStagingFallback(
             client: client,
             localURL: temp,
@@ -536,10 +583,33 @@ actor RepoBootstrap {
         )
         switch result {
         case .created:
-            return
+            try await verifyVersionCompatibleWithRetries()
         case .alreadyExists, .bestEffortRetry:
-            try await verifyVersionCompatible()
+            try await verifyVersionCompatibleWithRetries()
         }
+    }
+
+    private func verifyVersionCompatibleWithRetries() async throws {
+        var lastUnreadable: VersionConflict = .unreadable(nil)
+        for attempt in 0..<Self.postCreateReadRetryAttempts {
+            do {
+                try await verifyVersionCompatible()
+                return
+            } catch VersionConflict.unreadable(let underlying) {
+                if underlying is CancellationError {
+                    throw CancellationError()
+                }
+                lastUnreadable = .unreadable(underlying)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw error
+            }
+            if attempt + 1 < Self.postCreateReadRetryAttempts {
+                try await sleepBeforePostCreateReadRetry(attempt: attempt)
+            }
+        }
+        throw lastUnreadable
     }
 
     private func verifyVersionCompatible() async throws {
