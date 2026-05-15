@@ -10,6 +10,13 @@ enum MetadataCreateGate {
         case requireExclusiveMove
     }
 
+    /// `verifiedAgainstLocalContent: true` ⇒ gate SHA-confirmed remote bytes
+    /// match `localURL`, so callers can skip their own readback loop.
+    struct CreateOutcome: Sendable {
+        let result: AtomicCreateResult
+        let verifiedAgainstLocalContent: Bool
+    }
+
     enum Error: LocalizedError {
         case stagingVerificationFailed(remotePath: String, underlying: Swift.Error?)
         case finalVerificationFailed(remotePath: String, underlying: Swift.Error?)
@@ -33,8 +40,6 @@ enum MetadataCreateGate {
         }
     }
 
-    /// `.exclusive` → direct create. `.overwritePossible` → UUID staging path,
-    /// verify, move, post-verify.
     static func createWithStagingFallback(
         client: any RemoteStorageClientProtocol,
         localURL: URL,
@@ -42,6 +47,24 @@ enum MetadataCreateGate {
         respectTaskCancellation: Bool,
         finalizationPolicy: FinalizationPolicy = .allowBestEffort
     ) async throws -> AtomicCreateResult {
+        try await createWithStagingFallbackOutcome(
+            client: client,
+            localURL: localURL,
+            remotePath: remotePath,
+            respectTaskCancellation: respectTaskCancellation,
+            finalizationPolicy: finalizationPolicy
+        ).result
+    }
+
+    /// Gate does NOT post-verify on `.exclusive`-direct `.created` (no readback)
+    /// so the outcome's `verifiedAgainstLocalContent` is `false` there.
+    static func createWithStagingFallbackOutcome(
+        client: any RemoteStorageClientProtocol,
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        finalizationPolicy: FinalizationPolicy = .allowBestEffort
+    ) async throws -> CreateOutcome {
         let size = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? Int64) ?? 0
         let guarantee = client.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
         switch guarantee {
@@ -58,7 +81,7 @@ enum MetadataCreateGate {
             if case .alreadyExists = result {
                 do {
                     if try await verifyMatchesLocalWithRetries(client: client, remotePath: remotePath, localURL: localURL) {
-                        return .created
+                        return CreateOutcome(result: .created, verifiedAgainstLocalContent: true)
                     }
                 } catch is CancellationError {
                     throw CancellationError()
@@ -66,7 +89,7 @@ enum MetadataCreateGate {
                     // Verify inconclusive — fall through to surface .alreadyExists as-is.
                 }
             }
-            return result
+            return CreateOutcome(result: result, verifiedAgainstLocalContent: false)
         case .overwritePossible:
             let stagingPath = "\(remotePath).staging-\(UUID().uuidString)"
             let stagingResult = try await client.atomicCreate(
@@ -102,14 +125,7 @@ enum MetadataCreateGate {
                 throw Error.stagingVerificationFailed(remotePath: stagingPath, underlying: error)
             }
             do {
-                // Probe before the call. Backends with `.exclusive` guarantee skip the probe (the flag is the answer);
-                // anything else asks the backend at runtime so vendor-specific failure modes don't leak back here as error classification.
-                let supportsExclusiveMove: Bool
-                if client.moveIfAbsentGuarantee == .exclusive {
-                    supportsExclusiveMove = true
-                } else {
-                    supportsExclusiveMove = try await client.supportsExclusiveMoveIfAbsent(forDestinationPath: remotePath)
-                }
+                let supportsExclusiveMove = try await client.resolvedSupportsExclusiveMoveIfAbsent(forDestinationPath: remotePath)
                 let finalization: AtomicCreateResult
                 if supportsExclusiveMove {
                     finalization = try await client.moveIfAbsent(from: stagingPath, to: remotePath)
@@ -130,7 +146,7 @@ enum MetadataCreateGate {
                     do {
                         if try await verifyMatchesLocalWithRetries(client: client, remotePath: remotePath, localURL: localURL) {
                             try? await client.delete(path: stagingPath)
-                            return .created
+                            return CreateOutcome(result: .created, verifiedAgainstLocalContent: true)
                         }
                     } catch is CancellationError {
                         try? await client.delete(path: stagingPath)
@@ -139,7 +155,7 @@ enum MetadataCreateGate {
                         // Verify inconclusive — fall through to `.alreadyExists`.
                     }
                     try? await client.delete(path: stagingPath)
-                    return .alreadyExists
+                    return CreateOutcome(result: .alreadyExists, verifiedAgainstLocalContent: false)
                 }
                 if case .bestEffortRetry = finalization,
                    finalizationPolicy == .requireExclusiveMove,
@@ -160,7 +176,7 @@ enum MetadataCreateGate {
                 ) else {
                     throw Error.finalVerificationFailed(remotePath: remotePath, underlying: nil)
                 }
-                return .created
+                return CreateOutcome(result: .created, verifiedAgainstLocalContent: true)
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as Error {
@@ -194,7 +210,7 @@ enum MetadataCreateGate {
         localURL: URL
     ) async throws -> Bool {
         var lastError: Swift.Error?
-        let deadline = Date().addingTimeInterval(max(client.livenessConsistencyGraceSeconds, 1))
+        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
         var attempt = 0
         while true {
             do {

@@ -132,33 +132,26 @@ actor RepoBootstrap {
         let temp = try makeTempJSON(dict: dict, prefix: "repo-identity-final")
         defer { try? FileManager.default.removeItem(at: temp) }
 
-        let result = try await MetadataCreateGate.createWithStagingFallback(
+        let outcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
             client: client,
             localURL: temp,
             remotePath: markerPath,
             respectTaskCancellation: false,
             finalizationPolicy: .requireExclusiveMove
         )
-        switch result {
-        case .created:
-            if let finalized = try await loadFinalizedRepoIDWithRetries() {
-                return finalized
-            }
-            throw BootstrapError.ioFailure(NSError(
-                domain: "RepoBootstrap",
-                code: 11,
-                userInfo: [NSLocalizedDescriptionKey: "repo identity finalization at \(markerPath) was written but no readable marker exists"]
-            ))
-        case .alreadyExists, .bestEffortRetry:
-            if let finalized = try await loadFinalizedRepoIDWithRetries() {
-                return finalized
-            }
-            throw BootstrapError.ioFailure(NSError(
-                domain: "RepoBootstrap",
-                code: 11,
-                userInfo: [NSLocalizedDescriptionKey: "repo identity finalization at \(markerPath) raced but no readable marker exists"]
-            ))
+        // Gate already SHA-confirmed the remote bytes match `temp`, so `repoID`
+        // is the canonical finalized id — skip a redundant readback loop.
+        if outcome.verifiedAgainstLocalContent {
+            return repoID
         }
+        if let finalized = try await loadFinalizedRepoIDWithRetries() {
+            return finalized
+        }
+        throw BootstrapError.ioFailure(NSError(
+            domain: "RepoBootstrap",
+            code: 11,
+            userInfo: [NSLocalizedDescriptionKey: "repo identity finalization at \(markerPath) was written but no readable marker exists"]
+        ))
     }
 
     func loadFinalizedRepoID() async throws -> String? {
@@ -544,7 +537,7 @@ actor RepoBootstrap {
     }
 
     private func postCreateReadRetryDeadline() -> Date {
-        Date().addingTimeInterval(max(Self.postCreateReadRetryFloorSeconds, client.livenessConsistencyGraceSeconds))
+        client.metadataReadAfterWriteDeadline(floorSeconds: Self.postCreateReadRetryFloorSeconds)
     }
 
     private func sleepBeforePostCreateReadRetry(attempt: Int) async throws {
@@ -599,19 +592,19 @@ actor RepoBootstrap {
         ]
         let temp = try makeTempJSON(dict: versionDict, prefix: "repo-version")
         defer { try? FileManager.default.removeItem(at: temp) }
-        let result = try await MetadataCreateGate.createWithStagingFallback(
+        let outcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
             client: client,
             localURL: temp,
             remotePath: versionPath,
             respectTaskCancellation: false,
             finalizationPolicy: .requireExclusiveMove
         )
-        switch result {
-        case .created:
-            try await verifyVersionCompatibleWithRetries()
-        case .alreadyExists, .bestEffortRetry:
-            try await verifyVersionCompatibleWithRetries()
+        // Verified bytes are our just-written `format_version`, so it is compatible
+        // by construction; skip the readback compatibility loop.
+        if outcome.verifiedAgainstLocalContent {
+            return
         }
+        try await verifyVersionCompatibleWithRetries()
     }
 
     private func verifyVersionCompatibleWithRetries() async throws {

@@ -198,6 +198,18 @@ extension RemoteStorageClientProtocol {
         moveIfAbsentGuarantee == .exclusive
     }
 
+    /// Single resolved query so callers don't re-derive `.exclusive || probe` ladders.
+    func resolvedSupportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool {
+        if moveIfAbsentGuarantee == .exclusive { return true }
+        return try await supportsExclusiveMoveIfAbsent(forDestinationPath: destinationPath)
+    }
+
+    /// Shared read-after-write staleness budget; floor raises the minimum without
+    /// losing the `livenessConsistencyGraceSeconds` ceiling.
+    func metadataReadAfterWriteDeadline(floorSeconds: TimeInterval) -> Date {
+        Date().addingTimeInterval(max(floorSeconds, livenessConsistencyGraceSeconds))
+    }
+
     func verifyWriteAccess() async throws {}
 
     func atomicCreate(
