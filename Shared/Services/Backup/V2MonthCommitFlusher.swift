@@ -1,0 +1,139 @@
+import Foundation
+
+/// Writes the commit log entry for a month's pending ops. Returns the
+/// allocated seq + committed fingerprint sets; the caller updates the session
+/// coverage ledger and writes the snapshot.
+///
+/// Stateless — owns nothing mutable beyond its dependencies. Re-instantiated per flush.
+struct V2MonthCommitFlusher {
+    let services: BackupV2RuntimeServices
+    let monthKey: LibraryMonthKey
+    let materializedCovered: CoveredRanges
+    let observedClockAtLoad: UInt64
+    let indexes: V2MonthIndexes
+
+    struct Result {
+        let lastSeq: UInt64
+        let committedAssets: Set<Data>
+        let committedTombstones: Set<Data>
+    }
+
+    /// Allocates clocks + seq, writes the commit, stamps committed rows on `indexes`,
+    /// and clears pending sets. Returns `nil` when there are no pending ops.
+    func flushPending(
+        sessionWrittenCovered: CoveredRanges,
+        ignoreCancellation: Bool
+    ) async throws -> Result? {
+        let pending = indexes.snapshotPending()
+        let opCount = pending.assets.count + pending.tombstones.count
+        if opCount == 0 { return nil }
+
+        // Per-flush basis (not session-constant): tombstones must reflect our own intra-session adds, else replay would suppress them.
+        let priorCovered = materializedCovered.merging(sessionWrittenCovered)
+        var perWriterMaxSeq: [String: UInt64] = [:]
+        for (writer, ranges) in priorCovered.rangesByWriter {
+            perWriterMaxSeq[writer] = ranges.map(\.high).max() ?? 0
+        }
+
+        let lamportWatermark = max(observedClockAtLoad, await services.lamport.value())
+        let observedBasis = TombstoneObservationBasis(
+            perWriterMaxSeq: perWriterMaxSeq,
+            lamportWatermark: lamportWatermark
+        )
+        let clockRange = try await services.lamport.tickRange(count: opCount)
+        var clockCursor = clockRange.low
+        var ops: [CommitOp] = []
+        ops.reserveCapacity(opCount)
+        var opSeq = 0
+        var committedAddAssetClocks: [Data: UInt64] = [:]
+        var committedTombstoneClocks: [Data: UInt64] = [:]
+
+        for fp in pending.assets {
+            guard let asset = indexes.asset(forFingerprint: fp),
+                  let links = indexes.links(forFingerprint: fp) else { continue }
+            var resources: [CommitResourceEntry] = []
+            resources.reserveCapacity(links.count)
+            for link in links {
+                let resource = try indexes.resourceForCommitOp(hash: link.resourceHash)
+                resources.append(CommitResourceEntry(
+                    physicalRemotePath: resource.physicalRemotePath,
+                    logicalName: link.logicalName.isEmpty ? resource.logicalName : link.logicalName,
+                    contentHash: link.resourceHash,
+                    fileSize: resource.fileSize,
+                    resourceType: resource.resourceType,
+                    role: link.role,
+                    slot: link.slot,
+                    crypto: resource.crypto
+                ))
+            }
+            ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp,
+                creationDateMs: asset.creationDateMs,
+                backedUpAtMs: asset.backedUpAtMs,
+                resources: resources
+            ))))
+            committedAddAssetClocks[fp] = clockCursor
+            opSeq += 1
+            if opSeq < opCount { clockCursor += 1 }
+        }
+        for fp in pending.tombstones {
+            ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .tombstoneAsset(CommitTombstoneBody(
+                assetFingerprint: fp,
+                reason: .manifestOrphan,
+                observedBasis: observedBasis
+            ))))
+            committedTombstoneClocks[fp] = clockCursor
+            opSeq += 1
+            if opSeq < opCount { clockCursor += 1 }
+        }
+
+        // Retry on alreadyExists — local seq drift can produce a colliding filename.
+        let maxRetries = 4
+        var lastSeq: UInt64 = 0
+        var attempt = 0
+        while true {
+            let seq = try await services.seqAllocator.allocate()
+            lastSeq = seq
+            let header = CommitHeader(
+                version: CommitHeader.currentVersion,
+                repoID: services.repoID,
+                writerID: services.writerID,
+                seq: seq,
+                runID: services.runID,
+                scope: CommitHeader.monthScope(monthKey),
+                clockMin: clockRange.low,
+                clockMax: clockRange.high,
+                bodyKind: CommitHeader.bodyKindPlain
+            )
+            do {
+                _ = try await services.commitWriter.write(
+                    header: header,
+                    ops: ops,
+                    month: monthKey,
+                    respectTaskCancellation: !ignoreCancellation
+                )
+                break
+            } catch CommitLogWriter.WriteError.alreadyExists {
+                attempt += 1
+                if attempt >= maxRetries { throw CommitLogWriter.WriteError.alreadyExists }
+                if !ignoreCancellation { try Task.checkCancellation() }
+                continue
+            }
+        }
+
+        let committedAssets = Set(pending.assets)
+        let committedTombstones = Set(pending.tombstones)
+        indexes.recordCommit(
+            assetClocks: committedAddAssetClocks,
+            tombstoneClocks: committedTombstoneClocks,
+            writerID: services.writerID,
+            seq: lastSeq
+        )
+
+        return Result(
+            lastSeq: lastSeq,
+            committedAssets: committedAssets,
+            committedTombstones: committedTombstones
+        )
+    }
+}

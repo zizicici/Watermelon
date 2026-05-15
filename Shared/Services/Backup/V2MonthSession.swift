@@ -6,7 +6,7 @@ private let v2SessionLog = Logger(subsystem: "com.zizicici.watermelon", category
 /// V2-native in-memory month state, keyed by `physicalRemotePath` so multi-writer
 /// multi-path doesn't need the V1 sqlite UNIQUE(contentHash) workaround. Lives
 /// per-month per-worker; `flushToRemote` writes the commit + snapshot files for
-/// pending changes.
+/// pending changes via `V2MonthCommitFlusher` and `V2MonthSnapshotFlusher`.
 final class V2MonthSession: BackupMonthStore {
     enum FlushError: Error {
         case concurrentFlushRejected
@@ -41,6 +41,8 @@ final class V2MonthSession: BackupMonthStore {
     private let basePath: String
     private let client: any RemoteStorageClientProtocol
     private let stepLogger: MonthManifestStepLogger?
+    private let indexes: V2MonthIndexes
+    private let snapshotFlusher: V2MonthSnapshotFlusher
 
     var monthRelativePath: String {
         String(format: "%04d/%02d", year, month)
@@ -50,38 +52,7 @@ final class V2MonthSession: BackupMonthStore {
         RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
     }
 
-    // Materialized state — keyed by physicalRemotePath so multi-path same-hash is natural.
-    // **Faithful to commit log** (no listing-based filter). `presenceMap` gates
-    // actionability without dropping entries from the snapshot-emit path.
-    private var resourcesByPath: [String: RemoteManifestResource]
-    private var assetsByFingerprint: [Data: RemoteManifestAsset]
-    private var linksByFingerprint: [Data: [RemoteAssetResourceLink]]
-    /// `findResourceByHash` returns lex-min over present paths only; missing-path lookup would bind metadata to undownloadable bytes.
-    private var pathsByHash: [Data: Set<String>]
-    /// Reverse name indexes keep upload preparation from scanning every resource in a month.
-    private var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
-    private var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
-    private var collisionKeysCache: Set<String>?
-    /// Per-path presence; missing/inconclusive paths are excluded from find ops, hash-missing
-    /// is derived on demand for cache-wide consumers (Home / download / health / resume).
-    private var presenceMap: RemoteMonthPresenceMap
-
-    // Existing remote files from start-of-month directory listing (collision rename input).
-    private var remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata]
-    private var existingFileNameSet: Set<String>
-
-    // Pending V2 ops since last flush.
-    private var pendingV2AssetFingerprints: Set<Data> = []
-    private var pendingV2TombstoneFingerprints: Set<Data> = []
-
-    /// Mirror of RepoMonthState.deletedAssetStamps; survives flushes so snapshot
-    /// emits deletedKey rows. Legacy unstamped tombstones live in the Set side.
-    private var deletedAssetStamps: [Data: OpStamp]
-    private var legacyDeletedAssetFingerprints: Set<Data>
-
-    // Coverage ledger.
     private let materializedCovered: CoveredRanges
-    private var sessionWrittenCovered: CoveredRanges = .empty
 
     /// Lamport clock observed at session load. Per-flush basis adds whatever
     /// we've ticked since, so tombstones written later in the session don't
@@ -90,14 +61,11 @@ final class V2MonthSession: BackupMonthStore {
 
     private(set) var dirty: Bool = false
 
-    /// Pinned when commit landed but snapshot write failed; drives standalone retry on next flush.
-    private var pendingSnapshotRetrySeq: UInt64?
-    private var pendingRebaselineOnly: Bool = false
     let physicallyMissingHashesAreAuthoritative: Bool
     private let flushStateLock = NSLock()
     private var isFlushing = false
 
-    var hasAnyAsset: Bool { !assetsByFingerprint.isEmpty }
+    var hasAnyAsset: Bool { indexes.hasAnyAsset }
 
     init(
         client: any RemoteStorageClientProtocol,
@@ -118,95 +86,24 @@ final class V2MonthSession: BackupMonthStore {
         self.month = month
         self.v2Services = v2Services
         self.materializedCovered = materializedCovered
-        self.remoteFilesByName = remoteFilesByName
-        self.existingFileNameSet = Set(remoteFilesByName.keys)
         self.stepLogger = stepLogger
         self.observedClockAtLoad = observedClockAtLoad
         self.physicallyMissingHashesAreAuthoritative = verifiedMissingHashes != nil
-
-        // Faithful projection; filtering here would leak into snapshot writes and break the covered-range invariant.
-        var resourcesByPath: [String: RemoteManifestResource] = [:]
-        var pathsByHash: [Data: Set<String>] = [:]
-        var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
-        var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
-        var presenceMap = RemoteMonthPresenceMap()
-        let nameCase = client.backendNameCaseSensitivity
-        var sizesByPresenceKey: [String: Set<Int64>] = [:]
-        for (name, meta) in remoteFilesByName {
-            sizesByPresenceKey[nameCase.presenceKey(for: name), default: []].insert(meta.size)
-        }
-        for row in materializedState.resources.values {
-            let logicalName = (row.physicalRemotePath as NSString).lastPathComponent
-            let key = nameCase.presenceKey(for: logicalName)
-            let listedSizeMatches = sizesByPresenceKey[key]?.contains(row.fileSize) == true
-            let presence: RemoteResourcePresence
-            if let verifiedMissingHashes {
-                if !listedSizeMatches || verifiedMissingHashes.contains(row.contentHash) {
-                    presence = .missing
-                } else {
-                    presence = .listedSizeMatched
-                }
-            } else if listedSizeMatches {
-                presence = .inconclusive(.neverProbed)
-            } else {
-                presence = .missing
-            }
-            presenceMap.mark(path: row.physicalRemotePath, presence)
-            let resource = RemoteManifestResource(
-                year: year,
-                month: month,
-                physicalRemotePath: row.physicalRemotePath,
-                contentHash: row.contentHash,
-                fileSize: row.fileSize,
-                resourceType: row.resourceType,
-                creationDateMs: row.creationDateMs,
-                backedUpAtMs: row.backedUpAtMs,
-                crypto: row.crypto
-            )
-            resourcesByPath[row.physicalRemotePath] = resource
-            pathsByHash[row.contentHash, default: []].insert(row.physicalRemotePath)
-            let leaf = (row.physicalRemotePath as NSString).lastPathComponent
-            resourcesByLeafName[leaf, default: []].append(resource)
-            resourcesByCollisionKey[RemoteFileNaming.collisionKey(for: leaf), default: []].append(resource)
-        }
-        self.resourcesByPath = resourcesByPath
-        self.pathsByHash = pathsByHash
-        self.resourcesByLeafName = resourcesByLeafName
-        self.resourcesByCollisionKey = resourcesByCollisionKey
-        self.presenceMap = presenceMap
-
-        var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
-        for row in materializedState.assets.values {
-            assetsByFingerprint[row.assetFingerprint] = RemoteManifestAsset(
-                year: year,
-                month: month,
-                assetFingerprint: row.assetFingerprint,
-                creationDateMs: row.creationDateMs,
-                backedUpAtMs: row.backedUpAtMs,
-                resourceCount: row.resourceCount,
-                totalFileSizeBytes: row.totalFileSizeBytes,
-                stamp: row.stamp
-            )
-        }
-        self.assetsByFingerprint = assetsByFingerprint
-
-        var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
-        for row in materializedState.assetResources.values {
-            linksByFingerprint[row.assetFingerprint, default: []].append(RemoteAssetResourceLink(
-                year: year,
-                month: month,
-                assetFingerprint: row.assetFingerprint,
-                resourceHash: row.resourceHash,
-                role: row.role,
-                slot: row.slot,
-                logicalName: row.logicalName
-            ))
-        }
-        self.linksByFingerprint = linksByFingerprint
-
-        self.deletedAssetStamps = materializedState.deletedAssetStamps
-        self.legacyDeletedAssetFingerprints = materializedState.deletedAssetFingerprints
-            .subtracting(materializedState.deletedAssetStamps.keys)
+        let indexes = V2MonthIndexes(
+            year: year,
+            month: month,
+            materializedState: materializedState,
+            remoteFilesByName: remoteFilesByName,
+            verifiedMissingHashes: verifiedMissingHashes,
+            nameCase: client.backendNameCaseSensitivity
+        )
+        self.indexes = indexes
+        self.snapshotFlusher = V2MonthSnapshotFlusher(
+            services: v2Services,
+            monthKey: LibraryMonthKey(year: year, month: month),
+            materializedCovered: materializedCovered,
+            indexes: indexes
+        )
     }
 
     /// Materializes from V2 commit/snapshot + lists month dir for collision-rename input.
@@ -276,141 +173,55 @@ final class V2MonthSession: BackupMonthStore {
     }
 
     func requestSnapshotRebaseline() {
-        pendingRebaselineOnly = true
+        snapshotFlusher.requestRebaseline()
         dirty = true
     }
 
-    // MARK: - Read
+    // MARK: - Read (delegates to indexes)
 
     func containsAssetFingerprint(_ fingerprint: Data) -> Bool {
-        assetsByFingerprint[fingerprint] != nil
+        indexes.containsAssetFingerprint(fingerprint)
     }
 
     func isAssetIncomplete(_ fingerprint: Data) -> Bool {
-        guard let asset = assetsByFingerprint[fingerprint] else { return false }
-        let links = linksByFingerprint[fingerprint] ?? []
-        // Filter gates actionability only; materialized state stays faithful to the commit log.
-        return MonthManifestStore.isAssetIncomplete(
-            links: links,
-            isResourceAvailable: { hash in
-                self.anyPresentPath(forHash: hash) != nil
-            },
-            assetFingerprint: asset.assetFingerprint
-        )
+        indexes.isAssetIncomplete(fingerprint)
     }
 
     func findResourceByHash(_ contentHash: Data) -> RemoteManifestResource? {
-        // Lex-min over all paths would let a missing path shadow a present one and bind metadata to undownloadable bytes.
-        guard let chosen = anyPresentPath(forHash: contentHash) else { return nil }
-        return resourcesByPath[chosen]
+        indexes.findResourceByHash(contentHash)
     }
 
     func findByFileName(_ logicalName: String) -> RemoteManifestResource? {
-        let leafName = logicalName
-            .split(separator: "/", omittingEmptySubsequences: true)
-            .last
-            .map(String.init) ?? logicalName
-        let candidates: [RemoteManifestResource]
-        if client.backendNameCaseSensitivity.foldsCaseForCollisionAvoidance {
-            let key = RemoteFileNaming.collisionKey(for: leafName)
-            candidates = resourcesByCollisionKey[key] ?? []
-        } else {
-            candidates = resourcesByLeafName[leafName] ?? []
-        }
-        return candidates
-            .filter { !self.presenceMap.isMissing($0.physicalRemotePath) }
-            .min { $0.physicalRemotePath < $1.physicalRemotePath }
-    }
-
-    /// Lex-min of present paths for `hash`; nil if no path's file is on remote.
-    private func anyPresentPath(forHash hash: Data) -> String? {
-        guard let paths = pathsByHash[hash], !paths.isEmpty else { return nil }
-        return paths.lazy
-            .filter { !self.presenceMap.isMissing($0) }
-            .min()
+        indexes.findByFileName(logicalName)
     }
 
     func existingFileNames() -> Set<String> {
-        existingFileNameSet
+        indexes.existingFileNames()
     }
 
     func existingCollisionKeys() -> Set<String> {
-        if let cache = collisionKeysCache { return cache }
-        let built = RemoteFileNaming.collisionKeySet(from: existingFileNameSet)
-        collisionKeysCache = built
-        return built
+        indexes.existingCollisionKeys()
     }
 
     func remoteFileSize(named logicalName: String) -> Int64? {
-        remoteFilesByName[logicalName]?.size
+        indexes.remoteFileSize(named: logicalName)
     }
 
     func unsortedSnapshot() -> (resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink]) {
-        let resources = Array(resourcesByPath.values)
-        let assets = Array(assetsByFingerprint.values)
-        let links = linksByFingerprint.values.flatMap { $0 }
-        return (resources, assets, links)
+        indexes.unsortedSnapshot()
     }
 
     func physicallyMissingHashesSnapshot() -> Set<Data> {
-        presenceMap.fullyMissingHashes(pathsByHash: pathsByHash)
+        indexes.physicallyMissingHashesSnapshot()
     }
 
-    // MARK: - Write
+    // MARK: - Write (delegates + dirty tracking)
 
     @discardableResult
     func upsertResource(_ resource: RemoteManifestResource) throws -> RemoteManifestResource {
-        // If the same path is being repurposed to a different content hash, drop the
-        // stale (oldHash → path) entry first; otherwise findResourceByHash(oldHash)
-        // would still return this slot and serve up the new content under the wrong key.
-        if let existing = resourcesByPath[resource.physicalRemotePath],
-           existing.contentHash != resource.contentHash {
-            let oldHash = existing.contentHash
-            pathsByHash[oldHash]?.remove(resource.physicalRemotePath)
-            if pathsByHash[oldHash]?.isEmpty == true {
-                pathsByHash.removeValue(forKey: oldHash)
-            }
-        }
-        if let existing = resourcesByPath[resource.physicalRemotePath] {
-            removeNameIndexes(for: existing)
-        }
-        resourcesByPath[resource.physicalRemotePath] = resource
-        pathsByHash[resource.contentHash, default: []].insert(resource.physicalRemotePath)
-        addNameIndexes(for: resource)
-        if !existingFileNameSet.contains(resource.logicalName) {
-            existingFileNameSet.insert(resource.logicalName)
-            collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: resource.logicalName))
-        }
-        // Just wrote bytes — drop any stale presence marker so re-lookup picks the path up.
-        presenceMap.clear(path: resource.physicalRemotePath)
+        let result = try indexes.upsertResource(resource)
         dirty = true
-        return resource
-    }
-
-    private func addNameIndexes(for resource: RemoteManifestResource) {
-        let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-        resourcesByLeafName[leaf, default: []].append(resource)
-        resourcesByCollisionKey[RemoteFileNaming.collisionKey(for: leaf), default: []].append(resource)
-    }
-
-    private func removeNameIndexes(for resource: RemoteManifestResource) {
-        let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-        if var bucket = resourcesByLeafName[leaf] {
-            bucket.removeAll { $0.physicalRemotePath == resource.physicalRemotePath }
-            if bucket.isEmpty {
-                resourcesByLeafName.removeValue(forKey: leaf)
-            } else {
-                resourcesByLeafName[leaf] = bucket
-            }
-        }
-        let collisionKey = RemoteFileNaming.collisionKey(for: leaf)
-        guard var foldedBucket = resourcesByCollisionKey[collisionKey] else { return }
-        foldedBucket.removeAll { $0.physicalRemotePath == resource.physicalRemotePath }
-        if foldedBucket.isEmpty {
-            resourcesByCollisionKey.removeValue(forKey: collisionKey)
-        } else {
-            resourcesByCollisionKey[collisionKey] = foldedBucket
-        }
+        return result
     }
 
     func upsertAsset(
@@ -418,46 +229,12 @@ final class V2MonthSession: BackupMonthStore {
         links: [RemoteAssetResourceLink],
         replacingSubsetFingerprints: Set<Data>
     ) throws {
-        // Validate every link's resourceHash has a matching resource on file
-        // AND its physical file is present — otherwise flush would emit a commit
-        // body with empty resources[] and the snapshot covering that seq would
-        // break `state == fold(covered)`.
-        for link in links {
-            guard anyPresentPath(forHash: link.resourceHash) != nil else {
-                throw NSError(
-                    domain: "V2MonthSession",
-                    code: -11,
-                    userInfo: [NSLocalizedDescriptionKey: String(localized: "backup.manifest.error.missingResourceHash")]
-                )
-            }
-        }
-
-        // Subset replacement — older partial assets that are strict subsets of this one
-        // get tombstoned. Mirrors MonthManifestStore behavior for legacy import.
-        for sub in replacingSubsetFingerprints {
-            assetsByFingerprint.removeValue(forKey: sub)
-            linksByFingerprint.removeValue(forKey: sub)
-            pendingV2AssetFingerprints.remove(sub)
-            pendingV2TombstoneFingerprints.insert(sub)
-        }
-
-        assetsByFingerprint[asset.assetFingerprint] = asset
-        linksByFingerprint[asset.assetFingerprint] = links
-        pendingV2AssetFingerprints.insert(asset.assetFingerprint)
-        pendingV2TombstoneFingerprints.remove(asset.assetFingerprint)
-        // Resurrect: mirrors RepoMaterializer's apply-addAsset gate so the snapshot
-        // baseline doesn't carry both an asset row and its historical tombstone.
-        deletedAssetStamps.removeValue(forKey: asset.assetFingerprint)
-        legacyDeletedAssetFingerprints.remove(asset.assetFingerprint)
+        try indexes.upsertAsset(asset, links: links, replacingSubsetFingerprints: replacingSubsetFingerprints)
         dirty = true
     }
 
     func markRemoteFile(name: String, size: Int64) {
-        remoteFilesByName[name] = MonthManifestStore.RemoteFileMetadata(size: size)
-        if !existingFileNameSet.contains(name) {
-            existingFileNameSet.insert(name)
-            collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: name))
-        }
+        indexes.markRemoteFile(name: name, size: size)
     }
 
     // MARK: - Flush
@@ -473,22 +250,37 @@ final class V2MonthSession: BackupMonthStore {
         }
         if !ignoreCancellation { try Task.checkCancellation() }
 
+        // Stranded snapshot retry from a prior flush's commit-OK / snapshot-FAIL.
+        // Runs only when indexes have no new pending ops, so the pinned seq still
+        // matches the in-memory state.
+        do {
+            if try await snapshotFlusher.flushRetryIfPending(ignoreCancellation: ignoreCancellation) {
+                dirty = false
+                return .none
+            }
+        } catch {
+            throw FlushError.snapshotWriteFailed(
+                committedAssets: [],
+                committedTombstones: [],
+                underlying: error
+            )
+        }
+
         let monthKey = LibraryMonthKey(year: year, month: month)
-        let hasPendingOps = !pendingV2AssetFingerprints.isEmpty || !pendingV2TombstoneFingerprints.isEmpty
-        if let retrySeq = pendingSnapshotRetrySeq, !hasPendingOps {
+        let commitFlusher = V2MonthCommitFlusher(
+            services: services,
+            monthKey: monthKey,
+            materializedCovered: materializedCovered,
+            observedClockAtLoad: observedClockAtLoad,
+            indexes: indexes
+        )
+        guard let result = try await commitFlusher.flushPending(
+            sessionWrittenCovered: snapshotFlusher.sessionWrittenCovered,
+            ignoreCancellation: ignoreCancellation
+        ) else {
+            // dirty + no ops = rebaseline request (corrupted snapshot at load).
             do {
-                try await writeSnapshot(
-                    services: services,
-                    month: monthKey,
-                    ownCommitSeq: retrySeq,
-                    ignoreCancellation: ignoreCancellation
-                )
-                pendingSnapshotRetrySeq = nil
-                pendingRebaselineOnly = false
-                if pendingV2AssetFingerprints.isEmpty, pendingV2TombstoneFingerprints.isEmpty {
-                    dirty = false
-                    return .none
-                }
+                _ = try await snapshotFlusher.flushRebaselineIfPending(ignoreCancellation: ignoreCancellation)
             } catch {
                 throw FlushError.snapshotWriteFailed(
                     committedAssets: [],
@@ -496,191 +288,26 @@ final class V2MonthSession: BackupMonthStore {
                     underlying: error
                 )
             }
-        }
-
-        let opCount = pendingV2AssetFingerprints.count + pendingV2TombstoneFingerprints.count
-        if opCount == 0 {
-            // dirty + no ops = stranded snapshot retry from a prior failure or a rebaseline request.
-            if pendingRebaselineOnly, let services = v2Services {
-                do {
-                    try await writeSnapshot(
-                        services: services,
-                        month: monthKey,
-                        ownCommitSeq: nil,
-                        ignoreCancellation: ignoreCancellation
-                    )
-                    pendingRebaselineOnly = false
-                    dirty = false
-                } catch {
-                    throw FlushError.snapshotWriteFailed(
-                        committedAssets: [],
-                        committedTombstones: [],
-                        underlying: error
-                    )
-                }
-            } else {
-                dirty = false
-            }
+            dirty = false
             return .none
         }
 
-        // Per-flush basis (not session-constant): tombstones must reflect our own intra-session adds, else replay would suppress them.
-        let priorCovered = materializedCovered.merging(sessionWrittenCovered)
-        var perWriterMaxSeq: [String: UInt64] = [:]
-        for (writer, ranges) in priorCovered.rangesByWriter {
-            perWriterMaxSeq[writer] = ranges.map(\.high).max() ?? 0
-        }
-
-        let lamportWatermark = max(observedClockAtLoad, await services.lamport.value())
-        let observedBasis = TombstoneObservationBasis(
-            perWriterMaxSeq: perWriterMaxSeq,
-            lamportWatermark: lamportWatermark
-        )
-        let clockRange = try await services.lamport.tickRange(count: opCount)
-        var clockCursor = clockRange.low
-        var ops: [CommitOp] = []
-        ops.reserveCapacity(opCount)
-        var opSeq = 0
-        var committedAddAssetClocks: [Data: UInt64] = [:]
-        var committedTombstoneClocks: [Data: UInt64] = [:]
-
-        for fp in pendingV2AssetFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
-            guard let asset = assetsByFingerprint[fp],
-                  let links = linksByFingerprint[fp] else { continue }
-            var resources: [CommitResourceEntry] = []
-            resources.reserveCapacity(links.count)
-            for link in links {
-                // Fail-fast: dropping a link here would emit a commit body with
-                // fewer resources than in-memory and break the snapshot
-                // covered-range invariant once the next snapshot ships the seq.
-                guard let resource = findResourceByHash(link.resourceHash) else {
-                    throw NSError(
-                        domain: "V2MonthSession",
-                        code: -13,
-                        userInfo: [NSLocalizedDescriptionKey:
-                            "flush aborted: link hash \(link.resourceHash.hexString) lost its resource between upsert and flush"]
-                    )
-                }
-                resources.append(CommitResourceEntry(
-                    physicalRemotePath: resource.physicalRemotePath,
-                    logicalName: link.logicalName.isEmpty ? resource.logicalName : link.logicalName,
-                    contentHash: link.resourceHash,
-                    fileSize: resource.fileSize,
-                    resourceType: resource.resourceType,
-                    role: link.role,
-                    slot: link.slot,
-                    crypto: resource.crypto
-                ))
-            }
-            ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .addAsset(CommitAddAssetBody(
-                assetFingerprint: fp,
-                creationDateMs: asset.creationDateMs,
-                backedUpAtMs: asset.backedUpAtMs,
-                resources: resources
-            ))))
-            committedAddAssetClocks[fp] = clockCursor
-            opSeq += 1
-            if opSeq < opCount { clockCursor += 1 }
-        }
-        for fp in pendingV2TombstoneFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
-            ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: fp,
-                reason: .manifestOrphan,
-                observedBasis: observedBasis
-            ))))
-            committedTombstoneClocks[fp] = clockCursor
-            opSeq += 1
-            if opSeq < opCount { clockCursor += 1 }
-        }
-
-        // Retry on alreadyExists — local seq drift can produce a colliding filename.
-        let maxRetries = 4
-        var lastSeq: UInt64 = 0
-        var attempt = 0
-        while true {
-            let seq = try await services.seqAllocator.allocate()
-            lastSeq = seq
-            let header = CommitHeader(
-                version: CommitHeader.currentVersion,
-                repoID: services.repoID,
-                writerID: services.writerID,
-                seq: seq,
-                runID: services.runID,
-                scope: CommitHeader.monthScope(monthKey),
-                clockMin: clockRange.low,
-                clockMax: clockRange.high,
-                bodyKind: CommitHeader.bodyKindPlain
-            )
-            do {
-                _ = try await services.commitWriter.write(
-                    header: header,
-                    ops: ops,
-                    month: monthKey,
-                    respectTaskCancellation: !ignoreCancellation
-                )
-                break
-            } catch CommitLogWriter.WriteError.alreadyExists {
-                attempt += 1
-                if attempt >= maxRetries { throw CommitLogWriter.WriteError.alreadyExists }
-                if !ignoreCancellation { try Task.checkCancellation() }
-                continue
-            }
-        }
-
-        // Coverage must reflect the durable commit even if snapshot write later fails; otherwise the next materialize would replay this seq atop a future baseline.
-        sessionWrittenCovered.add(writerID: services.writerID, seq: lastSeq)
-
-        // Stamp committed rows so the snapshot baseline matches what a future replay would derive (LWW gate).
-        for (fp, clock) in committedAddAssetClocks {
-            guard let asset = assetsByFingerprint[fp] else { continue }
-            assetsByFingerprint[fp] = RemoteManifestAsset(
-                year: asset.year,
-                month: asset.month,
-                assetFingerprint: asset.assetFingerprint,
-                creationDateMs: asset.creationDateMs,
-                backedUpAtMs: asset.backedUpAtMs,
-                resourceCount: asset.resourceCount,
-                totalFileSizeBytes: asset.totalFileSizeBytes,
-                stamp: OpStamp(writerID: services.writerID, seq: lastSeq, clock: clock)
-            )
-        }
-        // Tombstones need stamps too; without them replay loses LWW evidence against stale adds once the snapshot covers the tombstone seq.
-        for (fp, clock) in committedTombstoneClocks {
-            deletedAssetStamps[fp] = OpStamp(writerID: services.writerID, seq: lastSeq, clock: clock)
-            legacyDeletedAssetFingerprints.remove(fp)
-        }
-
-        // Clear pending before writeSnapshot: commit is durable, so a snapshot failure must not re-emit the same ops in the next flush.
-        let committedAssets = pendingV2AssetFingerprints
-        let committedTombstones = pendingV2TombstoneFingerprints
-        pendingV2AssetFingerprints.removeAll()
-        pendingV2TombstoneFingerprints.removeAll()
         dirty = false
-
         do {
-            try await writeSnapshot(
-                services: services,
-                month: monthKey,
-                ownCommitSeq: lastSeq,
-                ignoreCancellation: ignoreCancellation
-            )
-            pendingSnapshotRetrySeq = nil
-            pendingRebaselineOnly = false
+            try await snapshotFlusher.flushAfterCommit(seq: result.lastSeq, ignoreCancellation: ignoreCancellation)
         } catch {
             dirty = true
-            pendingSnapshotRetrySeq = lastSeq
-            pendingRebaselineOnly = false
             throw FlushError.snapshotWriteFailed(
-                committedAssets: committedAssets,
-                committedTombstones: committedTombstones,
+                committedAssets: result.committedAssets,
+                committedTombstones: result.committedTombstones,
                 underlying: error
             )
         }
 
         return MonthManifestStore.FlushDelta(
             didFlush: true,
-            committedV2AssetFingerprints: committedAssets,
-            committedV2TombstoneFingerprints: committedTombstones
+            committedV2AssetFingerprints: result.committedAssets,
+            committedV2TombstoneFingerprints: result.committedTombstones
         )
     }
 
@@ -696,85 +323,6 @@ final class V2MonthSession: BackupMonthStore {
         flushStateLock.withLock {
             isFlushing = false
         }
-    }
-
-    private func writeSnapshot(
-        services: BackupV2RuntimeServices,
-        month: LibraryMonthKey,
-        ownCommitSeq: UInt64?,
-        ignoreCancellation: Bool
-    ) async throws {
-        // Emit un-filtered state; snapshot must satisfy `state == fold(commits in covered)`.
-        let snapshotState = currentMaterializedState()
-        var covered = materializedCovered.merging(sessionWrittenCovered)
-        // Only own-writer commit seqs may be added; peer-derived rebaseline values come through `materializedCovered`.
-        if let ownSeq = ownCommitSeq {
-            covered.add(writerID: services.writerID, seq: ownSeq)
-        }
-        let header = SnapshotHeader(
-            version: SnapshotHeader.currentVersion,
-            scope: CommitHeader.monthScope(month),
-            writerID: services.writerID,
-            repoID: services.repoID,
-            covered: covered
-        )
-        let parts = RepoSnapshotBuilder.build(header: header, state: snapshotState)
-        // Tick: retry needs a fresh filename, else alreadyExists loops forever.
-        let lamportRange = try await services.lamport.tickRange(count: 1)
-        _ = try await services.snapshotWriter.write(
-            header: header,
-            assets: parts.assets,
-            resources: parts.resources,
-            assetResources: parts.assetResources,
-            deletedKeys: parts.deletedKeys,
-            month: month,
-            lamport: lamportRange.high,
-            runID: services.runID,
-            respectTaskCancellation: !ignoreCancellation
-        )
-    }
-
-    /// Project our in-memory bookkeeping back into a `RepoMonthState` shape — the
-    /// fold-of-covered-commits truth that `RepoSnapshotBuilder` requires. No
-    /// listing-based filtering (that lives in the session-view layer).
-    private func currentMaterializedState() -> RepoMonthState {
-        var state = RepoMonthState.empty
-        for (fp, asset) in assetsByFingerprint {
-            state.assets[fp] = SnapshotAssetRow(
-                assetFingerprint: asset.assetFingerprint,
-                creationDateMs: asset.creationDateMs,
-                backedUpAtMs: asset.backedUpAtMs,
-                resourceCount: asset.resourceCount,
-                totalFileSizeBytes: asset.totalFileSizeBytes,
-                stamp: asset.stamp
-            )
-        }
-        for (path, resource) in resourcesByPath {
-            state.resources[path] = SnapshotResourceRow(
-                physicalRemotePath: resource.physicalRemotePath,
-                contentHash: resource.contentHash,
-                fileSize: resource.fileSize,
-                resourceType: resource.resourceType,
-                creationDateMs: resource.creationDateMs,
-                backedUpAtMs: resource.backedUpAtMs,
-                crypto: resource.crypto
-            )
-        }
-        for (fp, links) in linksByFingerprint {
-            for link in links {
-                let key = AssetResourceKey(assetFingerprint: fp, role: link.role, slot: link.slot)
-                state.assetResources[key] = SnapshotAssetResourceRow(
-                    assetFingerprint: fp,
-                    role: link.role,
-                    slot: link.slot,
-                    resourceHash: link.resourceHash,
-                    logicalName: link.logicalName
-                )
-            }
-        }
-        state.deletedAssetStamps = deletedAssetStamps
-        state.deletedAssetFingerprints = legacyDeletedAssetFingerprints.union(deletedAssetStamps.keys)
-        return state
     }
 }
 
