@@ -444,14 +444,17 @@ extension AssetProcessor {
                     }
                 }
                 assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
-                try cancellationController?.throwIfCancelled()
-                try Task.checkCancellation()
                 if let shotDate = prepared.shotDate {
                     let setDateStart = CFAbsoluteTimeGetCurrent()
                     if client.shouldSetModificationDate() {
+                        try cancellationController?.throwIfCancelled()
+                        try Task.checkCancellation()
                         do {
                             try await client.setModificationDate(shotDate, forPath: uploadPreparation.remoteAbsolutePath)
                         } catch {
+                            if Self.isCancellationError(error) || cancellationController?.isCancelled == true {
+                                throw CancellationError()
+                            }
                             // keep upload success even if metadata write failed
                         }
                     }
@@ -766,6 +769,27 @@ extension AssetProcessor {
             }
         }
         return result
+    }
+
+    private static func isCancellationError(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        var pending: [Error] = [error]
+        var seen: Set<String> = []
+        while let next = pending.popLast() {
+            if next is CancellationError { return true }
+            if let storage = next as? RemoteStorageClientError,
+               case .underlying(let inner) = storage {
+                pending.append(inner)
+                continue
+            }
+            let nsError = next as NSError
+            let key = "\(nsError.domain)#\(nsError.code)"
+            guard seen.insert(key).inserted else { continue }
+            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                pending.append(underlying)
+            }
+        }
+        return false
     }
 
     private static func detectRemoteContentRaceOrFallbackToRename(

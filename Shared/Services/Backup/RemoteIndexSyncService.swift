@@ -268,23 +268,47 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             client: client,
             basePath: basePath,
             fallback: captured.fallback,
-            budget: nil,
+            budget: OverlayProbeBudget(
+                maxVerifiedFilesPerMonth: Self.overlayProbeMaxVerifiedFilesPerMonth,
+                maxVerifiedBytesPerMonth: Self.overlayProbeMaxVerifiedBytesPerMonth
+            ),
             staleFallbackPolicy: .failClosedWhenMissingFallback,
             concurrencyCap: concurrencyCap
         )
         return try await syncGate.withLock { [self] in
-            let revisionUnchanged = applyPhysicalPresenceOverlay(
-                probe.missingByMonth,
-                expectedRevision: captured.revision,
-                allFresh: probe.fresh,
-                freshMonths: probe.freshMonths
-            )
-            if !revisionUnchanged {
+            // Apply + snapshot must share one lock acquisition so a worker can't bump
+            // the revision and add fingerprints between the two — the handle would
+            // otherwise claim `.fresh` for assets the probe never covered.
+            let result: (handle: RemoteViewHandle, staleRevision: Bool) = optimisticMutationLock.withLock {
+                let revisionUnchanged: Bool
+                if committedView.currentRevision() != captured.revision {
+                    clearPhysicalPresenceOverlayFreshnessLocked()
+                    revisionUnchanged = false
+                } else {
+                    for (month, hashes) in probe.missingByMonth {
+                        committedView.markPhysicallyMissing(month: month, hashes: hashes)
+                    }
+                    setPhysicalPresenceOverlayFreshnessLocked(allFresh: probe.fresh, freshMonths: probe.freshMonths)
+                    revisionUnchanged = true
+                }
+                let overlayFresh = revisionUnchanged && probe.fresh
+                let (revision, snapshot) = committedView.currentSnapshotWithRevision()
+                let fingerprints = Self.committedFingerprints(
+                    from: snapshot,
+                    subtractingInflight: inflightTracker
+                )
+                let handle = RemoteViewHandle(
+                    revision: revision,
+                    committedAssetFingerprintsByMonth: fingerprints,
+                    overlayFreshness: overlayFresh ? .fresh : .stale,
+                    producedAt: Date()
+                )
+                return (handle, !revisionUnchanged)
+            }
+            if result.staleRevision {
                 syncLog.info("[SyncTiming] overlay handle captured stale revision; preserving previous overlay")
             }
-            let overlayFresh = revisionUnchanged && probe.fresh
-            // Stale handles may include newer commits; resume callers reject stale overlay freshness.
-            return self.handleFromCurrentSnapshot(overlayFresh: overlayFresh)
+            return result.handle
         }
     }
 
@@ -999,15 +1023,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 case .success(let probe):
                     if !probe.fresh { anyFailure = true }
                     if probe.fresh { freshMonths.insert(month) }
-                    var missing = probe.missingHashes
-                    if !probe.inconclusiveHashes.isEmpty {
-                        if let stale = fallback[month] {
-                            missing.formUnion(stale.intersection(probe.inconclusiveHashes))
-                        } else if case .failClosedWhenMissingFallback = staleFallbackPolicy {
-                            missing.formUnion(probe.inconclusiveHashes)
-                        }
-                    }
-                    missingByMonth[month] = missing
+                    missingByMonth[month] = probe.missingHashes
                 case .failure(let error):
                     anyFailure = true
                     if let stale = fallback[month] {
@@ -1095,9 +1111,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 if sizeMatches.isEmpty { continue }
                 for match in sizeMatches {
                     if let budget {
-                        let budgetExceeded = verifiedFileCount >= budget.maxVerifiedFilesPerMonth ||
-                            verifiedByteCount + resource.fileSize > budget.maxVerifiedBytesPerMonth
-                        if budgetExceeded {
+                        let fileCap = verifiedFileCount >= budget.maxVerifiedFilesPerMonth
+                        let byteCap = verifiedByteCount + max(resource.fileSize, 0) > budget.maxVerifiedBytesPerMonth
+                        if fileCap || byteCap {
                             if !loggedProbeBudgetExhausted {
                                 loggedProbeBudgetExhausted = true
                                 syncLog.info("[SyncTiming] overlay probe budget exhausted for \(month.text); leaving unverified resources inconclusive")
@@ -1221,8 +1237,16 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                     basePath: normalizedBasePath,
                     remoteRelativePath: "\(yearEntry.name)/\(monthEntry.name)/\(MonthManifestStore.manifestFileName)"
                 )
-                guard let manifestEntry = try await client.metadata(path: manifestPath),
-                      manifestEntry.isDirectory == false else {
+                let manifestEntry: RemoteStorageEntry?
+                do {
+                    manifestEntry = try await client.metadata(path: manifestPath)
+                } catch {
+                    if isStorageNotFoundError(error) {
+                        continue
+                    }
+                    throw error
+                }
+                guard let manifestEntry, manifestEntry.isDirectory == false else {
                     continue
                 }
 

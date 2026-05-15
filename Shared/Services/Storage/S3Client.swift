@@ -4,6 +4,7 @@ final actor S3Client: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     // Multipart `CompleteMultipartUpload` historically doesn't honor If-None-Match across S3 vendors → concurrent multipart writers can clobber.
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    nonisolated var supportsInPlaceLivenessRenewal: Bool { true }
     // S3 keys are byte-exact; `IMG.JPG` and `img.jpg` are distinct objects.
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     // Conditional CopyObject support is endpoint-specific and probed asynchronously.
@@ -788,11 +789,10 @@ final actor S3Client: RemoteStorageClientProtocol {
         }
         do {
             try await delete(path: sourcePath)
-            return .created
         } catch {
             // Destination is durable; orphan cleanup reaps the source if delete failed.
-            return .bestEffortRetry
         }
+        return .created
     }
 
     func copy(from sourcePath: String, to destinationPath: String) async throws {

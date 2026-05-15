@@ -190,8 +190,8 @@ struct RemoteFormatCompatibilityService: Sendable {
             let temp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("migration-marker-detect-\(UUID().uuidString).json")
             defer { try? FileManager.default.removeItem(at: temp) }
-            let writerFromName = String(entry.name.dropLast(".json".count))
-            var writerID: String?
+            let parsedName = RepoLayout.parseMigrationMarkerFilename(entry.name)
+            var writerID = parsedName?.writerID
             var phase: MigrationMarkerPhase = .phase1
             do {
                 try await client.download(remotePath: path, localURL: temp)
@@ -211,9 +211,6 @@ struct RemoteFormatCompatibilityService: Sendable {
             } catch {
                 if !isNotFoundError(error) { throw error }
                 continue
-            }
-            if writerID == nil, RepoLayout.isValidWriterID(writerFromName) {
-                writerID = writerFromName
             }
             if let writerID {
                 results.append(MigrationMarkerState(writerID: writerID, phase: phase))

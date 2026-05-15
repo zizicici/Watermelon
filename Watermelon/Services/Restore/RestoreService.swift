@@ -73,14 +73,15 @@ final class RestoreService {
                     print("[RestoreService] item \(index + 1)/\(items.count) failed: \(error.localizedDescription)")
                 }
                 do {
-                    try await onItemCompleted(index + 1, items.count, restoredItem)
+                    try await notifyItemCompletedWithRetry(
+                        index: index + 1,
+                        total: items.count,
+                        restoredItem: restoredItem,
+                        onItemCompleted: onItemCompleted
+                    )
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
-                    if restoredItem != nil {
-                        // Hash-index callback failure after a save leaves the restored asset without durable backup identity.
-                        throw error
-                    }
                     print("[RestoreService] onItemCompleted \(index + 1)/\(items.count) failed: \(error.localizedDescription)")
                 }
             }
@@ -100,6 +101,29 @@ final class RestoreService {
             await storageClient.disconnectSafely()
             throw error
         }
+    }
+
+    private func notifyItemCompletedWithRetry(
+        index: Int,
+        total: Int,
+        restoredItem: RestoredItem?,
+        onItemCompleted: @Sendable (Int, Int, RestoredItem?) async throws -> Void
+    ) async throws {
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do {
+                try await onItemCompleted(index, total, restoredItem)
+                return
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
+                if attempt < 2 {
+                    try await Task.sleep(for: .milliseconds(250 * (1 << attempt)))
+                }
+            }
+        }
+        if let lastError { throw lastError }
     }
 
     private func restoreGroup(

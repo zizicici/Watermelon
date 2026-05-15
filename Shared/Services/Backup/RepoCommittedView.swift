@@ -239,6 +239,8 @@ final class RepoCommittedView: @unchecked Sendable {
     }
 
     func applyOptimisticUpsert(asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]?) {
+        missingLock.lock()
+        defer { missingLock.unlock() }
         cache.upsertAsset(asset, links: links)
     }
 

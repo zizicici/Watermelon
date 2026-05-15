@@ -7,10 +7,13 @@ import NIOSSH
 final actor SFTPClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .none }
+    nonisolated var supportsInPlaceLivenessRenewal: Bool { false }
+    nonisolated var supportsHeartbeatRenewal: Bool { false }
     // POSIX-style: case-sensitive on the wire; the server FS may differ but we can't probe that cheaply.
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
     private nonisolated static let chunkSize = 32 * 1024
+    private nonisolated static let renameOverwriteFlag: UInt32 = 0x00000001
     // Citadel 0.12.1's listDirectory leaks server-side directory handles; recycle
     // the channel after N lists so the leak can't exhaust the server's budget.
     private nonisolated static let listReconnectThreshold = 32
@@ -342,23 +345,27 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         }
     }
 
-    // SFTP v3 rename fails when target exists; surface verbatim so the caller's
-    // .bak-dance recovery can run instead of a delete-then-rename masking layer.
+    // Prefer server-side replacement over truncate writes for heartbeat renewal.
     func move(from sourcePath: String, to destinationPath: String) async throws {
         let client = try ensureClient()
         try await client.rename(
             at: RemotePathBuilder.normalizePath(sourcePath),
-            to: RemotePathBuilder.normalizePath(destinationPath)
+            to: RemotePathBuilder.normalizePath(destinationPath),
+            flags: Self.renameOverwriteFlag
         )
     }
 
     func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        let client = try ensureClient()
         if try await metadata(path: destinationPath) != nil {
             return .alreadyExists
         }
         try Task.checkCancellation()
         do {
-            try await move(from: sourcePath, to: destinationPath)
+            try await client.rename(
+                at: RemotePathBuilder.normalizePath(sourcePath),
+                to: RemotePathBuilder.normalizePath(destinationPath)
+            )
             return .bestEffortRetry
         } catch {
             if Self.isAlreadyExists(error) {

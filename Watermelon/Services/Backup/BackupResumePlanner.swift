@@ -69,7 +69,7 @@ final class BackupResumePlanner {
             return assetIDs.subtracting(completedAssetIDs)
         case .v2(let handle):
             guard let hashIndexRepository else {
-                return assetIDs
+                return assetIDs.subtracting(completedAssetIDs)
             }
             let committedView = handle.committedAssetFingerprintsByMonth
             let coverageWorker = self.coverageWorker
@@ -120,7 +120,7 @@ final class BackupResumePlanner {
             var pending = Set(pendingIDs)
             if case .v2(let handle) = dedupMode {
                 guard let repository = hashIndexRepository else {
-                    return pending
+                    return pending.subtracting(completedAssetIDs)
                 }
                 let committedView = handle.committedAssetFingerprintsByMonth
                 try Task.checkCancellation()

@@ -193,9 +193,25 @@ actor LivenessTracker {
         // MARK: Phase D — overwrite renewal (only when dataPathOverwriteRisk == .none)
         // Cancellation must surface here too so stopAndWait can unblock during shutdown.
         do {
+            let fallbackTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
+            do { try writeHeartbeat(timestampMs: fallbackTimestampMs) } catch {
+                try? await client.delete(path: stagingPath)
+                return
+            }
+            do {
+                if try await concurrentWriterClaimedRemoteHeartbeat(remotePath: remotePath, timestampMs: fallbackTimestampMs) {
+                    try? await client.delete(path: stagingPath)
+                    return
+                }
+            } catch is CancellationError {
+                try? await client.delete(path: stagingPath)
+                return
+            } catch {
+                livenessLog.warning("[Liveness] heartbeat probe failed before refreshed fallback atomic create for \(remotePath, privacy: .public), continuing exclusive create: \(error.localizedDescription, privacy: .public)")
+            }
             let createResult = try await client.atomicCreate(localURL: temp, remotePath: remotePath, respectTaskCancellation: true)
             if case .alreadyExists = createResult {
-                guard client.dataPathOverwriteRisk == .none else {
+                guard client.supportsInPlaceLivenessRenewal else {
                     try? await client.delete(path: stagingPath)
                     return
                 }

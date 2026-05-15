@@ -66,6 +66,19 @@ enum RepoLayout {
         normalize(joining: [base, watermelonDirectory, migrationsDirectory, "\(writerID).json"])
     }
 
+    static func migrationPhaseMarkerFileName(writerID: String, phase: Int, markerID: String) -> String {
+        "\(writerID)--phase\(phase)--\(markerID.lowercased()).json"
+    }
+
+    static func migrationPhaseMarkerPath(base: String, writerID: String, phase: Int, markerID: String) -> String {
+        normalize(joining: [
+            base,
+            watermelonDirectory,
+            migrationsDirectory,
+            migrationPhaseMarkerFileName(writerID: writerID, phase: phase, markerID: markerID)
+        ])
+    }
+
     static func snapshotFileName(month: LibraryMonthKey, lamport: UInt64, writerID: String, runID: String) -> String {
         "\(month.text)--\(format16Hex(lamport))--\(writerID)--\(runIDPrefix(runID)).jsonl"
     }
@@ -127,6 +140,11 @@ enum RepoLayout {
         let seq: UInt64
     }
 
+    struct ParsedMigrationMarkerFilename: Equatable, Sendable {
+        let writerID: String
+        let phase: Int?
+    }
+
     static func parseSnapshotFilename(_ name: String) -> ParsedSnapshotFilename? {
         let stripped = stripJsonlSuffix(name)
         let parts = stripped.components(separatedBy: "--")
@@ -161,6 +179,24 @@ enum RepoLayout {
         let candidate = String(name.dropLast(".json".count))
         guard isValidWriterID(candidate) else { return nil }
         return candidate
+    }
+
+    static func parseMigrationMarkerFilename(_ name: String) -> ParsedMigrationMarkerFilename? {
+        guard name.hasSuffix(".json") else { return nil }
+        let stripped = String(name.dropLast(".json".count))
+        if isValidWriterID(stripped) {
+            return ParsedMigrationMarkerFilename(writerID: stripped, phase: nil)
+        }
+        let parts = stripped.components(separatedBy: "--")
+        guard parts.count == 3,
+              isValidWriterID(parts[0]),
+              parts[1].hasPrefix("phase"),
+              let phase = Int(String(parts[1].dropFirst("phase".count))),
+              (1...3).contains(phase),
+              !parts[2].isEmpty else {
+            return nil
+        }
+        return ParsedMigrationMarkerFilename(writerID: parts[0], phase: phase)
     }
 
     /// Writers ID == lowercase UUID. Rejects `.DS_Store`-style files in liveness dir,

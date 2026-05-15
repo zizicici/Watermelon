@@ -41,6 +41,14 @@ enum OrphanMetadataCleanup {
     static func standardSweepDirectories(basePath: String) -> [SweepDirectory] {
         [
             SweepDirectory(
+                path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]),
+                parseWriter: { _ in nil }
+            ),
+            SweepDirectory(
+                path: RepoLayout.commitsDirectoryPath(base: basePath),
+                parseWriter: { RepoLayout.parseCommitFilename($0)?.writerID }
+            ),
+            SweepDirectory(
                 path: RepoLayout.snapshotsDirectoryPath(base: basePath),
                 parseWriter: { RepoLayout.parseSnapshotFilename($0)?.writerID }
             ),
@@ -49,6 +57,14 @@ enum OrphanMetadataCleanup {
                 // Liveness file naming is `<writerID>.json`; the "original" before
                 // `.staging-...` is that same name.
                 parseWriter: { RepoLayout.parseLivenessFilename($0) }
+            ),
+            SweepDirectory(
+                path: RepoLayout.identityDirectoryPath(base: basePath),
+                parseWriter: { RepoLayout.parseLivenessFilename($0) }
+            ),
+            SweepDirectory(
+                path: RepoLayout.migrationsDirectoryPath(base: basePath),
+                parseWriter: { RepoLayout.parseMigrationMarkerFilename($0)?.writerID }
             )
         ]
     }

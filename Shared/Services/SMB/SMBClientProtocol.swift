@@ -142,6 +142,16 @@ protocol RemoteStorageClientProtocol: Sendable {
     var moveIfAbsentGuarantee: CreateGuarantee { get }
     func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool
     var dataPathOverwriteRisk: DataPathOverwriteRisk { get }
+    var supportsInPlaceLivenessRenewal: Bool { get }
+    /// True when the backend can durably re-publish `liveness/<writerID>.json` after
+    /// the first write. SMB/WebDAV/S3/LocalVolume satisfy this via either an
+    /// overwrite-safe `move` (Phase B of `LivenessTracker.tick`) or in-place upload
+    /// (Phase D). SFTP without `posix-rename@openssh.com` cannot — rename-overwrite
+    /// is rejected on v3, and `supportsInPlaceLivenessRenewal` is false, so renewals
+    /// silently no-op after the initial heartbeat. When this is false the orphan
+    /// sweep gate MUST decline to run, because once our heartbeat goes stale a peer
+    /// would otherwise treat our writerID as stale and delete our live staging files.
+    var supportsHeartbeatRenewal: Bool { get }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { get }
     var concurrencyMode: ClientConcurrencyMode { get }
     /// Seconds added to the heartbeat stale threshold to absorb backend read-after-write
@@ -175,6 +185,11 @@ extension RemoteStorageClientProtocol {
 
     /// Fail-closed: treat uncustomized backends as overwrite-risky and exact-match.
     var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    var supportsInPlaceLivenessRenewal: Bool { dataPathOverwriteRisk == .none }
+    /// Default mirrors existing sweep behavior — only backends that explicitly
+    /// know they can't renew (currently SFTP without `posix-rename@openssh.com`)
+    /// must override to `false` so `BackupV2RuntimeBuilder` skips orphan sweep.
+    var supportsHeartbeatRenewal: Bool { true }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
     var livenessConsistencyGraceSeconds: TimeInterval { 0 }

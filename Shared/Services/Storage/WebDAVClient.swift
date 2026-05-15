@@ -685,14 +685,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             guard (200 ... 299).contains(response.statusCode) else {
                 throw Self.statusError(response.statusCode, method: "PUT", url: request.url)
             }
-            if respectTaskCancellation {
-                try Task.checkCancellation()
-            }
             onProgress?(1)
         } catch {
-            if Self.shouldCleanupPartialUpload(error) {
-                enqueueCancelledUploadCleanup(for: remotePath)
-            }
             if Self.isCancellationError(error) {
                 throw CancellationError()
             }
@@ -740,7 +734,6 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             guard (200 ... 299).contains(response.statusCode) else {
                 throw Self.statusError(response.statusCode, method: "PUT", url: request.url)
             }
-            if respectTaskCancellation { try Task.checkCancellation() }
             // 200/201/204 on .overwritePossible backends does NOT prove If-None-Match
             // was honored — some Nextcloud versions and self-implemented WebDAV servers
             // silently overwrite. Return .bestEffortRetry so callers (MetadataCreateGate,
@@ -752,14 +745,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                (inner as NSError).code == 412 {
                 return .alreadyExists
             }
-            if Self.shouldCleanupPartialUpload(storageError) {
-                enqueueCancelledUploadCleanup(for: remotePath)
-            }
             throw storageError
         } catch {
-            if Self.shouldCleanupPartialUpload(error) {
-                enqueueCancelledUploadCleanup(for: remotePath)
-            }
             if Self.isCancellationError(error) {
                 throw CancellationError()
             }

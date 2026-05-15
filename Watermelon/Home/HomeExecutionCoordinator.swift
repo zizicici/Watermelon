@@ -735,7 +735,7 @@ final class HomeExecutionCoordinator {
         phaseLabel: String
     ) -> BackupMonthFinalizationResult {
         switch result {
-        case .success(_, let skippedIncompleteCount):
+        case .success(_, let skippedIncompleteCount, let unverifiedFingerprintCount):
             if skippedIncompleteCount > 0 {
                 // Mark month failed so finishExecution reports partial; skip the alert — informational, not a crash.
                 let reason = String.localizedStringWithFormat(
@@ -748,6 +748,19 @@ final class HomeExecutionCoordinator {
                 refreshTerminalStatus(notifyState: false)
                 notifyStateChanged()
                 // Don't abort the whole upload phase for an informational skip.
+                return .downloadIncomplete(reason)
+            }
+            if unverifiedFingerprintCount > 0 {
+                // Asset saved to Photos but local fingerprint not durable; if marked .completed the next sync re-downloads as duplicate.
+                let reason = String.localizedStringWithFormat(
+                    String(localized: "restore.log.skippedIncomplete"),
+                    month.displayText,
+                    unverifiedFingerprintCount
+                )
+                session.markDownloadIncompleteMonth(month, reason: reason)
+                appendWarningLog(reason)
+                refreshTerminalStatus(notifyState: false)
+                notifyStateChanged()
                 return .downloadIncomplete(reason)
             }
             session.completeDownloadMonth(month)

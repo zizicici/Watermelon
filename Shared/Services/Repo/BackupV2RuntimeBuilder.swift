@@ -222,26 +222,28 @@ enum BackupV2RuntimeBuilder {
         var sweepTask: Task<Void, Never>? = nil
         if runMaintenanceTasks {
             await liveness.start()
-            // Sweep only on a determinate peer view — `isComplete == false` means at
-            // least one peer is `.unknown` and we'd risk deleting an active peer's
-            // staging files. Next bootstrap retries.
-            do {
-                let view = try await liveness.snapshotPeerStatuses()
-                if view.isComplete {
-                    var protectedWriters = view.sweepProtectionSet
-                    protectedWriters.insert(writerID)
-                    sweepTask = Task(priority: .utility) { [protectedWriters] in
-                        _ = await OrphanMetadataCleanup.sweep(
-                            client: metadataClient,
-                            directories: OrphanMetadataCleanup.standardSweepDirectories(basePath: profile.basePath),
-                            activeWriters: protectedWriters,
-                            ageThresholdSeconds: 3600,
-                            now: Date()
-                        )
+            if metadataClient.supportsHeartbeatRenewal {
+                // Sweep only on a determinate peer view — `isComplete == false` means at
+                // least one peer is `.unknown` and we'd risk deleting an active peer's
+                // staging files. Next bootstrap retries.
+                do {
+                    let view = try await liveness.snapshotPeerStatuses()
+                    if view.isComplete {
+                        var protectedWriters = view.sweepProtectionSet
+                        protectedWriters.insert(writerID)
+                        sweepTask = Task(priority: .utility) { [protectedWriters] in
+                            _ = await OrphanMetadataCleanup.sweep(
+                                client: metadataClient,
+                                directories: OrphanMetadataCleanup.standardSweepDirectories(basePath: profile.basePath),
+                                activeWriters: protectedWriters,
+                                ageThresholdSeconds: 3600,
+                                now: Date()
+                            )
+                        }
                     }
+                } catch {
+                    // List-level failure → no view at all; skip sweep (same as the prior `try?` behavior).
                 }
-            } catch {
-                // List-level failure → no view at all; skip sweep (same as the prior `try?` behavior).
             }
         }
 
@@ -282,7 +284,7 @@ enum BackupV2RuntimeBuilder {
             } catch is CancellationError {
                 throw CancellationError()
             } catch is CommitLogReader.ReadError {
-                throw BackupV2RuntimeBuildError.damagedV2Repo
+                continue
             } catch {
                 if isStorageNotFoundError(error) { continue }
                 throw error
@@ -297,7 +299,7 @@ enum BackupV2RuntimeBuilder {
             } catch is CancellationError {
                 throw CancellationError()
             } catch is SnapshotReader.ReadError {
-                throw BackupV2RuntimeBuildError.damagedV2Repo
+                continue
             } catch {
                 if isStorageNotFoundError(error) { continue }
                 throw error

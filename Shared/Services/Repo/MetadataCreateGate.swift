@@ -57,7 +57,7 @@ enum MetadataCreateGate {
             // and upgrade to .created when it matches.
             if case .alreadyExists = result {
                 do {
-                    if try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL) {
+                    if try await verifyMatchesLocalWithRetries(client: client, remotePath: remotePath, localURL: localURL) {
                         return .created
                     }
                 } catch is CancellationError {
@@ -128,7 +128,7 @@ enum MetadataCreateGate {
                 }
                 if case .alreadyExists = finalization {
                     do {
-                        if try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL) {
+                        if try await verifyMatchesLocalWithRetries(client: client, remotePath: remotePath, localURL: localURL) {
                             try? await client.delete(path: stagingPath)
                             return .created
                         }
@@ -143,7 +143,7 @@ enum MetadataCreateGate {
                 }
                 if case .bestEffortRetry = finalization,
                    finalizationPolicy == .requireExclusiveMove,
-                   client.moveIfAbsentGuarantee != .exclusive {
+                   !supportsExclusiveMove {
                     try? await client.delete(path: stagingPath)
                     throw Error.nonExclusiveFinalization(remotePath: remotePath)
                 }
@@ -188,31 +188,34 @@ enum MetadataCreateGate {
         }
     }
 
-    private static func verifyMatchesLocalWithRetries(
+    static func verifyMatchesLocalWithRetries(
         client: any RemoteStorageClientProtocol,
         remotePath: String,
         localURL: URL
     ) async throws -> Bool {
         var lastError: Swift.Error?
-        for attempt in 0..<3 {
+        let deadline = Date().addingTimeInterval(max(client.livenessConsistencyGraceSeconds, 1))
+        var attempt = 0
+        while true {
             do {
                 if try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL) {
                     return true
                 }
-                if attempt + 1 < 3 {
-                    try await Task.sleep(for: .milliseconds(200 * (1 << attempt)))
-                }
+                lastError = nil
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 lastError = error
-                if attempt + 1 < 3 {
-                    try await Task.sleep(for: .milliseconds(200 * (1 << attempt)))
-                }
             }
+            // Same-size stale reads after our own write also need the grace window;
+            // exiting on the first byte mismatch defeats the eventual-consistency budget.
+            guard Date() < deadline else {
+                if let lastError { throw lastError }
+                return false
+            }
+            try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
+            attempt += 1
         }
-        if let lastError { throw lastError }
-        return false
     }
 
     private static func verifyMatchesLocal(

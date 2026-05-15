@@ -11,7 +11,7 @@ actor RepoBootstrap {
         case ioFailure(Error)
     }
 
-    private static let postCreateReadRetryAttempts = 5
+    private static let postCreateReadRetryFloorSeconds: TimeInterval = 3
 
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
@@ -242,15 +242,25 @@ actor RepoBootstrap {
     private func stabilizeFreshElection(initial: String) async throws -> String {
         let maxRounds = 6
         let interval: Duration = .milliseconds(250)
-        for round in 0..<maxRounds {
+        var lastRead: String?
+        var stableReads = 0
+        for _ in 0..<maxRounds {
             try await Task.sleep(for: interval)
             try Task.checkCancellation()
-            if round + 1 < maxRounds {
-                do {
-                    _ = try await canonicalRepoIDFromClaims()
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {}
+            do {
+                let current = try await canonicalRepoIDFromClaims()
+                if current == lastRead, let current {
+                    stableReads += 1
+                    if stableReads >= 1 { return current }
+                } else {
+                    lastRead = current
+                    stableReads = 0
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastRead = nil
+                stableReads = 0
             }
         }
         return try await canonicalRepoIDFromClaims() ?? initial
@@ -299,10 +309,8 @@ actor RepoBootstrap {
                 userInfo: [NSLocalizedDescriptionKey: "identity claim atomicCreate reported \(atomicResult) but file not readable at \(claimPath)"]
             ))
         }
-        // For .bestEffortRetry we don't trust that our bytes are at the path —
-        // a peer could have raced exists+upload. Read back; if the content
-        // says a different repoID/writerID/ts, our identity is unanchored.
-        guard atomicResult == .bestEffortRetry else { return }
+        // Ambiguous outcomes need byte-level validation; metadata existence alone can be a stale read.
+        guard atomicResult == .bestEffortRetry || atomicResult == .alreadyExists else { return }
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("claim-verify-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
@@ -317,6 +325,16 @@ actor RepoBootstrap {
                 code: 4,
                 userInfo: [NSLocalizedDescriptionKey: "identity claim at \(claimPath) unparseable after write"]
             ))
+        }
+        if atomicResult == .alreadyExists {
+            guard landedRepoID == repoID, landedWriterID == writerID else {
+                throw BootstrapError.ioFailure(NSError(
+                    domain: "RepoBootstrap",
+                    code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: "identity claim content drift at \(claimPath): expected \(writerID) got \(landedWriterID)"]
+                ))
+            }
+            return
         }
         guard landedRepoID == repoID, landedWriterID == writerID, landedTs == createdAtMs else {
             throw BootstrapError.ioFailure(NSError(
@@ -503,7 +521,9 @@ actor RepoBootstrap {
 
     private func loadFinalizedRepoIDWithRetries() async throws -> String? {
         var lastError: Error?
-        for attempt in 0..<Self.postCreateReadRetryAttempts {
+        let deadline = postCreateReadRetryDeadline()
+        var attempt = 0
+        while true {
             do {
                 if let finalized = try await loadFinalizedRepoID() {
                     return finalized
@@ -514,12 +534,17 @@ actor RepoBootstrap {
             } catch {
                 lastError = error
             }
-            if attempt + 1 < Self.postCreateReadRetryAttempts {
-                try await sleepBeforePostCreateReadRetry(attempt: attempt)
+            guard Date() < deadline else {
+                if let lastError { throw lastError }
+                return nil
             }
+            try await sleepBeforePostCreateReadRetry(attempt: attempt)
+            attempt += 1
         }
-        if let lastError { throw lastError }
-        return nil
+    }
+
+    private func postCreateReadRetryDeadline() -> Date {
+        Date().addingTimeInterval(max(Self.postCreateReadRetryFloorSeconds, client.livenessConsistencyGraceSeconds))
     }
 
     private func sleepBeforePostCreateReadRetry(attempt: Int) async throws {
@@ -591,7 +616,9 @@ actor RepoBootstrap {
 
     private func verifyVersionCompatibleWithRetries() async throws {
         var lastUnreadable: VersionConflict = .unreadable(nil)
-        for attempt in 0..<Self.postCreateReadRetryAttempts {
+        let deadline = postCreateReadRetryDeadline()
+        var attempt = 0
+        while true {
             do {
                 try await verifyVersionCompatible()
                 return
@@ -605,11 +632,10 @@ actor RepoBootstrap {
             } catch {
                 throw error
             }
-            if attempt + 1 < Self.postCreateReadRetryAttempts {
-                try await sleepBeforePostCreateReadRetry(attempt: attempt)
-            }
+            guard Date() < deadline else { throw lastUnreadable }
+            try await sleepBeforePostCreateReadRetry(attempt: attempt)
+            attempt += 1
         }
-        throw lastUnreadable
     }
 
     private func verifyVersionCompatible() async throws {

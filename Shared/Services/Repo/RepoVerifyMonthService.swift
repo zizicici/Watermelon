@@ -11,6 +11,7 @@ actor RepoVerifyMonthService {
     private struct TombstonePlan {
         let tombstones: [(item: VerifyMonthReportItem, reason: CommitTombstoneBody.Reason)]
         let perWriterMaxSeq: [String: UInt64]
+        let lamportWatermark: UInt64
     }
 
     private struct PresenceSnapshot: Sendable {
@@ -126,6 +127,11 @@ actor RepoVerifyMonthService {
             entries = try await client.list(path: monthAbsolutePath)
         } catch {
             if isStorageNotFoundError(error) {
+                // A transient 404 on a month dir that the manifest expects to be populated
+                // would otherwise tombstone healthy bytes. Refuse to classify as missing.
+                if !state.resources.isEmpty {
+                    return { _ in .inconclusive(.probeFailure) }
+                }
                 return { _ in .missing }
             }
             throw error
@@ -162,11 +168,9 @@ actor RepoVerifyMonthService {
                 if sizeMatches.isEmpty { continue }
                 for match in sizeMatches {
                     let candidateSize = max(candidate.size, 0)
-                    let wouldExceedByteBudget = verifiedByteCount >
-                        Self.contentTrustMaxVerifiedBytesPerMonth - candidateSize
-                    let budgetExceeded = verifiedFileCount >= Self.contentTrustMaxVerifiedFilesPerMonth ||
-                        wouldExceedByteBudget
-                    if budgetExceeded {
+                    let fileCap = verifiedFileCount >= Self.contentTrustMaxVerifiedFilesPerMonth
+                    let byteCap = verifiedByteCount + candidateSize > Self.contentTrustMaxVerifiedBytesPerMonth
+                    if fileCap || byteCap {
                         return .inconclusive(.verifyBudgetExhausted)
                     }
                     let path = RemotePathBuilder.absolutePath(
@@ -223,6 +227,7 @@ actor RepoVerifyMonthService {
             let monthState = fresh.state.months[month] ?? .empty
             // tickRange must produce clocks above any peer op we just observed; advance lamport before allocating.
             try await services.lamport.observe(fresh.state.observedClock)
+            let lamportWatermark = await services.lamport.value()
             var freshLinksByFP: [Data: [SnapshotAssetResourceRow]] = [:]
             for ar in monthState.assetResources.values {
                 freshLinksByFP[ar.assetFingerprint, default: []].append(ar)
@@ -263,7 +268,11 @@ actor RepoVerifyMonthService {
                     return nil
                 }
             }
-            return TombstonePlan(tombstones: tombstones, perWriterMaxSeq: perWriterMaxSeq)
+            return TombstonePlan(
+                tombstones: tombstones,
+                perWriterMaxSeq: perWriterMaxSeq,
+                lamportWatermark: lamportWatermark
+            )
         }
 
         var plan = try await buildTombstonePlan()
@@ -276,7 +285,7 @@ actor RepoVerifyMonthService {
         while true {
             let basis = TombstoneObservationBasis(
                 perWriterMaxSeq: plan.perWriterMaxSeq,
-                lamportWatermark: await services.lamport.value()
+                lamportWatermark: plan.lamportWatermark
             )
             let clockRange = try await services.lamport.tickRange(count: plan.tombstones.count)
             var clockCursor = clockRange.low

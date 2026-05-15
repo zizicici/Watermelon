@@ -80,7 +80,10 @@ final class V2MonthIndexes {
                     presence = .listedSizeMatched
                 }
             } else if listedSizeMatches {
-                presence = .inconclusive(.neverProbed)
+                // Listing already confirmed name + size — same trust level as the overlay
+                // grants any resource it can't SHA-verify. Treating it as `.inconclusive` here
+                // breaks dedup and re-uploads everything when no overlay probe has run.
+                presence = .listedSizeMatched
             } else {
                 presence = .missing
             }
@@ -180,7 +183,7 @@ final class V2MonthIndexes {
             candidates = resourcesByLeafName[leafName] ?? []
         }
         return candidates
-            .filter { !self.presenceMap.isMissing($0.physicalRemotePath) }
+            .filter { self.presenceMap.isUsableCandidate($0.physicalRemotePath) }
             .min { $0.physicalRemotePath < $1.physicalRemotePath }
     }
 
@@ -188,7 +191,7 @@ final class V2MonthIndexes {
     private func anyPresentPath(forHash hash: Data) -> String? {
         guard let paths = pathsByHash[hash], !paths.isEmpty else { return nil }
         return paths.lazy
-            .filter { !self.presenceMap.isMissing($0) }
+            .filter { self.presenceMap.isUsableCandidate($0) }
             .min()
     }
 
@@ -243,8 +246,7 @@ final class V2MonthIndexes {
             existingFileNameSet.insert(resource.logicalName)
             collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: resource.logicalName))
         }
-        // Just wrote bytes — drop any stale presence marker so re-lookup picks the path up.
-        presenceMap.clear(path: resource.physicalRemotePath)
+        presenceMap.mark(path: resource.physicalRemotePath, .hashVerified)
         return resource
     }
 
@@ -295,7 +297,7 @@ final class V2MonthIndexes {
 
         // Subset replacement — older partial assets that are strict subsets of this one
         // get tombstoned. Mirrors MonthManifestStore behavior for legacy import.
-        for sub in replacingSubsetFingerprints {
+        for sub in replacingSubsetFingerprints where sub != asset.assetFingerprint {
             assetsByFingerprint.removeValue(forKey: sub)
             linksByFingerprint.removeValue(forKey: sub)
             pendingV2AssetFingerprints.remove(sub)

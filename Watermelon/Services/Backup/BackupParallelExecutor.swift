@@ -278,6 +278,7 @@ struct BackupParallelExecutor: Sendable {
                 var missingAssetCount = 0
                 var hasLoggedLocalHashCacheWarning = false
                 var uploadsSinceFlush = 0
+                var shouldFlushAfterDataConnectionLoss = false
 
                 var skippedMonthShortCircuit = false
                 if monthAlreadyFullyBackedUp(
@@ -423,6 +424,11 @@ struct BackupParallelExecutor: Sendable {
                                         )
                                     } catch {
                                         if let flushError = error as? V2MonthSession.FlushError,
+                                           case .concurrentFlushRejected = flushError {
+                                            uploadsSinceFlush = 0
+                                            continue
+                                        }
+                                        if let flushError = error as? V2MonthSession.FlushError,
                                            case .snapshotWriteFailed = flushError {
                                             remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                                         }
@@ -471,6 +477,7 @@ struct BackupParallelExecutor: Sendable {
                             if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
                                 clientReusable = false
                                 monthFatalError = error
+                                shouldFlushAfterDataConnectionLoss = true
                                 eventStream.emitLog(
                                     String.localizedStringWithFormat(
                                         String(localized: "backup.parallel.connectionLostDuringAsset"),
@@ -535,8 +542,9 @@ struct BackupParallelExecutor: Sendable {
                 let shouldFinishMonth = !workerState.paused && monthFatalError == nil
                 let hadDirtyManifestBeforeFinalize = monthStore.dirty
                 let skipFlushDueToUnavailable = monthFatalError.map(profile.isConnectionUnavailableErrorIncludingFlushUnderlying) ?? false
+                let canFlushV2AfterDataConnectionLoss = skipFlushDueToUnavailable && v2Services != nil && shouldFlushAfterDataConnectionLoss
 
-                if skipFlushDueToUnavailable {
+                if skipFlushDueToUnavailable && !canFlushV2AfterDataConnectionLoss {
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.parallel.skipManifestFlush"),
@@ -646,23 +654,55 @@ struct BackupParallelExecutor: Sendable {
                         }
                     } catch {
                         if let flushError = error as? V2MonthSession.FlushError,
-                           case .snapshotWriteFailed = flushError {
-                            remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
+                           case .concurrentFlushRejected = flushError {
+                            // Another flusher owns the pending state.
+                        } else {
+                            let isSnapshotWriteFailed: Bool
+                            if let flushError = error as? V2MonthSession.FlushError,
+                               case .snapshotWriteFailed = flushError {
+                                remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
+                                isSnapshotWriteFailed = true
+                            } else {
+                                isSnapshotWriteFailed = false
+                            }
+                            if error is CancellationError || (error as? V2MonthSession.FlushError)?.cancellationCause != nil {
+                                workerState.paused = true
+                                break
+                            }
+                            if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
+                                clientReusable = false
+                                monthFatalError = error
+                                eventStream.emitErrorLog(
+                                    String.localizedStringWithFormat(
+                                        String(localized: "backup.parallel.flushManifestFailed"),
+                                        workerID + 1,
+                                        monthKey.text,
+                                        profile.userFacingStorageErrorMessage(error)
+                                    ),
+                                    unless: error
+                                )
+                                break
+                            }
+                            eventStream.emitErrorLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.flushManifestFailed"),
+                                    workerID + 1,
+                                    monthKey.text,
+                                    profile.userFacingStorageErrorMessage(error)
+                                ),
+                                unless: error
+                            )
+                            if isSnapshotWriteFailed {
+                                // Commit durable; snapshot deferred. Month must not emit `.completed`.
+                                eventStream.emit(.monthChanged(MonthChangeEvent(
+                                    year: monthKey.year,
+                                    month: monthKey.month,
+                                    action: .downloadIncomplete(profile.userFacingStorageErrorMessage(error))
+                                )))
+                            } else {
+                                throw error
+                            }
                         }
-                        if error is CancellationError || (error as? V2MonthSession.FlushError)?.cancellationCause != nil {
-                            workerState.paused = true
-                            break
-                        }
-                        eventStream.emitErrorLog(
-                            String.localizedStringWithFormat(
-                                String(localized: "backup.parallel.flushManifestFailed"),
-                                workerID + 1,
-                                monthKey.text,
-                                profile.userFacingStorageErrorMessage(error)
-                            ),
-                            unless: error
-                        )
-                        throw error
                     }
                 }
 

@@ -345,6 +345,7 @@ final class BackgroundBackupRunner {
             guard let assetIDs = monthAssetIDs[monthKey], !assetIDs.isEmpty else { continue }
 
             var monthHasAssetFailures = false
+            var shouldFlushAfterDataConnectionAbort = false
 
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.monthStart"), monthKey.displayText, assetIDs.count),
@@ -452,6 +453,7 @@ final class BackgroundBackupRunner {
                         if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
                             anyMonthFailed = true
                             connectionUnavailableAbort = true
+                            shouldFlushAfterDataConnectionAbort = true
                             await writer.appendLog(
                                 String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
                                 level: .error
@@ -483,6 +485,11 @@ final class BackgroundBackupRunner {
                                     .union(delta.committedV2TombstoneFingerprints)
                             )
                         } catch {
+                            if let flushError = error as? V2MonthSession.FlushError,
+                               case .concurrentFlushRejected = flushError {
+                                uploadsSinceFlush = 0
+                                continue
+                            }
                             assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                             let isCancel = error is CancellationError
                                 || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
@@ -509,7 +516,7 @@ final class BackgroundBackupRunner {
             }
 
             var monthFlushFailureReason: String?
-            if connectionUnavailableAbort {
+            if connectionUnavailableAbort && !shouldFlushAfterDataConnectionAbort {
                 // Connection-unavailable already terminated this profile; another remote write would just re-log the same failure.
                 break
             }
@@ -521,6 +528,10 @@ final class BackgroundBackupRunner {
                         .union(delta.committedV2TombstoneFingerprints)
                 )
             } catch {
+                if let flushError = error as? V2MonthSession.FlushError,
+                   case .concurrentFlushRejected = flushError {
+                    continue
+                }
                 assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                 let isCancel = error is CancellationError
                     || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
@@ -543,6 +554,9 @@ final class BackgroundBackupRunner {
                 }
             }
             uploadsSinceFlush = 0
+            if connectionUnavailableAbort {
+                break
+            }
             if Task.isCancelled {
                 // Suppress per-month log; outer profile loop reports .cancelled.
             } else if let monthFlushFailureReason {

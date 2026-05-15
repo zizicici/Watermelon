@@ -121,8 +121,8 @@ struct V2MonthCommitFlusher {
             }
         }
 
-        let committedAssets = Set(pending.assets)
-        let committedTombstones = Set(pending.tombstones)
+        let committedAssets = Set(committedAddAssetClocks.keys)
+        let committedTombstones = Set(committedTombstoneClocks.keys)
         indexes.recordCommit(
             assetClocks: committedAddAssetClocks,
             tombstoneClocks: committedTombstoneClocks,

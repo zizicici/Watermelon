@@ -161,12 +161,6 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
                     return !Task.isCancelled
                 }
             )
-            if respectTaskCancellation, Task.isCancelled {
-                await cleanupCancelledUploadIfNeeded(
-                    remotePath: normalizedRemotePath
-                )
-                throw CancellationError()
-            }
         } catch {
             if respectTaskCancellation, Task.isCancelled {
                 await cleanupCancelledUploadIfNeeded(
