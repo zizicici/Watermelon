@@ -13,22 +13,21 @@ actor RepoVerifyMonthService {
         let perWriterMaxSeq: [String: UInt64]
     }
 
-    private enum PresenceProbeResult: Sendable {
-        case present
-        case absent
-        case inconclusive
-    }
-
     private struct PresenceSnapshot: Sendable {
-        let presentHashes: Set<Data>
-        let inconclusiveHashes: Set<Data>
+        let presenceByHash: [Data: RemoteResourcePresence]
 
         func isPresent(_ hash: Data) -> Bool {
-            presentHashes.contains(hash)
+            switch presenceByHash[hash] {
+            case .hashVerified, .listedSizeMatched: return true
+            case .missing, .inconclusive, .none: return false
+            }
         }
 
         func hasInconclusiveResource(in links: [SnapshotAssetResourceRow]) -> Bool {
-            links.contains { inconclusiveHashes.contains($0.resourceHash) }
+            links.contains { link in
+                if case .inconclusive = presenceByHash[link.resourceHash] { return true }
+                return false
+            }
         }
     }
 
@@ -108,26 +107,18 @@ actor RepoVerifyMonthService {
     ) async throws -> PresenceSnapshot {
         let probe = try await contentTrustPresenceProbe(month: month, state: state)
         let hashes = Set(state.resources.values.map(\.contentHash))
-        var present: Set<Data> = []
-        var inconclusive: Set<Data> = []
+        var presenceByHash: [Data: RemoteResourcePresence] = [:]
         for hash in hashes {
             try Task.checkCancellation()
-            switch try await probe(hash) {
-            case .present:
-                present.insert(hash)
-            case .absent:
-                break
-            case .inconclusive:
-                inconclusive.insert(hash)
-            }
+            presenceByHash[hash] = try await probe(hash)
         }
-        return PresenceSnapshot(presentHashes: present, inconclusiveHashes: inconclusive)
+        return PresenceSnapshot(presenceByHash: presenceByHash)
     }
 
     private func contentTrustPresenceProbe(
         month: LibraryMonthKey,
         state: RepoMonthState
-    ) async throws -> (Data) async throws -> PresenceProbeResult {
+    ) async throws -> (Data) async throws -> RemoteResourcePresence {
         let monthRelativePath = String(format: "%04d/%02d", month.year, month.month)
         let monthAbsolutePath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRelativePath)
         let entries: [RemoteStorageEntry]
@@ -135,7 +126,7 @@ actor RepoVerifyMonthService {
             entries = try await client.list(path: monthAbsolutePath)
         } catch {
             if isStorageNotFoundError(error) {
-                return { _ in .absent }
+                return { _ in .missing }
             }
             throw error
         }
@@ -163,8 +154,8 @@ actor RepoVerifyMonthService {
         var verifiedFileCount = 0
         var verifiedByteCount: Int64 = 0
         return { hash in
-            var sawInconclusive = false
-            guard let candidates = expectationsByHash[hash], !candidates.isEmpty else { return .absent }
+            var inconclusiveReason: RemoteResourcePresence.InconclusiveReason?
+            guard let candidates = expectationsByHash[hash], !candidates.isEmpty else { return .missing }
             for candidate in candidates {
                 let listed = entriesByKey[candidate.key] ?? []
                 let sizeMatches = listed.filter { $0.size == candidate.size }
@@ -176,7 +167,7 @@ actor RepoVerifyMonthService {
                     let budgetExceeded = verifiedFileCount >= Self.contentTrustMaxVerifiedFilesPerMonth ||
                         wouldExceedByteBudget
                     if budgetExceeded {
-                        return .inconclusive
+                        return .inconclusive(.verifyBudgetExhausted)
                     }
                     let path = RemotePathBuilder.absolutePath(
                         basePath: basePathRef,
@@ -193,14 +184,14 @@ actor RepoVerifyMonthService {
                         case .matched:
                             verifiedFileCount += 1
                             verifiedByteCount += candidateSize
-                            return .present
+                            return .hashVerified
                         case .mismatched:
                             verifiedFileCount += 1
                             verifiedByteCount += candidateSize
                         case .noContent:
                             continue
                         case .inconclusive:
-                            sawInconclusive = true
+                            inconclusiveReason = .probeFailure
                         }
                     } catch is CancellationError {
                         throw CancellationError()
@@ -210,8 +201,8 @@ actor RepoVerifyMonthService {
                     }
                 }
             }
-            if sawInconclusive { return .inconclusive }
-            return .absent
+            if let reason = inconclusiveReason { return .inconclusive(reason) }
+            return .missing
         }
     }
 

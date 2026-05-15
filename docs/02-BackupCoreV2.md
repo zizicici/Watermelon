@@ -227,6 +227,26 @@
 
 `MonthManifestStore` 实现拆为三段（均位于 `Shared/Services/Backup/`）：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。
 
+## 11.5 远端资源 presence 语义（统一类型）
+
+`RemoteResourcePresence`（`Shared/Services/Backup/RemoteResourcePresence.swift`）是 V2 worker session、sync overlay、verify probe 三处对"这个远端资源能不能信"的统一答复：
+
+- `.hashVerified` —— LIST + size + SHA 全过
+- `.listedSizeMatched` —— LIST + size 匹配，未做 SHA 验证（可作为候选，不可作为内容相等断言）
+- `.missing` —— LIST 缺该路径或 size 不匹配
+- `.inconclusive(reason)` —— `.neverProbed` / `.verifyBudgetExhausted` / `.probeFailure` 三种暂不能定论
+
+每月的 presence map 用 `RemoteMonthPresenceMap`（path-keyed value type）：
+
+- `V2MonthSession` 持有 1 份；`findByFileName` / `anyPresentPath` 通过 `isMissing(_:)` 过滤；`upsertResource` 写新字节后 `clear(path:)` 让重新查找能命中
+- `RemoteIndexSyncService` 的 overlay probe 输出按 hash 聚合（`[Data: RemoteResourcePresence]`）；`OverlayMonthProbe` 的 `missingHashes` / `inconclusiveHashes` / `fresh` 都是从这份 map derived
+- `RepoVerifyMonthService` 的 `PresenceSnapshot` 也用同一份 map；`hasInconclusiveResource(in:)` 判定 verify 是否完整
+
+调用约定：
+- `isHashVerified(_:)` —— 只认 SHA 过的；任何对内容字节安全敏感的判断走这条
+- `isUsableCandidate(_:)` —— size 匹配或 SHA 过都接受；upload preflight / dedup 走这条
+- `isMissing(_:)` —— 只认 `.missing`；inconclusive **不算** missing（避免 tombstone 错杀未探测字节）
+
 ## 12. 远端维护（用户主动触发）
 
 `RemoteMaintenanceController`（`Watermelon/Services/Backup/`）是 “验证远端” 入口：

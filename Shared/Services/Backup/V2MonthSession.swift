@@ -51,9 +51,8 @@ final class V2MonthSession: BackupMonthStore {
     }
 
     // Materialized state — keyed by physicalRemotePath so multi-path same-hash is natural.
-    // **Faithful to commit log** (no listing-based filter). The session-view layer
-    // uses `physicallyMissingHashes` to gate actionability without dropping
-    // entries from the snapshot-emit path.
+    // **Faithful to commit log** (no listing-based filter). `presenceMap` gates
+    // actionability without dropping entries from the snapshot-emit path.
     private var resourcesByPath: [String: RemoteManifestResource]
     private var assetsByFingerprint: [Data: RemoteManifestAsset]
     private var linksByFingerprint: [Data: [RemoteAssetResourceLink]]
@@ -63,14 +62,9 @@ final class V2MonthSession: BackupMonthStore {
     private var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
     private var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
     private var collisionKeysCache: Set<String>?
-    /// Session-scoped physical-missing set used for upsert/flush validation.
-    /// Workers push it into `RepoCommittedView.physicallyMissingByMonth` for
-    /// cache-wide consumers (Home/download/health/resume).
-    private var physicallyMissingHashes: Set<Data>
-    /// Per-path granularity needed when multi-path hashes have only some paths missing.
-    private var physicallyMissingPaths: Set<String>
-    private var untrustedPhysicalPresencePaths: Set<String>
-    private var unavailablePhysicalPresencePaths: Set<String>
+    /// Per-path presence; missing/inconclusive paths are excluded from find ops, hash-missing
+    /// is derived on demand for cache-wide consumers (Home / download / health / resume).
+    private var presenceMap: RemoteMonthPresenceMap
 
     // Existing remote files from start-of-month directory listing (collision rename input).
     private var remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata]
@@ -135,8 +129,7 @@ final class V2MonthSession: BackupMonthStore {
         var pathsByHash: [Data: Set<String>] = [:]
         var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
         var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
-        var physicallyMissingPaths: Set<String> = []
-        var untrustedPhysicalPresencePaths: Set<String> = []
+        var presenceMap = RemoteMonthPresenceMap()
         let nameCase = client.backendNameCaseSensitivity
         var sizesByPresenceKey: [String: Set<Int64>] = [:]
         for (name, meta) in remoteFilesByName {
@@ -146,15 +139,19 @@ final class V2MonthSession: BackupMonthStore {
             let logicalName = (row.physicalRemotePath as NSString).lastPathComponent
             let key = nameCase.presenceKey(for: logicalName)
             let listedSizeMatches = sizesByPresenceKey[key]?.contains(row.fileSize) == true
+            let presence: RemoteResourcePresence
             if let verifiedMissingHashes {
                 if !listedSizeMatches || verifiedMissingHashes.contains(row.contentHash) {
-                    physicallyMissingPaths.insert(row.physicalRemotePath)
+                    presence = .missing
+                } else {
+                    presence = .listedSizeMatched
                 }
             } else if listedSizeMatches {
-                untrustedPhysicalPresencePaths.insert(row.physicalRemotePath)
+                presence = .inconclusive(.neverProbed)
             } else {
-                physicallyMissingPaths.insert(row.physicalRemotePath)
+                presence = .missing
             }
+            presenceMap.mark(path: row.physicalRemotePath, presence)
             let resource = RemoteManifestResource(
                 year: year,
                 month: month,
@@ -176,21 +173,7 @@ final class V2MonthSession: BackupMonthStore {
         self.pathsByHash = pathsByHash
         self.resourcesByLeafName = resourcesByLeafName
         self.resourcesByCollisionKey = resourcesByCollisionKey
-        self.physicallyMissingPaths = physicallyMissingPaths
-        self.untrustedPhysicalPresencePaths = untrustedPhysicalPresencePaths
-        self.unavailablePhysicalPresencePaths = physicallyMissingPaths
-        // Hash missing iff every path missing; overlay consumers use the hash set, in-session lookup uses paths.
-        if physicallyMissingPaths.isEmpty {
-            self.physicallyMissingHashes = []
-        } else {
-            var refinedMissing: Set<Data> = []
-            for (hash, paths) in pathsByHash {
-                if paths.isSubset(of: physicallyMissingPaths) {
-                    refinedMissing.insert(hash)
-                }
-            }
-            self.physicallyMissingHashes = refinedMissing
-        }
+        self.presenceMap = presenceMap
 
         var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
         for row in materializedState.assets.values {
@@ -335,7 +318,7 @@ final class V2MonthSession: BackupMonthStore {
             candidates = resourcesByLeafName[leafName] ?? []
         }
         return candidates
-            .filter { !physicallyMissingPaths.contains($0.physicalRemotePath) }
+            .filter { !self.presenceMap.isMissing($0.physicalRemotePath) }
             .min { $0.physicalRemotePath < $1.physicalRemotePath }
     }
 
@@ -343,7 +326,7 @@ final class V2MonthSession: BackupMonthStore {
     private func anyPresentPath(forHash hash: Data) -> String? {
         guard let paths = pathsByHash[hash], !paths.isEmpty else { return nil }
         return paths.lazy
-            .filter { !self.unavailablePhysicalPresencePaths.contains($0) }
+            .filter { !self.presenceMap.isMissing($0) }
             .min()
     }
 
@@ -370,7 +353,7 @@ final class V2MonthSession: BackupMonthStore {
     }
 
     func physicallyMissingHashesSnapshot() -> Set<Data> {
-        physicallyMissingHashes
+        presenceMap.fullyMissingHashes(pathsByHash: pathsByHash)
     }
 
     // MARK: - Write
@@ -384,15 +367,8 @@ final class V2MonthSession: BackupMonthStore {
            existing.contentHash != resource.contentHash {
             let oldHash = existing.contentHash
             pathsByHash[oldHash]?.remove(resource.physicalRemotePath)
-            if let remaining = pathsByHash[oldHash], !remaining.isEmpty {
-                if remaining.isSubset(of: physicallyMissingPaths) {
-                    physicallyMissingHashes.insert(oldHash)
-                } else {
-                    physicallyMissingHashes.remove(oldHash)
-                }
-            } else {
+            if pathsByHash[oldHash]?.isEmpty == true {
                 pathsByHash.removeValue(forKey: oldHash)
-                physicallyMissingHashes.remove(oldHash)
             }
         }
         if let existing = resourcesByPath[resource.physicalRemotePath] {
@@ -405,11 +381,8 @@ final class V2MonthSession: BackupMonthStore {
             existingFileNameSet.insert(resource.logicalName)
             collisionKeysCache?.insert(RemoteFileNaming.collisionKey(for: resource.logicalName))
         }
-        // Just wrote bytes; clear missing markers so findResourceByHash can re-resolve.
-        physicallyMissingPaths.remove(resource.physicalRemotePath)
-        untrustedPhysicalPresencePaths.remove(resource.physicalRemotePath)
-        unavailablePhysicalPresencePaths.remove(resource.physicalRemotePath)
-        physicallyMissingHashes.remove(resource.contentHash)
+        // Just wrote bytes — drop any stale presence marker so re-lookup picks the path up.
+        presenceMap.clear(path: resource.physicalRemotePath)
         dirty = true
         return resource
     }

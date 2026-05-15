@@ -19,8 +19,23 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     private struct OverlayMonthProbe: Sendable {
         let month: LibraryMonthKey
-        let missingHashes: Set<Data>
-        let inconclusiveHashes: Set<Data>
+        let presenceByHash: [Data: RemoteResourcePresence]
+
+        var missingHashes: Set<Data> {
+            var result: Set<Data> = []
+            for (hash, presence) in presenceByHash where presence == .missing {
+                result.insert(hash)
+            }
+            return result
+        }
+
+        var inconclusiveHashes: Set<Data> {
+            var result: Set<Data> = []
+            for (hash, presence) in presenceByHash {
+                if case .inconclusive = presence { result.insert(hash) }
+            }
+            return result
+        }
 
         var fresh: Bool { inconclusiveHashes.isEmpty }
     }
@@ -1042,11 +1057,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             entries = try await client.list(path: monthAbs)
         } catch {
             if isStorageNotFoundError(error) {
-                return OverlayMonthProbe(
-                    month: month,
-                    missingHashes: Set(resources.map(\.contentHash)),
-                    inconclusiveHashes: []
-                )
+                var presence: [Data: RemoteResourcePresence] = [:]
+                for resource in resources {
+                    presence[resource.contentHash] = .missing
+                }
+                return OverlayMonthProbe(month: month, presenceByHash: presence)
             }
             throw error
         }
@@ -1068,11 +1083,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         var verifiedFileCount = 0
         var verifiedByteCount: Int64 = 0
         var loggedProbeBudgetExhausted = false
-        var missingHashes: Set<Data> = []
-        var inconclusiveHashes: Set<Data> = []
+        var presenceByHash: [Data: RemoteResourcePresence] = [:]
         for (hash, group) in resourcesByHash {
             var anyPresent = false
-            var inconclusive = false
+            var inconclusiveReason: RemoteResourcePresence.InconclusiveReason?
             candidateScan: for resource in group {
                 try Task.checkCancellation()
                 let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
@@ -1088,7 +1102,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                                 loggedProbeBudgetExhausted = true
                                 syncLog.info("[SyncTiming] overlay probe budget exhausted for \(month.text); leaving unverified resources inconclusive")
                             }
-                            inconclusive = true
+                            inconclusiveReason = .verifyBudgetExhausted
                             break candidateScan
                         }
                     }
@@ -1114,7 +1128,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                         case .noContent:
                             continue
                         case .inconclusive:
-                            inconclusive = true
+                            inconclusiveReason = .probeFailure
                         }
                     } catch is CancellationError {
                         throw CancellationError()
@@ -1126,18 +1140,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 }
             }
             if anyPresent {
-                continue
-            } else if inconclusive {
-                inconclusiveHashes.insert(hash)
+                presenceByHash[hash] = .hashVerified
+            } else if let reason = inconclusiveReason {
+                presenceByHash[hash] = .inconclusive(reason)
             } else {
-                missingHashes.insert(hash)
+                presenceByHash[hash] = .missing
             }
         }
-        return OverlayMonthProbe(
-            month: month,
-            missingHashes: missingHashes,
-            inconclusiveHashes: inconclusiveHashes
-        )
+        return OverlayMonthProbe(month: month, presenceByHash: presenceByHash)
     }
 
     private static func isNotFoundError(_ error: Error) -> Bool {
