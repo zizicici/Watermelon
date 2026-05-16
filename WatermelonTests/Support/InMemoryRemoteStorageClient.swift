@@ -383,9 +383,59 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         exclusiveMoveProbeOverride = value
     }
 
+    private var moveIfAbsentOutcomeOverride: AtomicCreateResult?
+    private var preMoveSourceMutation: (@Sendable (_ sourcePath: String) async -> Void)?
+
+    /// One-shot: next `moveIfAbsent` returns this outcome with production-like remote state.
+    /// `.bestEffortRetry` copies source bytes to destination and leaves the source visible so the
+    /// caller's post-write verifier can equality-check then delete. Cleared on use.
+    func setMoveIfAbsentOutcomeOverride(_ outcome: AtomicCreateResult?) {
+        moveIfAbsentOutcomeOverride = outcome
+    }
+
+    /// One-shot: invoked before the next `moveIfAbsent` materializes its decision, then cleared.
+    /// Lets a test mutate (e.g. delete) the source between the caller's pre-scan and the move.
+    func setPreMoveSourceMutation(_ mutation: (@Sendable (_ sourcePath: String) async -> Void)?) {
+        preMoveSourceMutation = mutation
+    }
+
     func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
         let src = Self.normalize(sourcePath)
         let dst = Self.normalize(destinationPath)
+        if let mutation = preMoveSourceMutation {
+            preMoveSourceMutation = nil
+            await mutation(src)
+        }
+        if let override = moveIfAbsentOutcomeOverride {
+            moveIfAbsentOutcomeOverride = nil
+            switch override {
+            case .created:
+                if files[dst] != nil { return .alreadyExists }
+                guard let data = files.removeValue(forKey: src) else {
+                    throw RemoteStorageClientError.underlying(NSError(
+                        domain: NSCocoaErrorDomain,
+                        code: NSFileNoSuchFileError,
+                        userInfo: [NSLocalizedDescriptionKey: "no such file"]
+                    ))
+                }
+                files[dst] = data
+                ensureDirectoryChain(for: dst)
+                return .created
+            case .alreadyExists:
+                return .alreadyExists
+            case .bestEffortRetry:
+                guard let data = files[src] else {
+                    throw RemoteStorageClientError.underlying(NSError(
+                        domain: NSCocoaErrorDomain,
+                        code: NSFileNoSuchFileError,
+                        userInfo: [NSLocalizedDescriptionKey: "no such file"]
+                    ))
+                }
+                files[dst] = data
+                ensureDirectoryChain(for: dst)
+                return .bestEffortRetry
+            }
+        }
         if files[dst] != nil {
             return .alreadyExists
         }

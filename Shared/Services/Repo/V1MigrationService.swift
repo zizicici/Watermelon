@@ -20,14 +20,12 @@ actor V1MigrationService {
         let migratedMonthCount: Int
     }
 
-    static let residueManifestFileName = ".watermelon_manifest.legacy-residue.sqlite"
-    private static let partialMigrationMarkerFileName = ".watermelon_manifest.legacy-partial-migration.json"
-
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
     private let database: DatabaseManager
     private let identity: RepoIdentity
     private let bootstrap: RepoBootstrap
+    private let residueQuarantine: V1MigrationResidueQuarantine
 
     init(
         client: any RemoteStorageClientProtocol,
@@ -41,6 +39,7 @@ actor V1MigrationService {
         self.database = database
         self.identity = identity
         self.bootstrap = bootstrap
+        self.residueQuarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
     }
 
     func scanV1Months() async throws -> [ScannedV1Month] {
@@ -95,7 +94,7 @@ actor V1MigrationService {
             guard let store = storeOrNil else {
                 // Quarantine corrupt residue so detectV1Manifests stops looping it as .v1.
                 v1MigrationLog.warning("V1 manifest at \(scanned.manifestAbsolutePath, privacy: .public) unreadable — quarantining as legacy residue")
-                try await quarantineV1ResidueManifest(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
+                try await residueQuarantine.quarantine(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
                 continue
             }
 
@@ -106,7 +105,7 @@ actor V1MigrationService {
                     try await deleteIfPresent(path: scanned.manifestAbsolutePath)
                 } else {
                     v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) has \(snapshot.resources.count, privacy: .public) resources / \(snapshot.links.count, privacy: .public) links but no assets — quarantining as legacy residue")
-                    try await quarantineV1ResidueManifest(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
+                    try await residueQuarantine.quarantine(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
                 }
                 continue
             }
@@ -206,7 +205,7 @@ actor V1MigrationService {
                 } else {
                     v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) has no migrable assets; quarantining as legacy residue")
                 }
-                try await quarantineV1ResidueManifest(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
+                try await residueQuarantine.quarantine(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
                 continue
             }
             if let firstSkipped = skippedAssetFailures.first {
@@ -335,7 +334,7 @@ actor V1MigrationService {
                 runID: runID,
                 respectTaskCancellation: false
             )
-            try await quarantineV1ResidueManifest(
+            try await residueQuarantine.quarantine(
                 year: scanned.year,
                 month: scanned.month,
                 sourcePath: scanned.manifestAbsolutePath
@@ -363,7 +362,7 @@ actor V1MigrationService {
 
     func runPhase3(writerID: String, runID: String) async throws {
         try await writeMigrationMarker(writerID: writerID, phase: MigrationMarkerPhase.phase3, runID: runID)
-        try await sweepResidueManifests()
+        try await residueQuarantine.sweepResidueManifests()
         try await deleteMigrationMarkers(writerID: writerID)
     }
 
@@ -440,51 +439,6 @@ actor V1MigrationService {
         return sawMarker ? .phase1 : nil
     }
 
-    private func sweepResidueManifests() async throws {
-        let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: basePath)
-        } catch {
-            if isStorageNotFoundError(error) { return }
-            throw error
-        }
-        let yearEntries = entries.filter { $0.isDirectory && $0.name.range(of: "^[0-9]{4}$", options: .regularExpression) != nil }
-        for yearEntry in yearEntries {
-            try Task.checkCancellation()
-            let yearPath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: yearEntry.name)
-            let monthEntries: [RemoteStorageEntry]
-            do {
-                monthEntries = try await client.list(path: yearPath)
-            } catch {
-                if isStorageNotFoundError(error) { continue }
-                throw error
-            }
-            for monthEntry in monthEntries where monthEntry.isDirectory && monthEntry.name.range(of: "^[0-9]{2}$", options: .regularExpression) != nil {
-                try Task.checkCancellation()
-                let monthPath = RemotePathBuilder.absolutePath(basePath: yearPath, remoteRelativePath: monthEntry.name)
-                let files: [RemoteStorageEntry]
-                do {
-                    files = try await client.list(path: monthPath)
-                } catch {
-                    if isStorageNotFoundError(error) { continue }
-                    throw error
-                }
-                let hasPartialMigrationMarker = files.contains { !$0.isDirectory && $0.name == Self.partialMigrationMarkerFileName }
-                let residueFiles = files.filter { !$0.isDirectory && Self.isResidueManifestName($0.name) }
-                if hasPartialMigrationMarker && !residueFiles.isEmpty {
-                    v1MigrationLog.info(
-                        "preserving \(residueFiles.count, privacy: .public) V1 residue manifest(s) under partial migration marker at \(monthPath, privacy: .public)"
-                    )
-                    continue
-                }
-                for file in residueFiles {
-                    try Task.checkCancellation()
-                    try await deleteIfPresent(path: file.path)
-                }
-            }
-        }
-    }
-
     /// Distinguishes our incomplete phase3 cleanup (marker survived) from a real V1 regression.
     func ownsMigrationMarker(writerID: String) async throws -> Bool {
         for path in try await migrationMarkerPaths(writerID: writerID) {
@@ -547,151 +501,6 @@ actor V1MigrationService {
         try await client.delete(path: path)
     }
 
-    /// Idempotent rename so detectV1Manifests stops routing the month as `.v1`.
-    private func quarantineV1ResidueManifest(year: Int, month: Int, sourcePath: String) async throws {
-        let monthRel = String(format: "%04d/%02d", year, month)
-        let residuePath = RemotePathBuilder.absolutePath(
-            basePath: basePath,
-            remoteRelativePath: monthRel + "/" + Self.residueManifestFileName
-        )
-        if let meta = try await metadataIfPresent(path: residuePath), !meta.isDirectory {
-            guard try await metadataIfPresent(path: sourcePath) != nil else { return }
-            if try await remoteFilesEqual(sourcePath, residuePath) {
-                try await deleteIfPresent(path: sourcePath)
-                return
-            }
-            try await moveSourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
-            return
-        }
-        // Peer-deletion between scan and quarantine must not abort the whole phase.
-        guard try await metadataIfPresent(path: sourcePath) != nil else { return }
-        if try await !client.resolvedSupportsExclusiveMoveIfAbsent(forDestinationPath: residuePath) {
-            try await copySourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
-            return
-        }
-        do {
-            switch try await client.moveIfAbsent(from: sourcePath, to: residuePath) {
-            case .created:
-                return
-            case .bestEffortRetry:
-                try await finishBestEffortResidueMove(sourcePath: sourcePath, destinationPath: residuePath)
-                return
-            case .alreadyExists:
-                if try await remoteFilesEqual(sourcePath, residuePath) {
-                    try await deleteIfPresent(path: sourcePath)
-                } else {
-                    try await moveSourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
-                }
-                return
-            }
-        } catch {
-            if isStorageNotFoundError(error) { return }
-            if let meta = try await metadataIfPresent(path: residuePath), !meta.isDirectory {
-                guard try await metadataIfPresent(path: sourcePath) != nil else { return }
-                if try await remoteFilesEqual(sourcePath, residuePath) {
-                    try await deleteIfPresent(path: sourcePath)
-                } else {
-                    try await moveSourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
-                }
-                return
-            }
-            throw error
-        }
-    }
-
-    private func moveSourceToUniqueResidue(monthRel: String, sourcePath: String) async throws {
-        let uniqueResiduePath = RemotePathBuilder.absolutePath(
-            basePath: basePath,
-            remoteRelativePath: monthRel + "/" + Self.residueManifestFileName + ".\(UUID().uuidString)"
-        )
-        if try await !client.resolvedSupportsExclusiveMoveIfAbsent(forDestinationPath: uniqueResiduePath) {
-            try await copySourceToVerifiedResidue(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
-            return
-        }
-        do {
-            switch try await client.moveIfAbsent(from: sourcePath, to: uniqueResiduePath) {
-            case .created:
-                return
-            case .bestEffortRetry:
-                try await finishBestEffortResidueMove(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
-                return
-            case .alreadyExists:
-                throw NSError(domain: "V1MigrationService", code: -32, userInfo: [
-                    NSLocalizedDescriptionKey: "unique residue path already exists for \(sourcePath)"
-                ])
-            }
-        } catch {
-            if isStorageNotFoundError(error) { return }
-            throw error
-        }
-    }
-
-    private func copySourceToUniqueResidue(monthRel: String, sourcePath: String) async throws {
-        for _ in 0..<4 {
-            let uniqueResiduePath = RemotePathBuilder.absolutePath(
-                basePath: basePath,
-                remoteRelativePath: monthRel + "/" + Self.residueManifestFileName + ".\(UUID().uuidString)"
-            )
-            guard try await metadataIfPresent(path: uniqueResiduePath) == nil else { continue }
-            try await copySourceToVerifiedResidue(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
-            return
-        }
-        throw NSError(domain: "V1MigrationService", code: -34, userInfo: [
-            NSLocalizedDescriptionKey: "could not allocate unique residue path for \(sourcePath)"
-        ])
-    }
-
-    private func copySourceToVerifiedResidue(sourcePath: String, destinationPath: String) async throws {
-        guard try await metadataIfPresent(path: sourcePath) != nil else { return }
-        do {
-            try await client.copy(from: sourcePath, to: destinationPath)
-        } catch {
-            if isStorageNotFoundError(error) { return }
-            throw error
-        }
-        guard try await remoteFilesEqual(sourcePath, destinationPath) else {
-            try? await deleteIfPresent(path: destinationPath)
-            if try await metadataIfPresent(path: sourcePath) == nil { return }
-            throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: destinationPath)
-        }
-        do {
-            try await client.delete(path: sourcePath)
-        } catch {
-            if isStorageNotFoundError(error) { return }
-            throw error
-        }
-        guard try await metadataIfPresent(path: sourcePath) == nil else {
-            throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: destinationPath)
-        }
-    }
-
-    private func finishBestEffortResidueMove(sourcePath: String, destinationPath: String) async throws {
-        guard try await metadataIfPresent(path: sourcePath) != nil else { return }
-        guard try await remoteFilesEqual(sourcePath, destinationPath) else {
-            if try await metadataIfPresent(path: sourcePath) == nil { return }
-            throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: destinationPath)
-        }
-        do {
-            try await client.delete(path: sourcePath)
-        } catch {
-            if isStorageNotFoundError(error) { return }
-            throw error
-        }
-        guard try await metadataIfPresent(path: sourcePath) == nil else {
-            throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: destinationPath)
-        }
-    }
-
-    private func residueMoveIncompleteError(sourcePath: String, destinationPath: String) -> NSError {
-        NSError(domain: "V1MigrationService", code: -33, userInfo: [
-            NSLocalizedDescriptionKey: "V1 manifest quarantine incomplete: source still visible at \(sourcePath) after moving to \(destinationPath)"
-        ])
-    }
-
-    private static func isResidueManifestName(_ name: String) -> Bool {
-        name == residueManifestFileName || name.hasPrefix(residueManifestFileName + ".")
-    }
-
     private func writePartialMigrationMarker(
         year: Int,
         month: Int,
@@ -703,7 +512,7 @@ actor V1MigrationService {
         let monthRel = String(format: "%04d/%02d", year, month)
         let markerPath = RemotePathBuilder.absolutePath(
             basePath: basePath,
-            remoteRelativePath: monthRel + "/" + Self.partialMigrationMarkerFileName
+            remoteRelativePath: monthRel + "/" + V1MigrationResidueFileNames.partialMigrationMarkerFileName
         )
         let dict: [String: Any] = [
             "v": 1,
@@ -731,56 +540,6 @@ actor V1MigrationService {
             respectTaskCancellation: false,
             finalizationPolicy: .allowBestEffort
         )
-    }
-
-    private func remoteFilesEqual(_ lhsPath: String, _ rhsPath: String) async throws -> Bool {
-        guard let lhsMeta = try await metadataIfPresent(path: lhsPath), !lhsMeta.isDirectory,
-              let rhsMeta = try await metadataIfPresent(path: rhsPath), !rhsMeta.isDirectory,
-              lhsMeta.size == rhsMeta.size else {
-            return false
-        }
-        let lhsURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("v1-residue-compare-\(UUID().uuidString)-lhs.sqlite")
-        let rhsURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("v1-residue-compare-\(UUID().uuidString)-rhs.sqlite")
-        defer {
-            try? FileManager.default.removeItem(at: lhsURL)
-            try? FileManager.default.removeItem(at: rhsURL)
-        }
-        do {
-            try await client.download(remotePath: lhsPath, localURL: lhsURL)
-            try await client.download(remotePath: rhsPath, localURL: rhsURL)
-        } catch {
-            if isStorageNotFoundError(error) { return false }
-            throw error
-        }
-        do {
-            return try localFilesEqual(lhsURL, rhsURL, expectedSize: lhsMeta.size)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            return false
-        }
-    }
-
-    private func localFilesEqual(_ lhsURL: URL, _ rhsURL: URL, expectedSize: Int64) throws -> Bool {
-        let lhsSize = try FileManager.default.attributesOfItem(atPath: lhsURL.path)[.size] as? Int64
-        let rhsSize = try FileManager.default.attributesOfItem(atPath: rhsURL.path)[.size] as? Int64
-        guard lhsSize == expectedSize, rhsSize == expectedSize else { return false }
-
-        let lhs = try FileHandle(forReadingFrom: lhsURL)
-        defer { try? lhs.close() }
-        let rhs = try FileHandle(forReadingFrom: rhsURL)
-        defer { try? rhs.close() }
-
-        let chunkSize = 64 * 1024
-        while true {
-            try Task.checkCancellation()
-            let lhsChunk = try lhs.read(upToCount: chunkSize) ?? Data()
-            let rhsChunk = try rhs.read(upToCount: chunkSize) ?? Data()
-            if lhsChunk != rhsChunk { return false }
-            if lhsChunk.isEmpty { return true }
-        }
     }
 
     private func writeMigrationMarker(writerID: String, phase: MigrationMarkerPhase, runID: String) async throws {
