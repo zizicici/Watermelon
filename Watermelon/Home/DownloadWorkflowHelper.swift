@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pure domain executor for download operations.
-/// Knows only how to restore remote items and write hash index entries.
+/// Restores remote items and delegates per-item durability verification to RestoredAssetFingerprintVerifier.
 /// Does NOT know about Home's data cache (syncRemoteData/refreshLocalIndex) or BSC upload/scoped-backup control.
 /// The coordinator decides when and how to sequence scoped backup, remote sync and local refresh.
 @MainActor
@@ -17,7 +17,7 @@ final class DownloadWorkflowHelper {
         self.dependencies = dependencies
     }
 
-    /// Downloads remote-only items via RestoreService and writes hash index per item.
+    /// Downloads remote-only items via RestoreService and verifies durable fingerprint binding per item.
     /// Filters on `isRestorable` so post-save verification can compare full fingerprints.
     func downloadItems(
         _ remoteItems: [RemoteAlbumItem],
@@ -31,8 +31,7 @@ final class DownloadWorkflowHelper {
             return .success(restoredCount: 0, skippedIncompleteCount: skippedIncompleteCount, unverifiedFingerprintCount: 0)
         }
 
-        let hashIndexBuildService = dependencies.localHashIndexBuildService
-        let hashIndexRepository = dependencies.hashIndexRepository
+        let verifier = dependencies.restoredAssetFingerprintVerifier
         let unverifiedTracker = UnverifiedFingerprintTracker()
 
         do {
@@ -53,11 +52,9 @@ final class DownloadWorkflowHelper {
                         // upstream — restoring the asset without a durable fingerprint would
                         // re-download it as a "duplicate" on the next session.
                         do {
-                            let verified = try await Self.rebuildVerifiedLocalHashIndex(
+                            let verified = try await verifier.verifyDurableBinding(
                                 assetLocalIdentifier: restoredItem.asset.localIdentifier,
-                                remoteAssetFingerprint: restoredItem.identity,
-                                buildService: hashIndexBuildService,
-                                repository: hashIndexRepository
+                                expectedFingerprint: restoredItem.identity
                             )
                             if !verified {
                                 throw NSError(
@@ -103,41 +100,6 @@ final class DownloadWorkflowHelper {
     }
 
     func cancel() {}
-
-    private nonisolated static func rebuildVerifiedLocalHashIndex(
-        assetLocalIdentifier: String,
-        remoteAssetFingerprint: Data,
-        buildService: LocalHashIndexBuildService,
-        repository: ContentHashIndexRepository
-    ) async throws -> Bool {
-        let delays: [Duration] = [
-            .milliseconds(500),
-            .milliseconds(750),
-            .milliseconds(1_000),
-            .milliseconds(1_500),
-            .milliseconds(2_000),
-            .milliseconds(2_500),
-            .milliseconds(3_000)
-        ]
-        for attempt in 0...delays.count {
-            try Task.checkCancellation()
-            let result = try await buildService.buildIndex(
-                for: [assetLocalIdentifier],
-                workerCount: 1,
-                allowNetworkAccess: false
-            )
-            if result.readyAssetIDs.contains(assetLocalIdentifier) {
-                let records = try await Task.detached(priority: .utility) {
-                    try repository.fetchAssetFingerprintRecords(assetIDs: [assetLocalIdentifier])
-                }.value
-                return records[assetLocalIdentifier]?.fingerprint == remoteAssetFingerprint
-            }
-            if attempt < delays.count {
-                try await Task.sleep(for: delays[attempt])
-            }
-        }
-        return false
-    }
 }
 
 enum DownloadMonthResult {
