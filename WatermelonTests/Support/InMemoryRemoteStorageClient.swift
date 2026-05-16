@@ -359,14 +359,14 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         moveIfAbsentGuaranteeBox.withLock { $0 = guarantee }
     }
 
-    nonisolated var livenessConsistencyGraceSeconds: TimeInterval {
-        livenessGraceBox.withLock { $0 }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval {
+        readAfterWriteGraceBox.withLock { $0 }
     }
-    private nonisolated let livenessGraceBox = OSAllocatedUnfairLock(initialState: TimeInterval(0))
+    private nonisolated let readAfterWriteGraceBox = OSAllocatedUnfairLock(initialState: TimeInterval(0))
 
     /// Lets per-test scenarios simulate eventually-consistent backends (R2/MinIO/WebDAV-behind-cache).
-    nonisolated func setLivenessConsistencyGrace(_ seconds: TimeInterval) {
-        livenessGraceBox.withLock { $0 = seconds }
+    nonisolated func setReadAfterWriteGrace(_ seconds: TimeInterval) {
+        readAfterWriteGraceBox.withLock { $0 = seconds }
     }
 
     func supportsExclusiveMoveIfAbsent(forDestinationPath _: String) async throws -> Bool {

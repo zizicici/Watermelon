@@ -222,7 +222,7 @@ enum BackupV2RuntimeBuilder {
         var sweepTask: Task<Void, Never>? = nil
         if runMaintenanceTasks {
             await liveness.start()
-            if metadataClient.supportsHeartbeatRenewal {
+            if metadataClient.supportsLivenessSafeRenewal {
                 // Sweep only on a determinate peer view — `isComplete == false` means at
                 // least one peer is `.unknown` and we'd risk deleting an active peer's
                 // staging files. Next bootstrap retries.

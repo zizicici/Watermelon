@@ -190,7 +190,7 @@ actor LivenessTracker {
             livenessLog.warning("[Liveness] heartbeat probe failed before fallback atomic create for \(remotePath, privacy: .public), continuing exclusive create: \(error.localizedDescription, privacy: .public)")
         }
 
-        // MARK: Phase D — overwrite renewal (only when dataPathOverwriteRisk == .none)
+        // MARK: Phase D — overwrite renewal (only when client.supportsLivenessSafeOverwriteUpload)
         // Cancellation must surface here too so stopAndWait can unblock during shutdown.
         do {
             let fallbackTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -211,7 +211,7 @@ actor LivenessTracker {
             }
             let createResult = try await client.atomicCreate(localURL: temp, remotePath: remotePath, respectTaskCancellation: true)
             if case .alreadyExists = createResult {
-                guard client.supportsInPlaceLivenessRenewal else {
+                guard client.supportsLivenessSafeOverwriteUpload else {
                     try? await client.delete(path: stagingPath)
                     return
                 }
@@ -298,7 +298,7 @@ actor LivenessTracker {
         let dir = RepoLayout.livenessDirectoryPath(base: basePath)
         let entries = try await client.list(path: dir)
         let now = Date()
-        let gracePeriodSec = client.livenessConsistencyGraceSeconds
+        let gracePeriodSec = client.readAfterWriteGraceSeconds
 
         var active: Set<String> = []
         var stale: Set<String> = []

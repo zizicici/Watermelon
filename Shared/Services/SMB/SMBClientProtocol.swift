@@ -142,24 +142,26 @@ protocol RemoteStorageClientProtocol: Sendable {
     var moveIfAbsentGuarantee: CreateGuarantee { get }
     func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool
     var dataPathOverwriteRisk: DataPathOverwriteRisk { get }
-    var supportsInPlaceLivenessRenewal: Bool { get }
-    /// True when the backend can durably re-publish `liveness/<writerID>.json` after
-    /// the first write. SMB/WebDAV/S3/LocalVolume satisfy this via either an
-    /// overwrite-safe `move` (Phase B of `LivenessTracker.tick`) or in-place upload
-    /// (Phase D). SFTP without `posix-rename@openssh.com` cannot — rename-overwrite
-    /// is rejected on v3, and `supportsInPlaceLivenessRenewal` is false, so renewals
-    /// silently no-op after the initial heartbeat. When this is false the orphan
-    /// sweep gate MUST decline to run, because once our heartbeat goes stale a peer
-    /// would otherwise treat our writerID as stale and delete our live staging files.
-    var supportsHeartbeatRenewal: Bool { get }
+    /// `client.upload(localURL:remotePath:)` to an existing path is safe to use as
+    /// a liveness heartbeat renewal — the destination ends up with fresh bytes or
+    /// keeps the old, never with no file. False for backends whose `upload` truncates
+    /// then deletes on failure (SFTP) or whose replace semantics aren't verified
+    /// peer-observable atomic (SMB / WebDAV default).
+    var supportsLivenessSafeOverwriteUpload: Bool { get }
+    /// At least one renewal path (overwrite-move OR liveness-safe overwrite-upload)
+    /// can republish fresh bytes at an existing liveness path; false iff both fail
+    /// (SFTP v3 rename-overwrite is rejected and `supportsLivenessSafeOverwriteUpload`
+    /// is false). When false the orphan sweep gate MUST decline to run — once our
+    /// heartbeat goes stale a peer would otherwise treat our writerID as stale and
+    /// delete our live staging files.
+    var supportsLivenessSafeRenewal: Bool { get }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { get }
     var concurrencyMode: ClientConcurrencyMode { get }
-    /// Seconds added to the heartbeat stale threshold to absorb backend read-after-write
-    /// lag. `0` for strong-consistency backends (LocalVolume, SMB, SFTP, AWS S3 since
-    /// 2020). `>0` for S3-compatible behind eventual-consistency proxies (R2, MinIO,
-    /// B2) or WebDAV behind reverse-proxy / CDN caches. Used by `LivenessTracker` to
-    /// distinguish "peer truly gone" from "peer just wrote but write not yet visible."
-    var livenessConsistencyGraceSeconds: TimeInterval { get }
+    /// Shared read-after-write staleness budget consumed by metadata-write
+    /// verification AND peer-heartbeat classification. `>0` for S3-compatible
+    /// behind eventual-consistency proxies (R2, MinIO, B2) or WebDAV behind
+    /// reverse-proxy / CDN caches.
+    var readAfterWriteGraceSeconds: TimeInterval { get }
     /// Composing wrappers transitively expose this so `wrapIfSerial` doesn't double-wrap.
     var isSerialized: Bool { get }
     func setModificationDate(_ date: Date, forPath path: String) async throws
@@ -185,14 +187,16 @@ extension RemoteStorageClientProtocol {
 
     /// Fail-closed: treat uncustomized backends as overwrite-risky and exact-match.
     var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
-    var supportsInPlaceLivenessRenewal: Bool { dataPathOverwriteRisk == .none }
-    /// Default mirrors existing sweep behavior — only backends that explicitly
-    /// know they can't renew (currently SFTP without `posix-rename@openssh.com`)
-    /// must override to `false` so `BackupV2RuntimeBuilder` skips orphan sweep.
-    var supportsHeartbeatRenewal: Bool { true }
+    /// Conservative default: backends must opt in explicitly after verifying the
+    /// renewal-safety contract end-to-end.
+    var supportsLivenessSafeOverwriteUpload: Bool { false }
+    /// Intentional fail-open compatibility default; only SFTP overrides to `false`.
+    /// A future backend that lacks both renewal paths must override or the sweep
+    /// gate silently lets it run.
+    var supportsLivenessSafeRenewal: Bool { true }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
-    var livenessConsistencyGraceSeconds: TimeInterval { 0 }
+    var readAfterWriteGraceSeconds: TimeInterval { 0 }
 
     func supportsExclusiveMoveIfAbsent(forDestinationPath _: String) async throws -> Bool {
         moveIfAbsentGuarantee == .exclusive
@@ -204,10 +208,9 @@ extension RemoteStorageClientProtocol {
         return try await supportsExclusiveMoveIfAbsent(forDestinationPath: destinationPath)
     }
 
-    /// Shared read-after-write staleness budget; floor raises the minimum without
-    /// losing the `livenessConsistencyGraceSeconds` ceiling.
+    /// Floor raises the minimum without losing the `readAfterWriteGraceSeconds` ceiling.
     func metadataReadAfterWriteDeadline(floorSeconds: TimeInterval) -> Date {
-        Date().addingTimeInterval(max(floorSeconds, livenessConsistencyGraceSeconds))
+        Date().addingTimeInterval(max(floorSeconds, readAfterWriteGraceSeconds))
     }
 
     func verifyWriteAccess() async throws {}

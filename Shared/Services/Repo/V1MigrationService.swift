@@ -1043,7 +1043,7 @@ actor V1MigrationService {
 
     private func verifyMigrationMarkerWrite(remotePath: String, localURL: URL) async throws {
         // Share the metadata-write readback contract so eventually-consistent backends
-        // (S3-compatible / WebDAV-behind-cache) get the same `livenessConsistencyGraceSeconds`
+        // (S3-compatible / WebDAV-behind-cache) get the same `readAfterWriteGraceSeconds`
         // budget here as commits and snapshots — a fixed 600 ms loop reports stale reads
         // as fatal marker failures even when the write itself landed.
         do {

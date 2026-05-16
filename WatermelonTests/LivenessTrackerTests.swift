@@ -38,11 +38,11 @@ final class LivenessTrackerTests: XCTestCase {
         XCTAssertTrue(view.isComplete)
     }
 
-    /// Backend with `livenessConsistencyGraceSeconds > 0` (e.g., R2/MinIO/WebDAV-behind-cache):
+    /// Backend with `readAfterWriteGraceSeconds > 0` (e.g., R2/MinIO/WebDAV-behind-cache):
     /// a 404 may be post-write visibility lag, not a truly absent peer. Must classify as unknown.
     func testSnapshotPeerStatuses_404WithGrace_yieldsUnknown_vanishedWithinGrace() async throws {
         let client = InMemoryRemoteStorageClient()
-        client.setLivenessConsistencyGrace(30)
+        client.setReadAfterWriteGrace(30)
         try await client.connect()
         try await client.createDirectory(path: RepoLayout.livenessDirectoryPath(base: basePath))
 
@@ -62,7 +62,7 @@ final class LivenessTrackerTests: XCTestCase {
     /// the peer is truly gone and is omitted from all sets — no cleanup gate.
     func testSnapshotPeerStatuses_404WithoutGrace_omitsPeer() async throws {
         let client = InMemoryRemoteStorageClient()
-        // Default livenessConsistencyGrace = 0.
+        // Default readAfterWriteGraceSeconds = 0.
         try await client.connect()
         try await client.createDirectory(path: RepoLayout.livenessDirectoryPath(base: basePath))
 

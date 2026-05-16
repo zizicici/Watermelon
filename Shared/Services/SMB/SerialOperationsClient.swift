@@ -125,11 +125,11 @@ final class SerialOperationsClient: RemoteStorageClientProtocol, @unchecked Send
     var concurrencyMode: ClientConcurrencyMode { underlying.concurrencyMode }
     var isSerialized: Bool { true }
     var dataPathOverwriteRisk: DataPathOverwriteRisk { underlying.dataPathOverwriteRisk }
-    var supportsInPlaceLivenessRenewal: Bool { underlying.supportsInPlaceLivenessRenewal }
-    var supportsHeartbeatRenewal: Bool { underlying.supportsHeartbeatRenewal }
+    var supportsLivenessSafeOverwriteUpload: Bool { underlying.supportsLivenessSafeOverwriteUpload }
+    var supportsLivenessSafeRenewal: Bool { underlying.supportsLivenessSafeRenewal }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { underlying.backendNameCaseSensitivity }
     var moveIfAbsentGuarantee: CreateGuarantee { underlying.moveIfAbsentGuarantee }
-    var livenessConsistencyGraceSeconds: TimeInterval { underlying.livenessConsistencyGraceSeconds }
+    var readAfterWriteGraceSeconds: TimeInterval { underlying.readAfterWriteGraceSeconds }
 
     func shouldSetModificationDate() -> Bool { underlying.shouldSetModificationDate() }
     func shouldLimitUploadRetries(for error: Error) -> Bool { underlying.shouldLimitUploadRetries(for: error) }

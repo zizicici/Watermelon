@@ -4,13 +4,14 @@ final actor S3Client: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     // Multipart `CompleteMultipartUpload` historically doesn't honor If-None-Match across S3 vendors → concurrent multipart writers can clobber.
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
-    nonisolated var supportsInPlaceLivenessRenewal: Bool { true }
+    // PUT is atomic replace at the object level — peers see old XOR new, never neither.
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
     // S3 keys are byte-exact; `IMG.JPG` and `img.jpg` are distinct objects.
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     // Conditional CopyObject support is endpoint-specific and probed asynchronously.
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
     // Covers R2/MinIO/B2 and other non-strongly-consistent S3-compatible endpoints; AWS S3 itself is strong-consistent since 2020 but conservative grace is cheap.
-    nonisolated var livenessConsistencyGraceSeconds: TimeInterval { 30 }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 30 }
     static let errorDomain = S3ErrorClassifier.errorDomain
 
     struct Config: Sendable {

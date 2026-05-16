@@ -23,6 +23,8 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     // POSIX O_EXCL → kernel-enforced uniqueness per path, even across processes; no peer can win.
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .none }
+    // No peer race on a local mount; failure cleanup affects only this writer.
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { nameCaseSensitivityState.value }
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
     struct Config {
