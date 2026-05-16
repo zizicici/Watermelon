@@ -169,6 +169,183 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
+    /// Hijacked marker (filename writerID-A, JSON writer_id=B) must not be adopted —
+    /// silently routing cleanup at the wrong writerID hits the wrong file path and
+    /// loops cleanup-only forever.
+    func testHijackedMigrationMarker_isSkippedAndRoutesToV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let filenameWriterID = "11111111-1111-1111-1111-111111111111"
+        let hijackJSONWriterID = "22222222-2222-2222-2222-222222222222"
+        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: filenameWriterID)
+        await client.injectFile(
+            path: markerPath,
+            contents: #"{"v":2,"writer_id":"\#(hijackJSONWriterID)","phase":2}"#
+        )
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "hijacked marker must be skipped, never adopted as cleanup ownerWriterID")
+    }
+
+    func testMigrationMarkerParse_acceptsLegacyVoneMarker() throws {
+        let writerID = "33333333-3333-3333-3333-333333333333"
+        let parsed = try MigrationMarker.parse(
+            filename: "\(writerID).json",
+            bytes: Data("{}".utf8)
+        )
+        XCTAssertEqual(parsed.writerID, writerID)
+        XCTAssertEqual(parsed.phase, .phase1, "legacy markers without `phase` field map to phase1")
+        XCTAssertNil(parsed.runID)
+        XCTAssertNil(parsed.startedAtMs)
+    }
+
+    func testMigrationMarkerParse_rejectsUnknownPhase() {
+        let writerID = "44444444-4444-4444-4444-444444444444"
+        let bytes = Data(#"{"v":2,"writer_id":"\#(writerID)","phase":4}"#.utf8)
+        XCTAssertThrowsError(try MigrationMarker.parse(filename: "\(writerID).json", bytes: bytes)) { error in
+            guard case MigrationMarkerError.unknownPhase(let raw) = error else {
+                XCTFail("expected .unknownPhase, got \(error)")
+                return
+            }
+            XCTAssertEqual(raw, 4)
+        }
+    }
+
+    func testMigrationMarkerParse_rejectsHijackedWriterID() {
+        let filenameWriterID = "55555555-5555-5555-5555-555555555555"
+        let hijackJSONWriterID = "66666666-6666-6666-6666-666666666666"
+        let bytes = Data(#"{"v":2,"writer_id":"\#(hijackJSONWriterID)","phase":2}"#.utf8)
+        XCTAssertThrowsError(try MigrationMarker.parse(filename: "\(filenameWriterID).json", bytes: bytes)) { error in
+            guard case MigrationMarkerError.writerIDMismatch(let filename, let jsonWriter) = error else {
+                XCTFail("expected .writerIDMismatch, got \(error)")
+                return
+            }
+            XCTAssertEqual(filename, filenameWriterID)
+            XCTAssertEqual(jsonWriter, hijackJSONWriterID)
+        }
+    }
+
+    func testMigrationMarkerParse_rejectsWrongTypeWriterID() {
+        let writerID = "77777777-7777-7777-7777-777777777777"
+        // Present-but-wrong-type writer_id must not silently fall back to filename writerID.
+        let bytes = Data(#"{"v":2,"writer_id":123,"phase":2}"#.utf8)
+        XCTAssertThrowsError(try MigrationMarker.parse(filename: "\(writerID).json", bytes: bytes)) { error in
+            guard case MigrationMarkerError.writerIDWrongType = error else {
+                XCTFail("expected .writerIDWrongType, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testMigrationMarkerParse_rejectsWrongTypePhase() {
+        let writerID = "88888888-8888-8888-8888-888888888888"
+        // Present-but-wrong-type phase must not silently default to phase1.
+        let bytes = Data(#"{"v":2,"writer_id":"\#(writerID)","phase":"2"}"#.utf8)
+        XCTAssertThrowsError(try MigrationMarker.parse(filename: "\(writerID).json", bytes: bytes)) { error in
+            guard case MigrationMarkerError.phaseWrongType = error else {
+                XCTFail("expected .phaseWrongType, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testMigrationMarkerParse_rejectsBooleanPhase() {
+        let writerID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        // JSON booleans bridge through `as? Int` (true → 1); reject before phase mapping.
+        let bytes = Data(#"{"v":2,"writer_id":"\#(writerID)","phase":true}"#.utf8)
+        XCTAssertThrowsError(try MigrationMarker.parse(filename: "\(writerID).json", bytes: bytes)) { error in
+            guard case MigrationMarkerError.phaseWrongType = error else {
+                XCTFail("expected .phaseWrongType, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testMigrationMarkerParse_rejectsFalseBooleanPhase() {
+        let writerID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+        let bytes = Data(#"{"v":2,"writer_id":"\#(writerID)","phase":false}"#.utf8)
+        XCTAssertThrowsError(try MigrationMarker.parse(filename: "\(writerID).json", bytes: bytes)) { error in
+            guard case MigrationMarkerError.phaseWrongType = error else {
+                XCTFail("expected .phaseWrongType, got \(error)")
+                return
+            }
+        }
+    }
+
+    /// Numeric integer 0 is not a defined phase; must surface as `.unknownPhase(raw: 0)`,
+    /// not be misclassified as a boolean by a too-broad Bool-bridge check.
+    func testMigrationMarkerParse_rejectsZeroPhase() {
+        let writerID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+        let bytes = Data(#"{"v":2,"writer_id":"\#(writerID)","phase":0}"#.utf8)
+        XCTAssertThrowsError(try MigrationMarker.parse(filename: "\(writerID).json", bytes: bytes)) { error in
+            guard case MigrationMarkerError.unknownPhase(let raw) = error else {
+                XCTFail("expected .unknownPhase(0), got \(error)")
+                return
+            }
+            XCTAssertEqual(raw, 0)
+        }
+    }
+
+    /// Round-trip every defined phase through encode → parse. The previous Bool-bridge
+    /// guard silently rejected `phase:1` (NSNumber(1) bridges to Bool); this locks the
+    /// integer mapping for the production-shaped marker.
+    func testMigrationMarkerEncodeParse_roundTripsAllPhases() throws {
+        let writerID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+        for phase in [MigrationMarkerPhase.phase1, .phase2, .phase3] {
+            let marker = ParsedMigrationMarker(
+                writerID: writerID,
+                phase: phase,
+                runID: "run-\(phase.rawValue)",
+                startedAtMs: 1_700_000_000_000,
+                lastStepMs: 1_700_000_000_500
+            )
+            let bytes = try MigrationMarker.encode(marker)
+            let parsed = try MigrationMarker.parse(filename: "\(writerID).json", bytes: bytes)
+            XCTAssertEqual(parsed.writerID, writerID)
+            XCTAssertEqual(parsed.phase, phase, "round-trip must preserve phase \(phase.rawValue)")
+            XCTAssertEqual(parsed.runID, "run-\(phase.rawValue)")
+            XCTAssertEqual(parsed.startedAtMs, 1_700_000_000_000)
+            XCTAssertEqual(parsed.lastStepMs, 1_700_000_000_500)
+        }
+    }
+
+    /// Wrong-type fields must be skipped at the inspector boundary, not routed to cleanup.
+    func testWrongTypePhaseMarker_isSkippedAndRoutesToV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let writerID = "99999999-9999-9999-9999-999999999999"
+        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
+        await client.injectFile(
+            path: markerPath,
+            contents: #"{"v":2,"writer_id":"\#(writerID)","phase":"2"}"#
+        )
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "wrong-type phase must be skipped, never routed to cleanup")
+    }
+
+    /// JSON booleans bridge `as? Int` as 1/0; without explicit rejection a `phase:true`
+    /// marker parses as phase1 and is adopted as cleanup residue.
+    func testBooleanPhaseMarker_isSkippedAndRoutesToV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let writerID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
+        await client.injectFile(
+            path: markerPath,
+            contents: #"{"v":2,"writer_id":"\#(writerID)","phase":true}"#
+        )
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "boolean phase must be skipped, never routed to cleanup")
+    }
+
     private func makeFixture() async -> (InMemoryRemoteStorageClient, ServerProfileRecord) {
         let client = InMemoryRemoteStorageClient()
         try? await client.connect()

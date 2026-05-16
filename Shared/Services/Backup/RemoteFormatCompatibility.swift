@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let remoteFormatLog = Logger(subsystem: "com.zizicici.watermelon", category: "RemoteFormatCompatibility")
 
 enum WatermelonRemoteFormat {
     static let markerDirectoryName = ".watermelon"
@@ -62,21 +65,6 @@ enum RemoteFormatInspection: Equatable, Sendable {
 }
 
 struct RemoteFormatCompatibilityService: Sendable {
-    private enum MigrationMarkerPhase: Int {
-        case phase1 = 1
-        case phase2 = 2
-        case phase3 = 3
-    }
-
-    private struct MigrationMarkerState {
-        let writerID: String
-        let phase: MigrationMarkerPhase
-
-        var isCleanupSafe: Bool {
-            phase == .phase2 || phase == .phase3
-        }
-    }
-
     init() {}
 
     func verify(client: any RemoteStorageClientProtocol, profile: ServerProfileRecord) async throws {
@@ -159,7 +147,7 @@ struct RemoteFormatCompatibilityService: Sendable {
                     if try await hasV1Manifests() {
                         return .v2WithV1Manifests(formatVersion: formatVersion)
                     }
-                    if let cleanup = markerStates.first(where: { $0.isCleanupSafe }) {
+                    if let cleanup = markerStates.first(where: { $0.phase.isCleanupSafe }) {
                         return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: cleanup.writerID)
                     }
                     if let residue = markerStates.first {
@@ -182,38 +170,33 @@ struct RemoteFormatCompatibilityService: Sendable {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         markers: [RemoteStorageEntry]
-    ) async throws -> [MigrationMarkerState] {
+    ) async throws -> [ParsedMigrationMarker] {
         let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
-        var results: [MigrationMarkerState] = []
+        var results: [ParsedMigrationMarker] = []
         for entry in markers where !entry.isDirectory && entry.name.hasSuffix(".json") {
             let path = RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name)
             let temp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("migration-marker-detect-\(UUID().uuidString).json")
             defer { try? FileManager.default.removeItem(at: temp) }
-            let parsedName = RepoLayout.parseMigrationMarkerFilename(entry.name)
-            var writerID = parsedName?.writerID
-            var phase: MigrationMarkerPhase = .phase1
+            let data: Data
             do {
                 try await client.download(remotePath: path, localURL: temp)
-                if let data = try? Data(contentsOf: temp),
-                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    if let parsed = dict["writer_id"] as? String,
-                       RepoLayout.isValidWriterID(parsed) {
-                        writerID = parsed
-                    }
-                    if let raw = dict["phase"] as? Int,
-                       let parsedPhase = MigrationMarkerPhase(rawValue: raw) {
-                        phase = parsedPhase
-                    }
-                }
+                data = try Data(contentsOf: temp)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 if !isNotFoundError(error) { throw error }
                 continue
             }
-            if let writerID {
-                results.append(MigrationMarkerState(writerID: writerID, phase: phase))
+            do {
+                // Adopting a hijacked/malformed marker would loop cleanup at a foreign writerID forever.
+                let parsed = try MigrationMarker.parse(filename: entry.name, bytes: data)
+                results.append(parsed)
+            } catch {
+                remoteFormatLog.warning(
+                    "skipping migration marker at \(path, privacy: .public): \(String(describing: error), privacy: .public)"
+                )
+                continue
             }
         }
         return results
