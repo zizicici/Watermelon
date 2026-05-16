@@ -301,16 +301,14 @@ final class V1MigrationServiceTests: XCTestCase {
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
-        let sources = V1MigrationService.RepoIdentitySources(stored: nil, remote: nil, data: nil, suggested: "r")
         let outcome = try await service.run(
             profileID: profileID,
             inspection: .v1,
             writerID: "w",
             runID: "run-1",
-            sources: sources
+            resolvedRepoID: "r"
         )
 
-        XCTAssertTrue(outcome.v2DataWritten, "v1 path with non-empty scan must write V2 data")
         XCTAssertEqual(outcome.migratedMonthCount, 1)
         XCTAssertEqual(outcome.resolvedRepoID, "r")
 
@@ -344,16 +342,14 @@ final class V1MigrationServiceTests: XCTestCase {
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
-        let sources = V1MigrationService.RepoIdentitySources(stored: nil, remote: "r", data: nil, suggested: "r")
         let outcome = try await service.run(
             profileID: profileID,
             inspection: .v2WithPendingMigrationCleanup(formatVersion: RepoLayout.formatVersion, ownerWriterID: "peer"),
             writerID: "w",
             runID: "cleanup-run-1",
-            sources: sources
+            resolvedRepoID: "r"
         )
 
-        XCTAssertFalse(outcome.v2DataWritten, "cleanup path must not write V2 data")
         XCTAssertEqual(outcome.migratedMonthCount, 0)
 
         // Peer marker must be gone after phase3(owner).

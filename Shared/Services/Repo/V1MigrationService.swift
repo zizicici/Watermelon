@@ -24,19 +24,9 @@ actor V1MigrationService {
         case noWorkNeeded
     }
 
-    /// Bundles the three sources of repoID truth (DB, remote `.watermelon/repo.json`,
-    /// existing V2 commit/snapshot data) that `publishIdentity` reconciles against.
-    struct RepoIdentitySources: Sendable {
-        let stored: String?
-        let remote: String?
-        let data: String?
-        let suggested: String
-    }
-
     struct MigrationOutcome: Sendable {
         let resolvedRepoID: String
         let migratedMonthCount: Int
-        let v2DataWritten: Bool
     }
 
     static let residueManifestFileName = ".watermelon_manifest.legacy-residue.sqlite"
@@ -364,27 +354,6 @@ actor V1MigrationService {
         return processed
     }
 
-    /// FSM step: publish identity. Resolves the canonical repoID across the
-    /// 3 known sources (DB / `.watermelon/repo.json` / V2 commit-snapshot data)
-    /// and stamps an identity claim. Idempotent.
-    func publishIdentity(sources: RepoIdentitySources, writerID: String) async throws -> String {
-        let resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: sources.suggested, writerID: writerID)
-        if let stored = sources.stored, resolvedRepoID != stored {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: stored, remote: resolvedRepoID)
-        }
-        if let remote = sources.remote, resolvedRepoID != remote {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remote, remote: resolvedRepoID)
-        }
-        if let data = sources.data, resolvedRepoID != data {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: data, remote: resolvedRepoID)
-        }
-        let finalizedRepoID = try await bootstrap.ensureIdentityFinalization(repoID: resolvedRepoID, writerID: writerID)
-        if finalizedRepoID != resolvedRepoID {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: finalizedRepoID)
-        }
-        return resolvedRepoID
-    }
-
     /// FSM step: publish version (infrastructure). Idempotent — both full
     /// migration and cleanup paths call this; cleanup keeps `migrationCompleted`
     /// at its current value (see `markProfileMigrated`).
@@ -422,7 +391,7 @@ actor V1MigrationService {
         }
     }
 
-    /// 8-step FSM entry: detect (input `inspection`) → claim → publishIdentity →
+    /// 8-step FSM entry: detect (input `inspection`) → claim → publishIdentity (caller) →
     /// ensureVersionPublished → runPhase1 (full) → markProfileMigrated (full) →
     /// runPhase3 → verifyFinalState. Cleanup-only path skips phase1 +
     /// markProfileMigrated and uses the peer's writerID for marker cleanup.
@@ -431,7 +400,7 @@ actor V1MigrationService {
         inspection: RemoteFormatInspection,
         writerID: String,
         runID: String,
-        sources: RepoIdentitySources,
+        resolvedRepoID: String,
         onMigrationStart: (() async -> Void)? = nil,
         onMigrationComplete: ((Int) async -> Void)? = nil
     ) async throws -> MigrationOutcome {
@@ -445,10 +414,7 @@ actor V1MigrationService {
             claim = .noWorkNeeded
         }
 
-        let resolvedRepoID = try await publishIdentity(sources: sources, writerID: writerID)
-
         var migratedCount = 0
-        var v2DataWritten = false
         var cleanedWriterID = writerID
 
         switch claim {
@@ -466,7 +432,6 @@ actor V1MigrationService {
                 await onMigrationStart?()
                 try await ensureVersionPublished(writerID: writerID)
                 migratedCount = try await runPhase1(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
-                v2DataWritten = true
                 try await markProfileMigrated(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
                 try await runPhase3(writerID: writerID, runID: runID)
                 await onMigrationComplete?(migratedCount)
@@ -487,8 +452,7 @@ actor V1MigrationService {
         }
         return MigrationOutcome(
             resolvedRepoID: resolvedRepoID,
-            migratedMonthCount: migratedCount,
-            v2DataWritten: v2DataWritten
+            migratedMonthCount: migratedCount
         )
     }
 
