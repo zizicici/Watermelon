@@ -291,7 +291,7 @@ actor V1MigrationService {
     /// migration and cleanup paths call this; cleanup keeps `migrationCompleted`
     /// at its current value (see `markProfileMigrated`).
     func ensureVersionPublished(writerID: String) async throws {
-        try await bootstrap.ensureVersionJSON(writerID: writerID)
+        try await VersionManifestStore(client: client, basePath: basePath).writeIfAbsent(writerID: writerID)
         try await bootstrap.ensureSubdirectories()
     }
 

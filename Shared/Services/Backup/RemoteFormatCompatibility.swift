@@ -3,25 +3,6 @@ import os.log
 
 private let remoteFormatLog = Logger(subsystem: "com.zizicici.watermelon", category: "RemoteFormatCompatibility")
 
-enum WatermelonRemoteFormat {
-    static let markerDirectoryName = ".watermelon"
-    static let versionFileName = "version.json"
-}
-
-struct WatermelonRemoteVersionManifest: Decodable, Sendable {
-    let formatVersion: Int?
-    let minAppVersion: String?
-    let createdAt: String?
-    let createdBy: String?
-
-    enum CodingKeys: String, CodingKey {
-        case formatVersion = "format_version"
-        case minAppVersion = "min_app_version"
-        case createdAt = "created_at"
-        case createdBy = "created_by"
-    }
-}
-
 enum BackupCompatibilityError: LocalizedError {
     case remoteFormatUnsupported(minAppVersion: String?)
     case repoIdentityMismatch
@@ -71,11 +52,11 @@ struct RemoteFormatCompatibilityService: Sendable {
         let basePath = RemotePathBuilder.normalizePath(profile.basePath)
         let entries = try await client.list(path: basePath)
         let markerExists = entries.contains { entry in
-            entry.isDirectory && entry.name == WatermelonRemoteFormat.markerDirectoryName
+            entry.isDirectory && entry.name == RepoLayout.watermelonDirectory
         }
         guard markerExists else { return }
 
-        let detected = await readMinAppVersion(client: client, profile: profile)
+        let detected = await readMinAppVersion(client: client, basePath: basePath)
         throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: detected)
     }
 
@@ -92,14 +73,13 @@ struct RemoteFormatCompatibilityService: Sendable {
         }
 
         let markerExists = entries.contains { entry in
-            entry.isDirectory && entry.name == WatermelonRemoteFormat.markerDirectoryName
+            entry.isDirectory && entry.name == RepoLayout.watermelonDirectory
         }
 
         if markerExists {
-            let manifest = try await loadVersionManifestStrict(client: client, profile: profile)
+            let manifest = try await VersionManifestStore(client: client, basePath: basePath).load()
             if case .found(let preCheck) = manifest {
-                let preVersion = preCheck.formatVersion ?? 0
-                if preVersion > RepoLayout.currentSupportedFormatVersion {
+                if preCheck.formatVersion > RepoLayout.currentSupportedFormatVersion {
                     return .unsupported(minAppVersion: preCheck.minAppVersion)
                 }
             }
@@ -139,7 +119,7 @@ struct RemoteFormatCompatibilityService: Sendable {
                 }
                 return .fresh
             case .found(let manifest):
-                let formatVersion = manifest.formatVersion ?? 0
+                let formatVersion = manifest.formatVersion
                 if formatVersion >= 2 && formatVersion <= RepoLayout.currentSupportedFormatVersion {
                     let markerStates = try await markerStore.parseEntries(migrationDirEntries)
                     if try await hasV1Manifests() {
@@ -227,62 +207,11 @@ struct RemoteFormatCompatibilityService: Sendable {
         return false
     }
 
-    enum VersionManifestLoad: Sendable {
-        case absent
-        case found(WatermelonRemoteVersionManifest)
-    }
-
-    /// `.absent` only on confirmed not-found; transport/parse errors throw so callers can't conflate "missing" with "couldn't read".
-    private func loadVersionManifestStrict(
-        client: any RemoteStorageClientProtocol,
-        profile: ServerProfileRecord
-    ) async throws -> VersionManifestLoad {
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("watermelon-version-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: tempURL) }
-
-        let absolutePath = RemotePathBuilder.absolutePath(
-            basePath: profile.basePath,
-            remoteRelativePath: "\(WatermelonRemoteFormat.markerDirectoryName)/\(WatermelonRemoteFormat.versionFileName)"
-        )
-        let entry: RemoteStorageEntry?
-        do {
-            entry = try await client.metadata(path: absolutePath)
-        } catch {
-            if isNotFoundError(error) { return .absent }
-            throw error
-        }
-        guard let entry else {
-            return .absent
-        }
-        guard !entry.isDirectory else {
-            throw BackupCompatibilityError.damagedV2Repo
-        }
-        try await client.download(remotePath: absolutePath, localURL: tempURL)
-        let data = try Data(contentsOf: tempURL)
-        let manifest = try JSONDecoder().decode(WatermelonRemoteVersionManifest.self, from: data)
-        return .found(manifest)
-    }
-
-    private func loadVersionManifest(
-        client: any RemoteStorageClientProtocol,
-        profile: ServerProfileRecord
-    ) async -> WatermelonRemoteVersionManifest? {
-        do {
-            switch try await loadVersionManifestStrict(client: client, profile: profile) {
-            case .absent: return nil
-            case .found(let manifest): return manifest
-            }
-        } catch {
-            return nil
-        }
-    }
-
     private func readMinAppVersion(
         client: any RemoteStorageClientProtocol,
-        profile: ServerProfileRecord
+        basePath: String
     ) async -> String? {
-        let manifest = await loadVersionManifest(client: client, profile: profile)
+        let manifest = await VersionManifestStore(client: client, basePath: basePath).loadOrNil()
         if let version = manifest?.minAppVersion?.trimmingCharacters(in: .whitespacesAndNewlines),
            !version.isEmpty {
             return version

@@ -290,32 +290,33 @@ struct BackupRunPreparationService: Sendable {
         guard let meta = try await client.metadata(path: versionPath) else {
             return .v1
         }
+        // Pre-bound the size so a damaged/oversized version.json never reaches the parser.
         guard !meta.isDirectory,
               meta.size <= Self.maxProfileLessVersionFileBytes else {
             throw BackupCompatibilityError.damagedV2Repo
         }
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("verify-version-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: tempURL) }
-        try await client.download(remotePath: versionPath, localURL: tempURL)
-        let data = try Data(contentsOf: tempURL)
-        let object: Any
+        let load: VersionManifestStore.Load
         do {
-            object = try JSONSerialization.jsonObject(with: data)
-        } catch {
+            load = try await VersionManifestStore(client: client, basePath: basePath).load()
+        } catch is RepoBootstrap.VersionConflict {
             throw BackupCompatibilityError.damagedV2Repo
+        } catch let bootstrap as RepoBootstrap.BootstrapError {
+            if case .ioFailure = bootstrap { throw BackupCompatibilityError.damagedV2Repo }
+            throw bootstrap
         }
-        guard let dict = object as? [String: Any],
-              let formatVersion = dict["format_version"] as? Int else {
-            throw BackupCompatibilityError.damagedV2Repo
+        switch load {
+        case .absent:
+            return .v1
+        case .found(let manifest):
+            let formatVersion = manifest.formatVersion
+            if formatVersion > RepoLayout.currentSupportedFormatVersion {
+                return .unsupported(minAppVersion: manifest.minAppVersion)
+            }
+            if formatVersion >= 2 {
+                return .v2(formatVersion: formatVersion)
+            }
+            return .v1
         }
-        if formatVersion > RepoLayout.currentSupportedFormatVersion {
-            return .unsupported(minAppVersion: dict["min_app_version"] as? String)
-        }
-        if formatVersion >= 2 {
-            return .v2(formatVersion: formatVersion)
-        }
-        return .v1
     }
 
     @discardableResult

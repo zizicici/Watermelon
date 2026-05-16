@@ -34,8 +34,14 @@ actor RepoBootstrap {
         var resolvedID = try await ensureRepoJSON(repoID: suggested, writerID: writerID)
         try await ensureSubdirectories()
         resolvedID = try await ensureIdentityFinalization(repoID: resolvedID, writerID: writerID)
-        try await ensureVersionJSON(writerID: writerID)
+        try await VersionManifestStore(client: client, basePath: basePath).writeIfAbsent(writerID: writerID)
         return try await ensureRepoJSON(repoID: resolvedID, writerID: writerID)
+    }
+
+    /// Thin compatibility wrapper for callers/tests that still target the legacy
+    /// bootstrap entry point. Real IO lives in `VersionManifestStore`.
+    func ensureVersionJSON(writerID: String) async throws {
+        try await VersionManifestStore(client: client, basePath: basePath).writeIfAbsent(writerID: writerID)
     }
 
     // WebDAV/SMB/SFTP don't auto-create parents on PUT.
@@ -269,97 +275,6 @@ actor RepoBootstrap {
         case higherFormatVersion(remote: Int, local: Int, minAppVersion: String?)
         case unreadable(Error?)
         case mismatchedFormatVersion(remote: Int, local: Int, minAppVersion: String?)
-    }
-
-    func ensureVersionJSON(writerID: String) async throws {
-        try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
-
-        let versionPath = RepoLayout.versionFilePath(base: basePath)
-        // Existing version metadata wins; creation only starts after a confirmed absent precheck.
-        if try await metadataFileIfPresent(path: versionPath, description: "version manifest", code: 18) != nil {
-            try await verifyVersionCompatibleWithRetries()
-            return
-        }
-
-        let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let versionDict: [String: Any] = [
-            "format_version": RepoLayout.formatVersion,
-            "min_app_version": RepoLayout.minAppVersionPlaceholder,
-            "created_at_ms": createdAtMs,
-            "created_by_writer": writerID
-        ]
-        let temp = try makeTempJSON(dict: versionDict, prefix: "repo-version")
-        defer { try? FileManager.default.removeItem(at: temp) }
-        let outcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
-            client: client,
-            localURL: temp,
-            remotePath: versionPath,
-            respectTaskCancellation: false,
-            finalizationPolicy: .requireExclusiveMove
-        )
-        // Verified bytes are our just-written `format_version`, so it is compatible
-        // by construction; skip the readback compatibility loop.
-        if outcome.verifiedAgainstLocalContent {
-            return
-        }
-        try await verifyVersionCompatibleWithRetries()
-    }
-
-    private func verifyVersionCompatibleWithRetries() async throws {
-        var lastUnreadable: VersionConflict = .unreadable(nil)
-        let deadline = postCreateReadRetryDeadline()
-        var attempt = 0
-        while true {
-            do {
-                try await verifyVersionCompatible()
-                return
-            } catch VersionConflict.unreadable(let underlying) {
-                if underlying is CancellationError {
-                    throw CancellationError()
-                }
-                lastUnreadable = .unreadable(underlying)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                throw error
-            }
-            guard Date() < deadline else { throw lastUnreadable }
-            try await sleepBeforePostCreateReadRetry(attempt: attempt)
-            attempt += 1
-        }
-    }
-
-    private func verifyVersionCompatible() async throws {
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("repo-version-verify-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: tempURL) }
-        do {
-            try await client.download(remotePath: RepoLayout.versionFilePath(base: basePath), localURL: tempURL)
-        } catch {
-            // Read failure must surface; silently continuing risks overlaying V2 onto an
-            // unknown format.
-            throw VersionConflict.unreadable(error)
-        }
-        let data: Data
-        do {
-            data = try Data(contentsOf: tempURL)
-        } catch {
-            throw VersionConflict.unreadable(error)
-        }
-        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let remoteFormat = dict["format_version"] as? Int else {
-            throw VersionConflict.unreadable(nil)
-        }
-        let minApp = dict["min_app_version"] as? String
-        if remoteFormat > RepoLayout.currentSupportedFormatVersion {
-            throw VersionConflict.higherFormatVersion(remote: remoteFormat, local: RepoLayout.currentSupportedFormatVersion, minAppVersion: minApp)
-        }
-        // V2 wire schema is additive: optional fields (stamps, observedBasis)
-        // round-trip through any v2 reader / writer. The lower bound stops V1
-        // from getting silently overlaid.
-        if remoteFormat < 2 {
-            throw VersionConflict.mismatchedFormatVersion(remote: remoteFormat, local: RepoLayout.formatVersion, minAppVersion: minApp)
-        }
     }
 
     private func makeTempJSON(dict: [String: Any], prefix: String) throws -> URL {
