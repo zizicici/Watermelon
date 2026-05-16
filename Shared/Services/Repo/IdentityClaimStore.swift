@@ -284,7 +284,10 @@ nonisolated struct IdentityClaimStore: Sendable {
         defer { try? FileManager.default.removeItem(at: temp) }
         try await client.download(remotePath: claimPath, localURL: temp)
         let data = try Data(contentsOf: temp)
-        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        // Use try? so non-JSON readback (peer overwrote between atomicCreate and verify)
+        // routes through the typed "unparseable after write" diagnosis rather than leaking
+        // raw NSCocoaError. Parity with fetchClaim / classifyExistingClaim.
+        guard let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let landedRepoID = dict["repo_id"] as? String,
               let landedWriterID = dict["writer_id"] as? String,
               let landedTs = Self.strictInt64(dict["created_at_ms"]) else {
@@ -364,20 +367,14 @@ nonisolated struct IdentityClaimStore: Sendable {
         ))
     }
 
+    // Local encode/write errors stay raw so callers don't conflate "our disk is full"
+    // with the `BootstrapError.ioFailure → damagedV2Repo` mapping reserved for
+    // malformed remote V2 metadata.
     private func makeTempJSON(dict: [String: Any], prefix: String) throws -> URL {
-        let data: Data
-        do {
-            data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys, .prettyPrinted])
-        } catch {
-            throw RepoBootstrap.BootstrapError.ioFailure(error)
-        }
+        let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys, .prettyPrinted])
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(prefix)-\(UUID().uuidString).json")
-        do {
-            try data.write(to: temp, options: .atomic)
-        } catch {
-            throw RepoBootstrap.BootstrapError.ioFailure(error)
-        }
+        try data.write(to: temp, options: .atomic)
         return temp
     }
 }

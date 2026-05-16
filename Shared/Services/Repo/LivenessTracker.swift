@@ -126,6 +126,19 @@ actor LivenessTracker {
             return
         }
         if stagingCreated {
+            // Overwrite-capable move (S3, WebDAV) would otherwise replace a
+            // concurrent same-writerID instance's fresher heartbeat with ours.
+            do {
+                if try await concurrentWriterClaimedRemoteHeartbeat(remotePath: remotePath, timestampMs: timestampMs) {
+                    try? await client.delete(path: stagingPath)
+                    return
+                }
+            } catch is CancellationError {
+                try? await client.delete(path: stagingPath)
+                return
+            } catch {
+                livenessLog.warning("[Liveness] heartbeat probe failed before staging move for \(remotePath, privacy: .public), continuing move: \(error.localizedDescription, privacy: .public)")
+            }
             do {
                 try await client.move(from: stagingPath, to: remotePath)
                 return
@@ -395,11 +408,21 @@ actor LivenessTracker {
     private func readHeartbeatTimestamp(from url: URL, remotePath: String) throws -> Int64 {
         let data = try Data(contentsOf: url)
         guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let ts = (dict["ts"] as? Int64) ?? (dict["ts"] as? Int).map(Int64.init) else {
+              let ts = LivenessTracker.strictInt64(dict["ts"]) else {
             throw NSError(domain: "LivenessTracker", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: "heartbeat at \(remotePath) is unreadable"
             ])
         }
         return ts
+    }
+
+    /// JSON booleans bridge through `as? Int` (true→1); reject CFBoolean so a
+    /// corrupt `ts: true` heartbeat can't parse to 1ms and mislead peer staleness.
+    private static func strictInt64(_ raw: Any?) -> Int64? {
+        guard let raw else { return nil }
+        if CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID() { return nil }
+        if let v = raw as? Int64 { return v }
+        if let v = raw as? Int { return Int64(v) }
+        return nil
     }
 }

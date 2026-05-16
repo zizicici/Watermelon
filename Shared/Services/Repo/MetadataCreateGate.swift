@@ -76,8 +76,9 @@ enum MetadataCreateGate {
             )
             // S3 single-part PUT phantom: server wrote our bytes but client timed out;
             // retry hits If-None-Match → 412 → .alreadyExists, but it's our own bytes.
-            // Caller paths are writer-unique so a peer can't be the source. Verify SHA
-            // and upgrade to .created when it matches.
+            // Caller payloads embed writer-distinguishing fields (created_by_writer /
+            // created_at_ms / run_id) so a peer can never SHA-collide with our local
+            // bytes — matching SHA proves the remote bytes are ours. Verify and upgrade.
             if case .alreadyExists = result {
                 do {
                     if try await verifyMatchesLocalWithRetries(client: client, remotePath: remotePath, localURL: localURL) {
@@ -156,12 +157,6 @@ enum MetadataCreateGate {
                     }
                     try? await client.delete(path: stagingPath)
                     return CreateOutcome(result: .alreadyExists, verifiedAgainstLocalContent: false)
-                }
-                if case .bestEffortRetry = finalization,
-                   finalizationPolicy == .requireExclusiveMove,
-                   !supportsExclusiveMove {
-                    try? await client.delete(path: stagingPath)
-                    throw Error.nonExclusiveFinalization(remotePath: remotePath)
                 }
             } catch {
                 try? await client.delete(path: stagingPath)

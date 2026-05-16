@@ -213,21 +213,14 @@ nonisolated struct VersionManifestStore: Sendable {
         }
     }
 
+    // Local encode/write errors stay raw so callers don't conflate "our disk is full"
+    // with the `BootstrapError.ioFailure → damagedV2Repo` mapping reserved for
+    // malformed remote V2 metadata.
     private func makeTempJSON(dict: [String: Any], prefix: String) throws -> URL {
-        let data: Data
-        do {
-            data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys, .prettyPrinted])
-        } catch {
-            throw RepoBootstrap.BootstrapError.ioFailure(error)
-        }
+        let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys, .prettyPrinted])
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(prefix)-\(UUID().uuidString).json")
-        do {
-            try data.write(to: temp, options: .atomic)
-        } catch {
-            throw RepoBootstrap.BootstrapError.ioFailure(error)
-        }
+        try data.write(to: temp, options: .atomic)
         return temp
     }
 }
-

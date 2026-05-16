@@ -263,12 +263,13 @@ final class BootstrapStateMachineTests: XCTestCase {
         let filenameWriterID = "55555555-5555-5555-5555-555555555555"
         let hijackJSONWriterID = "66666666-6666-6666-6666-666666666666"
         let bytes = Data(#"{"v":2,"writer_id":"\#(hijackJSONWriterID)","phase":2}"#.utf8)
-        XCTAssertThrowsError(try MigrationMarker.parse(filename: "\(filenameWriterID).json", bytes: bytes)) { error in
+        let parsedFilename = "\(filenameWriterID).json"
+        XCTAssertThrowsError(try MigrationMarker.parse(filename: parsedFilename, bytes: bytes)) { error in
             guard case MigrationMarkerError.writerIDMismatch(let filename, let jsonWriter) = error else {
                 XCTFail("expected .writerIDMismatch, got \(error)")
                 return
             }
-            XCTAssertEqual(filename, filenameWriterID)
+            XCTAssertEqual(filename, parsedFilename)
             XCTAssertEqual(jsonWriter, hijackJSONWriterID)
         }
     }

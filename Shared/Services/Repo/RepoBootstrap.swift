@@ -171,9 +171,24 @@ actor RepoBootstrap {
             .appendingPathComponent("repo-identity-final-read-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
         try await client.download(remotePath: markerPath, localURL: temp)
-        let data = try Data(contentsOf: temp)
-        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let repoID = dict["repo_id"] as? String, !repoID.isEmpty else {
+        // Wrap raw read/parse errors so inspectRemoteFormat maps them to .damagedV2Repo.
+        let dict: [String: Any]
+        do {
+            let data = try Data(contentsOf: temp)
+            guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw BootstrapError.ioFailure(NSError(
+                    domain: "RepoBootstrap",
+                    code: 12,
+                    userInfo: [NSLocalizedDescriptionKey: "repo identity finalization marker at \(markerPath) is malformed"]
+                ))
+            }
+            dict = parsed
+        } catch let bootstrap as BootstrapError {
+            throw bootstrap
+        } catch {
+            throw BootstrapError.ioFailure(error)
+        }
+        guard let repoID = dict["repo_id"] as? String, !repoID.isEmpty else {
             throw BootstrapError.ioFailure(NSError(
                 domain: "RepoBootstrap",
                 code: 12,
@@ -192,9 +207,19 @@ actor RepoBootstrap {
             return .absent
         }
         try await client.download(remotePath: path, localURL: temp)
-        let data = try Data(contentsOf: temp)
-        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = dict["repo_id"] as? String, !id.isEmpty else {
+        let dict: [String: Any]
+        do {
+            let data = try Data(contentsOf: temp)
+            guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw BootstrapError.ioFailure(NSError(domain: "RepoBootstrap", code: 1, userInfo: [NSLocalizedDescriptionKey: "repo.json malformed"]))
+            }
+            dict = parsed
+        } catch let bootstrap as BootstrapError {
+            throw bootstrap
+        } catch {
+            throw BootstrapError.ioFailure(error)
+        }
+        guard let id = dict["repo_id"] as? String, !id.isEmpty else {
             throw BootstrapError.ioFailure(NSError(domain: "RepoBootstrap", code: 1, userInfo: [NSLocalizedDescriptionKey: "repo.json malformed"]))
         }
         return .found(id)
@@ -277,20 +302,14 @@ actor RepoBootstrap {
         case mismatchedFormatVersion(remote: Int, local: Int, minAppVersion: String?)
     }
 
+    // Local encode/write errors stay raw so callers don't conflate "our disk is full"
+    // with the `BootstrapError.ioFailure → damagedV2Repo` mapping reserved for
+    // malformed remote V2 metadata.
     private func makeTempJSON(dict: [String: Any], prefix: String) throws -> URL {
-        let data: Data
-        do {
-            data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys, .prettyPrinted])
-        } catch {
-            throw BootstrapError.ioFailure(error)
-        }
+        let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys, .prettyPrinted])
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(prefix)-\(UUID().uuidString).json")
-        do {
-            try data.write(to: temp, options: .atomic)
-        } catch {
-            throw BootstrapError.ioFailure(error)
-        }
+        try data.write(to: temp, options: .atomic)
         return temp
     }
 

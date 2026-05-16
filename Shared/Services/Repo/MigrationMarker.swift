@@ -43,7 +43,7 @@ enum MigrationMarker {
             }
             if jsonWriter != parsedName.writerID {
                 throw MigrationMarkerError.writerIDMismatch(
-                    filename: parsedName.writerID,
+                    filename: filename,
                     jsonWriter: jsonWriter
                 )
             }
@@ -67,8 +67,8 @@ enum MigrationMarker {
             phase = .phase1
         }
         let runID = dict["run_id"] as? String
-        let startedAtMs = (dict["started_at_ms"] as? Int64) ?? (dict["started_at_ms"] as? Int).map(Int64.init)
-        let lastStepMs = (dict["last_step_at_ms"] as? Int64) ?? (dict["last_step_at_ms"] as? Int).map(Int64.init)
+        let startedAtMs = strictInt64(dict["started_at_ms"])
+        let lastStepMs = strictInt64(dict["last_step_at_ms"])
         return ParsedMigrationMarker(
             writerID: parsedName.writerID,
             phase: phase,
@@ -76,6 +76,16 @@ enum MigrationMarker {
             startedAtMs: startedAtMs,
             lastStepMs: lastStepMs
         )
+    }
+
+    /// JSON booleans bridge through `as? Int` (true→1); reject CFBoolean so a
+    /// corrupt `started_at_ms: true` can't anchor later phase writes at 1ms.
+    private static func strictInt64(_ raw: Any?) -> Int64? {
+        guard let raw else { return nil }
+        if CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID() { return nil }
+        if let v = raw as? Int64 { return v }
+        if let v = raw as? Int { return Int64(v) }
+        return nil
     }
 
     static func encode(_ marker: ParsedMigrationMarker) throws -> Data {
