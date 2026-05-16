@@ -30,7 +30,7 @@ nonisolated enum ExistingClaimClassification: Sendable {
     case corrupt
 }
 
-struct IdentityClaimStore: Sendable {
+nonisolated struct IdentityClaimStore: Sendable {
     let client: any RemoteStorageClientProtocol
     let basePath: String
 
@@ -239,7 +239,7 @@ struct IdentityClaimStore: Sendable {
            let id = dict["repo_id"] as? String, !id.isEmpty,
            let wid = dict["writer_id"] as? String, !wid.isEmpty, wid == expectedWriterID,
            RepoLayout.isValidWriterID(wid),
-           let ts = (dict["created_at_ms"] as? Int64) ?? (dict["created_at_ms"] as? Int).map(Int64.init) {
+           let ts = Self.strictInt64(dict["created_at_ms"]) {
             return .claim(IdentityClaim(repoID: id, writerID: wid, createdAtMs: ts))
         }
         // A writerID-shaped filename could have been canonical (lex-min); quarantining would silently flip the adopted repoID.
@@ -287,7 +287,7 @@ struct IdentityClaimStore: Sendable {
         guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let landedRepoID = dict["repo_id"] as? String,
               let landedWriterID = dict["writer_id"] as? String,
-              let landedTs = (dict["created_at_ms"] as? Int64) ?? (dict["created_at_ms"] as? Int).map(Int64.init) else {
+              let landedTs = Self.strictInt64(dict["created_at_ms"]) else {
             throw RepoBootstrap.BootstrapError.ioFailure(NSError(
                 domain: "RepoBootstrap",
                 code: 4,
@@ -328,6 +328,17 @@ struct IdentityClaimStore: Sendable {
             }
         }
         throw lastError ?? NSError(domain: "RepoBootstrap", code: 7, userInfo: [NSLocalizedDescriptionKey: "download retries exhausted at \(remotePath)"])
+    }
+
+    /// JSON `true`/`false` bridges to NSNumber that `as? Int`-casts to 1/0;
+    /// a foreign claim with `"created_at_ms": true` would otherwise be treated
+    /// as a valid claim at timestamp 1 and could win lex-min election.
+    private static func strictInt64(_ raw: Any?) -> Int64? {
+        guard let raw else { return nil }
+        if CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID() { return nil }
+        if let v = raw as? Int64 { return v }
+        if let v = raw as? Int { return Int64(v) }
+        return nil
     }
 
     private func metadataFileIfPresent(path: String, description: String, code: Int) async throws -> RemoteStorageEntry? {

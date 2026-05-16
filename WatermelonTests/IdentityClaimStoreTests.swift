@@ -81,6 +81,47 @@ final class IdentityClaimStoreTests: XCTestCase {
         XCTAssertEqual(result.repoID, "repo-B", "serialOnly branch must match concurrent lex-min outcome")
     }
 
+    /// A foreign claim with `"created_at_ms": true` must not bridge through `as? Int`
+    /// to timestamp 1 and silently win lex-min election. `strictInt64` rejects
+    /// CFBoolean ahead of any numeric cast, forcing the corrupt-foreign path.
+    func testCanonicalElection_foreignBooleanTimestamp_throwsCorrupt() async throws {
+        let (client, store) = await makeStore()
+        let path = RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter)
+        let dict: [String: Any] = [
+            "v": 1,
+            "repo_id": "hijack",
+            "created_at_ms": true,
+            "writer_id": otherWriter
+        ]
+        let data = try JSONSerialization.data(withJSONObject: dict)
+        await client.injectFile(path: path, data: data)
+        do {
+            _ = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
+            XCTFail("expected throw on boolean timestamp claim")
+        } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
+            XCTAssertEqual(error.domain, "RepoBootstrap")
+            XCTAssertEqual(error.code, 9)
+        }
+    }
+
+    /// Same defense applied to a self-corrupt claim: it must surface as the soft
+    /// `ignoredSelfCorrupt` signal, not adopt timestamp 1.
+    func testCanonicalElection_selfBooleanTimestamp_softSelfCorrupt() async throws {
+        let (client, store) = await makeStore()
+        let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        let dict: [String: Any] = [
+            "v": 1,
+            "repo_id": "ours",
+            "created_at_ms": false,
+            "writer_id": selfWriter
+        ]
+        let data = try JSONSerialization.data(withJSONObject: dict)
+        await client.injectFile(path: path, data: data)
+        let result = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
+        XCTAssertNil(result.repoID, "boolean timestamp must not be accepted as a valid claim")
+        XCTAssertTrue(result.ignoredSelfCorrupt, "self boolean timestamp must surface as soft self-corrupt")
+    }
+
     func testCanonicalElection_filenameMismatchedPayloadWriterID_throws() async throws {
         let (client, store) = await makeStore()
         // Filename writerID-A but payload writer_id=B (forged-timestamp defense).
@@ -225,7 +266,8 @@ final class IdentityClaimStoreTests: XCTestCase {
         await injectValidClaim(client, writerID: selfWriter, repoID: "old-repo", createdAtMs: 999)
         try await store.writeOwnClaim(repoID: "new-repo", writerID: selfWriter, createdAtMs: 2_000)
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
-        let bytes = try XCTUnwrap(await client.snapshotFiles()[path])
+        let snapshot = await client.snapshotFiles()
+        let bytes = try XCTUnwrap(snapshot[path])
         let dict = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
         XCTAssertEqual(dict?["repo_id"] as? String, "new-repo")
     }
@@ -235,7 +277,8 @@ final class IdentityClaimStoreTests: XCTestCase {
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         await client.injectFile(path: path, data: Data("garbage".utf8))
         try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 1_000)
-        let bytes = try XCTUnwrap(await client.snapshotFiles()[path])
+        let snapshot = await client.snapshotFiles()
+        let bytes = try XCTUnwrap(snapshot[path])
         let dict = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
         XCTAssertEqual(dict?["repo_id"] as? String, "repo-A")
     }
@@ -247,7 +290,8 @@ final class IdentityClaimStoreTests: XCTestCase {
         await client.setAtomicCreateMode(.bestEffort)
         try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 7_000)
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
-        let bytes = try XCTUnwrap(await client.snapshotFiles()[path])
+        let snapshot = await client.snapshotFiles()
+        let bytes = try XCTUnwrap(snapshot[path])
         let dict = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
         XCTAssertEqual(dict?["repo_id"] as? String, "repo-A")
     }

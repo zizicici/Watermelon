@@ -159,7 +159,8 @@ final class RepoIdentitySourcesTests: XCTestCase {
         try await client.connect()
         let bootstrap = RepoBootstrap(client: client, basePath: basePath)
         _ = try await bootstrap.initializeFreshRepo(writerID: "w")
-        let finalizedID = try XCTUnwrap(try await bootstrap.loadRepoID())
+        let loaded = try await bootstrap.loadRepoID()
+        let finalizedID = try XCTUnwrap(loaded)
 
         // Caller hands in a different suggestion; publish must adopt the finalized id.
         let sources = RepoIdentitySources(stored: nil, remote: nil, data: nil, suggested: "ignored-suggestion")
@@ -177,7 +178,8 @@ final class RepoIdentitySourcesTests: XCTestCase {
         try await client.connect()
         let bootstrap = RepoBootstrap(client: client, basePath: basePath)
         _ = try await bootstrap.initializeFreshRepo(writerID: "peer")
-        let finalizedID = try XCTUnwrap(try await bootstrap.loadRepoID())
+        let loaded = try await bootstrap.loadRepoID()
+        let finalizedID = try XCTUnwrap(loaded)
 
         let sources = RepoIdentitySources(stored: "stale-local", remote: nil, data: nil, suggested: "stale-local")
         do {

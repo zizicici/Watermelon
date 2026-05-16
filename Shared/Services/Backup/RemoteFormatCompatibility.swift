@@ -77,7 +77,19 @@ struct RemoteFormatCompatibilityService: Sendable {
         }
 
         if markerExists {
-            let manifest = try await VersionManifestStore(client: client, basePath: basePath).load()
+            // A damaged version.json (corrupt JSON, boolean format_version, directory at path) must
+            // surface as `damagedV2Repo` so the user sees an actionable diagnosis — mirroring the
+            // profile-less inspect path. Without this mapping, callers see a raw VersionConflict /
+            // ioFailure(NSError code 18) wrapped opaquely by `userFacingStorageErrorMessage`.
+            let manifest: VersionManifestStore.Load
+            do {
+                manifest = try await VersionManifestStore(client: client, basePath: basePath).load()
+            } catch is RepoBootstrap.VersionConflict {
+                throw BackupCompatibilityError.damagedV2Repo
+            } catch let bootstrap as RepoBootstrap.BootstrapError {
+                if case .ioFailure = bootstrap { throw BackupCompatibilityError.damagedV2Repo }
+                throw bootstrap
+            }
             if case .found(let preCheck) = manifest {
                 if preCheck.formatVersion > RepoLayout.currentSupportedFormatVersion {
                     return .unsupported(minAppVersion: preCheck.minAppVersion)

@@ -10,7 +10,7 @@ private let migrationMarkerStoreLog = Logger(
 /// parse bytes; tolerant parse APIs swallow every failure mode (V1MigrationService
 /// `requireValid: false` policy); `parseEntries` rethrows cancellation and non-not-found
 /// IO and only skips parse failures with a warning (RemoteFormatCompatibility policy).
-struct MigrationMarkerStore: Sendable {
+nonisolated struct MigrationMarkerStore: Sendable {
     let client: any RemoteStorageClientProtocol
     let basePath: String
 
@@ -69,21 +69,33 @@ struct MigrationMarkerStore: Sendable {
     func deleteAll(writerID: String) async throws {
         for path in try await pathsFor(writerID: writerID) {
             guard try await metadataIfPresent(path: path) != nil else { continue }
-            try await client.delete(path: path)
+            do {
+                try await client.delete(path: path)
+            } catch {
+                // A peer racing the same cleanup can remove the marker between
+                // our metadata probe and delete; tolerate not-found so we don't
+                // abort phase3 mid-loop with a transient error.
+                if !isStorageNotFoundError(error) { throw error }
+            }
         }
     }
 
     // MARK: - Tolerant parsed access (V1MigrationService policy)
 
     /// Pre-v:2 markers (no `phase` field) report `.phase1`; any unparseable marker
-    /// still counts as `sawMarker` so phase1 idempotence holds.
+    /// — including a directory squatting at the canonical path — still counts as
+    /// `sawMarker` so phase1 idempotence holds. Directory handling matches `existsFor`.
     func currentPhase(writerID: String) async throws -> MigrationMarkerPhase? {
         let paths = try await pathsFor(writerID: writerID)
         var bestPhase: MigrationMarkerPhase?
         var sawMarker = false
         for path in paths {
-            guard let meta = try await metadataIfPresent(path: path), !meta.isDirectory else { continue }
+            guard let meta = try await metadataIfPresent(path: path) else { continue }
             sawMarker = true
+            if meta.isDirectory {
+                bestPhase = Self.maxPhase(bestPhase, .phase1)
+                continue
+            }
             guard let info = await tolerantMarkerInfo(path: path, writerID: writerID) else {
                 bestPhase = Self.maxPhase(bestPhase, .phase1)
                 continue

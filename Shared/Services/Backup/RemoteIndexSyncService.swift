@@ -1023,7 +1023,19 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 case .success(let probe):
                     if !probe.fresh { anyFailure = true }
                     if probe.fresh { freshMonths.insert(month) }
-                    missingByMonth[month] = probe.missingHashes
+                    var missing = probe.missingHashes
+                    // Inconclusive (budget exhausted, transient probe failure) hashes
+                    // must NOT silently drop out of the overlay — replace-semantics in
+                    // markPhysicallyMissing would clear a prior-confirmed missing hash
+                    // and let resume/dedup classify it as remotely covered.
+                    if !probe.inconclusiveHashes.isEmpty {
+                        if let stale = fallback[month] {
+                            missing.formUnion(stale.intersection(probe.inconclusiveHashes))
+                        } else if case .failClosedWhenMissingFallback = staleFallbackPolicy {
+                            missing.formUnion(probe.inconclusiveHashes)
+                        }
+                    }
+                    missingByMonth[month] = missing
                 case .failure(let error):
                     anyFailure = true
                     if let stale = fallback[month] {

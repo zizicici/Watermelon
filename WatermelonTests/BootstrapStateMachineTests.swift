@@ -155,6 +155,52 @@ final class BootstrapStateMachineTests: XCTestCase {
         XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion), "stale marker without V1 manifests → V2")
     }
 
+    /// A damaged version.json (garbage bytes / boolean format_version) inside an
+    /// otherwise V2-shaped remote must surface as `damagedV2Repo`, not a raw
+    /// `VersionConflict.unreadable` or `BootstrapError.ioFailure` that ends up
+    /// wrapped opaquely in `userFacingStorageErrorMessage`.
+    func testWatermelonPresent_versionJsonGarbage_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        await client.injectFile(path: RepoLayout.versionFilePath(base: basePath), contents: "{not-json")
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("expected damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testWatermelonPresent_versionJsonBooleanFormatVersion_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        let body: [String: Any] = [
+            "format_version": true,
+            "min_app_version": "2.0.0"
+        ]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        await client.injectFile(path: RepoLayout.versionFilePath(base: basePath), data: data)
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("expected damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testWatermelonPresent_versionJsonIsDirectory_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        // Directory squatting on the version.json path — code 18 in VersionManifestStore.
+        try await client.createDirectory(path: RepoLayout.versionFilePath(base: basePath) + "/child")
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("expected damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
     func testTransientListErrorPropagates() async throws {
         // version.json transient errors should NOT be misclassified as unsupported.
         let (client, profile) = await makeFixture()

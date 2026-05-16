@@ -3,7 +3,7 @@ import os.log
 
 private let v1MigrationResidueQuarantineLog = Logger(subsystem: "com.zizicici.watermelon", category: "V1MigrationResidueQuarantine")
 
-struct V1MigrationResidueQuarantine: Sendable {
+nonisolated struct V1MigrationResidueQuarantine: Sendable {
     let client: any RemoteStorageClientProtocol
     let basePath: String
 
@@ -208,7 +208,14 @@ struct V1MigrationResidueQuarantine: Sendable {
 
     private func deleteIfPresent(path: String) async throws {
         guard try await metadataIfPresent(path: path) != nil else { return }
-        try await client.delete(path: path)
+        do {
+            try await client.delete(path: path)
+        } catch {
+            // A peer racing the same cleanup can remove the file between metadata
+            // and delete; SMB/WebDAV/SFTP surface that as an error (S3 is idempotent).
+            // Treat not-found as success so cleanup doesn't abort with a spurious error.
+            if !isStorageNotFoundError(error) { throw error }
+        }
     }
 
     private func remoteFilesEqual(_ lhsPath: String, _ rhsPath: String) async throws -> Bool {

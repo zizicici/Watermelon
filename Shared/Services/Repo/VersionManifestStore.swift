@@ -12,7 +12,7 @@ nonisolated struct VersionManifest: Sendable {
     let createdByWriter: String?
 }
 
-struct VersionManifestStore: Sendable {
+nonisolated struct VersionManifestStore: Sendable {
     enum Load: Sendable {
         case absent
         case found(VersionManifest)

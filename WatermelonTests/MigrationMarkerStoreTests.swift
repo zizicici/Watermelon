@@ -205,6 +205,21 @@ final class MigrationMarkerStoreTests: XCTestCase {
         XCTAssertEqual(phase, .phase1)
     }
 
+    /// A directory squatting at the canonical marker path is a `sawMarker = true`
+    /// signal so callers (e.g. phase1 idempotence) treat it the same way
+    /// `existsFor` already does. Filtering it out of `currentPhase` would let two
+    /// APIs answering the same question disagree for the same path.
+    func testCurrentPhase_directoryAtCanonicalPath_treatedAsPhase1() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let canonical = RepoLayout.migrationMarkerPath(base: basePath, writerID: validWriterID)
+        try await client.createDirectory(path: canonical)
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+
+        let phase = try await store.currentPhase(writerID: validWriterID)
+        XCTAssertEqual(phase, .phase1, "directory at canonical path must count as sawMarker, matching existsFor")
+    }
+
     func testCurrentPhase_returnsNilWhenNoMarkers() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
