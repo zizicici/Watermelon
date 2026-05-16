@@ -50,7 +50,7 @@ enum BackupV2RuntimeBuilder {
             resolvedRepoID = try await sources.publish(bootstrap: bootstrap, writerID: writerID)
             // WebDAV/SMB/SFTP don't auto-create parents on PUT.
             try await bootstrap.ensureSubdirectories()
-        case .v2WithPendingMigrationCleanup:
+        case .v2WithPendingMigrationCleanup(_, let ownerWriterID):
             try await bootstrap.ensureSubdirectories()
             // Heavy commit/snapshot scan stays on data `client`; publication on the
             // metadata bootstrap keeps marker writes off the data connection.
@@ -71,14 +71,12 @@ enum BackupV2RuntimeBuilder {
             )
             do {
                 let resolved = try await sources.publish(bootstrap: cleanupBootstrap, writerID: writerID)
-                let outcome = try await cleanup.run(
-                    profileID: profileID,
-                    inspection: inspection,
+                try await cleanup.runCleanupOnly(
+                    ownerWriterID: ownerWriterID,
                     writerID: writerID,
-                    runID: runID,
-                    resolvedRepoID: resolved
+                    runID: runID
                 )
-                resolvedRepoID = outcome.resolvedRepoID
+                resolvedRepoID = resolved
             } catch let error as RepoBootstrap.VersionConflict {
                 switch error {
                 case .higherFormatVersion(_, _, let minApp),
@@ -121,16 +119,15 @@ enum BackupV2RuntimeBuilder {
             )
             do {
                 let resolved = try await sources.publish(bootstrap: bootstrap, writerID: writerID)
-                let outcome = try await migration.run(
+                _ = try await migration.runFullMigration(
                     profileID: profileID,
-                    inspection: inspection,
+                    repoID: resolved,
                     writerID: writerID,
                     runID: runID,
-                    resolvedRepoID: resolved,
                     onMigrationStart: onMigrationStart,
                     onMigrationComplete: onMigrationComplete
                 )
-                resolvedRepoID = outcome.resolvedRepoID
+                resolvedRepoID = resolved
             } catch let error as RepoBootstrap.VersionConflict {
                 switch error {
                 case .higherFormatVersion(_, _, let minApp),

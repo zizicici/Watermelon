@@ -16,16 +16,7 @@ actor V1MigrationService {
         let manifestAbsolutePath: String
     }
 
-    /// Per-call claim decision derived from `RemoteFormatInspection`. Distinguishes
-    /// "we run full migration" from "we finalize a peer's incomplete migration".
-    enum MigrationClaim: Sendable {
-        case fullMigration
-        case cleanupOnly(ownerWriterID: String)
-        case noWorkNeeded
-    }
-
     struct MigrationOutcome: Sendable {
-        let resolvedRepoID: String
         let migratedMonthCount: Int
     }
 
@@ -391,69 +382,44 @@ actor V1MigrationService {
         }
     }
 
-    /// 8-step FSM entry: detect (input `inspection`) → claim → publishIdentity (caller) →
-    /// ensureVersionPublished → runPhase1 (full) → markProfileMigrated (full) →
-    /// runPhase3 → verifyFinalState. Cleanup-only path skips phase1 +
-    /// markProfileMigrated and uses the peer's writerID for marker cleanup.
-    func run(
+    func runFullMigration(
         profileID: Int64,
-        inspection: RemoteFormatInspection,
+        repoID: String,
         writerID: String,
         runID: String,
-        resolvedRepoID: String,
         onMigrationStart: (() async -> Void)? = nil,
         onMigrationComplete: ((Int) async -> Void)? = nil
     ) async throws -> MigrationOutcome {
-        let claim: MigrationClaim
-        switch inspection {
-        case .v1, .v2WithV1Manifests:
-            claim = .fullMigration
-        case .v2WithPendingMigrationCleanup(_, let ownerWriterID):
-            claim = .cleanupOnly(ownerWriterID: ownerWriterID)
-        case .fresh, .v2, .unsupported:
-            claim = .noWorkNeeded
-        }
-
         var migratedCount = 0
-        var cleanedWriterID = writerID
-
-        switch claim {
-        case .fullMigration:
-            let state = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: resolvedRepoID, writerID: writerID)
-            let needsMigration: Bool
-            if state.migrationCompleted != 1 {
-                needsMigration = true
-            } else if try await ownsMigrationMarker(writerID: writerID) {
-                needsMigration = true
-            } else {
-                needsMigration = !(try await scanV1Months()).isEmpty
-            }
-            if needsMigration {
-                await onMigrationStart?()
-                try await ensureVersionPublished(writerID: writerID)
-                migratedCount = try await runPhase1(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
-                try await markProfileMigrated(profileID: profileID, repoID: resolvedRepoID, writerID: writerID, runID: runID)
-                try await runPhase3(writerID: writerID, runID: runID)
-                await onMigrationComplete?(migratedCount)
-            }
-        case .cleanupOnly(let ownerWriterID):
-            cleanedWriterID = ownerWriterID
+        let state = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: writerID)
+        let needsMigration: Bool
+        if state.migrationCompleted != 1 {
+            needsMigration = true
+        } else if try await ownsMigrationMarker(writerID: writerID) {
+            needsMigration = true
+        } else {
+            needsMigration = !(try await scanV1Months()).isEmpty
+        }
+        if needsMigration {
+            await onMigrationStart?()
             try await ensureVersionPublished(writerID: writerID)
-            try await runPhase3(writerID: ownerWriterID, runID: runID)
-        case .noWorkNeeded:
-            break
+            migratedCount = try await runPhase1(profileID: profileID, repoID: repoID, writerID: writerID, runID: runID)
+            try await markProfileMigrated(profileID: profileID, repoID: repoID, writerID: writerID, runID: runID)
+            try await runPhase3(writerID: writerID, runID: runID)
+            await onMigrationComplete?(migratedCount)
         }
+        try await verifyFinalState(cleanedWriterID: writerID)
+        return MigrationOutcome(migratedMonthCount: migratedCount)
+    }
 
-        switch claim {
-        case .noWorkNeeded:
-            break
-        case .fullMigration, .cleanupOnly:
-            try await verifyFinalState(cleanedWriterID: cleanedWriterID)
-        }
-        return MigrationOutcome(
-            resolvedRepoID: resolvedRepoID,
-            migratedMonthCount: migratedCount
-        )
+    func runCleanupOnly(
+        ownerWriterID: String,
+        writerID: String,
+        runID: String
+    ) async throws {
+        try await ensureVersionPublished(writerID: writerID)
+        try await runPhase3(writerID: ownerWriterID, runID: runID)
+        try await verifyFinalState(cleanedWriterID: ownerWriterID)
     }
 
     /// Pre-phase markers (no `phase` field) report `.phase1`; phase1 is idempotent.

@@ -281,7 +281,7 @@ final class V1MigrationServiceTests: XCTestCase {
         try await service.verifyFinalState(cleanedWriterID: "w")
     }
 
-    // MARK: - run() integration
+    // MARK: - Migration entrypoint integration
 
     func testRun_v1Inspection_executesFullPathAndFlipsMigrationCompleted() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -301,16 +301,14 @@ final class V1MigrationServiceTests: XCTestCase {
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
-        let outcome = try await service.run(
+        let outcome = try await service.runFullMigration(
             profileID: profileID,
-            inspection: .v1,
+            repoID: "r",
             writerID: "w",
-            runID: "run-1",
-            resolvedRepoID: "r"
+            runID: "run-1"
         )
 
         XCTAssertEqual(outcome.migratedMonthCount, 1)
-        XCTAssertEqual(outcome.resolvedRepoID, "r")
 
         let state = try await identity.loadRepoState(profileID: profileID, repoID: "r")
         XCTAssertEqual(state?.migrationCompleted, 1, "full migration path must mark profile migrated")
@@ -342,15 +340,11 @@ final class V1MigrationServiceTests: XCTestCase {
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
-        let outcome = try await service.run(
-            profileID: profileID,
-            inspection: .v2WithPendingMigrationCleanup(formatVersion: RepoLayout.formatVersion, ownerWriterID: "peer"),
+        try await service.runCleanupOnly(
+            ownerWriterID: "peer",
             writerID: "w",
-            runID: "cleanup-run-1",
-            resolvedRepoID: "r"
+            runID: "cleanup-run-1"
         )
-
-        XCTAssertEqual(outcome.migratedMonthCount, 0)
 
         // Peer marker must be gone after phase3(owner).
         let peerMarker = await client.hasFile(RepoLayout.migrationMarkerPath(base: basePath, writerID: "peer"))
