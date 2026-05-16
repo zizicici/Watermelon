@@ -26,6 +26,7 @@ actor V1MigrationService {
     private let identity: RepoIdentity
     private let bootstrap: RepoBootstrap
     private let residueQuarantine: V1MigrationResidueQuarantine
+    private let markerStore: MigrationMarkerStore
 
     init(
         client: any RemoteStorageClientProtocol,
@@ -40,6 +41,7 @@ actor V1MigrationService {
         self.identity = identity
         self.bootstrap = bootstrap
         self.residueQuarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        self.markerStore = MigrationMarkerStore(client: client, basePath: basePath)
     }
 
     func scanV1Months() async throws -> [ScannedV1Month] {
@@ -69,7 +71,7 @@ actor V1MigrationService {
         // WebDAV/SMB/SFTP don't auto-create parents on PUT.
         try await bootstrap.ensureSubdirectories()
         // Marker before any commit keeps interrupted migration visible to inspect.
-        try await writeMigrationMarker(writerID: writerID, phase: MigrationMarkerPhase.phase1, runID: runID)
+        try await markerStore.writePhase(writerID: writerID, phase: .phase1, runID: runID)
 
         let allocator = SeqAllocator(database: database, profileID: profileID, repoID: repoID, initial: try await initialSeq(repoID: repoID, profileID: profileID))
         let clock = PersistedLamportClock(database: database, profileID: profileID, repoID: repoID, initial: try await initialClock(repoID: repoID, profileID: profileID))
@@ -356,14 +358,14 @@ actor V1MigrationService {
     /// cleanup path intentionally leaves `migrationCompleted=0` (preserves
     /// pre-refactor behavior where a peer's cleanup run never set the flag).
     func markProfileMigrated(profileID: Int64, repoID: String, writerID: String, runID: String) async throws {
-        try await writeMigrationMarker(writerID: writerID, phase: MigrationMarkerPhase.phase2, runID: runID)
+        try await markerStore.writePhase(writerID: writerID, phase: .phase2, runID: runID)
         try await identity.setMigrationCompleted(profileID: profileID, repoID: repoID)
     }
 
     func runPhase3(writerID: String, runID: String) async throws {
-        try await writeMigrationMarker(writerID: writerID, phase: MigrationMarkerPhase.phase3, runID: runID)
+        try await markerStore.writePhase(writerID: writerID, phase: .phase3, runID: runID)
         try await residueQuarantine.sweepResidueManifests()
-        try await deleteMigrationMarkers(writerID: writerID)
+        try await markerStore.deleteAll(writerID: writerID)
     }
 
     /// FSM step: verify final state. Post-condition guard — re-list base and
@@ -421,70 +423,16 @@ actor V1MigrationService {
         try await verifyFinalState(cleanedWriterID: ownerWriterID)
     }
 
-    /// Pre-phase markers (no `phase` field) report `.phase1`; phase1 is idempotent.
     func currentPhase(writerID: String) async throws -> MigrationMarkerPhase? {
-        let paths = try await migrationMarkerPaths(writerID: writerID)
-        var bestPhase: MigrationMarkerPhase?
-        var sawMarker = false
-        for path in paths {
-            guard let meta = try await metadataIfPresent(path: path), !meta.isDirectory else { continue }
-            sawMarker = true
-            guard let info = try await migrationMarkerInfo(path: path, writerID: writerID, requireValid: false) else {
-                bestPhase = maxPhase(bestPhase, .phase1)
-                continue
-            }
-            bestPhase = maxPhase(bestPhase, info.phase)
-        }
-        if let bestPhase { return bestPhase }
-        return sawMarker ? .phase1 : nil
+        try await markerStore.currentPhase(writerID: writerID)
     }
 
-    /// Distinguishes our incomplete phase3 cleanup (marker survived) from a real V1 regression.
     func ownsMigrationMarker(writerID: String) async throws -> Bool {
-        for path in try await migrationMarkerPaths(writerID: writerID) {
-            if try await metadataIfPresent(path: path) != nil {
-                return true
-            }
-        }
-        return false
+        try await markerStore.existsFor(writerID: writerID)
     }
 
-    /// Used by builder to tell "peer mid-migration" apart from "real V1 regression".
     func anyMigrationMarkerExists() async throws -> Bool {
-        let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
-        do {
-            let entries = try await client.list(path: dir)
-            return entries.contains { !$0.isDirectory && $0.name.hasSuffix(".json") }
-        } catch {
-            if isStorageNotFoundError(error) { return false }
-            throw error
-        }
-    }
-
-    private func migrationMarkerPaths(writerID: String) async throws -> [String] {
-        let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
-        var paths: Set<String> = [RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)]
-        do {
-            let entries = try await client.list(path: dir)
-            for entry in entries where !entry.isDirectory {
-                guard RepoLayout.parseMigrationMarkerFilename(entry.name)?.writerID == writerID else { continue }
-                paths.insert(RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name))
-            }
-        } catch {
-            if !isStorageNotFoundError(error) { throw error }
-        }
-        return Array(paths)
-    }
-
-    private func deleteMigrationMarkers(writerID: String) async throws {
-        for path in try await migrationMarkerPaths(writerID: writerID) {
-            try await deleteIfPresent(path: path)
-        }
-    }
-
-    private func maxPhase(_ lhs: MigrationMarkerPhase?, _ rhs: MigrationMarkerPhase) -> MigrationMarkerPhase {
-        guard let lhs else { return rhs }
-        return lhs.rawValue >= rhs.rawValue ? lhs : rhs
+        try await markerStore.existsAny()
     }
 
     private func metadataIfPresent(path: String) async throws -> RemoteStorageEntry? {
@@ -540,179 +488,6 @@ actor V1MigrationService {
             respectTaskCancellation: false,
             finalizationPolicy: .allowBestEffort
         )
-    }
-
-    private func writeMigrationMarker(writerID: String, phase: MigrationMarkerPhase, runID: String) async throws {
-        try await client.createDirectory(path: RepoLayout.migrationsDirectoryPath(base: basePath))
-        let path = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
-        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let startedAtMs = try await migrationMarkerStartedAtForWriter(writerID: writerID) ?? nowMs
-        let marker = ParsedMigrationMarker(
-            writerID: writerID,
-            phase: phase,
-            runID: runID,
-            startedAtMs: startedAtMs,
-            lastStepMs: nowMs
-        )
-        let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("migration-marker-\(UUID().uuidString).json")
-        try MigrationMarker.encode(marker).write(to: temp, options: .atomic)
-        defer { try? FileManager.default.removeItem(at: temp) }
-        if phase == .phase1, try await metadataIfPresent(path: path) == nil {
-            let outcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
-                client: client,
-                localURL: temp,
-                remotePath: path,
-                respectTaskCancellation: false
-            )
-            if case .alreadyExists = outcome.result {
-                try await writeUniqueMigrationMarker(writerID: writerID, phase: phase, runID: runID, startedAtMs: startedAtMs, nowMs: nowMs)
-                return
-            }
-            if !outcome.verifiedAgainstLocalContent {
-                try await verifyMigrationMarkerWrite(remotePath: path, localURL: temp)
-            }
-            return
-        }
-        try await writeUniqueMigrationMarker(writerID: writerID, phase: phase, runID: runID, startedAtMs: startedAtMs, nowMs: nowMs)
-    }
-
-    private func migrationMarkerStartedAt(path: String, writerID: String, requireValid: Bool) async throws -> Int64? {
-        let info = try await migrationMarkerInfo(path: path, writerID: writerID, requireValid: requireValid)
-        return info?.startedAtMs
-    }
-
-    private func migrationMarkerStartedAtForWriter(writerID: String) async throws -> Int64? {
-        for path in try await migrationMarkerPaths(writerID: writerID) {
-            if let startedAtMs = try await migrationMarkerStartedAt(path: path, writerID: writerID, requireValid: false) {
-                return startedAtMs
-            }
-        }
-        return nil
-    }
-
-    private func writeUniqueMigrationMarker(
-        writerID: String,
-        phase: MigrationMarkerPhase,
-        runID: String,
-        startedAtMs: Int64,
-        nowMs: Int64
-    ) async throws {
-        let marker = ParsedMigrationMarker(
-            writerID: writerID,
-            phase: phase,
-            runID: runID,
-            startedAtMs: startedAtMs,
-            lastStepMs: nowMs
-        )
-        let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("migration-marker-\(UUID().uuidString).json")
-        try MigrationMarker.encode(marker).write(to: temp, options: .atomic)
-        defer { try? FileManager.default.removeItem(at: temp) }
-        for _ in 0..<4 {
-            let markerID = UUID().uuidString.lowercased()
-            let path = RepoLayout.migrationPhaseMarkerPath(
-                base: basePath,
-                writerID: writerID,
-                phase: phase.rawValue,
-                markerID: markerID
-            )
-            let outcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
-                client: client,
-                localURL: temp,
-                remotePath: path,
-                respectTaskCancellation: false
-            )
-            if case .alreadyExists = outcome.result {
-                continue
-            }
-            if !outcome.verifiedAgainstLocalContent {
-                try await verifyMigrationMarkerWrite(remotePath: path, localURL: temp)
-            }
-            return
-        }
-        throw NSError(domain: "V1MigrationService", code: -43, userInfo: [
-            NSLocalizedDescriptionKey: "could not allocate unique migration marker for \(writerID)"
-        ])
-    }
-
-    private func migrationMarkerInfo(path: String, writerID: String, requireValid: Bool) async throws -> ParsedMigrationMarker? {
-        let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("migration-marker-existing-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: temp) }
-        do {
-            try await client.download(remotePath: path, localURL: temp)
-        } catch {
-            if isStorageNotFoundError(error) { return nil }
-            if requireValid { throw error }
-            return nil
-        }
-        let data: Data
-        do {
-            data = try Data(contentsOf: temp)
-        } catch {
-            if requireValid { throw error }
-            return nil
-        }
-        let filename = (path as NSString).lastPathComponent
-        do {
-            let parsed = try MigrationMarker.parse(filename: filename, bytes: data)
-            // Defense-in-depth: callers source paths from the writerID, but a future caller mustn't silently adopt a foreign marker.
-            if parsed.writerID != writerID {
-                if requireValid {
-                    throw NSError(domain: "V1MigrationService", code: -42, userInfo: [
-                        NSLocalizedDescriptionKey: "migration marker at \(path) is not owned by writer \(writerID)"
-                    ])
-                }
-                return nil
-            }
-            return parsed
-        } catch let error as MigrationMarkerError {
-            if requireValid {
-                throw NSError(domain: "V1MigrationService", code: -44, userInfo: [
-                    NSLocalizedDescriptionKey: "migration marker at \(path) failed shared parser: \(error)"
-                ])
-            }
-            return nil
-        } catch {
-            if requireValid { throw error }
-            return nil
-        }
-    }
-
-    private func verifyMigrationMarkerWrite(remotePath: String, localURL: URL) async throws {
-        // Share the metadata-write readback contract so eventually-consistent backends
-        // (S3-compatible / WebDAV-behind-cache) get the same `readAfterWriteGraceSeconds`
-        // budget here as commits and snapshots — a fixed 600 ms loop reports stale reads
-        // as fatal marker failures even when the write itself landed.
-        do {
-            if try await MetadataCreateGate.verifyMatchesLocalWithRetries(
-                client: client,
-                remotePath: remotePath,
-                localURL: localURL
-            ) {
-                return
-            }
-            throw NSError(
-                domain: "V1MigrationService",
-                code: -41,
-                userInfo: [NSLocalizedDescriptionKey: "migration marker bytes did not verify at \(remotePath)"]
-            )
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            if let nsError = error as NSError?, nsError.domain == "V1MigrationService", nsError.code == -41 {
-                throw error
-            }
-            throw NSError(
-                domain: "V1MigrationService",
-                code: -41,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "migration marker bytes did not verify at \(remotePath)",
-                    NSUnderlyingErrorKey: error
-                ]
-            )
-        }
     }
 
     private func initialSeq(repoID: String, profileID: Int64) async throws -> UInt64 {

@@ -103,8 +103,9 @@ struct RemoteFormatCompatibilityService: Sendable {
                     return .unsupported(minAppVersion: preCheck.minAppVersion)
                 }
             }
-            let migrationMarkers = try await listMigrationMarkers(client: client, basePath: basePath)
-            let migrationInProgress = !migrationMarkers.isEmpty
+            let markerStore = MigrationMarkerStore(client: client, basePath: basePath)
+            let migrationDirEntries = try await markerStore.migrationsDirectoryEntries()
+            let migrationInProgress = migrationDirEntries.contains { !$0.isDirectory && $0.name.hasSuffix(".json") }
             var cachedV1Manifests: Bool?
             func hasV1Manifests() async throws -> Bool {
                 if let cachedV1Manifests { return cachedV1Manifests }
@@ -121,11 +122,7 @@ struct RemoteFormatCompatibilityService: Sendable {
                         return .v2WithV1Manifests(formatVersion: RepoLayout.formatVersion)
                     }
                     if migrationInProgress {
-                        let markerStates = try await inspectMigrationMarkers(
-                            client: client,
-                            basePath: basePath,
-                            markers: migrationMarkers
-                        )
+                        let markerStates = try await markerStore.parseEntries(migrationDirEntries)
                         let ordered = Self.sortedMarkers(markerStates)
                         if let marker = ordered.first {
                             return .v2WithPendingMigrationCleanup(
@@ -144,7 +141,7 @@ struct RemoteFormatCompatibilityService: Sendable {
             case .found(let manifest):
                 let formatVersion = manifest.formatVersion ?? 0
                 if formatVersion >= 2 && formatVersion <= RepoLayout.currentSupportedFormatVersion {
-                    let markerStates = try await inspectMigrationMarkers(client: client, basePath: basePath, markers: migrationMarkers)
+                    let markerStates = try await markerStore.parseEntries(migrationDirEntries)
                     if try await hasV1Manifests() {
                         return .v2WithV1Manifests(formatVersion: formatVersion)
                     }
@@ -175,56 +172,6 @@ struct RemoteFormatCompatibilityService: Sendable {
                 return lhs.phase.rawValue > rhs.phase.rawValue
             }
             return lhs.writerID < rhs.writerID
-        }
-    }
-
-    private func inspectMigrationMarkers(
-        client: any RemoteStorageClientProtocol,
-        basePath: String,
-        markers: [RemoteStorageEntry]
-    ) async throws -> [ParsedMigrationMarker] {
-        let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
-        var results: [ParsedMigrationMarker] = []
-        for entry in markers where !entry.isDirectory && entry.name.hasSuffix(".json") {
-            let path = RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name)
-            let temp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("migration-marker-detect-\(UUID().uuidString).json")
-            defer { try? FileManager.default.removeItem(at: temp) }
-            let data: Data
-            do {
-                try await client.download(remotePath: path, localURL: temp)
-                data = try Data(contentsOf: temp)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                if !isNotFoundError(error) { throw error }
-                continue
-            }
-            do {
-                // Adopting a hijacked/malformed marker would loop cleanup at a foreign writerID forever.
-                let parsed = try MigrationMarker.parse(filename: entry.name, bytes: data)
-                results.append(parsed)
-            } catch {
-                remoteFormatLog.warning(
-                    "skipping migration marker at \(path, privacy: .public): \(String(describing: error), privacy: .public)"
-                )
-                continue
-            }
-        }
-        return results
-    }
-
-    /// Fail-closed: list errors throw so a network blip can't be misread as "no migration".
-    private func listMigrationMarkers(
-        client: any RemoteStorageClientProtocol,
-        basePath: String
-    ) async throws -> [RemoteStorageEntry] {
-        let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
-        do {
-            return try await client.list(path: dir)
-        } catch {
-            if isNotFoundError(error) { return [] }
-            throw error
         }
     }
 

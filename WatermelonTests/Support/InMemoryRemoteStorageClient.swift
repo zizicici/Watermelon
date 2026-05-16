@@ -58,7 +58,14 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     /// staging-fallback path. `setAtomicCreateMode` only affects atomicCreate's
     /// return shape, not the reported guarantee.
     nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
-        .overwritePossible
+        atomicCreateGuaranteeBox.withLock { $0 }
+    }
+    private nonisolated let atomicCreateGuaranteeBox = OSAllocatedUnfairLock(initialState: CreateGuarantee.overwritePossible)
+
+    /// Lets tests flip to `.exclusive` so the gate exercises its direct-atomic path
+    /// (skips staging, skips post-verify on `.created`).
+    nonisolated func setAtomicCreateGuarantee(_ guarantee: CreateGuarantee) {
+        atomicCreateGuaranteeBox.withLock { $0 = guarantee }
     }
 
     /// Stage a one-shot bestEffort race: the next `atomicCreate(remotePath:)` will
