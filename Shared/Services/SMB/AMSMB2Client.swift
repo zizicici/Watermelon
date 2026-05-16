@@ -7,6 +7,8 @@ import AMSMB2
 final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    // libsmb2 hard-codes `replace_if_exist=0` in `smb2_rename_async`; move to an existing destination fails.
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseInsensitive }
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
 

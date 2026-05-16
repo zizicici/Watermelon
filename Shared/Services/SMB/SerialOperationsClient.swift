@@ -126,7 +126,7 @@ final class SerialOperationsClient: RemoteStorageClientProtocol, @unchecked Send
     var isSerialized: Bool { true }
     var dataPathOverwriteRisk: DataPathOverwriteRisk { underlying.dataPathOverwriteRisk }
     var supportsLivenessSafeOverwriteUpload: Bool { underlying.supportsLivenessSafeOverwriteUpload }
-    var supportsLivenessSafeRenewal: Bool { underlying.supportsLivenessSafeRenewal }
+    var supportsLivenessSafeOverwriteMove: Bool { underlying.supportsLivenessSafeOverwriteMove }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { underlying.backendNameCaseSensitivity }
     var moveIfAbsentGuarantee: CreateGuarantee { underlying.moveIfAbsentGuarantee }
     var readAfterWriteGraceSeconds: TimeInterval { underlying.readAfterWriteGraceSeconds }

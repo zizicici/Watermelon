@@ -6,6 +6,8 @@ final actor S3Client: RemoteStorageClientProtocol {
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
     // PUT is atomic replace at the object level — peers see old XOR new, never neither.
     nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
+    // `move` is CopyObject + DeleteObject; destination is atomically replaced per-key, source orphan is irrelevant to renewal.
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
     // S3 keys are byte-exact; `IMG.JPG` and `img.jpg` are distinct objects.
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     // Conditional CopyObject support is endpoint-specific and probed asynchronously.

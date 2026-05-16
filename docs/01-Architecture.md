@@ -285,15 +285,16 @@
 - `moveIfAbsentGuarantee` —— `moveIfAbsent` 默认能力。LocalVolume / SMB / S3-conditional 是 `.exclusive`；WebDAV / SFTP 是 `.overwritePossible`
 - `supportsExclusiveMoveIfAbsent(forDestinationPath:)` async —— runtime probe，覆盖静态 `moveIfAbsentGuarantee`。S3 forward 到 `conditionalCopyIfAbsentSupported()`（首次跑探测、actor 缓存）；WebDAV forward 到 `Overwrite: F` 探测；其它 backend 默认 `(moveIfAbsentGuarantee == .exclusive)`
 - `dataPathOverwriteRisk` —— `.perKey`（S3 / WebDAV / SMB）vs `.none`（LocalVolume / SFTP），上传路径决定是否强加 `~widN` 后缀
-- `supportsLivenessSafeOverwriteUpload` —— `client.upload` 到既有路径是否可作为 liveness 心跳续期（既不丢旧又不留空）。LocalVolume / S3 为 `true`；SMB / WebDAV / SFTP 为 `false`。默认保守为 `false`，不耦合 `dataPathOverwriteRisk`。`LivenessTracker` Phase D 消费
-- `supportsLivenessSafeRenewal` —— overwrite-move 或 liveness-safe overwrite-upload 至少一条续期路径可用。仅 SFTP（无 `posix-rename@openssh.com` 且 upload 不安全）为 `false`；为 `false` 时 `BackupV2RuntimeBuilder` 必须跳过 orphan sweep。`BackupV2RuntimeBuilder` 消费。当前默认 `true` 是兼容默认，未做反向 decouple（见协议默认注释）
+- `supportsLivenessSafeOverwriteUpload` —— `client.upload` 到既有路径是否可作为 liveness 心跳续期（既不丢旧又不留空）。LocalVolume / S3 为 `true`；SMB / WebDAV / SFTP 为 `false`。默认保守为 `false`，不耦合 `dataPathOverwriteRisk`。与 `supportsLivenessSafeOverwriteMove` 共同决定派生的 `supportsLivenessSafeRenewal`，`LivenessTracker` Phase D 直接消费 upload 原子
+- `supportsLivenessSafeOverwriteMove` —— `client.move` 到既有路径是否在目的地做原子替换（同伴永不观察到路径缺失）。LocalVolume（POSIX `rename(2)`）/ S3（CopyObject + DeleteObject，目的地按对象原子替换）/ WebDAV（RFC 4918 `MOVE` + `Overwrite: T`，主流实现走 `rename(2)`）为 `true`；SMB（libsmb2 `smb2_rename_async` 硬编码 `replace_if_exist=0`）/ SFTP（v3 `rename` 拒绝既有目的地）为 `false`。无默认 —— 协议强制每个后端显式声明
+- `supportsLivenessSafeRenewal` —— 派生自 `supportsLivenessSafeOverwriteUpload || supportsLivenessSafeOverwriteMove`：至少一条续期路径安全则为 `true`。SMB 与 SFTP 两路均不安全，因此为 `false`；为 `false` 时 `BackupV2RuntimeBuilder` 必须跳过 orphan sweep（心跳一旦失活，同伴会把我们的 writerID 判为陈旧，进而删除正在写入的 staging）。`BackupV2RuntimeBuilder` 消费
 - `readAfterWriteGraceSeconds` —— 共享 read-after-write 容忍预算，被 `MetadataCreateGate.metadataReadAfterWriteDeadline` 与 `LivenessTracker.snapshotPeerStatuses` 共同消费。S3 / WebDAV `30`（R2 / MinIO / B2 / CDN 反代场景）；其他后端 `0`
 - `backendNameCaseSensitivity` —— `.caseSensitive` / `.caseInsensitive` / `.unknown`，`presenceKey(for:)` extension 折叠
 - `concurrencyMode` —— `.concurrent` vs `.serialOnly`（SMB / SFTP），`SerialOperationsClient` 包裹
 
 新增能力位必须按其实际承载的语义命名（原语 vs coordination 安全），避免出现"原语命名 + coordination 取值"的错位。
 
-`MetadataCreateGate.createWithStagingFallback` 消费 `atomicCreateGuarantee` / `moveIfAbsentGuarantee` / `dataPathOverwriteRisk` / `readAfterWriteGraceSeconds`：先看 `atomicCreateGuarantee`（`.exclusive` → 直接 atomicCreate；`.overwritePossible` → UUID staging + 验证 + move），再看 `moveIfAbsentGuarantee` + runtime probe 决定 finalization 路径（exclusive moveIfAbsent vs `bestEffortCopyIfAbsent` 兜底 vs 抛 `nonExclusiveFinalization`）。`supportsLivenessSafeOverwriteUpload` 与 `supportsLivenessSafeRenewal` 不在 gate 路径上，由 `LivenessTracker` / `BackupV2RuntimeBuilder` 各自消费。
+`MetadataCreateGate.createWithStagingFallback` 消费 `atomicCreateGuarantee` / `moveIfAbsentGuarantee` / `dataPathOverwriteRisk` / `readAfterWriteGraceSeconds`：先看 `atomicCreateGuarantee`（`.exclusive` → 直接 atomicCreate；`.overwritePossible` → UUID staging + 验证 + move），再看 `moveIfAbsentGuarantee` + runtime probe 决定 finalization 路径（exclusive moveIfAbsent vs `bestEffortCopyIfAbsent` 兜底 vs 抛 `nonExclusiveFinalization`）。liveness 能力原子和派生 composite 不在 gate 路径上，由 `LivenessTracker` / `BackupV2RuntimeBuilder` 各自消费。
 
 协议扩展默认提供 `shouldSetModificationDate / shouldLimitUploadRetries / directReadURL / disconnectSafely / supportsExclusiveMoveIfAbsent`（默认 `moveIfAbsentGuarantee == .exclusive`）。
 

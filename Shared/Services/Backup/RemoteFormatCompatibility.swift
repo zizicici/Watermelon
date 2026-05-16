@@ -126,7 +126,8 @@ struct RemoteFormatCompatibilityService: Sendable {
                             basePath: basePath,
                             markers: migrationMarkers
                         )
-                        if let marker = markerStates.first {
+                        let ordered = Self.sortedMarkers(markerStates)
+                        if let marker = ordered.first {
                             return .v2WithPendingMigrationCleanup(
                                 formatVersion: RepoLayout.formatVersion,
                                 ownerWriterID: marker.writerID
@@ -147,10 +148,11 @@ struct RemoteFormatCompatibilityService: Sendable {
                     if try await hasV1Manifests() {
                         return .v2WithV1Manifests(formatVersion: formatVersion)
                     }
-                    if let cleanup = markerStates.first(where: { $0.phase.isCleanupSafe }) {
+                    let ordered = Self.sortedMarkers(markerStates)
+                    if let cleanup = ordered.first(where: { $0.phase.isCleanupSafe }) {
                         return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: cleanup.writerID)
                     }
-                    if let residue = markerStates.first {
+                    if let residue = ordered.first {
                         // With no V1 manifests left, any marker only represents cleanup residue.
                         return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: residue.writerID)
                     }
@@ -164,6 +166,16 @@ struct RemoteFormatCompatibilityService: Sendable {
             return .v1
         }
         return .fresh
+    }
+
+    // Deterministic dispatch so repeated runs against the same remote pick a stable writerID.
+    private static func sortedMarkers(_ markers: [ParsedMigrationMarker]) -> [ParsedMigrationMarker] {
+        markers.sorted { lhs, rhs in
+            if lhs.phase.rawValue != rhs.phase.rawValue {
+                return lhs.phase.rawValue > rhs.phase.rawValue
+            }
+            return lhs.writerID < rhs.writerID
+        }
     }
 
     private func inspectMigrationMarkers(

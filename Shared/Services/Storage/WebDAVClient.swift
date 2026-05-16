@@ -3,6 +3,8 @@ import Foundation
 final actor WebDAVClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    // RFC 4918 MOVE with `Overwrite: T` is implemented as rename(2) on common WebDAV servers; soft claim for typical deployments.
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .unknown }
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
     // Reverse-proxy / CDN caching can stale-cache `PROPFIND` / `GET` responses past a peer's tick interval.

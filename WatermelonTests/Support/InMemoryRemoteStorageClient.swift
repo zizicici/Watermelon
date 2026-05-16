@@ -13,6 +13,8 @@ import os
 /// crash-recovery / corruption / transport-failure scenarios without touching real I/O.
 actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    // In-memory `move` unconditionally overwrites the destination dictionary entry.
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
     enum AtomicCreateMode: Sendable {
         case strictlyAtomic     // POSIX O_EXCL / S3 If-None-Match — returns .created
         case bestEffort         // SMB exists+upload — returns .bestEffortRetry on success

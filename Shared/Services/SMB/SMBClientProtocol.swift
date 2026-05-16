@@ -144,17 +144,13 @@ protocol RemoteStorageClientProtocol: Sendable {
     var dataPathOverwriteRisk: DataPathOverwriteRisk { get }
     /// `client.upload(localURL:remotePath:)` to an existing path is safe to use as
     /// a liveness heartbeat renewal — the destination ends up with fresh bytes or
-    /// keeps the old, never with no file. False for backends whose `upload` truncates
-    /// then deletes on failure (SFTP) or whose replace semantics aren't verified
-    /// peer-observable atomic (SMB / WebDAV default).
+    /// keeps the old, never with no file. Pairs with `supportsLivenessSafeOverwriteMove`;
+    /// derived `supportsLivenessSafeRenewal` is the OR of the two.
     var supportsLivenessSafeOverwriteUpload: Bool { get }
-    /// At least one renewal path (overwrite-move OR liveness-safe overwrite-upload)
-    /// can republish fresh bytes at an existing liveness path; false iff both fail
-    /// (SFTP v3 rename-overwrite is rejected and `supportsLivenessSafeOverwriteUpload`
-    /// is false). When false the orphan sweep gate MUST decline to run — once our
-    /// heartbeat goes stale a peer would otherwise treat our writerID as stale and
-    /// delete our live staging files.
-    var supportsLivenessSafeRenewal: Bool { get }
+    /// `client.move` to an existing destination atomically replaces it — peer never
+    /// observes the path as missing. Pairs with `supportsLivenessSafeOverwriteUpload`;
+    /// derived `supportsLivenessSafeRenewal` is the OR of the two.
+    var supportsLivenessSafeOverwriteMove: Bool { get }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { get }
     var concurrencyMode: ClientConcurrencyMode { get }
     /// Shared read-after-write staleness budget consumed by metadata-write
@@ -190,10 +186,13 @@ extension RemoteStorageClientProtocol {
     /// Conservative default: backends must opt in explicitly after verifying the
     /// renewal-safety contract end-to-end.
     var supportsLivenessSafeOverwriteUpload: Bool { false }
-    /// Intentional fail-open compatibility default; only SFTP overrides to `false`.
-    /// A future backend that lacks both renewal paths must override or the sweep
-    /// gate silently lets it run.
-    var supportsLivenessSafeRenewal: Bool { true }
+    /// Derived: a backend can renew the liveness path iff at least one of the two
+    /// renewal atoms is safe. `BackupV2RuntimeBuilder` consumes this — when false
+    /// the orphan sweep MUST decline to run, since a stale heartbeat would let a
+    /// peer delete our live staging files.
+    var supportsLivenessSafeRenewal: Bool {
+        supportsLivenessSafeOverwriteUpload || supportsLivenessSafeOverwriteMove
+    }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
     var readAfterWriteGraceSeconds: TimeInterval { 0 }

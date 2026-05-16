@@ -8,10 +8,10 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .none }
     // openFile(.truncate) destroys the original immediately, and the failure path
-    // calls remove(at:) — partial write loses the existing heartbeat. SFTP v3 also
-    // rejects rename-overwrite without the posix-rename@openssh.com extension.
+    // calls remove(at:) — partial write loses the existing heartbeat.
     nonisolated var supportsLivenessSafeOverwriteUpload: Bool { false }
-    nonisolated var supportsLivenessSafeRenewal: Bool { false }
+    // SFTP v3 rejects rename-overwrite without the posix-rename@openssh.com extension.
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
     // POSIX-style: case-sensitive on the wire; the server FS may differ but we can't probe that cheaply.
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
@@ -349,7 +349,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     }
 
     // SSH_FXP_RENAME_OVERWRITE flag — honored by SFTPv4+ / posix-rename extension;
-    // plain v3 servers reject when destination exists (see supportsLivenessSafeRenewal).
+    // plain v3 servers reject when destination exists (see supportsLivenessSafeOverwriteMove).
     func move(from sourcePath: String, to destinationPath: String) async throws {
         let client = try ensureClient()
         try await client.rename(
