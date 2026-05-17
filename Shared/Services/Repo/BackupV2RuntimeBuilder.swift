@@ -4,7 +4,7 @@ enum BackupV2RuntimeBuildError: Error {
     case profileMissingID
     case unsupportedRemoteFormat(minAppVersion: String?)
     case requiresForegroundMigration
-    case repoIdentityMismatch(local: String, remote: String)
+    case repoIdentityMismatch(stored: String, observed: String)
     case repoFormatRegression(repoID: String)
     case damagedV2Repo
 }
@@ -56,6 +56,7 @@ enum BackupV2RuntimeBuilder {
             do {
                 let sources = try await RepoIdentitySources.collect(
                     profileID: profileID,
+                    writerID: writerID,
                     identity: identity,
                     client: client,
                     basePath: profile.basePath,
@@ -77,6 +78,7 @@ enum BackupV2RuntimeBuilder {
             do {
                 let sources = try await RepoIdentitySources.collect(
                     profileID: profileID,
+                    writerID: writerID,
                     identity: identity,
                     client: client,
                     basePath: profile.basePath,
@@ -152,6 +154,7 @@ enum BackupV2RuntimeBuilder {
             do {
                 let sources = try await RepoIdentitySources.collect(
                     profileID: profileID,
+                    writerID: writerID,
                     identity: identity,
                     client: client,
                     basePath: profile.basePath,
@@ -224,6 +227,17 @@ enum BackupV2RuntimeBuilder {
         )
         var sweepTask: Task<Void, Never>? = nil
         if runMaintenanceTasks {
+            if metadataClient.supportsLivenessSafeRenewal {
+                // Own writerID is always in activeWriters during the general sweep, so
+                // own-writer liveness stagings from prior-crash ticks would never be
+                // reclaimed there. Run a self-only sweep before liveness.start() — no
+                // in-flight tick exists yet, so any own staging is by definition stranded.
+                _ = await OrphanMetadataCleanup.sweepOwnLivenessStagings(
+                    client: metadataClient,
+                    basePath: profile.basePath,
+                    writerID: writerID
+                )
+            }
             await liveness.start()
             if metadataClient.supportsLivenessSafeRenewal {
                 // Sweep only on a determinate peer view — `isComplete == false` means at

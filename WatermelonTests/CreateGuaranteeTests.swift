@@ -49,22 +49,32 @@ final class CreateGuaranteeTests: XCTestCase {
         XCTAssertEqual(bytes, Data("payload".utf8))
     }
 
-    /// `.exclusive` backend (default in-memory mode): direct `atomicCreate` to the
-    /// final path, no staging.
+    /// `.exclusive` backend (S3 If-None-Match / POSIX O_EXCL): direct `atomicCreate`
+    /// to the final path, no staging side-path. The in-memory client defaults to
+    /// `.overwritePossible`, so the test must flip the guarantee explicitly — otherwise
+    /// the gate routes through staging+moveIfAbsent and the "direct" path never runs.
     func testCreateWithStagingFallback_exclusive_directCreate() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
+        client.setAtomicCreateGuarantee(.exclusive)
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try Data("payload".utf8).write(to: tmp)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
+        let finalPath = "/repo/.watermelon/commits/y.jsonl"
         let result = try await MetadataCreateGate.createWithStagingFallback(
             client: client,
             localURL: tmp,
-            remotePath: "/repo/.watermelon/commits/y.jsonl",
+            remotePath: finalPath,
             respectTaskCancellation: false
         )
         XCTAssertEqual(result, .created)
+        // Direct atomicCreate path must NOT have left any staging side files.
+        let stagingExists = await client.snapshotFiles().keys.contains(where: { $0.contains(".staging-") })
+        XCTAssertFalse(stagingExists, "exclusive direct path must skip staging entirely")
+        // Bytes must land at the final path.
+        let landed = await client.hasFile(finalPath)
+        XCTAssertTrue(landed)
     }
 
     /// Probe says yes → finalization uses `moveIfAbsent`, not the copy fallback. Even

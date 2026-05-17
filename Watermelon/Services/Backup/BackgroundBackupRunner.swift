@@ -385,11 +385,12 @@ final class BackgroundBackupRunner {
                 continue
             }
 
-            // Parity with BackupParallelExecutor: publish the per-month materialize()
-            // snapshot so committedView reflects newer commits this month-pass observed
-            // beyond the initial syncIndex/materialize, and keep
-            // physicalPresenceOverlayFreshMonths aligned with physicallyMissingHashesAreAuthoritative.
-            // The BG runner owns its own RemoteIndexSyncService — this state is not visible to FG.
+            // BG is single-worker sequential — this replace keeps the BG-local
+            // RemoteIndexSyncService's committedView aligned with the V2MonthSession
+            // we just loaded (resources/assets/links is the load-bearing half).
+            // physicallyMissingHashes is defensive parity in BG (no cross-worker
+            // reads). FG's BackupParallelExecutor does the equivalent for the
+            // genuinely parallel case.
             let loadedSnapshot = monthStore.unsortedSnapshot()
             assetProcessor.remoteIndexService.replaceCachedMonth(
                 monthKey,

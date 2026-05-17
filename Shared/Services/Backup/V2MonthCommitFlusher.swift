@@ -47,6 +47,11 @@ struct V2MonthCommitFlusher {
         var opSeq = 0
         var committedAddAssetClocks: [Data: UInt64] = [:]
         var committedTombstoneClocks: [Data: UInt64] = [:]
+        // Rows are built with the same field projection RepoMaterializer uses on replay
+        // (asset body's creationDateMs/backedUpAtMs), so snapshot baseline == replay output
+        // for the same commit. Later assets overwrite per path in op order, matching the
+        // materializer's last-write-wins replay of multiple addAsset ops referencing one path.
+        var committedResources: [String: SnapshotResourceRow] = [:]
 
         for fp in pending.assets {
             guard let asset = indexes.asset(forFingerprint: fp),
@@ -65,6 +70,15 @@ struct V2MonthCommitFlusher {
                     slot: link.slot,
                     crypto: resource.crypto
                 ))
+                committedResources[resource.physicalRemotePath] = SnapshotResourceRow(
+                    physicalRemotePath: resource.physicalRemotePath,
+                    contentHash: link.resourceHash,
+                    fileSize: resource.fileSize,
+                    resourceType: resource.resourceType,
+                    creationDateMs: asset.creationDateMs,
+                    backedUpAtMs: asset.backedUpAtMs,
+                    crypto: resource.crypto
+                )
             }
             ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .addAsset(CommitAddAssetBody(
                 assetFingerprint: fp,
@@ -126,6 +140,7 @@ struct V2MonthCommitFlusher {
         indexes.recordCommit(
             assetClocks: committedAddAssetClocks,
             tombstoneClocks: committedTombstoneClocks,
+            committedResources: committedResources,
             writerID: services.writerID,
             seq: lastSeq
         )

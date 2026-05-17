@@ -133,6 +133,46 @@ final class RepoStateRecordTests: XCTestCase {
                        "observing a smaller value must not regress persisted lastClock")
     }
 
+    /// observe on an actor whose `current` is below DB high-water must adopt the
+    /// DB value, not leave `value()` reading the smaller external. Pre-fix the
+    /// rejected conditional UPDATE silently left `current = external < dbValue`,
+    /// so `value()` could under-report — fragile if any future caller bases a
+    /// decision on `value()` rather than re-reading the DB.
+    func testPersistedLamportClockObserveAdoptsDBHighWaterAfterRejectedUpdate() async throws {
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+
+        let foreground = PersistedLamportClock(database: databaseManager, profileID: profileID, repoID: "r", initial: 0)
+        try await foreground.observe(500)
+
+        let background = PersistedLamportClock(database: databaseManager, profileID: profileID, repoID: "r", initial: 0)
+        try await background.observe(100)
+
+        let bgValue = await background.value()
+        XCTAssertEqual(bgValue, 500,
+                       "observe must lift actor-local current to DB high-water when the conditional UPDATE is rejected")
+    }
+
+    /// Symmetric to PersistedLamportClock: SeqAllocator.observeRemoteMax must lift
+    /// actor-local `current` to the DB high-water if the conditional UPDATE is
+    /// rejected, so future `value()` reads don't under-report.
+    func testSeqAllocatorObserveRemoteMaxAdoptsDBHighWaterAfterRejectedUpdate() async throws {
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+
+        let foreground = SeqAllocator(database: databaseManager, profileID: profileID, repoID: "r", initial: 0)
+        try await foreground.observeRemoteMax(100)
+
+        let background = SeqAllocator(database: databaseManager, profileID: profileID, repoID: "r", initial: 0)
+        try await background.observeRemoteMax(50)
+
+        let bgValue = await background.value()
+        XCTAssertEqual(bgValue, 100,
+                       "observeRemoteMax must lift actor-local current to DB high-water when the conditional UPDATE is rejected")
+    }
+
     /// Profile delete must cascade to `repo_state` — otherwise a recycled profileID
     /// inherits stale lastSeq/lastClock from the previous owner.
     func testDeleteServerProfileCascadesToRepoState() async throws {

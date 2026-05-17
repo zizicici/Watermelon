@@ -227,23 +227,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
     }
 
-    @discardableResult
-    func syncOverlayOnly(
-        client: any RemoteStorageClientProtocol,
-        basePath: String,
-        fallback: [LibraryMonthKey: Set<Data>] = [:],
-        concurrencyCap: Int = 4
-    ) async throws -> Bool {
-        try await syncGate.withLock { [self] in
-            try await refreshPhysicalPresenceOverlay(
-                client: client,
-                basePath: basePath,
-                fallback: fallback,
-                concurrencyCap: concurrencyCap
-            )
-        }
-    }
-
     func syncOverlayAndCaptureHandle(
         client: any RemoteStorageClientProtocol,
         basePath: String,

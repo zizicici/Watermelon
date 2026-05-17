@@ -13,8 +13,13 @@ struct RepoIdentitySources: Sendable {
     /// `client` is the data-path client — heavy commit/snapshot list+read I/O
     /// stays off the metadata connection so we don't serialise against liveness
     /// on `.serialOnly` backends (SMB/SFTP).
+    /// `writerID` enables partial-die wipe-and-reuse recovery: when DB has only
+    /// a stale per-profile fallback row, our own identity claim on the current
+    /// remote proves we already participated in this repo, so the stale row can
+    /// be ignored instead of triggering a false mismatch.
     static func collect(
         profileID: Int64,
+        writerID: String,
         identity: RepoIdentity,
         client: any RemoteStorageClientProtocol,
         basePath: String,
@@ -23,13 +28,12 @@ struct RepoIdentitySources: Sendable {
         let bootstrap = RepoBootstrap(client: client, basePath: basePath)
         let remote = try await bootstrap.loadRepoID()
         let data = try await checkedExistingV2DataRepoID(
-            storedRepoID: nil,
             client: client,
             basePath: basePath,
             format: format
         )
         if let remote, let data, remote != data {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: data, remote: remote)
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: data, observed: remote)
         }
         // Prefer the exact (profileID, currentRepoID) row when the remote carries
         // an identity; the per-profile fallback can otherwise surface a stale row
@@ -39,14 +43,34 @@ struct RepoIdentitySources: Sendable {
         if let currentRepoID,
            let exact = try await identity.loadRepoState(profileID: profileID, repoID: currentRepoID) {
             stored = exact.repoID
+        } else if let fallback = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID {
+            // Partial-die wipe-and-reuse: previous repo A row exists, remote was
+            // wiped + freshly initialized as repo B, and the app died before
+            // lazyEnsureRepoState wrote the new (profile, B) row. Without this
+            // check the fallback returns A, mismatch fires, and the user is stuck.
+            // Our own identity claim file at `currentRepoID` is the trust anchor
+            // proving we already participated in B (RepoBootstrap.initializeFreshRepo
+            // wrote it via writeOwnClaim). Foreign or absent claim → preserve the
+            // original foreign-repo mismatch behavior.
+            if let currentRepoID, fallback != currentRepoID {
+                let claims = IdentityClaimStore(client: client, basePath: basePath)
+                if let ownClaim = try await claims.readOwnClaim(writerID: writerID),
+                   ownClaim.repoID == currentRepoID {
+                    stored = nil
+                } else {
+                    stored = fallback
+                }
+            } else {
+                stored = fallback
+            }
         } else {
-            stored = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
+            stored = nil
         }
         if let stored, let remote, stored != remote {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: stored, remote: remote)
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: stored, observed: remote)
         }
         if let stored, let data, stored != data {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: stored, remote: data)
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: stored, observed: data)
         }
         let suggested = remote ?? data ?? stored ?? UUID().uuidString.lowercased()
         return RepoIdentitySources(stored: stored, remote: remote, data: data, suggested: suggested)
@@ -59,23 +83,22 @@ struct RepoIdentitySources: Sendable {
     func publish(bootstrap: RepoBootstrap, writerID: String) async throws -> String {
         let resolvedRepoID = try await bootstrap.ensureRepoJSON(repoID: suggested, writerID: writerID)
         if let stored, resolvedRepoID != stored {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: stored, remote: resolvedRepoID)
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: stored, observed: resolvedRepoID)
         }
         if let remote, resolvedRepoID != remote {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: remote, remote: resolvedRepoID)
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: remote, observed: resolvedRepoID)
         }
         if let data, resolvedRepoID != data {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: data, remote: resolvedRepoID)
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: data, observed: resolvedRepoID)
         }
         let finalizedRepoID = try await bootstrap.ensureIdentityFinalization(repoID: resolvedRepoID, writerID: writerID)
         if finalizedRepoID != resolvedRepoID {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: resolvedRepoID, remote: finalizedRepoID)
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: resolvedRepoID, observed: finalizedRepoID)
         }
         return resolvedRepoID
     }
 
     private static func checkedExistingV2DataRepoID(
-        storedRepoID: String?,
         client: any RemoteStorageClientProtocol,
         basePath: String,
         format: RemoteFormatCompatibilityService
@@ -89,9 +112,6 @@ struct RepoIdentitySources: Sendable {
         }
         guard dataRepoIDs.count == 1, let dataRepoID = dataRepoIDs.first else {
             throw BackupV2RuntimeBuildError.damagedV2Repo
-        }
-        if let storedRepoID, storedRepoID != dataRepoID {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: storedRepoID, remote: dataRepoID)
         }
         return dataRepoID
     }

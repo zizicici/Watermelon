@@ -62,10 +62,12 @@ actor PersistedLamportClock {
     }
 
     func observe(_ external: UInt64) throws {
-        if external > current {
-            try persist(value: external)
-            current = external
-        }
+        guard external > current else { return }
+        // persist returns the post-write DB high-water; a concurrent peer may have
+        // already pushed it past `external`, in which case our actor-local `current`
+        // must adopt that higher value rather than regress to `external`.
+        let dbHighWater = try persist(value: external)
+        current = max(external, dbHighWater)
     }
 
     /// Allocates `count` ticks under a single write-transaction read-then-write so
@@ -99,12 +101,15 @@ actor PersistedLamportClock {
         return range
     }
 
-    private func persist(value: UInt64) throws {
+    private func persist(value: UInt64) throws -> UInt64 {
         // Bumps the persisted clock only if `value` is higher — used by `observe`
         // where conditional advance (no regression) is the desired semantic.
+        // Returns the post-write DB value so observe can match in-memory `current`
+        // to it; otherwise a rejected UPDATE (DB already higher) would leave
+        // `current < dbValue` and future `value()` reads would under-report.
         let signed = Int64(bitPattern: value)
-        try database.write { [profileID, repoID] db in
-            guard try Self.readPersistedClock(db: db, profileID: profileID, repoID: repoID) != nil else {
+        return try database.write { [profileID, repoID] db in
+            guard let before = try Self.readPersistedClock(db: db, profileID: profileID, repoID: repoID) else {
                 throw PersistedLamportClockError.missingRepoState(profileID: profileID, repoID: repoID)
             }
             try db.execute(
@@ -115,6 +120,7 @@ actor PersistedLamportClock {
                 """,
                 arguments: [signed, profileID, repoID, signed]
             )
+            return max(before, value)
         }
     }
 

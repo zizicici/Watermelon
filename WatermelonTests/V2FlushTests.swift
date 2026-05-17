@@ -419,10 +419,14 @@ final class V2FlushTests: XCTestCase {
         }
     }
 
-    /// Snapshot must emit one resource row per known physical path per hash. If it
-    /// only emits the deduped one, the next materialize uses the snapshot as
-    /// baseline + covered suppresses the alternate paths' commits → data loss.
-    func testFlushV2SnapshotEmitsAllPhysicalPathsPerHash() async throws {
+    /// Snapshot is a projection of committed state — `state == fold(commits in covered)`.
+    /// Within one writer, all links to a given hash resolve to `findResourceByHash`'s
+    /// lex-min present path, so only that path appears in the commit body. An alternate
+    /// `upsertResource(pathB)` at the same hash that is never referenced by any
+    /// committed addAsset is orphan storage and must NOT land in the snapshot —
+    /// otherwise the snapshot's resource projection diverges from `fold(commits)` and
+    /// grows forever as failed-asset uploads accumulate.
+    func testFlushV2SnapshotEmitsOnlyCommittedPathsPerHash() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let v2 = try await makeV2Services(client: client)
@@ -430,7 +434,6 @@ final class V2FlushTests: XCTestCase {
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
 
-        // Same content hash, two different physical paths (multi-writer collision).
         let hash = TestFixtures.fingerprint(0xAA)
         let pathA = "2026/01/photo.jpg"
         let pathB = "2026/01/photo~widB.jpg"
@@ -463,14 +466,15 @@ final class V2FlushTests: XCTestCase {
         try store.upsertAsset(asset, links: [link])
         _ = try await store.flushToRemote()
 
-        // Re-materialize and verify both physical paths survive the snapshot round-trip.
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[monthKey])
-        XCTAssertNotNil(monthState.resources[pathA], "primary physical path must survive")
-        XCTAssertNotNil(monthState.resources[pathB], "alternate physical path must survive — \"deduped\" snapshot loses data")
+        // pathA is in the addAsset commit body (lex-min present path for hash).
+        XCTAssertNotNil(monthState.resources[pathA], "committed path must survive")
         XCTAssertEqual(monthState.resources[pathA]?.contentHash, hash)
-        XCTAssertEqual(monthState.resources[pathB]?.contentHash, hash)
+        // pathB was upserted but never linked through any committed asset → orphan.
+        XCTAssertNil(monthState.resources[pathB],
+                     "orphan path (no commit body references it) must not be in snapshot — would break state == fold(commits)")
     }
 
     /// Resources whose physical files are missing from the directory listing must be
@@ -631,6 +635,361 @@ final class V2FlushTests: XCTestCase {
         )
         XCTAssertTrue(session3.isAssetIncomplete(assetFP),
                       "session view filters via physicallyMissingHashes — incomplete remains observable")
+    }
+
+    /// `upsertResource` without a follow-up `upsertAsset` for that resource (e.g. an
+    /// asset's second resource upload permanently fails, so the asset never lands —
+    /// but the first resource's `recordUploadedResource` already ran) must NOT carry
+    /// the orphan resource into the snapshot. The snapshot baseline must stay equal
+    /// to `fold(commits in covered)`; commits never carry orphan resources, so
+    /// neither can the snapshot.
+    func testFlushV2_orphanUpsertResourceWithoutUpsertAsset_isFilteredFromSnapshot() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let orphanHash = TestFixtures.fingerprint(0xA1)
+        let orphanPath = "2026/01/orphan.jpg"
+        let orphanResource = RemoteManifestResource(
+            year: year, month: month,
+            physicalRemotePath: orphanPath,
+            contentHash: orphanHash, fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 0
+        )
+        // Simulates "first resource of a multi-resource asset uploaded, then second
+        // upload permanently failed → AssetProcessor.process returns .failed without
+        // upsertAsset". The orphan resource is left dangling in indexes.
+        _ = try store.upsertResource(orphanResource)
+
+        // A legitimate asset with its resource succeeds and gets committed.
+        let legitHash = TestFixtures.fingerprint(0xA2)
+        let legitPath = "2026/01/legit.jpg"
+        let legitFP = TestFixtures.fingerprint(0xB2)
+        let legitResource = RemoteManifestResource(
+            year: year, month: month,
+            physicalRemotePath: legitPath,
+            contentHash: legitHash, fileSize: 50,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 0
+        )
+        let legitAsset = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: legitFP,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 50
+        )
+        let legitLink = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: legitFP, resourceHash: legitHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "legit.jpg"
+        )
+        _ = try store.upsertResource(legitResource)
+        try store.upsertAsset(legitAsset, links: [legitLink])
+        _ = try await store.flushToRemote()
+
+        // Materialize: the legit resource is in the snapshot/commit body; the orphan
+        // path appears in no commit body anywhere, so it must not show up either.
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[monthKey])
+        XCTAssertNotNil(monthState.resources[legitPath],
+                        "committed resource must survive the materialize round-trip")
+        XCTAssertNil(monthState.resources[orphanPath],
+                     "orphan resource (upserted but never linked to a committed asset) must not be in snapshot — snapshot ≠ fold(commits)")
+    }
+
+    /// Path-only committed tracking would let an in-session `upsertResource` overwrite
+    /// a previously-committed path with a different hash, and then the snapshot would
+    /// emit the new (uncommitted) content under that path — breaking
+    /// `state == fold(commits in covered)`. The committed row store is keyed by
+    /// (path, full row), so the snapshot emit ignores the live `resourcesByPath`
+    /// overwrite and preserves the historical committed row.
+    func testFlushV2_committedPathOverwrittenByUpsert_snapshotRetainsCommittedHash() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+
+        // Round 1: commit asset A at (path, oldHash).
+        let path = "2026/01/photo.jpg"
+        let oldHash = TestFixtures.fingerprint(0x10)
+        let assetAFP = TestFixtures.fingerprint(0x20)
+        let store1 = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        let oldResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: path,
+            contentHash: oldHash, fileSize: 100,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let assetA = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: assetAFP,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 100
+        )
+        let linkA = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: assetAFP, resourceHash: oldHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "photo.jpg"
+        )
+        _ = try store1.upsertResource(oldResource)
+        try store1.upsertAsset(assetA, links: [linkA])
+        await client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0, count: 100))
+        _ = try await store1.flushToRemote()
+
+        // Round 2: new session loads the snapshot. Simulate physical file deletion
+        // followed by an upsertResource that repurposes the same path with a
+        // different hash — but the corresponding upsertAsset never lands (asset
+        // commit fails). Then commit a legitimate, unrelated asset to force a
+        // snapshot flush.
+        try await client.delete(path: "\(basePath)/\(path)")
+        let store2 = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        let newHash = TestFixtures.fingerprint(0x11)
+        let newResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: path,
+            contentHash: newHash, fileSize: 200,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        _ = try store2.upsertResource(newResource)
+
+        let otherHash = TestFixtures.fingerprint(0x30)
+        let otherFP = TestFixtures.fingerprint(0x40)
+        let otherPath = "2026/01/other.jpg"
+        let otherResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: otherPath,
+            contentHash: otherHash, fileSize: 50,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let otherAsset = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: otherFP,
+            creationDateMs: nil, backedUpAtMs: 2, resourceCount: 1, totalFileSizeBytes: 50
+        )
+        let otherLink = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: otherFP, resourceHash: otherHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "other.jpg"
+        )
+        _ = try store2.upsertResource(otherResource)
+        try store2.upsertAsset(otherAsset, links: [otherLink])
+        await client.injectFile(path: "\(basePath)/\(otherPath)", data: Data(repeating: 1, count: 50))
+        _ = try await store2.flushToRemote()
+
+        // Materialize and verify: the path retains oldHash from the original commit,
+        // NOT newHash from the orphan upsertResource.
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[monthKey])
+        let retainedRow = try XCTUnwrap(monthState.resources[path],
+            "originally committed path must remain in snapshot — covered range includes its addAsset commit")
+        XCTAssertEqual(retainedRow.contentHash, oldHash,
+            "snapshot resource row at path must reflect the COMMITTED hash, not the in-session upsert overwrite")
+        XCTAssertEqual(retainedRow.fileSize, 100,
+            "the full row (size, type, etc) must match the committed row, not the overwritten one")
+    }
+
+    /// The seed of `committedResourceByPath` is faithful to `materializedState.resources`
+    /// (which is itself `fold(commits in covered)`). Earlier rounds gated on
+    /// "hash referenced by some link" to drop pre-fix orphans, but that gate dropped
+    /// legitimate post-tombstone orphan rows too (RepoMaterializer keeps
+    /// `state.resources[P]` after a tombstone removes the asset+links). Faithful
+    /// seeding is the only signal that preserves the covered-range invariant.
+    func testV2MonthIndexes_seed_isFaithfulToMaterializedResources() throws {
+        let tombstonedHash = TestFixtures.fingerprint(0x77)
+        let livingHash = TestFixtures.fingerprint(0x88)
+        let livingFP = TestFixtures.fingerprint(0xC1)
+        let tombstonedFP = TestFixtures.fingerprint(0xC2)
+        let tombstonedPath = "2026/01/tombstoned.jpg"
+        let livingPath = "2026/01/living.jpg"
+
+        // Mirror a post-tombstone fold(covered):
+        //   resources = {tombstonedPath (orphan after tombstone), livingPath}
+        //   assets = {livingFP only}; links reference only livingHash
+        //   deletedAssetStamps contains tombstonedFP
+        var materialized = RepoMonthState.empty
+        materialized.assets[livingFP] = SnapshotAssetRow(
+            assetFingerprint: livingFP,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resourceCount: 1,
+            totalFileSizeBytes: 50,
+            stamp: OpStamp(writerID: writerID, seq: 1, clock: 1)
+        )
+        materialized.resources[livingPath] = SnapshotResourceRow(
+            physicalRemotePath: livingPath,
+            contentHash: livingHash,
+            fileSize: 50,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            crypto: nil
+        )
+        materialized.resources[tombstonedPath] = SnapshotResourceRow(
+            physicalRemotePath: tombstonedPath,
+            contentHash: tombstonedHash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 0,
+            crypto: nil
+        )
+        let linkKey = AssetResourceKey(assetFingerprint: livingFP, role: ResourceTypeCode.photo, slot: 0)
+        materialized.assetResources[linkKey] = SnapshotAssetResourceRow(
+            assetFingerprint: livingFP,
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            resourceHash: livingHash,
+            logicalName: "living.jpg"
+        )
+        materialized.deletedAssetFingerprints.insert(tombstonedFP)
+        materialized.deletedAssetStamps[tombstonedFP] = OpStamp(writerID: writerID, seq: 2, clock: 2)
+
+        let indexes = V2MonthIndexes(
+            year: year, month: month,
+            materializedState: materialized,
+            remoteFilesByName: [:],
+            verifiedMissingHashes: nil,
+            nameCase: .caseSensitive
+        )
+        let state = indexes.currentMaterializedState()
+        XCTAssertNotNil(state.resources[livingPath],
+                        "linked resource row must survive seed")
+        XCTAssertNotNil(state.resources[tombstonedPath],
+                        "post-tombstone orphan row must survive seed — RepoMaterializer leaves it in fold(covered), so dropping it here would break state == fold(covered)")
+        XCTAssertEqual(state.resources[tombstonedPath]?.contentHash, tombstonedHash,
+                        "the orphan row's content hash must round-trip exactly — drift would corrupt the snapshot baseline")
+    }
+
+    /// A snapshot that "covers" both an addAsset commit AND a later tombstone commit
+    /// for the same asset must still emit the asset's resource row (RepoMaterializer
+    /// keeps `state.resources[P]` after a tombstone — the row is part of fold(covered)).
+    /// If we dropped the row, the next materialize would see a snapshot covering both
+    /// commits but missing the resource, violating `state == fold(commits in covered)`.
+    func testFlushV2_postTombstoneOrphanResource_survivesAcrossFlushes() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+
+        let assetFP = TestFixtures.fingerprint(0xA1)
+        let hash = TestFixtures.fingerprint(0xB1)
+        let physicalPath = "2026/01/photo.jpg"
+
+        // Round 1: commit asset A with one resource, with physical bytes on remote.
+        let store1 = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        let resource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: physicalPath,
+            contentHash: hash, fileSize: 100,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let asset = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: assetFP,
+            creationDateMs: 1_700_000_000_000, backedUpAtMs: 1_700_000_001_000,
+            resourceCount: 1, totalFileSizeBytes: 100
+        )
+        let link = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: assetFP, resourceHash: hash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "photo.jpg"
+        )
+        _ = try store1.upsertResource(resource)
+        try store1.upsertAsset(asset, links: [link])
+        await client.injectFile(path: "\(basePath)/\(physicalPath)", data: Data(repeating: 0, count: 100))
+        _ = try await store1.flushToRemote()
+
+        // Round 2: subset-replace asset A with asset B (different fp, same resource).
+        // This emits a tombstone for assetFP whose resource row remains in fold(covered).
+        let supersedingFP = TestFixtures.fingerprint(0xA2)
+        let superseding = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: supersedingFP,
+            creationDateMs: nil, backedUpAtMs: 2, resourceCount: 1, totalFileSizeBytes: 100
+        )
+        try store1.upsertAsset(superseding, links: [link], replacingSubsetFingerprints: [assetFP])
+        _ = try await store1.flushToRemote()
+
+        // Reload + flush an unrelated asset; the resulting snapshot must still emit
+        // the resource row for `physicalPath` because fold(covered) includes both
+        // the addAsset(A) and the tombstone(A) commits, and the materializer's
+        // tombstone handling preserves `state.resources[physicalPath]`.
+        let store2 = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        let otherFP = TestFixtures.fingerprint(0xC0)
+        let otherHash = TestFixtures.fingerprint(0xD0)
+        let otherPath = "2026/01/other.jpg"
+        let otherResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: otherPath,
+            contentHash: otherHash, fileSize: 50,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let otherAsset = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: otherFP,
+            creationDateMs: nil, backedUpAtMs: 3, resourceCount: 1, totalFileSizeBytes: 50
+        )
+        let otherLink = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: otherFP, resourceHash: otherHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "other.jpg"
+        )
+        _ = try store2.upsertResource(otherResource)
+        try store2.upsertAsset(otherAsset, links: [otherLink])
+        await client.injectFile(path: "\(basePath)/\(otherPath)", data: Data(repeating: 1, count: 50))
+        _ = try await store2.flushToRemote()
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[monthKey])
+        XCTAssertNotNil(monthState.resources[physicalPath],
+                        "post-tombstone orphan resource row must survive reload+flush — fold(covered) preserves it")
+        XCTAssertEqual(monthState.resources[physicalPath]?.contentHash, hash)
+    }
+
+    /// `recordCommit` must project committed snapshot rows from the addAsset BODY's
+    /// creationDateMs/backedUpAtMs (the same fields RepoMaterializer uses on replay).
+    /// Earlier this projection pulled from the live `RemoteManifestResource`, whose
+    /// `backedUpAtMs` is set at resource upload time (earlier than the asset's
+    /// `backedUpAtMs` set at AssetProcessor.process completion) — same commit replayed
+    /// later would yield a different row, breaking `snapshot == fold(covered)`.
+    func testFlushV2_committedRowDates_matchAssetBodyNotResource() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let hash = TestFixtures.fingerprint(0xAA)
+        let path = "2026/01/photo.jpg"
+        // Resource has DIFFERENT dates than the asset, to surface any projection bug.
+        let resource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: path,
+            contentHash: hash, fileSize: 100, resourceType: ResourceTypeCode.photo,
+            creationDateMs: 1_700_000_000_000,
+            backedUpAtMs: 1_700_000_005_000
+        )
+        let asset = RemoteManifestAsset(
+            year: year, month: month,
+            assetFingerprint: TestFixtures.fingerprint(0xBB),
+            creationDateMs: 1_700_000_100_000,
+            backedUpAtMs: 1_700_000_999_000,
+            resourceCount: 1, totalFileSizeBytes: 100
+        )
+        let link = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: asset.assetFingerprint,
+            resourceHash: hash, role: ResourceTypeCode.photo, slot: 0,
+            logicalName: "photo.jpg"
+        )
+        _ = try store.upsertResource(resource)
+        try store.upsertAsset(asset, links: [link])
+        _ = try await store.flushToRemote()
+
+        // Materialize: the resource row must carry the asset body's dates, matching
+        // what RepoMaterializer would derive on replay.
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[monthKey])
+        let row = try XCTUnwrap(monthState.resources[path])
+        XCTAssertEqual(row.creationDateMs, asset.creationDateMs,
+                       "resource row's creationDateMs must come from asset body, not the live resource — replay derives it from body")
+        XCTAssertEqual(row.backedUpAtMs, asset.backedUpAtMs,
+                       "resource row's backedUpAtMs must come from asset body, not the live resource — replay derives it from body")
     }
 
     /// Re-upserting at the same physicalRemotePath with a different content hash must

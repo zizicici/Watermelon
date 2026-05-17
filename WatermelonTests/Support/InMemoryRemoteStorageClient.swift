@@ -49,6 +49,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var downloadErrorByPath: [String: InjectedError] = [:]
     private var persistentDownloadErrorByPath: [String: InjectedError] = [:]
     private var uploadErrorByPath: [String: InjectedError] = [:]
+    private var deleteErrorByPath: [String: InjectedError] = [:]
     private var injectedMtimes: [String: Date] = [:]
 
     init() {}
@@ -152,8 +153,31 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         persistentDownloadErrorByPath.removeValue(forKey: Self.normalize(path))
     }
 
+    /// One-shot: next `download` at `path` throws `CancellationError()` so tests can
+    /// pin caller behavior under task cancellation without going through the generic
+    /// `InjectedError` translation (which produces NSError, not CancellationError).
+    func injectDownloadCancellation(for path: String) {
+        downloadCancelByPath.insert(Self.normalize(path))
+    }
+    private var downloadCancelByPath: Set<String> = []
+
     func injectUploadError(_ error: InjectedError, for path: String) {
         uploadErrorByPath[Self.normalize(path)] = error
+    }
+
+    /// One-shot injection for `delete(path:)` — when set, the next `delete` at `path`
+    /// throws this error and clears the hook. Use to exercise peer-race-during-delete
+    /// branches (e.g. another writer removed the same residue between our metadata
+    /// check and our delete call) where production code is expected to swallow
+    /// `.notFound` while still propagating other errors.
+    ///
+    /// `.notFound` is modeled as a faithful peer-race: the file/directory is removed
+    /// from the fake store before the not-found error is thrown, so the post-throw
+    /// state matches "another writer already deleted it". `.transport`/`.permission`
+    /// are non-mutating — the path stays where it was, matching a backend that
+    /// failed before applying the delete.
+    func injectDeleteError(_ error: InjectedError, for path: String) {
+        deleteErrorByPath[Self.normalize(path)] = error
     }
 
     func snapshotFiles() -> [String: Data] {
@@ -334,6 +358,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func download(remotePath: String, localURL: URL) async throws {
         let key = Self.normalize(remotePath)
+        if downloadCancelByPath.remove(key) != nil {
+            throw CancellationError()
+        }
         if let stuck = persistentDownloadErrorByPath[key] {
             throw Self.translate(stuck)
         }
@@ -357,6 +384,18 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func delete(path: String) async throws {
         let key = Self.normalize(path)
+        if let err = deleteErrorByPath.removeValue(forKey: key) {
+            // Peer-race fidelity: a real `.notFound` from a backend means the path
+            // is already gone, so reflect that in the fake before throwing.
+            if err == .notFound {
+                removeFileOrDirectory(at: key)
+            }
+            throw Self.translate(err)
+        }
+        removeFileOrDirectory(at: key)
+    }
+
+    private func removeFileOrDirectory(at key: String) {
         if files.removeValue(forKey: key) != nil { return }
         // Directory delete — remove all descendants and the explicit-dir mark.
         let prefix = key == "/" ? "/" : key + "/"

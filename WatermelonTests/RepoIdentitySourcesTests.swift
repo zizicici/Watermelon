@@ -36,6 +36,7 @@ final class RepoIdentitySourcesTests: XCTestCase {
 
         let sources = try await RepoIdentitySources.collect(
             profileID: profileID,
+            writerID: "w",
             identity: identity,
             client: client,
             basePath: basePath,
@@ -65,6 +66,7 @@ final class RepoIdentitySourcesTests: XCTestCase {
         do {
             _ = try await RepoIdentitySources.collect(
                 profileID: profileID,
+                writerID: "w",
                 identity: identity,
                 client: client,
                 basePath: basePath,
@@ -112,6 +114,7 @@ final class RepoIdentitySourcesTests: XCTestCase {
         do {
             _ = try await RepoIdentitySources.collect(
                 profileID: profileID,
+                writerID: "w",
                 identity: identity,
                 client: client,
                 basePath: basePath,
@@ -150,6 +153,7 @@ final class RepoIdentitySourcesTests: XCTestCase {
 
         let sources = try await RepoIdentitySources.collect(
             profileID: profileID,
+            writerID: "w",
             identity: identity,
             client: client,
             basePath: basePath,
@@ -159,6 +163,170 @@ final class RepoIdentitySourcesTests: XCTestCase {
         XCTAssertEqual(sources.stored, "fresh-repo-B")
         XCTAssertEqual(sources.remote, "fresh-repo-B")
         XCTAssertEqual(sources.suggested, "fresh-repo-B")
+    }
+
+    /// Partial-die wipe-and-reuse: the stale per-profile fallback for repo A is the
+    /// only DB row, but our own writer's claim file at the current remote already
+    /// names repo B. `collect` must treat `stored` as nil so `lazyEnsureRepoState`
+    /// can write the missing (profile, B) row on the next call, rather than
+    /// throwing a false mismatch the user can't recover from without re-wiping.
+    func testCollect_wipedAndReusedRemote_ownClaimPresent_recoversWithoutMismatch() async throws {
+        let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "fresh-repo-B")
+        // Our own claim file proves we already participated in repo B (would have
+        // been written by RepoBootstrap.initializeFreshRepo before the partial die).
+        try await injectOwnClaim(client: client, writerID: ownWriterID, repoID: "fresh-repo-B")
+
+        let identity = RepoIdentity(database: databaseManager)
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: ownWriterID, basePath: basePath, storageType: .webdav)
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID, repoID: "old-wiped-A",
+                writerID: ownWriterID, lastClock: 500, lastSeq: 200,
+                migrationCompleted: 1
+            ).insert(db)
+        }
+
+        let sources = try await RepoIdentitySources.collect(
+            profileID: profileID,
+            writerID: ownWriterID,
+            identity: identity,
+            client: client,
+            basePath: basePath,
+            format: RemoteFormatCompatibilityService()
+        )
+
+        XCTAssertNil(sources.stored, "own claim authorizes ignoring the stale per-profile fallback")
+        XCTAssertEqual(sources.remote, "fresh-repo-B")
+        XCTAssertEqual(sources.suggested, "fresh-repo-B")
+    }
+
+    /// Same wipe-and-reuse setup but without our own claim — must still throw mismatch.
+    /// Guards against weakening the foreign-repo guard when narrowing the recovery rule.
+    func testCollect_wipedAndReusedRemote_noOwnClaim_preservesMismatch() async throws {
+        let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "fresh-repo-B")
+
+        let identity = RepoIdentity(database: databaseManager)
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: ownWriterID, basePath: basePath, storageType: .webdav)
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID, repoID: "old-wiped-A",
+                writerID: ownWriterID, lastClock: 500, lastSeq: 200,
+                migrationCompleted: 1
+            ).insert(db)
+        }
+
+        do {
+            _ = try await RepoIdentitySources.collect(
+                profileID: profileID,
+                writerID: ownWriterID,
+                identity: identity,
+                client: client,
+                basePath: basePath,
+                format: RemoteFormatCompatibilityService()
+            )
+            XCTFail("expected repoIdentityMismatch without own claim")
+        } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) {
+            XCTAssertEqual(stored, "old-wiped-A")
+            XCTAssertEqual(observed, "fresh-repo-B")
+        }
+    }
+
+    /// Wipe-and-reuse setup with a foreign writer's claim only — must still throw
+    /// mismatch. The recovery rule must consult OUR claim file, not any claim.
+    func testCollect_wipedAndReusedRemote_foreignClaimOnly_preservesMismatch() async throws {
+        let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let foreignWriterID = "22222222-2222-2222-2222-bbbbbbbbbbbb"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "fresh-repo-B")
+        // Foreign peer participated in repo B but we did not.
+        try await injectOwnClaim(client: client, writerID: foreignWriterID, repoID: "fresh-repo-B")
+
+        let identity = RepoIdentity(database: databaseManager)
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: ownWriterID, basePath: basePath, storageType: .webdav)
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID, repoID: "old-wiped-A",
+                writerID: ownWriterID, lastClock: 500, lastSeq: 200,
+                migrationCompleted: 1
+            ).insert(db)
+        }
+
+        do {
+            _ = try await RepoIdentitySources.collect(
+                profileID: profileID,
+                writerID: ownWriterID,
+                identity: identity,
+                client: client,
+                basePath: basePath,
+                format: RemoteFormatCompatibilityService()
+            )
+            XCTFail("expected repoIdentityMismatch — foreign claim must not authorize own recovery")
+        } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
+            // expected
+        }
+    }
+
+    /// Wipe-and-reuse setup where our claim points to a different repoID than the
+    /// canonical remote. Realistic shape: a peer's lex-min-earlier claim wins
+    /// canonical election (remote = "B"), but our writer's stale claim still says
+    /// "A". The recovery branch must reject this — only an own claim that matches
+    /// the canonical remote authorizes ignoring the stale per-profile fallback.
+    func testCollect_wipedAndReusedRemote_ownClaimNamesWrongRepo_preservesMismatch() async throws {
+        let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let peerWriterID = "00000000-0000-0000-0000-000000000001"  // lex-min < own → wins election
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "fresh-repo-B")
+        // Peer's claim wins canonical (lower writerID under equal createdAtMs).
+        try await injectOwnClaim(client: client, writerID: peerWriterID, repoID: "fresh-repo-B")
+        // Our own writer's claim still names the stale repo.
+        try await injectOwnClaim(client: client, writerID: ownWriterID, repoID: "old-wiped-A")
+
+        let identity = RepoIdentity(database: databaseManager)
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: ownWriterID, basePath: basePath, storageType: .webdav)
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID, repoID: "old-wiped-A",
+                writerID: ownWriterID, lastClock: 500, lastSeq: 200,
+                migrationCompleted: 1
+            ).insert(db)
+        }
+
+        do {
+            _ = try await RepoIdentitySources.collect(
+                profileID: profileID,
+                writerID: ownWriterID,
+                identity: identity,
+                client: client,
+                basePath: basePath,
+                format: RemoteFormatCompatibilityService()
+            )
+            XCTFail("expected repoIdentityMismatch — own claim for a different repo must not authorize recovery")
+        } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
+            // expected
+        }
+    }
+
+    private func injectOwnClaim(
+        client: InMemoryRemoteStorageClient,
+        writerID: String,
+        repoID: String
+    ) async throws {
+        let body: [String: Any] = [
+            "v": 1,
+            "repo_id": repoID,
+            "created_at_ms": Int64(0),
+            "writer_id": writerID
+        ]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        await client.injectFile(path: RepoLayout.identityClaimPath(base: basePath, writerID: writerID), data: data)
     }
 
     /// Stored DB repoID disagreeing with remote `repo.json` claim means the profile
@@ -175,15 +343,16 @@ final class RepoIdentitySourcesTests: XCTestCase {
         do {
             _ = try await RepoIdentitySources.collect(
                 profileID: profileID,
+                writerID: "w",
                 identity: identity,
                 client: client,
                 basePath: basePath,
                 format: RemoteFormatCompatibilityService()
             )
             XCTFail("expected repoIdentityMismatch")
-        } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let local, let remote) {
-            XCTAssertEqual(local, "stored-id")
-            XCTAssertEqual(remote, "remote-id")
+        } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) {
+            XCTAssertEqual(stored, "stored-id")
+            XCTAssertEqual(observed, "remote-id")
         }
     }
 
@@ -223,9 +392,9 @@ final class RepoIdentitySourcesTests: XCTestCase {
         do {
             _ = try await sources.publish(bootstrap: bootstrap, writerID: "w")
             XCTFail("expected repoIdentityMismatch")
-        } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let local, let remote) {
-            XCTAssertEqual(local, "stale-local")
-            XCTAssertEqual(remote, finalizedID)
+        } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) {
+            XCTAssertEqual(stored, "stale-local")
+            XCTAssertEqual(observed, finalizedID)
         }
     }
 }

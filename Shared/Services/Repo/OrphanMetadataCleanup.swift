@@ -69,6 +69,59 @@ enum OrphanMetadataCleanup {
         ]
     }
 
+    /// Targeted bootstrap-only sweep of our own writerID's stranded liveness staging
+    /// files. The general `sweep` gate unconditionally protects `activeWriters` —
+    /// which always includes our own writerID — so own-writer liveness stagings
+    /// from prior crashes are otherwise immortal. Run **before** `liveness.start()`
+    /// so no in-flight tick can be racing with us; the age threshold guards same-
+    /// process residue if a backend ever lists a file we just made. Nil mtime
+    /// fails closed (same as the general sweep) — backends that omit
+    /// `modificationDate` would otherwise let us clobber an in-flight tick from a
+    /// concurrent same-writerID instance.
+    static func sweepOwnLivenessStagings(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        writerID: String,
+        ageThresholdSeconds: TimeInterval = 3600,
+        now: Date = Date()
+    ) async -> Int {
+        let dir = RepoLayout.livenessDirectoryPath(base: basePath)
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: dir)
+        } catch {
+            cleanupLog.warning("self-liveness sweep list failed: \(dir, privacy: .public) \(String(describing: error), privacy: .public)")
+            return 0
+        }
+        var deleted = 0
+        var stagingsSeen = 0
+        var stagingsWithoutMtime = 0
+        for entry in entries {
+            if Task.isCancelled { return deleted }
+            guard !entry.isDirectory else { continue }
+            guard let range = entry.name.range(of: ".staging-") else { continue }
+            let originalName = String(entry.name[..<range.lowerBound])
+            guard RepoLayout.parseLivenessFilename(originalName) == writerID else { continue }
+            stagingsSeen += 1
+            guard let mtime = entry.modificationDate else {
+                stagingsWithoutMtime += 1
+                continue
+            }
+            if now.timeIntervalSince(mtime) < ageThresholdSeconds { continue }
+            let path = RepoLayout.normalize(joining: [dir, entry.name])
+            do {
+                try await client.delete(path: path)
+                deleted += 1
+            } catch {
+                cleanupLog.warning("self-liveness orphan delete failed: \(path, privacy: .public) \(String(describing: error), privacy: .public)")
+            }
+        }
+        if stagingsSeen > 0 && stagingsWithoutMtime == stagingsSeen {
+            cleanupLog.warning("own-liveness staging files in \(dir, privacy: .public) all lack mtime; sweep disabled until backend exposes modificationDate")
+        }
+        return deleted
+    }
+
     /// Sweep each directory with its own writer parser — without per-directory
     /// parsers, liveness files (different name shape than snapshots) lose the
     /// per-writer activeWriters gate and rely on mtime alone, which is weaker.

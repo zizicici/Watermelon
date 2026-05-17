@@ -155,9 +155,9 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
                 allowMigration: false
             )
             XCTFail("expected repoIdentityMismatch")
-        } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let local, let remote) {
-            XCTAssertEqual(local, "stale-local")
-            XCTAssertEqual(remote, "remote-canonical")
+        } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) {
+            XCTAssertEqual(stored, "stale-local")
+            XCTAssertEqual(observed, "remote-canonical")
         }
     }
 
@@ -269,6 +269,76 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let repoExists = await client.hasFile(RepoLayout.repoFilePath(base: basePath))
         XCTAssertTrue(repoExists, "ensureRepoJSON must re-create the missing file")
         await secondRun.shutdown()
+    }
+
+    /// `.v2WithPendingMigrationCleanup` arm: V2-shaped repo with a stale migration
+    /// marker AND a malformed `.watermelon/repo.json`. RepoIdentitySources.collect
+    /// → bootstrap.loadRepoID → loadRepoJSONStrict throws `BootstrapError.ioFailure`.
+    /// The arm's catch must remap to `damagedV2Repo` so the user sees the actionable
+    /// compatibility diagnosis instead of the raw enum render. Pins parity with the
+    /// `.v2` / `.v2WithV1Manifests` / `.fresh` arms whose mappings already have
+    /// direct tests.
+    func testV2WithPendingMigrationCleanup_corruptRepoJSON_throwsDamagedV2Repo() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        // `RepoLayout.parseMigrationMarkerFilename` only accepts a 36-char lowercase
+        // UUID writerID; anything else (e.g. "peer") is silently dropped by the marker
+        // store and inspect would route through the `.v2` arm instead — the test
+        // would pass for the wrong reason. Use a real UUID and pin the route below.
+        let cleanupWriterID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: cleanupWriterID)
+        let markerDict: [String: Any] = [
+            "v": 2,
+            "writer_id": cleanupWriterID,
+            "run_id": "stale-run",
+            "phase": 1,
+            "started_at_ms": Int64(0),
+            "last_step_at_ms": Int64(0)
+        ]
+        let markerData = try JSONSerialization.data(withJSONObject: markerDict)
+        await client.injectFile(
+            path: RepoLayout.migrationMarkerPath(base: basePath, writerID: cleanupWriterID),
+            data: markerData
+        )
+
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        // Pin the inspect route BEFORE injecting the malformed repo.json — inspect
+        // doesn't read repo.json, so this stays clean. If a future refactor changes
+        // the marker filename rules or stops mapping phase1 residue to the cleanup
+        // arm, this assertion fails loud before we exercise the catch-arm under test.
+        let inspection = try await RemoteFormatCompatibilityService().inspectRemoteFormat(
+            client: client, profile: profile
+        )
+        switch inspection {
+        case .v2WithPendingMigrationCleanup(_, let ownerWriterID):
+            XCTAssertEqual(ownerWriterID, cleanupWriterID,
+                           "marker writerID must round-trip through parseEntries")
+        default:
+            XCTFail("expected .v2WithPendingMigrationCleanup route, got \(inspection)")
+            return
+        }
+
+        // Malformed repo.json forces BootstrapError.ioFailure from the arm's
+        // RepoIdentitySources.collect → bootstrap.loadRepoID path.
+        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), contents: "{not-json")
+
+        do {
+            _ = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: true
+            )
+            XCTFail("expected damagedV2Repo")
+        } catch BackupV2RuntimeBuildError.damagedV2Repo {
+            // expected
+        }
     }
 
     /// Inspect-side malformed `version.json` (marker dir present) throws

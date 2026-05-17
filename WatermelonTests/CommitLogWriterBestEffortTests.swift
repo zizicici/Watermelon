@@ -1,9 +1,14 @@
 import XCTest
 @testable import Watermelon
 
-/// On a non-atomic backend (SMB exists+upload TOCTOU), `CommitLogWriter` returns
-/// `.bestEffortRetry` and verifies the remote bytes via SHA roundtrip. SHA mismatch
-/// → throw `.alreadyExists` so the upper layer re-allocates seq and retries.
+/// Commit publication contract regardless of backend shape.
+/// - `.overwritePossible` (SMB exists+upload): writer must stage via the gate and
+///   surface same-`(writer, seq)` collisions as `.alreadyExists` instead of
+///   silently overwriting peer bytes.
+/// - `.exclusive` (S3 If-None-Match / POSIX O_EXCL): writer must SHA-verify a
+///   `.alreadyExists` outcome so an S3 single-part PUT phantom (bytes landed,
+///   response lost) is absorbed as success while mismatched peer bytes still
+///   surface as `.alreadyExists` for seq re-allocation.
 final class CommitLogWriterBestEffortTests: XCTestCase {
     private let basePath = "/repo"
     private let month = LibraryMonthKey(year: 2026, month: 1)
@@ -164,6 +169,108 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         let hookStillArmed = await client.isBestEffortOverwriteStaged(at: path)
         XCTAssertTrue(hookStillArmed,
                       "writer must not invoke atomicCreate on the final commit path; staging hook should remain unfired")
+    }
+
+    /// `.exclusive` backend (S3 If-None-Match): when prior bytes at the final path
+    /// match the bytes we're trying to write — e.g. S3 single-part PUT phantom where
+    /// the upload landed but the response was lost and the retry hits 412 — the
+    /// writer must absorb `.alreadyExists` rather than allocate a new seq + write a
+    /// duplicate commit row that LWW will reconcile to the same state.
+    func testExclusiveBackend_alreadyExistsWithMatchingBytes_succeeds() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        // Switch the in-memory client to .exclusive so the writer's `.exclusive`
+        // arm is exercised (default is .overwritePossible → staging fallback).
+        client.setAtomicCreateGuarantee(.exclusive)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let header = makeHeader(seq: 1, clock: 1)
+        let op = sampleOp(opSeq: 0, clock: 1)
+        // Pre-populate the final path with bytes that match what the writer would
+        // produce; the next atomicCreate returns `.alreadyExists` (in-memory's
+        // .strictlyAtomic semantics) and the writer must SHA-verify and accept.
+        let ourBytes = try Self.encodeCommit(header: header, ops: [op])
+        let path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerID, seq: 1)
+        await client.injectFile(path: path, data: ourBytes)
+
+        let file = try await writer.write(
+            header: header, ops: [op], month: month, respectTaskCancellation: false
+        )
+        XCTAssertEqual(file.rowCount, 2)
+        // Remote bytes must remain the matched payload — writer must NOT have rewritten.
+        let afterWrite = await client.snapshotFiles()
+        XCTAssertEqual(afterWrite[path], ourBytes)
+    }
+
+    /// `.exclusive` backend, mismatched remote bytes (peer wrote a different commit
+    /// at the same `(writer, seq)` slot): writer must still throw `.alreadyExists`
+    /// so the flusher re-allocates seq. Pins that the matching-bytes shortcut does
+    /// not weaken the foreign-bytes guard.
+    func testExclusiveBackend_alreadyExistsWithMismatchedBytes_throwsAlreadyExists() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setAtomicCreateGuarantee(.exclusive)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let peerOp = CommitOp(
+            opSeq: 0, clock: 1,
+            body: .tombstoneAsset(CommitTombstoneBody(
+                assetFingerprint: TestFixtures.fingerprint(0xDD),
+                reason: .userDeleted
+            ))
+        )
+        let peerHeader = makeHeader(seq: 1, clock: 1)
+        let peerBytes = try Self.encodeCommit(header: peerHeader, ops: [peerOp])
+        let path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerID, seq: 1)
+        await client.injectFile(path: path, data: peerBytes)
+
+        let ourOp = sampleOp(opSeq: 0, clock: 1)
+        do {
+            _ = try await writer.write(
+                header: makeHeader(seq: 1, clock: 1),
+                ops: [ourOp],
+                month: month,
+                respectTaskCancellation: false
+            )
+            XCTFail("expected .alreadyExists — peer bytes must not be accepted as our own")
+        } catch CommitLogWriter.WriteError.alreadyExists {
+            // expected
+        }
+        // Peer bytes must survive untouched.
+        let afterWrite = await client.snapshotFiles()
+        XCTAssertEqual(afterWrite[path], peerBytes)
+    }
+
+    /// `.exclusive` backend, `.alreadyExists` outcome, and `download` during the
+    /// SHA self-verify is cancelled (user stop / task cancel): the writer must
+    /// surface `CancellationError`, not wrap it as `WriteError.ioFailure`. Callers
+    /// up the stack treat cancellation specially (pause vs. abort) — wrapping it
+    /// makes the run look like a transport failure and produces the wrong UI.
+    func testExclusiveBackend_alreadyExistsThenDownloadCancelled_propagatesCancellation() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setAtomicCreateGuarantee(.exclusive)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let header = makeHeader(seq: 1, clock: 1)
+        let op = sampleOp(opSeq: 0, clock: 1)
+        // Pre-populate the final path so atomicCreate returns .alreadyExists, which
+        // routes through verifyCommitOnRemote → client.download.
+        let bytes = try Self.encodeCommit(header: header, ops: [op])
+        let path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerID, seq: 1)
+        await client.injectFile(path: path, data: bytes)
+        await client.injectDownloadCancellation(for: path)
+
+        do {
+            _ = try await writer.write(
+                header: header, ops: [op], month: month, respectTaskCancellation: false
+            )
+            XCTFail("expected CancellationError to propagate from the verify download")
+        } catch is CancellationError {
+            // expected — cancellation preserved
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
     }
 
     /// Contract: verify-on-remote treats ANY mismatch as a race signal. Unparseable

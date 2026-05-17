@@ -357,6 +357,84 @@ final class V1MigrationServiceTests: XCTestCase {
                        "cleanup-only path must leave migrationCompleted at 0 (pre-refactor behavior)")
     }
 
+    /// Peer-race tolerance: phase1's empty-manifest branch deletes the source V1
+    /// manifest, but a sibling cleanup may have removed it between our
+    /// `metadataIfPresent` check and our `delete` call. `deleteIfPresent` must
+    /// swallow not-found from non-idempotent backends so phase1 doesn't abort
+    /// the whole migration over a benign race. Non-not-found errors must still
+    /// propagate (transport flap is not the same as a peer who already cleaned up).
+    func testDeleteIfPresent_emptyManifestPath_swallowsPeerRaceNotFound() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        // Empty V1 manifest — schema only, no rows — drives runPhase1 into the
+        // "no assets/resources/links → deleteIfPresent" branch.
+        let manifestBytes = try Self.buildEmptyV1ManifestSqlite()
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 6)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+        // Simulate a peer cleanup completing between metadataIfPresent and delete:
+        // metadata succeeds, delete throws .notFound. Must NOT propagate.
+        await client.injectDeleteError(.notFound, for: manifestPath)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        // Must not throw — peer-race on delete is benign.
+        let processed = try await service.runPhase1(
+            profileID: profileID, repoID: "r", writerID: "w", runID: "run-1"
+        )
+        XCTAssertEqual(processed, 0, "empty manifest contributes zero migrated months")
+        // Peer-race fidelity: the fake mirrors a real backend where the path is
+        // gone by the time .notFound is observed. If the manifest were still
+        // present, the next detectV1Manifests pass would re-find it and loop.
+        let manifestStillPresent = await client.hasFile(manifestPath)
+        XCTAssertFalse(manifestStillPresent, "peer-race .notFound must leave the V1 manifest absent")
+    }
+
+    /// Parity: deleteIfPresent must still propagate non-not-found delete errors.
+    /// A transport/permission failure is not "peer cleaned it up first" — surfacing
+    /// it keeps real backend faults visible instead of being swallowed as race.
+    func testDeleteIfPresent_emptyManifestPath_propagatesNonNotFoundDeleteError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        let manifestBytes = try Self.buildEmptyV1ManifestSqlite()
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 6)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+        await client.injectDeleteError(.permission, for: manifestPath)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        do {
+            _ = try await service.runPhase1(
+                profileID: profileID, repoID: "r", writerID: "w", runID: "run-1"
+            )
+            XCTFail("expected permission error to propagate; not-found swallow must not catch other shapes")
+        } catch {
+            // Permission is translated to NSCocoaErrorDomain / NSFileReadNoPermissionError
+            // wrapped in RemoteStorageClientError.underlying. Pin that shape so a future
+            // regression that broadens the swallow to all errors (or narrows it
+            // differently) surfaces here instead of passing on any random thrown error.
+            XCTAssertFalse(isStorageNotFoundError(error),
+                           "permission error must not classify as not-found (would be swallowed in prod)")
+            guard case RemoteStorageClientError.underlying(let underlying) = error else {
+                XCTFail("expected RemoteStorageClientError.underlying, got \(error)")
+                return
+            }
+            let nsError = underlying as NSError
+            XCTAssertEqual(nsError.domain, NSCocoaErrorDomain)
+            XCTAssertEqual(nsError.code, NSFileReadNoPermissionError)
+        }
+        // Non-mutating injection contract: a propagated error leaves the file in place.
+        let manifestStillPresent = await client.hasFile(manifestPath)
+        XCTAssertTrue(manifestStillPresent, ".permission injection must not mutate fake storage")
+    }
+
     // MARK: - Helpers
 
     private func injectMigrationMarker(client: InMemoryRemoteStorageClient, writerID: String, phase: Int) async throws {
@@ -425,6 +503,19 @@ final class V1MigrationServiceTests: XCTestCase {
         }
         // GRDB checkpoints WAL into the main db file on `.write` completion under DELETE
         // journal mode; reading the bytes now gives a clean reopen-able file.
+        try dbQueue.close()
+        return try Data(contentsOf: dbURL)
+    }
+
+    /// Schema-only manifest, no rows. Drives runPhase1 into the empty-manifest branch
+    /// which calls `deleteIfPresent` on the source path.
+    private static func buildEmptyV1ManifestSqlite() throws -> Data {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let dbURL = tempDir.appendingPathComponent("v1-empty.sqlite")
+        let dbQueue = try DatabaseQueue(path: dbURL.path)
+        try MonthManifestStore.migrate(dbQueue)
         try dbQueue.close()
         return try Data(contentsOf: dbURL)
     }

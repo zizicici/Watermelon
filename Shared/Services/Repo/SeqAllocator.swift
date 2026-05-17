@@ -19,10 +19,12 @@ actor SeqAllocator {
     }
 
     func observeRemoteMax(_ remoteMax: UInt64) throws {
-        if remoteMax > current {
-            try persist(value: remoteMax)
-            current = remoteMax
-        }
+        guard remoteMax > current else { return }
+        // persist returns the post-write DB high-water; if a concurrent allocator
+        // already pushed it past `remoteMax`, our actor-local `current` must adopt
+        // the higher value rather than regress to `remoteMax`.
+        let dbHighWater = try persist(value: remoteMax)
+        current = max(remoteMax, dbHighWater)
     }
 
     /// Allocates the next seq under a single write-transaction read-then-write so
@@ -61,12 +63,15 @@ actor SeqAllocator {
         case exhausted
     }
 
-    private func persist(value: UInt64) throws {
+    private func persist(value: UInt64) throws -> UInt64 {
         // Bumps the persisted seq if `value` is higher than what the DB currently holds.
         // Used by `observeRemoteMax` where conditional advance is the desired semantic.
+        // Returns the post-write DB value so the caller can match in-memory `current`
+        // to it; otherwise a rejected UPDATE would leave `current < dbValue` and
+        // future `value()` reads would under-report.
         let signed = Int64(bitPattern: value)
-        try database.write { [profileID, repoID] db in
-            guard try Self.readPersistedSeq(db: db, profileID: profileID, repoID: repoID) != nil else {
+        return try database.write { [profileID, repoID] db in
+            guard let before = try Self.readPersistedSeq(db: db, profileID: profileID, repoID: repoID) else {
                 throw SeqAllocatorError.missingRepoState(profileID: profileID, repoID: repoID)
             }
             try db.execute(
@@ -77,6 +82,7 @@ actor SeqAllocator {
                 """,
                 arguments: [signed, profileID, repoID, signed]
             )
+            return max(before, value)
         }
     }
 

@@ -32,6 +32,14 @@ final class V2MonthIndexes {
     private(set) var deletedAssetStamps: [Data: OpStamp]
     private(set) var legacyDeletedAssetFingerprints: Set<Data>
 
+    /// Resource rows projected from committed `addAsset` bodies, keyed by path.
+    /// Seeded unconditionally from `materializedState.resources` (which is itself
+    /// `fold(commits in covered)`) and updated by `recordCommit`. Snapshot emit
+    /// reads directly from here — never from the live `resourcesByPath` — so an
+    /// in-session `upsertResource` overwriting a committed path with a different
+    /// hash cannot leak the replacement bytes into the snapshot baseline.
+    private var committedResourceByPath: [String: SnapshotResourceRow]
+
     // Pending V2 ops since last flush.
     private(set) var pendingV2AssetFingerprints: Set<Data> = []
     private(set) var pendingV2TombstoneFingerprints: Set<Data> = []
@@ -143,6 +151,12 @@ final class V2MonthIndexes {
         self.deletedAssetStamps = materializedState.deletedAssetStamps
         self.legacyDeletedAssetFingerprints = materializedState.deletedAssetFingerprints
             .subtracting(materializedState.deletedAssetStamps.keys)
+        // Faithful seed: every row from `materializedState.resources` is in
+        // `fold(commits in covered)` already, so preserving them on the next
+        // snapshot emit keeps `state == fold(covered)`. Tombstoned-asset orphan
+        // rows are part of fold(covered) (RepoMaterializer keeps them) and must
+        // survive forward.
+        self.committedResourceByPath = materializedState.resources
     }
 
     // MARK: - Read
@@ -357,10 +371,15 @@ final class V2MonthIndexes {
 
     /// Stamps committed rows so the snapshot baseline matches what a future replay would derive
     /// (LWW gate). Clears pending sets — commit is durable, so a snapshot failure must not re-emit
-    /// the same ops in the next flush.
+    /// the same ops in the next flush. `committedResources` carries the full snapshot row for
+    /// every path embedded in an `addAsset` body so the baseline survives a later same-path
+    /// `upsertResource` overwrite. Rows must be built by the flusher with the same field
+    /// projection RepoMaterializer uses on replay (asset body's creationDateMs/backedUpAtMs,
+    /// resource entry's physicalRemotePath/contentHash/fileSize/resourceType/crypto).
     func recordCommit(
         assetClocks: [Data: UInt64],
         tombstoneClocks: [Data: UInt64],
+        committedResources: [String: SnapshotResourceRow],
         writerID: String,
         seq: UInt64
     ) {
@@ -381,6 +400,9 @@ final class V2MonthIndexes {
             deletedAssetStamps[fp] = OpStamp(writerID: writerID, seq: seq, clock: clock)
             legacyDeletedAssetFingerprints.remove(fp)
         }
+        for (path, row) in committedResources {
+            committedResourceByPath[path] = row
+        }
         pendingV2AssetFingerprints.removeAll()
         pendingV2TombstoneFingerprints.removeAll()
     }
@@ -400,16 +422,13 @@ final class V2MonthIndexes {
                 stamp: asset.stamp
             )
         }
-        for (path, resource) in resourcesByPath {
-            state.resources[path] = SnapshotResourceRow(
-                physicalRemotePath: resource.physicalRemotePath,
-                contentHash: resource.contentHash,
-                fileSize: resource.fileSize,
-                resourceType: resource.resourceType,
-                creationDateMs: resource.creationDateMs,
-                backedUpAtMs: resource.backedUpAtMs,
-                crypto: resource.crypto
-            )
+        // Snapshot resources are read from the committed map directly, NOT from
+        // `resourcesByPath` — the live indexes may have been overwritten by an
+        // in-session `upsertResource` for a path that was previously committed at
+        // a different hash; using the committed row keeps the snapshot baseline
+        // equal to `fold(commits in covered)`.
+        for (path, row) in committedResourceByPath {
+            state.resources[path] = row
         }
         for (fp, links) in linksByFingerprint {
             for link in links {

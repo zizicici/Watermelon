@@ -116,6 +116,34 @@ nonisolated struct IdentityClaimStore: Sendable {
         try await canonicalElection().repoID
     }
 
+    /// Reads only our own `<writerID>.json` claim file (no election, no peer scan).
+    /// Returns nil if the file is absent; throws on transport failure or directory-where-file-expected.
+    /// Used by partial-die wipe-and-reuse recovery: when DB has only a stale fallback row, our own
+    /// claim file is the trust anchor that proves this writer already participated in the current repo.
+    func readOwnClaim(writerID: String) async throws -> IdentityClaim? {
+        let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
+        guard try await metadataFileIfPresent(path: claimPath, description: "identity claim", code: 18) != nil else {
+            return nil
+        }
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("own-claim-read-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        do {
+            try await client.download(remotePath: claimPath, localURL: temp)
+        } catch {
+            if isStorageNotFoundError(error) { return nil }
+            throw error
+        }
+        let data = try Data(contentsOf: temp)
+        guard let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let landedRepoID = dict["repo_id"] as? String, !landedRepoID.isEmpty,
+              let landedWriterID = dict["writer_id"] as? String, landedWriterID == writerID,
+              let landedTs = Self.strictInt64(dict["created_at_ms"]) else {
+            return nil
+        }
+        return IdentityClaim(repoID: landedRepoID, writerID: landedWriterID, createdAtMs: landedTs)
+    }
+
     // MARK: - Heal
 
     /// Only 0-byte (atomicCreate half-failed) is safe to clear; any other content might be canonical.

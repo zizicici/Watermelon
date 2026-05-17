@@ -77,7 +77,14 @@ actor CommitLogWriter {
             case .created:
                 break
             case .alreadyExists:
-                throw WriteError.alreadyExists
+                // S3 single-part PUT phantom: bytes landed but the response was lost,
+                // retry hits If-None-Match 412. SHA-verify so our own prior write is
+                // absorbed; mismatched/unparseable bytes still surface as `.alreadyExists`.
+                try await verifyCommitOnRemote(
+                    remotePath: remotePath,
+                    expectedSha: sha,
+                    expectedRowCount: integrity.rowCount
+                )
             case .bestEffortRetry:
                 // Defensive — `.exclusive` shouldn't return bestEffortRetry, but if it does
                 // (transport timeout after write), SHA-verify so a peer collision still surfaces.
@@ -135,6 +142,8 @@ actor CommitLogWriter {
         defer { try? FileManager.default.removeItem(at: verifyURL) }
         do {
             try await client.download(remotePath: remotePath, localURL: verifyURL)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw WriteError.ioFailure(error)
         }
