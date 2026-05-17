@@ -127,6 +127,28 @@ final class VersionManifestStoreTests: XCTestCase {
         }
     }
 
+    /// CFBoolean defense for `created_at_ms`: NSNumber-bridged true would
+    /// successfully `as? Int64`-cast to 1, anchoring a future reader at 1 ms
+    /// unless the strict parser rejects it before the cast.
+    func testLoad_createdAtMsBoolean_returnsNilCreatedAtMs() async throws {
+        let (client, store) = await makeStore()
+        let dict: [String: Any] = [
+            "format_version": RepoLayout.formatVersion,
+            "min_app_version": RepoLayout.minAppVersionPlaceholder,
+            "created_at_ms": true,
+            "created_by_writer": "boolean-createdAt"
+        ]
+        let data = try JSONSerialization.data(withJSONObject: dict)
+        await client.injectFile(path: RepoLayout.versionFilePath(base: basePath), data: data)
+
+        guard case .found(let manifest) = try await store.load() else {
+            XCTFail("expected .found — CFBoolean rejection applies to createdAtMs, not format_version")
+            return
+        }
+        XCTAssertNil(manifest.createdAtMs,
+                     "strictInt64 must reject CFBoolean — must NOT bridge to Int64=1")
+    }
+
     // MARK: - Compatibility verification
 
     func testVerifyCompatible_higherFormat_throwsHigherFormatVersion() async throws {

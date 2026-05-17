@@ -195,6 +195,42 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
+    /// `.fresh` arm: marker directory present, no version.json, no V1/V2 data,
+    /// but `.watermelon/repo.json` is malformed. Inspect classifies `.fresh`
+    /// (absent version.json + no V1/V2 data); `initializeFreshRepo →
+    /// ensureRepoJSON → loadRepoJSONStrict` then throws
+    /// `BootstrapError.ioFailure`. Pins parity with the `.v2` and
+    /// `.v2WithV1Manifests` arms so a future refactor that drops the catch is
+    /// caught by tests.
+    func testFreshArm_corruptRepoJSON_throwsDamagedV2Repo() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        // Marker directory present forces inspect past the "no marker → .fresh"
+        // shortcut so the malformed file is exercised in the bootstrap path.
+        try await client.createDirectory(
+            path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory])
+        )
+        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), contents: "{not-json")
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        do {
+            _ = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+            XCTFail("expected damagedV2Repo")
+        } catch BackupV2RuntimeBuildError.damagedV2Repo {
+            // expected — the `.fresh` arm now mirrors sibling damaged-repo mapping
+        }
+    }
+
     /// V2 path runs ensureRepoJSON to repair a half-bootstrap state where
     /// version.json exists but repo.json was lost.
     func testV2Repo_halfBootstrap_repoMissing_isHealedByEnsureRepoJSON() async throws {
@@ -233,6 +269,97 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let repoExists = await client.hasFile(RepoLayout.repoFilePath(base: basePath))
         XCTAssertTrue(repoExists, "ensureRepoJSON must re-create the missing file")
         await secondRun.shutdown()
+    }
+
+    /// Inspect-side malformed `version.json` (marker dir present) throws
+    /// `BackupCompatibilityError.damagedV2Repo` from `inspectRemoteFormat`
+    /// directly. The builder's wrap at `BackupV2RuntimeBuilder.swift:32-40`
+    /// must remap to `BackupV2RuntimeBuildError.damagedV2Repo` so caller
+    /// catch-arms (BackupRunPreparation / BackgroundBackupRunner) route
+    /// through their typed-error handlers instead of the generic catch.
+    func testInspectSide_corruptVersionJSON_throwsDamagedV2Repo() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(
+            path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory])
+        )
+        await client.injectFile(path: RepoLayout.versionFilePath(base: basePath), contents: "{not-json")
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        do {
+            _ = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+            XCTFail("expected damagedV2Repo from inspect-side remap")
+        } catch BackupV2RuntimeBuildError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    /// Regression: SeqAllocator must observe our writer's remote max only.
+    /// Pre-fix, builder took `observedSeqByWriter.values.max()`, which would
+    /// bump our local seq to a peer's high-water mark — wasting seq density
+    /// and producing non-contiguous commit filenames for our writer (the
+    /// `(writerID, seq)` path is per-writer, never shared).
+    func testBuild_doesNotBumpAllocatorToForeignWriterSeq() async throws {
+        let canonicalRepoID = "shared-repo-id"
+        let foreignWriterID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: canonicalRepoID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+
+        // Stage a foreign-writer commit at seq=1000 so the materializer reports
+        // `observedSeqByWriter[foreignWriter] = 1000`.
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let header = TestFixtures.makeCommitHeader(
+            repoID: canonicalRepoID,
+            writerID: foreignWriterID,
+            seq: 1000,
+            runID: "foreign-run",
+            month: LibraryMonthKey(year: 2026, month: 1),
+            clockMin: 1,
+            clockMax: 1
+        )
+        let op = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+            assetFingerprint: Data(repeating: 0xAB, count: 32),
+            creationDateMs: nil, backedUpAtMs: 1, resources: []
+        )))
+        _ = try await commitWriter.write(
+            header: header,
+            ops: [op],
+            month: LibraryMonthKey(year: 2026, month: 1),
+            respectTaskCancellation: false
+        )
+
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+        let identity = RepoIdentity(database: databaseManager)
+        let ourWriterID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        _ = try await identity.lazyEnsureRepoState(profileID: profile.id!, repoID: canonicalRepoID, writerID: ourWriterID)
+
+        let services = try await BackupV2RuntimeBuilder.build(
+            client: client,
+            metadataClient: metadataClient,
+            profile: profile,
+            databaseManager: databaseManager,
+            allowMigration: false
+        )
+        let allocatorValue = await services.seqAllocator.value()
+        XCTAssertLessThan(allocatorValue, 1000,
+                          "allocator must not bump to a foreign writer's seq — namespacing is per (writerID, seq)")
+        await services.shutdown()
     }
 
     private func insertProfile() throws -> ServerProfileRecord {

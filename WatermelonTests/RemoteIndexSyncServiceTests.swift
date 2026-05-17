@@ -336,6 +336,198 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         }
     }
 
+    /// Regression: budget-exhausted overlay probe must still yield a fresh handle when
+    /// the fail-closed policy folds every inconclusive hash into the missing set. The
+    /// prior gate read raw `inconclusiveHashes.isEmpty`, so any month with > 64 verified
+    /// files or > 32 MB of verified bytes left resume permanently stalled at
+    /// `prepareResumeHandle`'s `stalePhysicalPresenceOverlay` throw.
+    func testSyncOverlayAndCaptureHandle_budgetExhausted_remainsFreshUnderFailClosedPolicy() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        let service = RemoteIndexSyncService()
+        let writer = service.makeOptimisticAssetWriter()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+        try await client.createDirectory(path: "\(basePath)/\(monthRel)")
+
+        // 65 distinct resources → budget cap of 64 files forces the 65th onto the
+        // `.inconclusive(.verifyBudgetExhausted)` branch on at least one iteration order.
+        for index in 0..<65 {
+            let bytes = Data("overlay-probe-budget-\(index)".utf8)
+            let hash = Data(SHA256.hash(data: bytes))
+            let name = "f\(index).jpg"
+            let resource = RemoteManifestResource(
+                year: monthA.year, month: monthA.month,
+                physicalRemotePath: "\(monthRel)/\(name)",
+                contentHash: hash, fileSize: Int64(bytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: 0
+            )
+            writer.appendResource(resource)
+            await client.injectFile(path: "\(basePath)/\(monthRel)/\(name)", data: bytes)
+        }
+
+        let handle = try await service.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
+        XCTAssertEqual(handle.overlayFreshness, .fresh,
+                       "budget-exhausted inconclusives folded into missing must not block resume freshness")
+        // Load-bearing side effect: the budget-exhausted inconclusive must also land
+        // in the missing overlay, otherwise resume would dedup against unverified bytes.
+        let monthMissing = service.physicallyMissingHashesForTest(month: monthA)
+        XCTAssertFalse(monthMissing.isEmpty,
+                       "budget-exhausted inconclusive hashes must be folded into missing under fail-closed")
+        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        XCTAssertEqual(verified, monthMissing,
+                       "freshness-aware accessor must publish the same missing set for the fresh month")
+    }
+
+    /// Regression: fail-closed policy must still fold *all* budget-exhausted inconclusives
+    /// into missing when a partial fallback exists. Pre-fix the merge short-circuited on
+    /// `if let stale = fallback[month]`, so any current inconclusive hash not already in the
+    /// fallback stayed unresolved and the month was deterministically marked stale — leaving
+    /// resume blocked even though the inconclusives all sit outside the fallback set.
+    func testSyncOverlayAndCaptureHandle_partialFallback_failClosedFoldsRemainingInconclusives() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        let service = RemoteIndexSyncService()
+        let writer = service.makeOptimisticAssetWriter()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+        try await client.createDirectory(path: "\(basePath)/\(monthRel)")
+
+        for index in 0..<65 {
+            let bytes = Data("overlay-probe-partial-fallback-\(index)".utf8)
+            let hash = Data(SHA256.hash(data: bytes))
+            let name = "f\(index).jpg"
+            let resource = RemoteManifestResource(
+                year: monthA.year, month: monthA.month,
+                physicalRemotePath: "\(monthRel)/\(name)",
+                contentHash: hash, fileSize: Int64(bytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: 0
+            )
+            writer.appendResource(resource)
+            await client.injectFile(path: "\(basePath)/\(monthRel)/\(name)", data: bytes)
+        }
+
+        // Seed a prior fallback that contains a hash unrelated to any current resource.
+        // Pre-fix this triggers the `if let stale = fallback[month]` branch and skips the
+        // fail-closed fold — every inconclusive hash outside the fallback stays unresolved.
+        let foreignHash = Data(SHA256.hash(data: Data("foreign-hash-not-in-current-month".utf8)))
+        service.markPhysicallyMissingV2(month: monthA, hashes: [foreignHash])
+
+        let handle = try await service.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
+        XCTAssertEqual(handle.overlayFreshness, .fresh,
+                       "fail-closed policy must fold all unresolved inconclusives into missing even when a partial fallback exists")
+        // Load-bearing side effect: unresolved inconclusives must be folded into the
+        // missing overlay even though a foreign fallback hash is seeded for the month.
+        let monthMissing = service.physicallyMissingHashesForTest(month: monthA)
+        XCTAssertFalse(monthMissing.isEmpty,
+                       "fail-closed policy must populate missing with unresolved inconclusives")
+        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        XCTAssertEqual(verified, monthMissing,
+                       "freshness-aware accessor must publish the same missing set under partial fallback")
+    }
+
+    /// Regression: `.preserveFallback` (used by `refreshPhysicalPresenceOverlay` on
+    /// every regular sync) must mark a budget-exhausted month as NOT fresh even when
+    /// the prior fallback covers every inconclusive hash. The previous post-merge gate
+    /// was policy-blind and folded fallback-covered inconclusives as resolved, which
+    /// flipped `verifiedPhysicallyMissingHashes` from nil to the fallback set under
+    /// `.preserveFallback`. Downstream that turns prior overlay entries into
+    /// authoritative misses for `V2MonthSession.loadOrCreate`, forcing spurious
+    /// re-uploads after a peer restored a previously-missing file.
+    func testRefreshPhysicalPresenceOverlay_preserveFallback_budgetExhaustedNotFreshEvenWhenCovered() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+        try await client.createDirectory(path: "\(basePath)/\(monthRel)")
+
+        let service = RemoteIndexSyncService()
+        let writer = service.makeOptimisticAssetWriter()
+        var allHashes: Set<Data> = []
+        for index in 0..<65 {
+            let bytes = Data("preserve-fallback-budget-\(index)".utf8)
+            let hash = Data(SHA256.hash(data: bytes))
+            allHashes.insert(hash)
+            let name = "f\(index).jpg"
+            let resource = RemoteManifestResource(
+                year: monthA.year, month: monthA.month,
+                physicalRemotePath: "\(monthRel)/\(name)",
+                contentHash: hash, fileSize: Int64(bytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: 0
+            )
+            writer.appendResource(resource)
+            await client.injectFile(path: "\(basePath)/\(monthRel)/\(name)", data: bytes)
+        }
+
+        // Seed prior overlay covering EVERY hash — the cross-policy gate would have
+        // marked the month fresh because resolvedInconclusives ⊇ inconclusiveHashes.
+        service.markPhysicallyMissingV2(month: monthA, hashes: allHashes)
+
+        _ = try await service.refreshPhysicalPresenceOverlay(
+            client: client,
+            basePath: basePath,
+            fallback: [monthA: allHashes]
+        )
+        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        XCTAssertNil(verified,
+                     ".preserveFallback must not advertise the fallback set as verified-missing for a budget-exhausted month")
+    }
+
+    /// Regression: a whole-month probe failure (transient list error) must NOT widen
+    /// the published overlay beyond the prior fallback under any policy. Loop 3
+    /// briefly wrote `allHashes` into `missingByMonth` under fail-closed for
+    /// symmetry with the `.success` arm; but the apply-overlay path writes those
+    /// hashes into `committedView` unconditionally on revision match, and Home
+    /// consumers read `physicallyMissingHashes` without the per-month freshness
+    /// gate — so a transport blip would hide real remote content from Home until
+    /// the next successful sync repaired the overlay.
+    func testSyncOverlayAndCaptureHandle_failureArm_preservesFallbackInsteadOfAllMissing() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+        try await client.createDirectory(path: "\(basePath)/\(monthRel)")
+
+        let service = RemoteIndexSyncService()
+        let writer = service.makeOptimisticAssetWriter()
+        var allHashes: Set<Data> = []
+        for index in 0..<3 {
+            let bytes = Data("failure-arm-preserve-\(index)".utf8)
+            let hash = Data(SHA256.hash(data: bytes))
+            allHashes.insert(hash)
+            let name = "f\(index).jpg"
+            let resource = RemoteManifestResource(
+                year: monthA.year, month: monthA.month,
+                physicalRemotePath: "\(monthRel)/\(name)",
+                contentHash: hash, fileSize: Int64(bytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: 0
+            )
+            writer.appendResource(resource)
+            await client.injectFile(path: "\(basePath)/\(monthRel)/\(name)", data: bytes)
+        }
+        let priorMissing = Set([allHashes.first!])
+        service.markPhysicallyMissingV2(month: monthA, hashes: priorMissing)
+
+        // Force the month directory list to fail with a transport error so the
+        // probe lands in the .failure arm with a non-empty fallback.
+        await client.injectListError(.transport, for: "\(basePath)/\(monthRel)")
+
+        let handle = try await service.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
+        XCTAssertEqual(handle.overlayFreshness, .stale,
+                       "transport blip on a whole-month probe must yield a stale handle")
+        let published = service.physicallyMissingHashesForTest(month: monthA)
+        XCTAssertEqual(published, priorMissing,
+                       ".failure arm must preserve the prior fallback subset, not widen to every manifest hash")
+        XCTAssertFalse(published == allHashes,
+                       ".failure arm must NOT publish every hash as missing under fail-closed (Home consumers bypass freshness gate)")
+    }
+
     /// V1 verifyMonth must refuse a V2 repo. If a V2 repo lost some metadata and
     /// inspection misclassified it as V1, calling verifyMonth would write V1
     /// manifest state into the shared committedView and pollute the V2 cache.

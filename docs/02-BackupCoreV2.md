@@ -239,7 +239,7 @@
 每月的 presence map 用 `RemoteMonthPresenceMap`（path-keyed value type）：
 
 - `V2MonthSession` 持有 1 份；`findByFileName` / `anyPresentPath` 通过 `isMissing(_:)` 过滤；`upsertResource` 写新字节后 `clear(path:)` 让重新查找能命中
-- `RemoteIndexSyncService` 的 overlay probe 输出按 hash 聚合（`[Data: RemoteResourcePresence]`）；`OverlayMonthProbe` 的 `missingHashes` / `inconclusiveHashes` / `fresh` 都是从这份 map derived
+- `RemoteIndexSyncService` 的 overlay probe 输出按 hash 聚合（`[Data: RemoteResourcePresence]`）；`OverlayMonthProbe` 的 `missingHashes` / `inconclusiveHashes` 都是从这份 map derived，每月 freshness 由调用方按 policy（`.preserveFallback` / `.failClosedWhenMissingFallback`）在 probe 输出之外判定
 - `RepoVerifyMonthService` 的 `PresenceSnapshot` 也用同一份 map；`hasInconclusiveResource(in:)` 判定 verify 是否完整
 
 调用约定：

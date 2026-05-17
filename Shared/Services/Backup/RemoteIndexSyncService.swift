@@ -36,8 +36,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             }
             return result
         }
-
-        var fresh: Bool { inconclusiveHashes.isEmpty }
     }
 
     private struct OverlayProbeResult: Sendable {
@@ -190,7 +188,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     private let committedView: RepoCommittedView
     private let inflightTracker: OptimisticInflightTracker
     private let optimisticMutationLock = NSLock()
-    private var physicalPresenceOverlayFresh = false
     private var physicalPresenceOverlayFreshMonths: Set<LibraryMonthKey> = []
     private let syncGate = SyncGate()
     private let state = MutableState()
@@ -288,7 +285,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                     for (month, hashes) in probe.missingByMonth {
                         committedView.markPhysicallyMissing(month: month, hashes: hashes)
                     }
-                    setPhysicalPresenceOverlayFreshnessLocked(allFresh: probe.fresh, freshMonths: probe.freshMonths)
+                    setPhysicalPresenceOverlayFreshnessLocked(freshMonths: probe.freshMonths)
                     revisionUnchanged = true
                 }
                 let overlayFresh = revisionUnchanged && probe.fresh
@@ -789,15 +786,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     private func clearPhysicalPresenceOverlayFreshnessLocked() {
-        physicalPresenceOverlayFresh = false
         physicalPresenceOverlayFreshMonths.removeAll()
     }
 
     private func setPhysicalPresenceOverlayFreshnessLocked(
-        allFresh: Bool,
         freshMonths: Set<LibraryMonthKey>
     ) {
-        physicalPresenceOverlayFresh = allFresh
         physicalPresenceOverlayFreshMonths = freshMonths
     }
 
@@ -890,7 +884,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             )
             if physicallyMissingHashes == nil {
                 physicalPresenceOverlayFreshMonths.remove(month)
-                physicalPresenceOverlayFresh = false
             } else {
                 physicalPresenceOverlayFreshMonths.insert(month)
             }
@@ -952,7 +945,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         let applied = applyPhysicalPresenceOverlay(
             probe.missingByMonth,
             expectedRevision: captured.revision,
-            allFresh: probe.fresh,
             freshMonths: probe.freshMonths
         )
         if !applied {
@@ -966,7 +958,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     private func applyPhysicalPresenceOverlay(
         _ missingByMonth: [LibraryMonthKey: Set<Data>],
         expectedRevision: UInt64? = nil,
-        allFresh: Bool = false,
         freshMonths: Set<LibraryMonthKey> = []
     ) -> Bool {
         optimisticMutationLock.withLock {
@@ -978,7 +969,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             for (month, hashes) in missingByMonth {
                 committedView.markPhysicallyMissing(month: month, hashes: hashes)
             }
-            setPhysicalPresenceOverlayFreshnessLocked(allFresh: allFresh, freshMonths: freshMonths)
+            setPhysicalPresenceOverlayFreshnessLocked(freshMonths: freshMonths)
             return true
         }
     }
@@ -1021,28 +1012,57 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 try Task.checkCancellation()
                 switch result {
                 case .success(let probe):
-                    if !probe.fresh { anyFailure = true }
-                    if probe.fresh { freshMonths.insert(month) }
                     var missing = probe.missingHashes
                     // Inconclusive (budget exhausted, transient probe failure) hashes
                     // must NOT silently drop out of the overlay — replace-semantics in
                     // markPhysicallyMissing would clear a prior-confirmed missing hash
                     // and let resume/dedup classify it as remotely covered.
+                    var resolvedInconclusives: Set<Data> = []
                     if !probe.inconclusiveHashes.isEmpty {
                         if let stale = fallback[month] {
-                            missing.formUnion(stale.intersection(probe.inconclusiveHashes))
-                        } else if case .failClosedWhenMissingFallback = staleFallbackPolicy {
-                            missing.formUnion(probe.inconclusiveHashes)
+                            let cover = stale.intersection(probe.inconclusiveHashes)
+                            missing.formUnion(cover)
+                            resolvedInconclusives.formUnion(cover)
                         }
+                        // Under fail-closed policy, any inconclusive hash not covered by
+                        // a fallback entry must still be folded into missing — otherwise a
+                        // partial fallback short-circuits the policy and leaves the month
+                        // stale forever for budget-exhausted hashes outside the fallback.
+                        if case .failClosedWhenMissingFallback = staleFallbackPolicy {
+                            let unresolved = probe.inconclusiveHashes.subtracting(resolvedInconclusives)
+                            missing.formUnion(unresolved)
+                            resolvedInconclusives.formUnion(unresolved)
+                        }
+                    }
+                    // Freshness is policy-aware. Fail-closed folds every inconclusive into
+                    // missing, so post-merge coverage is the right gate (resume can proceed).
+                    // Preserve-fallback only intersects with prior state — fallback entries
+                    // are prior evidence, not current proof, so any inconclusive must stale
+                    // the month to keep `verifiedPhysicallyMissingHashes` returning nil and
+                    // avoid spurious re-uploads after a peer restored a previously-missing file.
+                    let monthFresh: Bool
+                    switch staleFallbackPolicy {
+                    case .failClosedWhenMissingFallback:
+                        monthFresh = probe.inconclusiveHashes.subtracting(resolvedInconclusives).isEmpty
+                    case .preserveFallback:
+                        monthFresh = probe.inconclusiveHashes.isEmpty
+                    }
+                    if monthFresh {
+                        freshMonths.insert(month)
+                    } else {
+                        anyFailure = true
                     }
                     missingByMonth[month] = missing
                 case .failure(let error):
                     anyFailure = true
+                    // A whole-month probe failure means we have no current information about
+                    // physical presence. The prior fallback is the best authentic state we
+                    // have; widening to "all hashes missing" under fail-closed would publish
+                    // a transient transport blip into the overlay that Home consumers read
+                    // without the per-month freshness gate, hiding real remote content until
+                    // the next successful sync.
                     if let stale = fallback[month] {
                         missingByMonth[month] = stale
-                    } else if case .failClosedWhenMissingFallback = staleFallbackPolicy {
-                        let allHashes = Set((resourcesByMonth[month] ?? []).map(\.contentHash))
-                        missingByMonth[month] = allHashes
                     } else {
                         missingByMonth[month] = []
                     }

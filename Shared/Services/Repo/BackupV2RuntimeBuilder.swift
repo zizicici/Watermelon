@@ -28,7 +28,16 @@ enum BackupV2RuntimeBuilder {
         }
         // Inspect lists basePath; ensure it exists for fresh-profile bootstraps.
         try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
-        let inspection = try await format.inspectRemoteFormat(client: client, profile: profile)
+        let inspection: RemoteFormatInspection
+        do {
+            inspection = try await format.inspectRemoteFormat(client: client, profile: profile)
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // Inspect throws the typed compatibility error directly for malformed
+            // version.json / marker-present V2 data without a readable manifest;
+            // remap so caller catch-arms (BackupRunPreparation / BackgroundBackupRunner)
+            // route through their damagedV2Repo handlers instead of the generic catch.
+            throw BackupV2RuntimeBuildError.damagedV2Repo
+        }
 
         let identity = RepoIdentity(database: databaseManager)
         let writerID = try await identity.lazyEnsureWriterID(profileID: profileID)
@@ -95,7 +104,10 @@ enum BackupV2RuntimeBuilder {
                          .mismatchedFormatVersion(_, _, let minApp):
                         throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
                     case .unreadable:
-                        throw error
+                        // Persistent unreadable after the retry budget burned — corruption,
+                        // not transient. Mirror inspect-side mapping so the user sees the
+                        // actionable damagedV2Repo diagnosis instead of a raw enum render.
+                        throw BackupV2RuntimeBuildError.damagedV2Repo
                     }
                 }
             } catch let error as RepoBootstrap.BootstrapError {
@@ -106,15 +118,26 @@ enum BackupV2RuntimeBuilder {
             }
         case .fresh:
             do {
-                resolvedRepoID = try await bootstrap.initializeFreshRepo(writerID: writerID)
-            } catch let error as RepoBootstrap.VersionConflict {
-                switch error {
-                case .higherFormatVersion(_, _, let minApp),
-                     .mismatchedFormatVersion(_, _, let minApp):
-                    throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
-                case .unreadable:
-                    throw error
+                do {
+                    resolvedRepoID = try await bootstrap.initializeFreshRepo(writerID: writerID)
+                } catch let error as RepoBootstrap.VersionConflict {
+                    switch error {
+                    case .higherFormatVersion(_, _, let minApp),
+                         .mismatchedFormatVersion(_, _, let minApp):
+                        throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
+                    case .unreadable:
+                        throw BackupV2RuntimeBuildError.damagedV2Repo
+                    }
                 }
+            } catch let error as RepoBootstrap.BootstrapError {
+                // Marker-only `.fresh` classification can still surface a malformed
+                // `repo.json` / `repo-identity-final.json` / peer claim through
+                // `ensureRepoJSON` / `ensureIdentityFinalization`; mirror sibling
+                // arms so the user sees `damagedV2Repo` instead of a raw enum render.
+                if case .ioFailure = error {
+                    throw BackupV2RuntimeBuildError.damagedV2Repo
+                }
+                throw error
             }
             await onBootstrap?()
         case .v1, .v2WithV1Manifests:
@@ -158,7 +181,7 @@ enum BackupV2RuntimeBuilder {
                          .mismatchedFormatVersion(_, _, let minApp):
                         throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
                     case .unreadable:
-                        throw error
+                        throw BackupV2RuntimeBuildError.damagedV2Repo
                     }
                 }
             } catch let error as RepoBootstrap.BootstrapError {
@@ -178,10 +201,13 @@ enum BackupV2RuntimeBuilder {
         let commitWriter = CommitLogWriter(client: metadataClient, basePath: profile.basePath)
         let snapshotWriter = SnapshotWriter(client: metadataClient, basePath: profile.basePath)
 
-        // Observe peer clocks/seq before allocating so our writes can't land below them.
+        // Observe peer clock + our own remote seq high-water before allocating: the
+        // clock is global, but seq is namespaced per (writerID, seq) so only entries
+        // from our writer can collide. Taking a cross-writer max would waste seq
+        // density and produce non-contiguous commit filenames for our writer.
         let materializer = RepoMaterializer(client: client, basePath: profile.basePath)
         let output = try await materializer.materialize(expectedRepoID: resolvedRepoID)
-        let remoteSeqMax = output.observedSeqByWriter.values.max() ?? 0
+        let remoteSeqMax = output.observedSeqByWriter[writerID] ?? 0
         if remoteSeqMax > initialSeq {
             try await allocator.observeRemoteMax(remoteSeqMax)
         }

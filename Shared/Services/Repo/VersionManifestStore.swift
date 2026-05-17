@@ -64,7 +64,7 @@ nonisolated struct VersionManifestStore: Sendable {
         return .found(VersionManifest(
             formatVersion: formatVersion,
             minAppVersion: dict["min_app_version"] as? String,
-            createdAtMs: (dict["created_at_ms"] as? Int64) ?? (dict["created_at_ms"] as? Int).map(Int64.init),
+            createdAtMs: Self.strictInt64(dict["created_at_ms"]),
             createdByWriter: dict["created_by_writer"] as? String
         ))
     }
@@ -202,6 +202,16 @@ nonisolated struct VersionManifestStore: Sendable {
         guard let raw else { return nil }
         if CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID() { return nil }
         return raw as? Int
+    }
+
+    /// Same CFBoolean defense as `strictFormatVersion`, applied to ms-since-epoch fields so
+    /// `created_at_ms: true` cannot bridge to `1` and anchor a future writer at 1 ms.
+    private static func strictInt64(_ raw: Any?) -> Int64? {
+        guard let raw else { return nil }
+        if CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID() { return nil }
+        if let value = raw as? Int64 { return value }
+        if let value = raw as? Int { return Int64(value) }
+        return nil
     }
 
     private func metadataFileIfPresent(path: String) async throws -> RemoteStorageEntry? {

@@ -387,7 +387,13 @@ actor V1MigrationService {
 
     private func deleteIfPresent(path: String) async throws {
         guard try await metadataIfPresent(path: path) != nil else { return }
-        try await client.delete(path: path)
+        do {
+            try await client.delete(path: path)
+        } catch {
+            // Peer racing the same cleanup can remove the file between metadata and delete;
+            // non-idempotent backends surface that as an error. Treat not-found as success.
+            if !isStorageNotFoundError(error) { throw error }
+        }
     }
 
     private func writePartialMigrationMarker(
