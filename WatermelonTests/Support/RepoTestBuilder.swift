@@ -31,6 +31,10 @@ struct RepoTestBuilder {
     ) async throws -> RepoTestBuilder {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
+        // AMSMB2 production parity: atomicCreate is overwritePossible but moveIfAbsent
+        // is exclusive — the gate's staging→moveIfAbsent path closes the silent
+        // peer-commit overwrite hazard.
+        client.setMoveIfAbsentGuarantee(.exclusive)
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")

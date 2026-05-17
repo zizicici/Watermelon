@@ -385,12 +385,21 @@ final class BackgroundBackupRunner {
                 continue
             }
 
-            if monthStore.physicallyMissingHashesAreAuthoritative {
-                assetProcessor.remoteIndexService.markPhysicallyMissingV2(
-                    month: monthKey,
-                    hashes: monthStore.physicallyMissingHashesSnapshot()
-                )
-            }
+            // Parity with BackupParallelExecutor: publish the per-month materialize()
+            // snapshot so committedView reflects newer commits this month-pass observed
+            // beyond the initial syncIndex/materialize, and keep
+            // physicalPresenceOverlayFreshMonths aligned with physicallyMissingHashesAreAuthoritative.
+            // The BG runner owns its own RemoteIndexSyncService — this state is not visible to FG.
+            let loadedSnapshot = monthStore.unsortedSnapshot()
+            assetProcessor.remoteIndexService.replaceCachedMonth(
+                monthKey,
+                resources: loadedSnapshot.resources,
+                assets: loadedSnapshot.assets,
+                links: loadedSnapshot.links,
+                physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
+                    ? monthStore.physicallyMissingHashesSnapshot()
+                    : nil
+            )
 
             let fetchBatchSize = 500
             for batchStart in stride(from: 0, to: assetIDs.count, by: fetchBatchSize) {

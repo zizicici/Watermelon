@@ -123,6 +123,44 @@ final class RepoIdentitySourcesTests: XCTestCase {
         }
     }
 
+    /// Wiped-and-reused remote: profile previously backed up to repo A, the user
+    /// wiped the remote, and a later `.fresh` init created a row for repo B.
+    /// `collect` must pick the exact (profileID, remoteRepoID) row instead of the
+    /// stale higher-`lastSeq` row for repo A, otherwise the user gets stuck in a
+    /// false `repoIdentityMismatch` loop every run.
+    func testCollect_wipedAndReusedRemote_prefersExactRowOverStalePerProfileFallback() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "fresh-repo-B")
+
+        let identity = RepoIdentity(database: databaseManager)
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID, repoID: "old-wiped-A",
+                writerID: "w", lastClock: 500, lastSeq: 200,
+                migrationCompleted: 1
+            ).insert(db)
+            try RepoStateRecord(
+                profileID: profileID, repoID: "fresh-repo-B",
+                writerID: "w", lastClock: 0, lastSeq: 0,
+                migrationCompleted: 0
+            ).insert(db)
+        }
+
+        let sources = try await RepoIdentitySources.collect(
+            profileID: profileID,
+            identity: identity,
+            client: client,
+            basePath: basePath,
+            format: RemoteFormatCompatibilityService()
+        )
+
+        XCTAssertEqual(sources.stored, "fresh-repo-B")
+        XCTAssertEqual(sources.remote, "fresh-repo-B")
+        XCTAssertEqual(sources.suggested, "fresh-repo-B")
+    }
+
     /// Stored DB repoID disagreeing with remote `repo.json` claim means the profile
     /// was re-pointed at a foreign remote — must throw, not silently write commits.
     func testCollect_storedDisagreesWithRemote_throwsMismatch() async throws {

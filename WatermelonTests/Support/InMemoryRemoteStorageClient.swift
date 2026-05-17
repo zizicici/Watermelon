@@ -37,6 +37,11 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     /// `path` stores the injected bytes (NOT the uploaded ones) and returns
     /// `.bestEffortRetry`, simulating a peer who raced ahead on a non-atomic backend.
     private var bestEffortRaceBytes: [String: Data] = [:]
+    /// One-shot injection for `.bestEffort` mode — when set, the next atomicCreate at
+    /// `path` OVERWRITES whatever bytes are currently there with the uploader's bytes
+    /// and returns `.bestEffortRetry`, simulating SMB's `exists+upload` TOCTOU where
+    /// the existence check raced ahead and our upload silently replaced a peer's file.
+    private var bestEffortOverwritePaths: Set<String> = []
     /// Per-path operation injection — when set, the next matching call throws this error
     /// once. Cleared after firing so tests can chain "fail once, then succeed".
     private var listErrorByPath: [String: InjectedError] = [:]
@@ -73,6 +78,23 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     /// caller's uploaded bytes). Use to exercise the verify-on-remote retry path.
     func stageBestEffortRace(at path: String, with bytes: Data) {
         bestEffortRaceBytes[Self.normalize(path)] = bytes
+    }
+
+    /// Stage a one-shot bestEffort overwrite of an existing path. Models the
+    /// SMB-style `exists+upload` TOCTOU: a peer's bytes are present at `path`, but
+    /// the next `atomicCreate(remotePath:)` silently replaces them with the local
+    /// uploader's bytes and returns `.bestEffortRetry`. Without this hook the
+    /// in-memory client short-circuits `.alreadyExists` and cannot reproduce the
+    /// silent-overwrite race.
+    func stageBestEffortOverwriteOfExistingPath(at path: String) {
+        bestEffortOverwritePaths.insert(Self.normalize(path))
+    }
+
+    /// Returns true when an unfired `stageBestEffortOverwriteOfExistingPath(at:)` hook
+    /// is still armed for `path`. Use to assert a caller never reached the final-path
+    /// `atomicCreate` codepath (e.g. `CommitLogWriter` must stage via UUID side path).
+    func isBestEffortOverwriteStaged(at path: String) -> Bool {
+        bestEffortOverwritePaths.contains(Self.normalize(path))
     }
 
     /// Pre-populate a file at `path` with `data`. Use this to stage half-bootstrapped
@@ -284,6 +306,15 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
             ensureDirectoryChain(for: key)
             return .created
         case .bestEffort:
+            // Silent-overwrite race: peer's bytes are present, but our `exists` check
+            // raced ahead at T0 and `upload` at T1 replaces them — mirrors AMSMB2's
+            // `uploadItem(toPath:)` semantics on a same-key collision.
+            if bestEffortOverwritePaths.remove(key) != nil {
+                let data = try Data(contentsOf: localURL)
+                files[key] = data
+                ensureDirectoryChain(for: key)
+                return .bestEffortRetry
+            }
             if files[key] != nil { return .alreadyExists }
             if let raceBytes = bestEffortRaceBytes.removeValue(forKey: key) {
                 files[key] = raceBytes
@@ -359,9 +390,13 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee {
         moveIfAbsentGuaranteeBox.withLock { $0 }
     }
-    /// Default mirrors the protocol's fail-closed `.overwritePossible` so the gate exercises probe + finalization branches.
-    /// Tests modeling LocalVolume / S3-conditional opt into `.exclusive` via `setMoveIfAbsentGuarantee`.
-    private nonisolated let moveIfAbsentGuaranteeBox = OSAllocatedUnfairLock(initialState: CreateGuarantee.overwritePossible)
+    /// Default mirrors AMSMB2 (production's most-used overwrite-possible backend):
+    /// `atomicCreate` is `.overwritePossible` but `moveIfAbsent` is `.exclusive`. This
+    /// is what `CommitLogWriter`'s gate routing now requires to surface peer collisions
+    /// as `.alreadyExists` instead of silently overwriting. Tests modeling other shapes
+    /// (`.overwritePossible` moveIfAbsent for the gate's copy-fallback path, or
+    /// LocalVolume-style fully-exclusive) opt in via `setMoveIfAbsentGuarantee`.
+    private nonisolated let moveIfAbsentGuaranteeBox = OSAllocatedUnfairLock(initialState: CreateGuarantee.exclusive)
 
     /// Lets per-test scenarios swap `.exclusive` ↔ `.overwritePossible` to exercise the gate's two finalization paths.
     nonisolated func setMoveIfAbsentGuarantee(_ guarantee: CreateGuarantee) {

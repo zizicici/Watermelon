@@ -21,19 +21,32 @@ struct RepoIdentitySources: Sendable {
         format: RemoteFormatCompatibilityService
     ) async throws -> RepoIdentitySources {
         let bootstrap = RepoBootstrap(client: client, basePath: basePath)
-        let stored = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
         let remote = try await bootstrap.loadRepoID()
-        if let stored, let remote, stored != remote {
-            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: stored, remote: remote)
-        }
         let data = try await checkedExistingV2DataRepoID(
-            storedRepoID: stored,
+            storedRepoID: nil,
             client: client,
             basePath: basePath,
             format: format
         )
         if let remote, let data, remote != data {
             throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: data, remote: remote)
+        }
+        // Prefer the exact (profileID, currentRepoID) row when the remote carries
+        // an identity; the per-profile fallback can otherwise surface a stale row
+        // for an old wiped-and-reused repo and trigger a false identity mismatch.
+        let currentRepoID = remote ?? data
+        let stored: String?
+        if let currentRepoID,
+           let exact = try await identity.loadRepoState(profileID: profileID, repoID: currentRepoID) {
+            stored = exact.repoID
+        } else {
+            stored = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID
+        }
+        if let stored, let remote, stored != remote {
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: stored, remote: remote)
+        }
+        if let stored, let data, stored != data {
+            throw BackupV2RuntimeBuildError.repoIdentityMismatch(local: stored, remote: data)
         }
         let suggested = remote ?? data ?? stored ?? UUID().uuidString.lowercased()
         return RepoIdentitySources(stored: stored, remote: remote, data: data, suggested: suggested)
