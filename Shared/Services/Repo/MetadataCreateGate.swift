@@ -69,11 +69,21 @@ enum MetadataCreateGate {
         let guarantee = client.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
         switch guarantee {
         case .exclusive:
-            let result = try await client.atomicCreate(
-                localURL: localURL,
-                remotePath: remotePath,
-                respectTaskCancellation: respectTaskCancellation
-            )
+            // URLSession-backed clients (S3) surface task cancellation as
+            // NSURLErrorCancelled, not literal CancellationError. Normalize at the
+            // gate boundary so direct callers (SnapshotWriter, V1MigrationService)
+            // see CancellationError instead of a wrapped finalization failure.
+            let result: AtomicCreateResult
+            do {
+                result = try await client.atomicCreate(
+                    localURL: localURL,
+                    remotePath: remotePath,
+                    respectTaskCancellation: respectTaskCancellation
+                )
+            } catch {
+                if Self.isCancellationError(error) { throw CancellationError() }
+                throw error
+            }
             // S3 single-part PUT phantom: server wrote our bytes but client timed out;
             // retry hits If-None-Match → 412 → .alreadyExists, but it's our own bytes.
             // Caller payloads embed writer-distinguishing fields (created_by_writer /
@@ -86,18 +96,29 @@ enum MetadataCreateGate {
                     }
                 } catch is CancellationError {
                     throw CancellationError()
+                } catch let error where CommitLogWriter.isTransientVerifyDownloadFailure(error) {
+                    // Transient — fall through to surface .alreadyExists for caller-side retry.
                 } catch {
-                    // Verify inconclusive — fall through to surface .alreadyExists as-is.
+                    // Permanent verify failure (permission, auth, config) must not be silently
+                    // demoted to .alreadyExists; the actionable cause would be masked by the
+                    // caller's collision interpretation.
+                    throw Error.finalVerificationFailed(remotePath: remotePath, underlying: error)
                 }
             }
             return CreateOutcome(result: result, verifiedAgainstLocalContent: false)
         case .overwritePossible:
             let stagingPath = "\(remotePath).staging-\(UUID().uuidString)"
-            let stagingResult = try await client.atomicCreate(
-                localURL: localURL,
-                remotePath: stagingPath,
-                respectTaskCancellation: respectTaskCancellation
-            )
+            let stagingResult: AtomicCreateResult
+            do {
+                stagingResult = try await client.atomicCreate(
+                    localURL: localURL,
+                    remotePath: stagingPath,
+                    respectTaskCancellation: respectTaskCancellation
+                )
+            } catch {
+                if Self.isCancellationError(error) { throw CancellationError() }
+                throw error
+            }
             switch stagingResult {
             case .created, .bestEffortRetry:
                 break
@@ -152,14 +173,24 @@ enum MetadataCreateGate {
                     } catch is CancellationError {
                         try? await client.delete(path: stagingPath)
                         throw CancellationError()
+                    } catch let error where CommitLogWriter.isTransientVerifyDownloadFailure(error) {
+                        // Transient — fall through; caller re-allocates seq and retries.
                     } catch {
-                        // Verify inconclusive — fall through to `.alreadyExists`.
+                        // Permanent verify failure (permission, auth, config) must escape so
+                        // the actionable cause isn't masked by a phantom `.alreadyExists` retry.
+                        try? await client.delete(path: stagingPath)
+                        throw Error.finalVerificationFailed(remotePath: remotePath, underlying: error)
                     }
                     try? await client.delete(path: stagingPath)
                     return CreateOutcome(result: .alreadyExists, verifiedAgainstLocalContent: false)
                 }
             } catch {
                 try? await client.delete(path: stagingPath)
+                // URLSession-shaped cancellation can leak from moveIfAbsent / copy /
+                // metadata on URLSession-backed clients; normalize so direct callers
+                // (SnapshotWriter, V1MigrationService) get CancellationError instead
+                // of a wrapped finalization failure.
+                if Self.isCancellationError(error) { throw CancellationError() }
                 throw error
             }
             try? await client.delete(path: stagingPath)
@@ -176,6 +207,15 @@ enum MetadataCreateGate {
                 throw CancellationError()
             } catch let error as Error {
                 throw error
+            } catch let error where Self.isCancellationError(error) {
+                throw CancellationError()
+            } catch let error where CommitLogWriter.isTransientVerifyDownloadFailure(error) {
+                // Bytes ARE at the destination (move/copy succeeded) but readback was
+                // inconclusive. Surface as .bestEffortRetry so callers (SnapshotWriter,
+                // MigrationMarkerStore, RepoBootstrap) can apply their own policy —
+                // e.g. SnapshotWriter logs and relies on commit-log rebuild — instead
+                // of aborting on a recoverable transport failure.
+                return CreateOutcome(result: .bestEffortRetry, verifiedAgainstLocalContent: false)
             } catch {
                 throw Error.finalVerificationFailed(remotePath: remotePath, underlying: error)
             }
@@ -213,9 +253,11 @@ enum MetadataCreateGate {
                     return true
                 }
                 lastError = nil
-            } catch is CancellationError {
-                throw CancellationError()
             } catch {
+                // URLSession-backed cancellation arrives as NSURLErrorCancelled (raw or wrapped);
+                // without normalization the retry loop swallows it as lastError, then upstream
+                // demotes it to .alreadyExists/verify-inconclusive and the user-stop is lost.
+                if Self.isCancellationError(error) { throw CancellationError() }
                 lastError = error
             }
             // Same-size stale reads after our own write also need the grace window;
@@ -227,6 +269,26 @@ enum MetadataCreateGate {
             try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
             attempt += 1
         }
+    }
+
+    private static func isCancellationError(_ error: Swift.Error) -> Bool {
+        if error is CancellationError { return true }
+        if let storageError = error as? RemoteStorageClientError {
+            switch storageError {
+            case .underlying(let underlying):
+                return isCancellationError(underlying)
+            default:
+                return false
+            }
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Swift.Error {
+            return isCancellationError(underlying)
+        }
+        return false
     }
 
     private static func verifyMatchesLocal(

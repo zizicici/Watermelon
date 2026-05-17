@@ -432,6 +432,47 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         await services.shutdown()
     }
 
+    /// The targeted self-sweep must run independent of `supportsLivenessSafeRenewal`.
+    /// On SMB/SFTP (renewal-unsafe) the general sweep is correctly skipped, but
+    /// liveness.start() still produces staging files on every non-local-volume backend,
+    /// so own crash residue would accumulate forever if the self-sweep were also gated.
+    func testSelfLivenessSweep_runsEvenWhenRenewalUnsafe() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        // Simulate SMB / SFTP: neither renewal atom is safe → supportsLivenessSafeRenewal == false.
+        metadataClient.setSupportsLivenessSafeOverwriteMove(false)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+        let identity = RepoIdentity(database: databaseManager)
+        let ourWriterID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+
+        // Plant aged own-writer liveness staging residue on the metadata client (where
+        // liveness ticks land), older than the 1h sweep threshold.
+        let ownStagingName = "\(ourWriterID).json.staging-\(UUID().uuidString).tmp"
+        let ownStagingPath = "\(basePath)/.watermelon/liveness/\(ownStagingName)"
+        await metadataClient.injectFile(path: ownStagingPath, contents: "stranded heartbeat")
+        await metadataClient.setModificationDateForTest(Date(timeIntervalSinceNow: -7200), path: ownStagingPath)
+
+        let services = try await BackupV2RuntimeBuilder.build(
+            client: client,
+            metadataClient: metadataClient,
+            profile: profile,
+            databaseManager: databaseManager,
+            allowMigration: false,
+            onBootstrap: { }
+        )
+        // shutdown to stop liveness ticks before assertion (would otherwise race with new tick writes).
+        await services.shutdown()
+
+        let stillThere = await metadataClient.hasFile(ownStagingPath)
+        XCTAssertFalse(stillThere,
+                       "self-sweep must reclaim aged own liveness staging even on renewal-unsafe backends (SMB/SFTP) — otherwise own crash residue is immortal")
+    }
+
     private func insertProfile() throws -> ServerProfileRecord {
         let id = try TestFixtures.insertServerProfile(in: databaseManager, basePath: basePath, storageType: .webdav)
         return TestFixtures.makeServerProfile(id: id, storageType: .webdav, basePath: basePath)

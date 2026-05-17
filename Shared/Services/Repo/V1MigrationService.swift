@@ -238,7 +238,8 @@ actor V1MigrationService {
                         resourceType: resource.resourceType,
                         creationDateMs: body.creationDateMs,
                         backedUpAtMs: body.backedUpAtMs,
-                        crypto: resource.crypto
+                        crypto: resource.crypto,
+                        stamp: stamp
                     )
                     state.assetResources[
                         AssetResourceKey(

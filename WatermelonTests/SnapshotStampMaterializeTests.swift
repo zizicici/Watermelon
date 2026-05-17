@@ -311,6 +311,132 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         }
     }
 
+    // MARK: - Test 6: Path-level LWW — stale uncovered add must not clobber newer covered resource row
+
+    /// Two different asset fingerprints wrote the same physicalRemotePath. Writer B's
+    /// newer commit (clock=200, different fp) is covered by the snapshot baseline;
+    /// Writer A's older commit (clock=100, different fp) is uncovered. Pre-fix, the
+    /// replay loop unconditionally assigned state.resources[P] = stale H1, replacing
+    /// B's H2 baseline row. With per-path stamps, the LWW gate must skip the overwrite.
+    func testStaleUncoveredAddDoesNotOverwriteNewerResourceRowAtSamePath() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+
+        let fpA = TestFixtures.fingerprint(0xA5)
+        let fpB = TestFixtures.fingerprint(0xA6)
+        let hashH1 = TestFixtures.fingerprint(0xC5)
+        let hashH2 = TestFixtures.fingerprint(0xC6)
+        let sharedPath = "2026/03/shared.jpg"
+
+        // A's older uncovered commit writes path -> H1 at clock 100.
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 1, clockMin: 100, clockMax: 100, writerID: writerA),
+            ops: [CommitOp(opSeq: 0, clock: 100, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fpA, creationDateMs: nil, backedUpAtMs: 1,
+                resources: [resourceEntry(path: sharedPath, hash: hashH1)]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+        // B's newer covered commit writes path -> H2 at clock 200.
+        _ = try await commitWriter.write(
+            header: makeHeader(seq: 1, clockMin: 200, clockMax: 200, writerID: writerB),
+            ops: [CommitOp(opSeq: 0, clock: 200, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fpB, creationDateMs: nil, backedUpAtMs: 2,
+                resources: [resourceEntry(path: sharedPath, hash: hashH2)]
+            )))],
+            month: month, respectTaskCancellation: false
+        )
+
+        var covered = CoveredRanges()
+        covered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
+        let bStamp = OpStamp(writerID: writerB, seq: 1, clock: 200)
+        let snapState = RepoMonthState(
+            assets: [fpB: SnapshotAssetRow(
+                assetFingerprint: fpB, creationDateMs: nil, backedUpAtMs: 2,
+                resourceCount: 1, totalFileSizeBytes: 100, stamp: bStamp
+            )],
+            resources: [
+                sharedPath: SnapshotResourceRow(
+                    physicalRemotePath: sharedPath,
+                    contentHash: hashH2,
+                    fileSize: 100, resourceType: ResourceTypeCode.photo,
+                    creationDateMs: nil, backedUpAtMs: 2, crypto: nil,
+                    stamp: bStamp
+                )
+            ],
+            assetResources: [
+                AssetResourceKey(assetFingerprint: fpB, role: ResourceTypeCode.photo, slot: 0):
+                    SnapshotAssetResourceRow(
+                        assetFingerprint: fpB, role: ResourceTypeCode.photo, slot: 0,
+                        resourceHash: hashH2, logicalName: "shared.jpg"
+                    )
+            ],
+            deletedAssetFingerprints: []
+        )
+        let parts = RepoSnapshotBuilder.build(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB, repoID: repoID, covered: covered
+            ),
+            state: snapState
+        )
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB, repoID: repoID, covered: covered
+            ),
+            assets: parts.assets, resources: parts.resources,
+            assetResources: parts.assetResources, deletedKeys: parts.deletedKeys,
+            month: month, lamport: 200, runID: "run-snap-pathLWW",
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+        let row = try XCTUnwrap(monthState.resources[sharedPath])
+        XCTAssertEqual(row.contentHash, hashH2,
+                       "stale uncovered add at clock=100 must NOT replace baseline H2 row at the shared path")
+        XCTAssertEqual(row.stamp?.clock, 200, "winning row's stamp must be B's")
+        // Both assets still recorded — neither's add is dropped, only the per-path
+        // resource overwrite is gated.
+        XCTAssertNotNil(monthState.assets[fpA])
+        XCTAssertNotNil(monthState.assets[fpB])
+    }
+
+    /// Pure round-trip: SnapshotResourceRow with a stamp must encode and decode losslessly.
+    func testResourceRowStampSurvivesWireRoundTrip() throws {
+        let row = SnapshotResourceRow(
+            physicalRemotePath: "2026/05/IMG.HEIC",
+            contentHash: Data(repeating: 0x12, count: 32),
+            fileSize: 1234,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: 99,
+            backedUpAtMs: 100,
+            crypto: nil,
+            stamp: OpStamp(writerID: "writer-A", seq: 9, clock: 77)
+        )
+        let line = try SnapshotRowMapper.encodeResourceLine(row)
+        let decoded = try SnapshotRowMapper.decodeLine(line)
+        guard case .resource(let parsed) = decoded else { XCTFail("resource"); return }
+        XCTAssertEqual(parsed, row)
+        XCTAssertEqual(parsed.stamp?.clock, 77)
+    }
+
+    /// Legacy resource rows without the stamp triple must decode as stamp=nil. The
+    /// materializer then degrades gracefully to last-write-wins-by-replay-order on
+    /// any path whose baseline came from a legacy snapshot.
+    func testLegacyResourceRowWithoutStampDecodes() throws {
+        let raw = #"{"t":"resource","r":{"physicalRemotePath":"2026/05/IMG.HEIC","contentHash":"\#(String(repeating: "ab", count: 32))","fileSize":100,"resourceType":1,"creationDateMs":null,"backedUpAtMs":100,"crypto":null}}"#
+        let decoded = try SnapshotRowMapper.decodeLine(raw)
+        guard case .resource(let parsed) = decoded else { XCTFail("resource"); return }
+        XCTAssertNil(parsed.stamp, "legacy resource rows must decode with stamp=nil")
+    }
+
     // MARK: - Helpers
 
     private func makeHeader(seq: UInt64, clockMin: UInt64, clockMax: UInt64, writerID: String) -> CommitHeader {

@@ -326,15 +326,27 @@ actor RepoMaterializer {
                     stamp: incoming
                 )
                 for resource in body.resources {
-                    state.resources[resource.physicalRemotePath] = SnapshotResourceRow(
-                        physicalRemotePath: resource.physicalRemotePath,
-                        contentHash: resource.contentHash,
-                        fileSize: resource.fileSize,
-                        resourceType: resource.resourceType,
-                        creationDateMs: body.creationDateMs,
-                        backedUpAtMs: body.backedUpAtMs,
-                        crypto: resource.crypto
-                    )
+                    // Path-level LWW: a stale uncovered add (different fp) replaying against a
+                    // newer covered/baseline row at the same path would otherwise unconditionally
+                    // overwrite, leaving state.resources pointing at bytes that were already
+                    // superseded by another writer.
+                    if let existing = state.resources[resource.physicalRemotePath]?.stamp,
+                       opStampPrecedes(incoming, existing) {
+                        // Skip the resource row overwrite only — the asset/assetResources rows
+                        // still need to land so this asset's bookkeeping (incomplete-resource
+                        // detection etc) reflects reality.
+                    } else {
+                        state.resources[resource.physicalRemotePath] = SnapshotResourceRow(
+                            physicalRemotePath: resource.physicalRemotePath,
+                            contentHash: resource.contentHash,
+                            fileSize: resource.fileSize,
+                            resourceType: resource.resourceType,
+                            creationDateMs: body.creationDateMs,
+                            backedUpAtMs: body.backedUpAtMs,
+                            crypto: resource.crypto,
+                            stamp: incoming
+                        )
+                    }
                     let key = AssetResourceKey(
                         assetFingerprint: body.assetFingerprint,
                         role: resource.role,

@@ -125,6 +125,15 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertEqual(stamp.writerID, writerID)
         XCTAssertGreaterThan(stamp.seq, 0)
         XCTAssertGreaterThan(stamp.clock, 0)
+
+        // Resource row needs the same stamp so cross-writer path-level LWW (after
+        // V1 migration) is also gated by opStampPrecedes. Without it, a peer's
+        // stale uncovered add at the same physicalRemotePath would silently
+        // overwrite the migration row on next materialize.
+        let resourceStamp = try XCTUnwrap(monthState.resources[resourcePath]?.stamp,
+                                          "migration-produced resource row must carry an OpStamp")
+        XCTAssertEqual(resourceStamp, stamp,
+                       "resource row stamp must match its producing asset's stamp (same writer/seq/clock)")
     }
 
     func testPhase1WritesMigrationMarkerNotVersionJSON() async throws {
@@ -433,6 +442,86 @@ final class V1MigrationServiceTests: XCTestCase {
         // Non-mutating injection contract: a propagated error leaves the file in place.
         let manifestStillPresent = await client.hasFile(manifestPath)
         XCTAssertTrue(manifestStillPresent, ".permission injection must not mutate fake storage")
+    }
+
+    /// End-to-end cancellation contract: when URLSession-shape cancellation fires
+    /// inside `CommitLogWriter.atomicCreate` mid-migration, `runFullMigration` must
+    /// throw `CancellationError` — not a `CommitLogWriter.WriteError` variant, not
+    /// retry-exhausted `.alreadyExists`. Per-writer cancellation contracts are pinned
+    /// separately; this test guards the seam: a regression in gate normalization,
+    /// writer catch ordering, or `shouldRetryMigrationCommitWrite`'s classifier
+    /// (any one) breaks end-to-end while individual unit tests still pass.
+    func testRunFullMigration_atomicCreateURLErrorCancelled_propagatesCancellation() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        // `.exclusive` so the writer's direct atomicCreate boundary fires (not the
+        // gate's staging path). InMemoryRemoteStorageClient's atomicCreate honors
+        // `injectAtomicCreateURLErrorCancelled` regardless of the configured guarantee.
+        client.setAtomicCreateGuarantee(.exclusive)
+
+        let assetFP = TestFixtures.fingerprint(0xCE)
+        let contentHash = TestFixtures.fingerprint(0xCF)
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: assetFP,
+            resourceHash: contentHash,
+            logicalName: "IMG_cancel.HEIC"
+        )
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 6)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let repoID = "test-repo-id"
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: writerID)
+
+        // SeqAllocator on a fresh repo allocates seq=1 — pin URL-cancel on that
+        // exact path so the cancel fires at the commit-write boundary inside
+        // V1MigrationService.runPhase1's commit loop.
+        let commitPath = RepoLayout.commitFilePath(
+            base: basePath,
+            month: LibraryMonthKey(year: 2025, month: 6),
+            writerID: writerID,
+            seq: 1
+        )
+        await client.injectAtomicCreateURLErrorCancelled(for: commitPath)
+
+        let service = makeService(client: client, profileID: profileID)
+        do {
+            _ = try await service.runFullMigration(
+                profileID: profileID,
+                repoID: repoID,
+                writerID: writerID,
+                runID: "run-cancel"
+            )
+            XCTFail("expected CancellationError to propagate end-to-end through runFullMigration")
+        } catch is CancellationError {
+            // expected — gate normalizes URL-cancel → writer surfaces CancellationError →
+            // shouldRetryMigrationCommitWrite returns false for cancellation → propagates
+        } catch CommitLogWriter.WriteError.alreadyExists {
+            XCTFail("URL-cancel must NOT exhaust the migrationMaxRetries loop and surface as .alreadyExists")
+        } catch CommitLogWriter.WriteError.ioFailure(let underlying) {
+            XCTFail("URL-cancel must NOT wrap as .ioFailure (got: \(underlying))")
+        } catch SnapshotWriter.WriteError.finalizationFailed(let underlying) {
+            XCTFail("URL-cancel must NOT wrap as SnapshotWriter.finalizationFailed (got: \(underlying))")
+        } catch SnapshotWriter.WriteError.ioFailure(let underlying) {
+            XCTFail("URL-cancel must NOT wrap as SnapshotWriter.ioFailure (got: \(underlying))")
+        } catch V1MigrationService.MigrationError.ioFailure(let underlying) {
+            XCTFail("URL-cancel must NOT wrap as MigrationError.ioFailure (got: \(underlying))")
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+
+        // Profile must NOT be marked migrated when cancellation interrupts phase1 —
+        // a future run needs to re-enter migration, not skip to verifyFinalState.
+        let state = try await identity.loadRepoState(profileID: profileID, repoID: repoID)
+        XCTAssertEqual(state?.migrationCompleted, 0,
+                       "cancellation mid-phase1 must leave migrationCompleted=0 so the next run resumes")
+        // V1 manifest must survive cancellation; quarantine only fires after a
+        // successful commit+snapshot publish.
+        let v1Survived = await client.hasFile(manifestPath)
+        XCTAssertTrue(v1Survived,
+                      "phase1 cancellation must NOT quarantine the V1 manifest — next run must still see it")
     }
 
     // MARK: - Helpers

@@ -44,6 +44,31 @@ struct SnapshotResourceRow: Equatable, Sendable {
     let creationDateMs: Int64?
     let backedUpAtMs: Int64
     let crypto: ResourceCryptoMetadata?
+    /// Producing addAsset's stamp. Path-level LWW: a stale uncovered add at the
+    /// same `physicalRemotePath` (different fp) must not overwrite a newer row
+    /// already baked into the baseline. nil = legacy snapshot row, LWW gate falls
+    /// back to last-write-wins-by-replay-order (pre-stamp behaviour).
+    let stamp: OpStamp?
+
+    init(
+        physicalRemotePath: String,
+        contentHash: Data,
+        fileSize: Int64,
+        resourceType: Int,
+        creationDateMs: Int64?,
+        backedUpAtMs: Int64,
+        crypto: ResourceCryptoMetadata?,
+        stamp: OpStamp? = nil
+    ) {
+        self.physicalRemotePath = physicalRemotePath
+        self.contentHash = contentHash
+        self.fileSize = fileSize
+        self.resourceType = resourceType
+        self.creationDateMs = creationDateMs
+        self.backedUpAtMs = backedUpAtMs
+        self.crypto = crypto
+        self.stamp = stamp
+    }
 }
 
 struct SnapshotAssetResourceRow: Equatable, Sendable {

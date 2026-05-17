@@ -14,7 +14,17 @@ import os
 actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     // In-memory `move` unconditionally overwrites the destination dictionary entry.
-    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool {
+        livenessSafeOverwriteMoveBox.withLock { $0 }
+    }
+    private nonisolated let livenessSafeOverwriteMoveBox = OSAllocatedUnfairLock(initialState: true)
+    /// Test hook: flip to `false` to simulate SMB / SFTP-style backends where neither
+    /// renewal atom is safe. `supportsLivenessSafeRenewal` (OR of upload + move)
+    /// becomes false and `BackupV2RuntimeBuilder` declines the general orphan sweep
+    /// while still running the targeted self-sweep.
+    nonisolated func setSupportsLivenessSafeOverwriteMove(_ value: Bool) {
+        livenessSafeOverwriteMoveBox.withLock { $0 = value }
+    }
     enum AtomicCreateMode: Sendable {
         case strictlyAtomic     // POSIX O_EXCL / S3 If-None-Match — returns .created
         case bestEffort         // SMB exists+upload — returns .bestEffortRetry on success
@@ -59,6 +69,16 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     func setAtomicCreateMode(_ mode: AtomicCreateMode) {
         atomicCreateMode = mode
     }
+
+    /// When set, `.alwaysAlreadyExists` mode plants these bytes at the destination
+    /// before returning `.alreadyExists` (only if no file is present). Models
+    /// production reality: `.alreadyExists` from a real backend means a peer's
+    /// bytes ARE at the path; tests that previously relied on the gate swallowing
+    /// the subsequent verify-notFound now stage faithful peer content instead.
+    func setAlwaysAlreadyExistsBaselineBytes(_ bytes: Data?) {
+        alwaysAlreadyExistsBaselineBytes = bytes
+    }
+    private var alwaysAlreadyExistsBaselineBytes: Data?
 
     /// Default mimics `.overwritePossible` so writers exercise the gate's
     /// staging-fallback path. `setAtomicCreateMode` only affects atomicCreate's
@@ -160,6 +180,45 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         downloadCancelByPath.insert(Self.normalize(path))
     }
     private var downloadCancelByPath: Set<String> = []
+
+    /// One-shot: next `download` at `path` throws an `NSURLErrorCancelled` shape
+    /// (same surface as URLSession when the underlying task is cancelled). Tests
+    /// can pin that callers normalize this to cancellation rather than wrapping
+    /// it as a transport / IO failure.
+    func injectDownloadURLErrorCancelled(for path: String) {
+        downloadURLCancelByPath.insert(Self.normalize(path))
+    }
+    private var downloadURLCancelByPath: Set<String> = []
+
+    /// One-shot: next `download` at `path` throws
+    /// `RemoteStorageClientError.underlying(NSURLErrorCancelled)`. Models a future
+    /// adapter layer that wraps URLSession errors into `.underlying` — exercises
+    /// the recursion arm of CommitLogWriter.isCancellationError so a regression
+    /// dropping that arm shows up as a test failure rather than a silent demotion
+    /// to ioFailure.
+    func injectDownloadWrappedURLCancellation(for path: String) {
+        downloadWrappedURLCancelByPath.insert(Self.normalize(path))
+    }
+    private var downloadWrappedURLCancelByPath: Set<String> = []
+
+    /// One-shot: next `atomicCreate` at `path` throws `NSURLErrorCancelled` shape
+    /// (S3 URLSession cancellation surface). Exercises CommitLogWriter's
+    /// cancellation normalization at the primary write boundary, not just the
+    /// verify-on-remote path.
+    func injectAtomicCreateURLErrorCancelled(for path: String) {
+        atomicCreateURLCancelByPath.insert(Self.normalize(path))
+    }
+    private var atomicCreateURLCancelByPath: Set<String> = []
+
+    /// One-shot: the next `download` at ANY path throws `NSURLErrorCancelled`.
+    /// `MetadataCreateGate.createWithStagingFallback` stages to a UUID side-path
+    /// the test can't predict, so per-path injection can't reach the gate's
+    /// staging-verify download. This path-agnostic hook lets tests pin the
+    /// gate-boundary cancellation normalization for that arm.
+    func injectNextDownloadURLErrorCancelled() {
+        nextDownloadURLCancelArmed = true
+    }
+    private var nextDownloadURLCancelArmed = false
 
     func injectUploadError(_ error: InjectedError, for path: String) {
         uploadErrorByPath[Self.normalize(path)] = error
@@ -315,6 +374,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         onProgress: ((Double) -> Void)?
     ) async throws -> AtomicCreateResult {
         let key = Self.normalize(remotePath)
+        if atomicCreateURLCancelByPath.remove(key) != nil {
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        }
         if let err = uploadErrorByPath.removeValue(forKey: key) {
             throw Self.translate(err)
         }
@@ -322,6 +384,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         onProgress?(1.0)
         switch atomicCreateMode {
         case .alwaysAlreadyExists:
+            if let baseline = alwaysAlreadyExistsBaselineBytes, files[key] == nil {
+                files[key] = baseline
+                ensureDirectoryChain(for: key)
+            }
             return .alreadyExists
         case .strictlyAtomic:
             if files[key] != nil { return .alreadyExists }
@@ -358,8 +424,20 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func download(remotePath: String, localURL: URL) async throws {
         let key = Self.normalize(remotePath)
+        if nextDownloadURLCancelArmed {
+            nextDownloadURLCancelArmed = false
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        }
         if downloadCancelByPath.remove(key) != nil {
             throw CancellationError()
+        }
+        if downloadURLCancelByPath.remove(key) != nil {
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        }
+        if downloadWrappedURLCancelByPath.remove(key) != nil {
+            throw RemoteStorageClientError.underlying(
+                NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+            )
         }
         if let stuck = persistentDownloadErrorByPath[key] {
             throw Self.translate(stuck)

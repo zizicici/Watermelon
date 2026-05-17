@@ -376,10 +376,14 @@ final class V2MonthIndexes {
     /// `upsertResource` overwrite. Rows must be built by the flusher with the same field
     /// projection RepoMaterializer uses on replay (asset body's creationDateMs/backedUpAtMs,
     /// resource entry's physicalRemotePath/contentHash/fileSize/resourceType/crypto).
+    /// `committedResourceClocks` maps each committed path to the clock of the producing
+    /// addAsset op; this method stamps each row with `OpStamp(writerID, seq, clock)` so the
+    /// path-level LWW gate in `RepoMaterializer` can skip a stale cross-writer overwrite.
     func recordCommit(
         assetClocks: [Data: UInt64],
         tombstoneClocks: [Data: UInt64],
         committedResources: [String: SnapshotResourceRow],
+        committedResourceClocks: [String: UInt64],
         writerID: String,
         seq: UInt64
     ) {
@@ -401,7 +405,17 @@ final class V2MonthIndexes {
             legacyDeletedAssetFingerprints.remove(fp)
         }
         for (path, row) in committedResources {
-            committedResourceByPath[path] = row
+            let stamp = committedResourceClocks[path].map { OpStamp(writerID: writerID, seq: seq, clock: $0) }
+            committedResourceByPath[path] = SnapshotResourceRow(
+                physicalRemotePath: row.physicalRemotePath,
+                contentHash: row.contentHash,
+                fileSize: row.fileSize,
+                resourceType: row.resourceType,
+                creationDateMs: row.creationDateMs,
+                backedUpAtMs: row.backedUpAtMs,
+                crypto: row.crypto,
+                stamp: stamp
+            )
         }
         pendingV2AssetFingerprints.removeAll()
         pendingV2TombstoneFingerprints.removeAll()

@@ -120,6 +120,11 @@ actor SnapshotWriter {
                 // backend that's chronically failing post-move verify.
                 snapshotWriterLog.warning("snapshot at \(finalPath, privacy: .public) wrote with unverified bytes; relying on commit log to rebuild on next read")
             }
+        } catch is CancellationError {
+            // Gate normalizes URL-shape cancellation to CancellationError; wrapping
+            // it as finalizationFailed loses the user-stop signal for callers like
+            // V1MigrationService that don't peel SnapshotWriter.WriteError.
+            throw CancellationError()
         } catch let error as WriteError {
             throw error
         } catch {

@@ -52,6 +52,9 @@ struct V2MonthCommitFlusher {
         // for the same commit. Later assets overwrite per path in op order, matching the
         // materializer's last-write-wins replay of multiple addAsset ops referencing one path.
         var committedResources: [String: SnapshotResourceRow] = [:]
+        // Per-path clock — recordCommit needs it to stamp the row with the producing op's
+        // (writerID, seq, clock). seq is unknown until allocator runs, so we defer stamping.
+        var committedResourceClocks: [String: UInt64] = [:]
 
         for fp in pending.assets {
             guard let asset = indexes.asset(forFingerprint: fp),
@@ -79,6 +82,7 @@ struct V2MonthCommitFlusher {
                     backedUpAtMs: asset.backedUpAtMs,
                     crypto: resource.crypto
                 )
+                committedResourceClocks[resource.physicalRemotePath] = clockCursor
             }
             ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .addAsset(CommitAddAssetBody(
                 assetFingerprint: fp,
@@ -141,6 +145,7 @@ struct V2MonthCommitFlusher {
             assetClocks: committedAddAssetClocks,
             tombstoneClocks: committedTombstoneClocks,
             committedResources: committedResources,
+            committedResourceClocks: committedResourceClocks,
             writerID: services.writerID,
             seq: lastSeq
         )

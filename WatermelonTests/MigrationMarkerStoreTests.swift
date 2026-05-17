@@ -411,9 +411,14 @@ final class MigrationMarkerStoreTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         // `.exclusive` makes the gate hit atomicCreate directly; `.alwaysAlreadyExists`
-        // forces every attempt to collide so the 4-retry budget exhausts.
+        // forces every attempt to collide so the 4-retry budget exhausts. Baseline
+        // peer bytes are planted so the gate's verify-after-alreadyExists download
+        // returns mismatched content (gate decides "not our bytes" → .alreadyExists)
+        // rather than failing with notFound (which the gate now correctly surfaces
+        // as a permanent verify failure).
         client.setAtomicCreateGuarantee(.exclusive)
         await client.setAtomicCreateMode(.alwaysAlreadyExists)
+        await client.setAlwaysAlreadyExistsBaselineBytes(Data("peer-bytes-distinct-from-marker".utf8))
         let store = MigrationMarkerStore(client: client, basePath: basePath)
 
         do {
@@ -422,6 +427,40 @@ final class MigrationMarkerStoreTests: XCTestCase {
         } catch let nsError as NSError {
             XCTAssertEqual(nsError.domain, "V1MigrationService")
             XCTAssertEqual(nsError.code, -43)
+        }
+    }
+
+    /// Gate `.exclusive` arm permanent-fail path through a non-writer caller.
+    /// On `.exclusive` + `.alwaysAlreadyExists` + a persistent download error
+    /// (e.g. permission denied) for the verify, the gate must surface
+    /// `.finalVerificationFailed(underlying:)` rather than silently demoting the
+    /// permanent failure to `.alreadyExists` and burning the 4-attempt budget.
+    /// MigrationMarkerStore doesn't catch the gate error — it propagates so the
+    /// caller sees the actionable cause.
+    func testWritePhase_exclusivePermanentVerifyFailure_propagatesGateError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setAtomicCreateGuarantee(.exclusive)
+        await client.setAtomicCreateMode(.alwaysAlreadyExists)
+        // Plant peer bytes so the gate sees a real `.alreadyExists`; the verify
+        // download then hits the persistent permission error, exercising the
+        // gate's `.exclusive` arm permanent-fail catch.
+        await client.setAlwaysAlreadyExistsBaselineBytes(Data("peer-bytes-distinct-from-marker".utf8))
+        let canonical = RepoLayout.migrationMarkerPath(base: basePath, writerID: validWriterID)
+        await client.injectPersistentDownloadError(.permission, for: canonical)
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+
+        do {
+            try await store.writePhase(writerID: validWriterID, phase: .phase1, runID: "run-z")
+            XCTFail("expected gate's finalVerificationFailed to propagate, not silent .alreadyExists retry")
+        } catch let gateError as MetadataCreateGate.Error {
+            guard case .finalVerificationFailed = gateError else {
+                XCTFail("expected .finalVerificationFailed, got \(gateError)")
+                return
+            }
+            // expected — the actionable permanent error is preserved up the stack.
+        } catch let nsError as NSError where nsError.domain == "V1MigrationService" && nsError.code == -43 {
+            XCTFail("permanent verify failure must NOT silently exhaust the 4-attempt budget")
         }
     }
 

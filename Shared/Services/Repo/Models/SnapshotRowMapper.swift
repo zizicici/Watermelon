@@ -54,6 +54,11 @@ enum SnapshotRowMapper {
         } else {
             inner["crypto"] = NSNull()
         }
+        if let stamp = row.stamp {
+            inner["lastWriterID"] = stamp.writerID
+            inner["lastSeq"] = stamp.seq
+            inner["lastClock"] = stamp.clock
+        }
         let dict: [String: Any] = ["t": "resource", "r": inner]
         return try CommitOpMapper.jsonLine(dict: dict)
     }
@@ -293,6 +298,7 @@ enum SnapshotRowMapper {
             )
         }
         let backedUpAtMs = try mapValidation { try RepoWireValidator.validateNonNegativeInt64(r["backedUpAtMs"], field: "backedUpAtMs") }
+        let stamp = try decodeOptionalStamp(r)
         return SnapshotResourceRow(
             physicalRemotePath: physicalRemotePath,
             contentHash: hash,
@@ -300,7 +306,8 @@ enum SnapshotRowMapper {
             resourceType: resourceType,
             creationDateMs: creation,
             backedUpAtMs: backedUpAtMs,
-            crypto: crypto
+            crypto: crypto,
+            stamp: stamp
         )
     }
 

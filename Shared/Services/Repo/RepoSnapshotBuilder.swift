@@ -41,7 +41,8 @@ enum RepoSnapshotBuilder {
                 resourceType: row.resourceType,
                 creationDateMs: row.creationDateMs,
                 backedUpAtMs: row.backedUpAtMs,
-                crypto: row.crypto
+                crypto: row.crypto,
+                stamp: row.stamp
             )
         }
         let assetResources = state.assetResources.values.map { row in

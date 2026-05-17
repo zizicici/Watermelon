@@ -992,6 +992,70 @@ final class V2FlushTests: XCTestCase {
                        "resource row's backedUpAtMs must come from asset body, not the live resource — replay derives it from body")
     }
 
+    /// Pins the path-level resource LWW pipeline end-to-end through the production
+    /// flush path: V2MonthCommitFlusher → committedResourceClocks →
+    /// V2MonthIndexes.recordCommit → currentMaterializedState → RepoSnapshotBuilder
+    /// → wire snapshot → RepoMaterializer. The post-flush materialize must
+    /// produce a resource row whose stamp matches the commit body's op clock
+    /// and the flusher's allocated seq. If a future refactor drops
+    /// `committedResourceClocks[...] = clockCursor` in V2MonthCommitFlusher, the
+    /// SnapshotStampMaterializeTests fixture (which hand-builds the baseline
+    /// stamp) would still pass; this test catches that regression by going
+    /// through the real flush path.
+    func testFlushV2_resourceRowStampPropagatesThroughProductionFlushPath() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let hash = TestFixtures.fingerprint(0xCC)
+        let path = "2026/01/stamped.jpg"
+        let resource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: path,
+            contentHash: hash, fileSize: 200,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 0
+        )
+        let asset = RemoteManifestAsset(
+            year: year, month: month,
+            assetFingerprint: TestFixtures.fingerprint(0xDD),
+            creationDateMs: 1_700_000_100_000,
+            backedUpAtMs: 1_700_000_200_000,
+            resourceCount: 1, totalFileSizeBytes: 200
+        )
+        let link = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: asset.assetFingerprint,
+            resourceHash: hash, role: ResourceTypeCode.photo, slot: 0,
+            logicalName: "stamped.jpg"
+        )
+        _ = try store.upsertResource(resource)
+        try store.upsertAsset(asset, links: [link])
+        _ = try await store.flushToRemote()
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[monthKey])
+        let resourceRow = try XCTUnwrap(monthState.resources[path],
+                                         "production flush must publish a resource row at the path")
+        let resourceStamp = try XCTUnwrap(resourceRow.stamp,
+                                           "production flush must stamp resource rows for path-level LWW")
+        let assetRow = try XCTUnwrap(monthState.assets[asset.assetFingerprint])
+        let assetStamp = try XCTUnwrap(assetRow.stamp,
+                                        "production flush must stamp asset rows")
+        XCTAssertEqual(resourceStamp.writerID, writerID,
+                       "stamp.writerID must be the flusher's writerID")
+        XCTAssertEqual(resourceStamp.writerID, assetStamp.writerID,
+                       "resource and asset stamps share the producing op's writerID")
+        XCTAssertEqual(resourceStamp.seq, assetStamp.seq,
+                       "resource and asset stamps share the producing op's allocator seq")
+        XCTAssertEqual(resourceStamp.clock, assetStamp.clock,
+                       "resource stamp clock must match the producing addAsset op's clock")
+        XCTAssertGreaterThan(resourceStamp.clock, 0)
+        XCTAssertGreaterThan(resourceStamp.seq, 0)
+    }
+
     /// Re-upserting at the same physicalRemotePath with a different content hash must
     /// not leave the old (oldHash → path) mapping dangling. A stale entry would make
     /// `findResourceByHash(oldHash)` return the slot — now containing the new content —
