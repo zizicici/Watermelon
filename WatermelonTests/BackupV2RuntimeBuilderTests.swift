@@ -161,6 +161,40 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
+    /// `.v2WithV1Manifests` arm: a V2-shaped repo with V1 manifest residue and a
+    /// malformed `.watermelon/repo.json` must surface as `damagedV2Repo` — same
+    /// actionable diagnosis as the `.v2` arm. Locks in the joint-case catch at
+    /// BackupV2RuntimeBuilder.swift:164-169 so a future refactor that drops the
+    /// catch (or narrows the joint case) is caught by tests.
+    func testV2WithV1Manifests_corruptRepoJSON_throwsDamagedV2Repo() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        // Malformed bytes at the repo identity path force BootstrapError.ioFailure
+        // from RepoIdentitySources.collect → bootstrap.loadRepoID → loadRepoJSONStrict
+        // before V1MigrationService is invoked.
+        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), contents: "{not-json")
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        do {
+            _ = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: true
+            )
+            XCTFail("expected damagedV2Repo")
+        } catch BackupV2RuntimeBuildError.damagedV2Repo {
+            // expected
+        }
+    }
+
     /// V2 path runs ensureRepoJSON to repair a half-bootstrap state where
     /// version.json exists but repo.json was lost.
     func testV2Repo_halfBootstrap_repoMissing_isHealedByEnsureRepoJSON() async throws {

@@ -98,6 +98,31 @@ final class LivenessTrackerTests: XCTestCase {
         XCTAssertFalse(view.isComplete)
     }
 
+    /// JSON booleans bridge through `as? Int` (true→1), which would parse a corrupt
+    /// `{"ts": true}` heartbeat as ts=1ms and mark the peer ancient-stale — letting
+    /// sweep delete a live peer's staging. `LivenessTracker.strictInt64` rejects
+    /// CFBoolean before any numeric cast; the peer must land in unknown, blocking sweep.
+    func testSnapshotPeerStatuses_booleanTimestamp_yieldsUnknown_blocksSweep() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: RepoLayout.livenessDirectoryPath(base: basePath))
+
+        let path = RepoLayout.livenessFilePath(base: basePath, writerID: phantomWriter)
+        let body: [String: Any] = ["ts": true]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        await client.injectFile(path: path, data: data)
+
+        let tracker = LivenessTracker(client: client, basePath: basePath, writerID: selfWriter, isLocalVolume: false)
+        let view = try await tracker.snapshotPeerStatuses()
+
+        XCTAssertEqual(view.unknownPeerIDs, [phantomWriter])
+        XCTAssertTrue(view.activePeerIDs.isEmpty)
+        XCTAssertTrue(view.stalePeerIDs.isEmpty,
+                      "boolean ts must NOT bridge to 1ms and classify as ancient-stale")
+        XCTAssertFalse(view.isComplete, "any unparseable peer heartbeat must block cleanup")
+        XCTAssertTrue(view.sweepProtectionSet.contains(phantomWriter))
+    }
+
     /// `client.list` errors propagate (no view at all) — caller must skip cleanup.
     /// Prior `try?` behavior in the builder is preserved by this throw.
     func testSnapshotPeerStatuses_listFailure_propagates() async throws {

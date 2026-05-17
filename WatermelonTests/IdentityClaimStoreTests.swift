@@ -333,6 +333,24 @@ final class IdentityClaimStoreTests: XCTestCase {
         }
     }
 
+    /// Truly non-JSON readback bytes must take the same `code: 4` "unparseable
+    /// after write" path as the missing-keys readback. Guards against regressing
+    /// `try? JSONSerialization` back to `try`, which would leak raw NSCocoaError
+    /// instead of the typed bootstrap diagnosis.
+    func testWriteOwn_bestEffortNonJSONReadback_throws() async throws {
+        let (client, store) = await makeStore()
+        await client.setAtomicCreateMode(.bestEffort)
+        let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        await client.stageBestEffortRace(at: path, with: Data("not-json".utf8))
+        do {
+            try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 7_000)
+            XCTFail("expected non-JSON post-write to throw")
+        } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
+            XCTAssertEqual(error.domain, "RepoBootstrap")
+            XCTAssertEqual(error.code, 4)
+        }
+    }
+
     func testWriteOwn_alreadyExistsMatchingReadback_succeeds() async throws {
         // Simulate a peer racing in between our metadata pre-check and atomicCreate:
         // metadata reports "no file", atomicCreate reports .alreadyExists, the file
