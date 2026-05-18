@@ -794,6 +794,48 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         XCTAssertEqual(Set(snapshotBeforeFailure.resources), Set(snapshotAfterFailure.resources))
     }
 
+    // MARK: - localRepoID route guard
+
+    func testSyncIndex_localRepoID_freshRemote_throwsDamagedV2Repo() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        do {
+            _ = try await service.syncIndex(
+                client: client,
+                profile: profile,
+                localRepoID: "bound-repo-id"
+            )
+            XCTFail("expected damagedV2Repo — local V2 binding must reject fresh remote")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testSyncIndex_localRepoID_v1Remote_throwsRequiresForegroundMigration() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await seedV1Manifest(client: client, basePath: basePath, month: monthA, marker: 0x31)
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        do {
+            _ = try await service.syncIndex(
+                client: client,
+                profile: profile,
+                localRepoID: "bound-repo-id"
+            )
+            XCTFail("expected requiresForegroundMigration — local V2 binding must reject V1 remote")
+        } catch BackupCompatibilityError.requiresForegroundMigration {
+            // expected
+        }
+    }
+
     private func seedV1Manifest(
         client: InMemoryRemoteStorageClient,
         basePath: String,

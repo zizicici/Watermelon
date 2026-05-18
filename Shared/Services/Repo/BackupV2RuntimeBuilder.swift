@@ -87,6 +87,9 @@ enum BackupV2RuntimeBuilder {
                 )
             }
         case .fresh:
+            if let existing = try await identity.findRepoStateByProfile(profileID: profileID) {
+                throw BackupV2RuntimeBuildError.repoFormatRegression(repoID: existing.repoID)
+            }
             do {
                 do {
                     resolvedRepoID = try await bootstrap.initializeFreshRepo(writerID: writerID)

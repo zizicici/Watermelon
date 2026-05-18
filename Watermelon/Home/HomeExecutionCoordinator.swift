@@ -705,6 +705,11 @@ final class HomeExecutionCoordinator {
             )
         } catch is CancellationError {
             return .cancelled
+        } catch let compatError as BackupCompatibilityError {
+            return .failed(DownloadMonthFailure(
+                message: context.profile.userFacingStorageErrorMessage(compatError),
+                underlyingError: compatError
+            ))
         } catch {
             appendWarningLog(String.localizedStringWithFormat(
                 String(localized: "manifest.log.reconcileFailed"),

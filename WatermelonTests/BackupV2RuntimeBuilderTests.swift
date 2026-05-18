@@ -561,6 +561,70 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         await services.shutdown()
     }
 
+    func testFreshArm_existingLocalRepoState_throwsRepoFormatRegression() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        let identity = RepoIdentity(database: databaseManager)
+        let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        let priorRepoID = "prior-bound-repo-id"
+        _ = try await identity.lazyEnsureRepoState(
+            profileID: profile.id!, repoID: priorRepoID, writerID: writerID
+        )
+
+        do {
+            _ = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+            XCTFail("expected repoFormatRegression")
+        } catch BackupV2RuntimeBuildError.repoFormatRegression(let repoID) {
+            XCTAssertEqual(repoID, priorRepoID,
+                           "regression guard must report the locally-bound repoID")
+        }
+    }
+
+    func testFreshArm_migratedLocalRepoState_throwsRepoFormatRegression() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        let identity = RepoIdentity(database: databaseManager)
+        let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        let migratedRepoID = "migrated-repo-id"
+        _ = try await identity.lazyEnsureRepoState(
+            profileID: profile.id!, repoID: migratedRepoID, writerID: writerID
+        )
+        try await identity.setMigrationCompleted(profileID: profile.id!, repoID: migratedRepoID)
+
+        do {
+            _ = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+            XCTFail("expected repoFormatRegression")
+        } catch BackupV2RuntimeBuildError.repoFormatRegression(let repoID) {
+            XCTAssertEqual(repoID, migratedRepoID)
+        }
+    }
+
     func testSelfLivenessSweep_runsEvenWhenRenewalUnsafe() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
@@ -645,5 +709,180 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     private func insertProfile() throws -> ServerProfileRecord {
         let id = try TestFixtures.insertServerProfile(in: databaseManager, basePath: basePath, storageType: .webdav)
         return TestFixtures.makeServerProfile(id: id, storageType: .webdav, basePath: basePath)
+    }
+
+    // MARK: - verifyMonthV2 identity guard
+
+    func testVerifyMonthV2_throwsIdentityMismatchWhenLocalRepoIDDiffers() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "remote-repo-b")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let profile = try insertProfile()
+
+        let identity = RepoIdentity(database: databaseManager)
+        let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        _ = try await identity.lazyEnsureRepoState(
+            profileID: profile.id!, repoID: "local-repo-a", writerID: writerID
+        )
+
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: RemoteIndexSyncService(),
+            databaseManager: databaseManager
+        )
+
+        do {
+            _ = try await service.verifyMonthV2(
+                client: client,
+                basePath: basePath,
+                month: LibraryMonthKey(year: 2026, month: 5),
+                profile: profile
+            )
+            XCTFail("expected repoIdentityMismatch")
+        } catch BackupCompatibilityError.repoIdentityMismatch {
+            // expected
+        }
+    }
+
+    func testVerifyMonthV2_matchingLocalRepoIDSucceeds() async throws {
+        let repoID = "shared-repo-id"
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let profile = try insertProfile()
+
+        let identity = RepoIdentity(database: databaseManager)
+        let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        _ = try await identity.lazyEnsureRepoState(
+            profileID: profile.id!, repoID: repoID, writerID: writerID
+        )
+
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: RemoteIndexSyncService(),
+            databaseManager: databaseManager
+        )
+
+        let report = try await service.verifyMonthV2(
+            client: client,
+            basePath: basePath,
+            month: LibraryMonthKey(year: 2026, month: 5),
+            profile: profile
+        )
+        XCTAssertTrue(report.reportOnly.isEmpty)
+    }
+
+    func testVerifyMonthV2_nilProfileSkipsIdentityGuard() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "some-repo")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: RemoteIndexSyncService(),
+            databaseManager: databaseManager
+        )
+
+        let report = try await service.verifyMonthV2(
+            client: client,
+            basePath: basePath,
+            month: LibraryMonthKey(year: 2026, month: 5)
+        )
+        XCTAssertTrue(report.reportOnly.isEmpty)
+    }
+
+    // MARK: - verifyMonth identity guard (non-V2 remote with local V2 binding)
+
+    func testVerifyMonth_localV2Binding_freshRemote_throwsDamagedV2Repo() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let profile = try insertProfile()
+        let identity = RepoIdentity(database: databaseManager)
+        let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        _ = try await identity.lazyEnsureRepoState(
+            profileID: profile.id!, repoID: "bound-repo-id", writerID: writerID
+        )
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: RemoteIndexSyncService(),
+            databaseManager: databaseManager
+        )
+        do {
+            _ = try await service.verifyMonth(
+                client: client,
+                basePath: basePath,
+                month: LibraryMonthKey(year: 2026, month: 5),
+                profile: profile
+            )
+            XCTFail("expected damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testVerifyMonth_localV2Binding_v1Remote_throwsRequiresForegroundMigration() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2026, month: 5)
+        let profile = try insertProfile()
+        let identity = RepoIdentity(database: databaseManager)
+        let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        _ = try await identity.lazyEnsureRepoState(
+            profileID: profile.id!, repoID: "bound-repo-id", writerID: writerID
+        )
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: RemoteIndexSyncService(),
+            databaseManager: databaseManager
+        )
+        do {
+            _ = try await service.verifyMonth(
+                client: client,
+                basePath: basePath,
+                month: LibraryMonthKey(year: 2026, month: 5),
+                profile: profile
+            )
+            XCTFail("expected requiresForegroundMigration")
+        } catch BackupCompatibilityError.requiresForegroundMigration {
+            // expected
+        }
+    }
+
+    func testVerifyMonth_noLocalV2Binding_freshRemote_succeeds() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let profile = try insertProfile()
+        // No repo_state seeded — no local V2 binding
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: RemoteIndexSyncService(),
+            databaseManager: databaseManager
+        )
+        let result = try await service.verifyMonth(
+            client: client,
+            basePath: basePath,
+            month: LibraryMonthKey(year: 2026, month: 5),
+            profile: profile
+        )
+        XCTAssertFalse(result, "fresh remote with no local binding should return false")
     }
 }

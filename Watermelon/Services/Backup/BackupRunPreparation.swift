@@ -67,7 +67,8 @@ struct BackupRunPreparationService: Sendable {
                         profile: profile,
                         eventStream: eventStream,
                         preMaterialized: preMaterialized,
-                        expectV2: v2Services != nil
+                        expectV2: v2Services != nil,
+                        localRepoID: v2Services?.repoID
                     )
                     _ = await v2Services?.initialMaterializeOutput.consume()
                     eventStream.emitLog(
@@ -213,11 +214,14 @@ struct BackupRunPreparationService: Sendable {
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteIndexSyncDigest {
         try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
+        let identity = RepoIdentity(database: databaseManager)
+        let localRepoID = try await identity.findRepoStateByProfile(profileID: profile.id ?? 0)?.repoID
         let digest = try await remoteIndexService.syncIndex(
             client: client,
             profile: profile,
             eventStream: eventStream,
-            onSyncProgress: onSyncProgress
+            onSyncProgress: onSyncProgress,
+            localRepoID: localRepoID
         )
         eventStream?.emitLog(
             String.localizedStringWithFormat(
@@ -256,6 +260,20 @@ struct BackupRunPreparationService: Sendable {
         } else {
             // Profile-less inspect must still parse version.json so a future format isn't downgraded to V2 stamped at the local formatVersion.
             inspection = try await Self.profileLessInspect(client: client, basePath: basePath)
+        }
+        if let profileID = profile?.id {
+            let identity = RepoIdentity(database: databaseManager)
+            let localState = try await identity.findRepoStateByProfile(profileID: profileID)
+            if localState != nil {
+                switch inspection {
+                case .fresh:
+                    throw BackupCompatibilityError.damagedV2Repo
+                case .v1:
+                    throw BackupCompatibilityError.requiresForegroundMigration
+                default:
+                    break
+                }
+            }
         }
         switch inspection {
         case .unsupported(let minAppVersion):
@@ -340,6 +358,13 @@ struct BackupRunPreparationService: Sendable {
             )
         case .found(let id):
             expectedRepoID = id
+        }
+        if let profileID = profile?.id {
+            let identity = RepoIdentity(database: databaseManager)
+            let localState = try await identity.findRepoStateByProfile(profileID: profileID)
+            if let localState, localState.repoID != expectedRepoID {
+                throw BackupCompatibilityError.repoIdentityMismatch
+            }
         }
         let verifier = RepoVerifyMonthService(client: metadataClient, basePath: basePath, expectedRepoID: expectedRepoID)
         var report = try await verifier.verify(month: month)

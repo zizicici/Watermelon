@@ -62,4 +62,83 @@ final class RemoteIndexV2SyncEngineTests: XCTestCase {
 
         XCTAssertTrue(output.state.months.isEmpty)
     }
+
+    func testMaterializeThrowsIdentityMismatchWhenLocalRepoIDDiffers() async throws {
+        let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "repo-a")
+
+        do {
+            _ = try await RemoteIndexV2SyncEngine().materialize(
+                client: builder.client,
+                basePath: basePath,
+                preMaterialized: nil,
+                localRepoID: "repo-b"
+            )
+            XCTFail("expected repoIdentityMismatch")
+        } catch BackupCompatibilityError.repoIdentityMismatch {
+            // expected
+        }
+    }
+
+    func testMaterializeMatchingLocalRepoIDDoesNotThrow() async throws {
+        let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "repo-a")
+
+        _ = try await RemoteIndexV2SyncEngine().materialize(
+            client: builder.client,
+            basePath: basePath,
+            preMaterialized: nil,
+            localRepoID: "repo-a"
+        )
+    }
+
+    func testMaterializeNilLocalRepoIDSkipsGuard() async throws {
+        let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "repo-a")
+
+        _ = try await RemoteIndexV2SyncEngine().materialize(
+            client: builder.client,
+            basePath: basePath,
+            preMaterialized: nil,
+            localRepoID: nil
+        )
+    }
+
+    func testMaterializePreMaterialized_mismatchedRepoID_throwsIdentityMismatch() async throws {
+        let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "repo-a")
+        let preMaterialized = try await builder.materialize()
+
+        do {
+            _ = try await RemoteIndexV2SyncEngine().materialize(
+                client: builder.client,
+                basePath: basePath,
+                preMaterialized: preMaterialized,
+                localRepoID: "repo-b"
+            )
+            XCTFail("expected repoIdentityMismatch")
+        } catch BackupCompatibilityError.repoIdentityMismatch {
+            // expected
+        }
+    }
+
+    func testMaterializePreMaterialized_matchingRepoIDSucceeds() async throws {
+        let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "repo-a")
+        let preMaterialized = try await builder.materialize()
+
+        _ = try await RemoteIndexV2SyncEngine().materialize(
+            client: builder.client,
+            basePath: basePath,
+            preMaterialized: preMaterialized,
+            localRepoID: "repo-a"
+        )
+    }
+
+    func testMaterializePreMaterialized_nilLocalRepoID_skipsGuard() async throws {
+        let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "repo-a")
+        let preMaterialized = try await builder.materialize()
+
+        _ = try await RemoteIndexV2SyncEngine().materialize(
+            client: builder.client,
+            basePath: basePath,
+            preMaterialized: preMaterialized,
+            localRepoID: nil
+        )
+    }
 }

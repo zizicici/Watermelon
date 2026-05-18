@@ -1439,4 +1439,29 @@ final class V2FlushTests: XCTestCase {
             in: databaseManager, writerID: writerID, basePath: basePath, storageType: .webdav
         )
     }
+
+    func testClassifierUnwrapsCommitLogWriterIOFailure() throws {
+        let profileID = try insertProfile()
+        let profile = try databaseManager.read { try ServerProfileRecord.fetchOne($0, key: profileID)! }
+        let connectionError = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorNotConnectedToInternet,
+            userInfo: nil
+        )
+        let wrapped = CommitLogWriter.WriteError.ioFailure(connectionError)
+        XCTAssertTrue(
+            profile.isConnectionUnavailableErrorIncludingFlushUnderlying(wrapped),
+            "classifier must unwrap CommitLogWriter.WriteError.ioFailure to find the underlying connection error"
+        )
+    }
+
+    func testClassifierSkipsCommitLogWriterAlreadyExists() throws {
+        let profileID = try insertProfile()
+        let profile = try databaseManager.read { try ServerProfileRecord.fetchOne($0, key: profileID)! }
+        let wrapped = CommitLogWriter.WriteError.alreadyExists
+        XCTAssertFalse(
+            profile.isConnectionUnavailableErrorIncludingFlushUnderlying(wrapped),
+            "classifier must not treat alreadyExists as a connection error"
+        )
+    }
 }

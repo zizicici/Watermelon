@@ -42,6 +42,13 @@ final class V2MonthSession: BackupMonthStore {
                     case .verificationFailed:
                         break
                     }
+                case let commit as CommitLogWriter.WriteError:
+                    switch commit {
+                    case .ioFailure(let inner):
+                        pending.append(inner)
+                    case .alreadyExists, .encodingFailed:
+                        break
+                    }
                 case let storage as RemoteStorageClientError:
                     switch storage {
                     case .underlying(let inner):
@@ -383,6 +390,13 @@ extension ServerProfileRecord {
                 case .ioFailure(let underlying), .finalizationFailed(let underlying):
                     pending.append(underlying)
                 case .verificationFailed:
+                    break
+                }
+            case let commit as CommitLogWriter.WriteError:
+                switch commit {
+                case .ioFailure(let underlying):
+                    pending.append(underlying)
+                case .alreadyExists, .encodingFailed:
                     break
                 }
             case let storage as RemoteStorageClientError:

@@ -172,7 +172,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
         preMaterialized: RepoMaterializer.MaterializeOutput? = nil,
-        expectV2: Bool = false
+        expectV2: Bool = false,
+        localRepoID: String? = nil
     ) async throws -> RemoteIndexSyncDigest {
         try await syncGate.withLock {
             try await syncIndexUnlocked(
@@ -181,7 +182,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 eventStream: eventStream,
                 onSyncProgress: onSyncProgress,
                 preMaterialized: preMaterialized,
-                expectV2: expectV2
+                expectV2: expectV2,
+                localRepoID: localRepoID
             )
         }
     }
@@ -274,7 +276,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         eventStream: BackupEventStream?,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
         preMaterialized: RepoMaterializer.MaterializeOutput? = nil,
-        expectV2: Bool = false
+        expectV2: Bool = false,
+        localRepoID: String? = nil
     ) async throws -> RemoteIndexSyncDigest {
         let syncStart = CFAbsoluteTimeGetCurrent()
 
@@ -291,7 +294,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             route = try RemoteIndexFormatRouteDecision.decide(
                 inspection: inspection,
                 alreadyV2: alreadyV2,
-                expectV2: expectV2
+                expectV2: expectV2 || (localRepoID != nil)
             )
         } catch {
             switch inspection {
@@ -320,7 +323,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 eventStream: eventStream,
                 onSyncProgress: onSyncProgress,
                 syncStart: syncStart,
-                preMaterialized: allowPreMaterialized ? preMaterialized : nil
+                preMaterialized: allowPreMaterialized ? preMaterialized : nil,
+                localRepoID: localRepoID
             )
         }
 
@@ -396,12 +400,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         eventStream: BackupEventStream?,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
         syncStart: CFAbsoluteTime,
-        preMaterialized: RepoMaterializer.MaterializeOutput? = nil
+        preMaterialized: RepoMaterializer.MaterializeOutput? = nil,
+        localRepoID: String? = nil
     ) async throws -> RemoteIndexSyncDigest {
         let output = try await RemoteIndexV2SyncEngine().materialize(
             client: client,
             basePath: profile.basePath,
-            preMaterialized: preMaterialized
+            preMaterialized: preMaterialized,
+            localRepoID: localRepoID
         )
         let priorOverlay = loadMaterializedCommittedView(output)
         do {

@@ -4,12 +4,19 @@ struct RemoteIndexV2SyncEngine: Sendable {
     func materialize(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        preMaterialized: RepoMaterializer.MaterializeOutput?
+        preMaterialized: RepoMaterializer.MaterializeOutput?,
+        localRepoID: String? = nil
     ) async throws -> RepoMaterializer.MaterializeOutput {
         if let preMaterialized {
+            if let localRepoID, let outputRepoID = preMaterialized.repoID, localRepoID != outputRepoID {
+                throw BackupCompatibilityError.repoIdentityMismatch
+            }
             return preMaterialized
         }
         let expectedRepoID = try await loadExpectedRepoIDReadOnly(client: client, basePath: basePath)
+        if let localRepoID, localRepoID != expectedRepoID {
+            throw BackupCompatibilityError.repoIdentityMismatch
+        }
         return try await RepoMaterializer(client: client, basePath: basePath)
             .materialize(expectedRepoID: expectedRepoID)
     }

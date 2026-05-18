@@ -24,6 +24,7 @@ actor RepoMaterializer {
         /// from empty. Caller can flip these months' next flush to emit a fresh baseline
         /// even when `dirty == false`, preventing O(commit log) replay every materialize.
         let corruptedSnapshotMonths: Set<LibraryMonthKey>
+        let repoID: String?
     }
 
     func materialize(expectedRepoID: String? = nil) async throws -> MaterializeOutput {
@@ -114,7 +115,8 @@ actor RepoMaterializer {
             state: state,
             observedSeqByWriter: observedSeqByWriter,
             coveredByMonth: commitTrust.coveredByMonth,
-            corruptedSnapshotMonths: corruptedSnapshotMonths
+            corruptedSnapshotMonths: corruptedSnapshotMonths,
+            repoID: expectedRepoID
         )
     }
 }

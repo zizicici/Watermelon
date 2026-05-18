@@ -235,7 +235,8 @@ final class BackgroundBackupRunner {
                 client: client,
                 profile: profile,
                 preMaterialized: preMaterialized,
-                expectV2: true
+                expectV2: true,
+                localRepoID: v2Services.repoID
             )
             _ = await v2Services.initialMaterializeOutput.consume()
             await assetProcessor.remoteIndexService.markIsV2()
