@@ -48,7 +48,11 @@ nonisolated struct VersionManifestStore: Sendable {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("version-load-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
-        try await client.download(remotePath: path, localURL: temp)
+        do {
+            try await client.download(remotePath: path, localURL: temp)
+        } catch {
+            throw RemoteWriteClassifier.normalizedCancellation(error)
+        }
         let data = try Data(contentsOf: temp)
         guard let wire = try? VersionManifestWire(data: data) else {
             throw RepoBootstrap.VersionConflict.unreadable(nil)

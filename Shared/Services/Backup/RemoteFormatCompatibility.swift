@@ -1,7 +1,4 @@
 import Foundation
-import os.log
-
-private let remoteFormatLog = Logger(subsystem: "com.zizicici.watermelon", category: "RemoteFormatCompatibility")
 
 enum BackupCompatibilityError: LocalizedError {
     case remoteFormatUnsupported(minAppVersion: String?)
@@ -64,107 +61,7 @@ struct RemoteFormatCompatibilityService: Sendable {
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord
     ) async throws -> RemoteFormatInspection {
-        let basePath = RemotePathBuilder.normalizePath(profile.basePath)
-        let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: basePath)
-        } catch {
-            throw error
-        }
-
-        let markerExists = entries.contains { entry in
-            entry.isDirectory && entry.name == RepoLayout.watermelonDirectory
-        }
-
-        if markerExists {
-            // A damaged version.json (corrupt JSON, boolean format_version, directory at path) must
-            // surface as `damagedV2Repo` so the user sees an actionable diagnosis — mirroring the
-            // profile-less inspect path. Without this mapping, callers see a raw VersionConflict /
-            // ioFailure(NSError code 18) wrapped opaquely by `userFacingStorageErrorMessage`.
-            let manifest: VersionManifestStore.Load
-            do {
-                manifest = try await VersionManifestStore(client: client, basePath: basePath).load()
-            } catch is RepoBootstrap.VersionConflict {
-                throw BackupCompatibilityError.damagedV2Repo
-            } catch let bootstrap as RepoBootstrap.BootstrapError {
-                if case .ioFailure = bootstrap { throw BackupCompatibilityError.damagedV2Repo }
-                throw bootstrap
-            }
-            if case .found(let preCheck) = manifest {
-                if preCheck.formatVersion > RepoLayout.currentSupportedFormatVersion {
-                    return .unsupported(minAppVersion: preCheck.minAppVersion)
-                }
-            }
-            let markerStore = MigrationMarkerStore(client: client, basePath: basePath)
-            let migrationDirEntries = try await markerStore.migrationsDirectoryEntries()
-            let migrationInProgress = migrationDirEntries.contains { !$0.isDirectory && $0.name.hasSuffix(".json") }
-            var cachedV1Manifests: Bool?
-            func hasV1Manifests() async throws -> Bool {
-                if let cachedV1Manifests { return cachedV1Manifests }
-                let detected = try await detectV1Manifests(client: client, basePath: basePath, entries: entries)
-                cachedV1Manifests = detected
-                return detected
-            }
-            switch manifest {
-            case .absent:
-                let v1Manifests = try await hasV1Manifests()
-                let hasV2Data = try await detectV2DataDirectories(client: client, basePath: basePath)
-                if hasV2Data {
-                    if v1Manifests {
-                        return .v2WithV1Manifests(formatVersion: RepoLayout.formatVersion)
-                    }
-                    if migrationInProgress {
-                        let markerStates = try await markerStore.parseEntries(migrationDirEntries)
-                        let ordered = Self.sortedMarkers(markerStates)
-                        if let marker = ordered.first {
-                            return .v2WithPendingMigrationCleanup(
-                                formatVersion: RepoLayout.formatVersion,
-                                ownerWriterID: marker.writerID
-                            )
-                        }
-                    }
-                    throw BackupCompatibilityError.damagedV2Repo
-                }
-                if v1Manifests { return .v1 }
-                if migrationInProgress {
-                    return .fresh
-                }
-                return .fresh
-            case .found(let manifest):
-                let formatVersion = manifest.formatVersion
-                if formatVersion >= 2 && formatVersion <= RepoLayout.currentSupportedFormatVersion {
-                    let markerStates = try await markerStore.parseEntries(migrationDirEntries)
-                    if try await hasV1Manifests() {
-                        return .v2WithV1Manifests(formatVersion: formatVersion)
-                    }
-                    let ordered = Self.sortedMarkers(markerStates)
-                    if let cleanup = ordered.first(where: { $0.phase.isCleanupSafe }) {
-                        return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: cleanup.writerID)
-                    }
-                    if let residue = ordered.first {
-                        // With no V1 manifests left, any marker only represents cleanup residue.
-                        return .v2WithPendingMigrationCleanup(formatVersion: formatVersion, ownerWriterID: residue.writerID)
-                    }
-                    return .v2(formatVersion: formatVersion)
-                }
-                return .unsupported(minAppVersion: manifest.minAppVersion)
-            }
-        }
-
-        if try await detectV1Manifests(client: client, basePath: basePath, entries: entries) {
-            return .v1
-        }
-        return .fresh
-    }
-
-    // Deterministic dispatch so repeated runs against the same remote pick a stable writerID.
-    private static func sortedMarkers(_ markers: [ParsedMigrationMarker]) -> [ParsedMigrationMarker] {
-        markers.sorted { lhs, rhs in
-            if lhs.phase.rawValue != rhs.phase.rawValue {
-                return lhs.phase.rawValue > rhs.phase.rawValue
-            }
-            return lhs.writerID < rhs.writerID
-        }
+        try await RepoBootstrapInspectionFSM().inspect(client: client, profile: profile)
     }
 
     /// Bootstrap-side guard: minting a new repoID over existing V2 data would orphan it.
@@ -172,51 +69,7 @@ struct RemoteFormatCompatibilityService: Sendable {
         client: any RemoteStorageClientProtocol,
         basePath: String
     ) async throws -> Bool {
-        try await detectV2DataDirectories(client: client, basePath: basePath)
-    }
-
-    /// Fail-closed: non-not-found errors throw so a 401 can't mint `.fresh` over a real V2 repo.
-    private func detectV2DataDirectories(
-        client: any RemoteStorageClientProtocol,
-        basePath: String
-    ) async throws -> Bool {
-        for subdir in [RepoLayout.commitsDirectory, RepoLayout.snapshotsDirectory] {
-            let path = RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory, subdir])
-            do {
-                let entries = try await client.list(path: path)
-                if !entries.isEmpty { return true }
-            } catch {
-                if isNotFoundError(error) { continue }
-                throw error
-            }
-        }
-        return false
-    }
-
-    private func isNotFoundError(_ error: Error) -> Bool {
-        isStorageNotFoundError(error)
-    }
-
-    private func detectV1Manifests(
-        client: any RemoteStorageClientProtocol,
-        basePath: String,
-        entries: [RemoteStorageEntry]
-    ) async throws -> Bool {
-        let yearEntries = entries
-            .filter { $0.isDirectory && $0.name.range(of: "^[0-9]{4}$", options: .regularExpression) != nil }
-            .sorted(by: { $0.name > $1.name })
-        for yearEntry in yearEntries {
-            let yearPath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: yearEntry.name)
-            let monthEntries = try await client.list(path: yearPath)
-            for monthEntry in monthEntries where monthEntry.isDirectory && monthEntry.name.range(of: "^[0-9]{2}$", options: .regularExpression) != nil {
-                let monthPath = RemotePathBuilder.absolutePath(basePath: yearPath, remoteRelativePath: monthEntry.name)
-                let monthContents = try await client.list(path: monthPath)
-                if monthContents.contains(where: { !$0.isDirectory && $0.name == MonthManifestStore.manifestFileName }) {
-                    return true
-                }
-            }
-        }
-        return false
+        try await RepoBootstrapInspectionFSM.hasAnyV2CommitOrSnapshotData(client: client, basePath: basePath)
     }
 
     private func readMinAppVersion(

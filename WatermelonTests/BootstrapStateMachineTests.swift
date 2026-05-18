@@ -78,6 +78,30 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
+    func testFutureVersion_doesNotListMigrationDirectory() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "future-id")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
+        await client.injectListError(.transport, for: RepoLayout.migrationsDirectoryPath(base: basePath))
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .unsupported(minAppVersion: "9.9.9"))
+    }
+
+    func testFormatVersionBelowTwo_doesNotParseMarkersOrDetectV1Manifests() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "legacy-format")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 1, minAppVersion: "1.0.0")
+        let writerID = "12121212-1212-1212-1212-121212121212"
+        try await injectMigrationMarker(client: client, writerID: writerID, phase: 3)
+        await client.injectPersistentDownloadError(.transport, for: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID))
+        try await client.createDirectory(path: "\(basePath)/2025")
+        await client.injectListError(.transport, for: "\(basePath)/2025")
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .unsupported(minAppVersion: "1.0.0"))
+    }
+
     func testWatermelonPresent_dataDirsHaveContent_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
         try await client.createDirectory(path: "\(basePath)/.watermelon")
@@ -130,6 +154,71 @@ final class BootstrapStateMachineTests: XCTestCase {
         XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion), "stale marker without V1 manifests → V2")
     }
 
+    func testPhase1ResidueMarker_noV1Manifests_routesToCleanup() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let writerID = "23232323-2323-2323-2323-232323232323"
+        try await injectMigrationMarker(client: client, writerID: writerID, phase: 1)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(
+            outcome,
+            .v2WithPendingMigrationCleanup(formatVersion: RepoLayout.formatVersion, ownerWriterID: writerID)
+        )
+    }
+
+    func testSupportedVersion_phaseAndWriterSort_selectsHighestPhaseLowestWriterID() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let phase2WriterID = "11111111-1111-1111-1111-111111111111"
+        let phase3LowWriterID = "22222222-2222-2222-2222-222222222222"
+        let phase3HighWriterID = "33333333-3333-3333-3333-333333333333"
+        try await injectMigrationMarker(client: client, writerID: phase2WriterID, phase: 2)
+        try await injectMigrationMarker(client: client, writerID: phase3HighWriterID, phase: 3)
+        try await injectMigrationMarker(client: client, writerID: phase3LowWriterID, phase: 3)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(
+            outcome,
+            .v2WithPendingMigrationCleanup(formatVersion: RepoLayout.formatVersion, ownerWriterID: phase3LowWriterID)
+        )
+    }
+
+    func testSupportedVersion_markerDownloadFailureWithV1Manifests_propagatesMarkerError() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let writerID = "45454545-4545-4545-4545-454545454545"
+        try await injectMigrationMarker(client: client, writerID: writerID, phase: 3)
+        await client.injectPersistentDownloadError(.transport, for: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID))
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("expected marker transport error")
+        } catch RemoteStorageClientError.underlying(let underlying) {
+            let nsError = underlying as NSError
+            XCTAssertEqual(nsError.domain, NSURLErrorDomain)
+            XCTAssertEqual(nsError.code, NSURLErrorNotConnectedToInternet)
+        } catch {
+            XCTFail("expected marker transport error, got \(error)")
+        }
+    }
+
+    func testVersionAbsentRawMarker_noV2Data_returnsFresh() async throws {
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        let writerID = "34343434-3434-3434-3434-343434343434"
+        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
+        await client.injectFile(path: markerPath, contents: "not-json")
+        await client.injectPersistentDownloadError(.transport, for: markerPath)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .fresh)
+    }
+
     func testWatermelonPresent_versionJsonGarbage_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
@@ -169,6 +258,43 @@ final class BootstrapStateMachineTests: XCTestCase {
             XCTFail("expected damagedV2Repo")
         } catch BackupCompatibilityError.damagedV2Repo {
             // expected
+        }
+    }
+
+    func testVersionLoadCancellation_propagatesCancellation() async throws {
+        try await assertVersionLoadCancellation { client, path in
+            await client.injectDownloadCancellation(for: path)
+        }
+    }
+
+    func testVersionLoadURLErrorCancelled_propagatesCancellation() async throws {
+        try await assertVersionLoadCancellation { client, path in
+            await client.injectDownloadURLErrorCancelled(for: path)
+        }
+    }
+
+    func testVersionLoadWrappedURLCancellation_propagatesCancellation() async throws {
+        try await assertVersionLoadCancellation { client, path in
+            await client.injectDownloadWrappedURLCancellation(for: path)
+        }
+    }
+
+    private func assertVersionLoadCancellation(
+        inject: (InMemoryRemoteStorageClient, String) async -> Void,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await inject(client, RepoLayout.versionFilePath(base: basePath))
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("expected cancellation", file: file, line: line)
+        } catch is CancellationError {
+        } catch {
+            XCTFail("expected CancellationError, got \(error)", file: file, line: line)
         }
     }
 
@@ -361,5 +487,22 @@ final class BootstrapStateMachineTests: XCTestCase {
             host: "host", port: 0, shareName: "", basePath: basePath, username: ""
         )
         return (client, profile)
+    }
+
+    private func injectMigrationMarker(
+        client: InMemoryRemoteStorageClient,
+        writerID: String,
+        phase: Int
+    ) async throws {
+        let marker: [String: Any] = [
+            "v": 2,
+            "writer_id": writerID,
+            "run_id": "run-\(phase)",
+            "phase": phase,
+            "started_at_ms": Int64(0),
+            "last_step_at_ms": Int64(1)
+        ]
+        let data = try JSONSerialization.data(withJSONObject: marker)
+        await client.injectFile(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID), data: data)
     }
 }
