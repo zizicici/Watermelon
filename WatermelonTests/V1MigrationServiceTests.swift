@@ -578,6 +578,54 @@ final class V1MigrationServiceTests: XCTestCase {
                              "lamport must observe remote clock=\(highestPreExistingClock) before ticking; got \(stamp.clock)")
     }
 
+    func testPhase1_retryAfterTransientCommitWriteUsesFreshSeqAndClock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setAtomicCreateGuarantee(.exclusive)
+        try await client.connect()
+
+        let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let repoID = "test-repo-id"
+        let migrationMonth = LibraryMonthKey(year: 2025, month: 6)
+        let assetFP = TestFixtures.fingerprint(0xAB)
+        let contentHash = TestFixtures.fingerprint(0xCD)
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: assetFP,
+            resourceHash: contentHash,
+            logicalName: "IMG_retry.HEIC"
+        )
+        let manifestPath = String(
+            format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)",
+            migrationMonth.year,
+            migrationMonth.month
+        )
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: writerID, basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: writerID)
+
+        let firstAttemptPath = RepoLayout.commitFilePath(
+            base: basePath,
+            month: migrationMonth,
+            writerID: writerID,
+            seq: 1
+        )
+        await client.injectUploadError(.transport, for: firstAttemptPath)
+
+        let service = makeService(client: client, profileID: profileID)
+        let processed = try await service.runPhase1(
+            profileID: profileID, repoID: repoID, writerID: writerID, runID: "run-retry"
+        )
+        XCTAssertEqual(processed, 1)
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let state = try XCTUnwrap(output.state.months[migrationMonth])
+        let stamp = try XCTUnwrap(state.assets[assetFP]?.stamp)
+        XCTAssertEqual(stamp.seq, 2)
+        XCTAssertEqual(stamp.clock, 2)
+    }
+
 
     private func injectMigrationMarker(client: InMemoryRemoteStorageClient, writerID: String, phase: Int) async throws {
         let dict: [String: Any] = [

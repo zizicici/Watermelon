@@ -158,6 +158,118 @@ final class RepoStateRecordTests: XCTestCase {
                        "observeRemoteMax must lift actor-local current to DB high-water when the conditional UPDATE is rejected")
     }
 
+    func testSeqAllocatorIgnoresRemoteSeqAbovePersistableCeiling() async throws {
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+
+        let allocator = SeqAllocator(database: databaseManager, profileID: profileID, repoID: "r", initial: 0)
+        try await allocator.observeRemoteMax(RepoStateAuthority.maxPersistableSeq + 1)
+
+        let ignoredValue = await allocator.value()
+        XCTAssertEqual(ignoredValue, 0)
+        var reloaded = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        XCTAssertEqual(reloaded?.lastSeq, 0, "above-ceiling remote seq must not be written as a negative SQLite INTEGER")
+
+        let next = try await allocator.allocate()
+        XCTAssertEqual(next, 1, "ignored remote poison must not re-enter actor-local state through the persist return path")
+        reloaded = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        XCTAssertEqual(reloaded?.lastSeq, 1)
+    }
+
+    func testSeqAllocatorCanAllocateMaxPersistableSeqAfterObservation() async throws {
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+
+        let allocator = SeqAllocator(database: databaseManager, profileID: profileID, repoID: "r", initial: 0)
+        try await allocator.observeRemoteMax(RepoStateAuthority.maxPersistableSeq - 1)
+        let next = try await allocator.allocate()
+
+        XCTAssertEqual(next, RepoStateAuthority.maxPersistableSeq)
+        let reloaded = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        XCTAssertEqual(reloaded?.lastSeq, Int64.max)
+    }
+
+    func testSeqAllocatorThrowsWhenNextSeqExceedsPersistableCeiling() async throws {
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+
+        let allocator = SeqAllocator(database: databaseManager, profileID: profileID, repoID: "r", initial: 0)
+        try await allocator.observeRemoteMax(RepoStateAuthority.maxPersistableSeq)
+
+        do {
+            _ = try await allocator.allocate()
+            XCTFail("expected exhausted")
+        } catch SeqAllocator.SeqAllocatorError.exhausted {
+            let reloaded = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+            XCTAssertEqual(reloaded?.lastSeq, Int64.max)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testSeqAllocatorSanitizesNegativePersistedSeqOnAllocate() async throws {
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+        try databaseManager.write { db in
+            try db.execute(
+                sql: "UPDATE \(RepoStateRecord.databaseTableName) SET lastSeq = -1 WHERE profileID = ? AND repoID = ?",
+                arguments: [profileID, "r"]
+            )
+        }
+
+        let allocator = SeqAllocator(database: databaseManager, profileID: profileID, repoID: "r", initial: 0)
+        let next = try await allocator.allocate()
+
+        XCTAssertEqual(next, 1)
+        let reloaded = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        XCTAssertEqual(reloaded?.lastSeq, 1)
+    }
+
+    func testSeqAllocatorRebuildsContinuityFromSafeObservationAfterNegativePersistedSeq() async throws {
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+        try databaseManager.write { db in
+            try db.execute(
+                sql: "UPDATE \(RepoStateRecord.databaseTableName) SET lastSeq = -1 WHERE profileID = ? AND repoID = ?",
+                arguments: [profileID, "r"]
+            )
+        }
+        let poisonedRow = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        let poisoned = try XCTUnwrap(poisonedRow)
+        let counters = RepoStateAuthority.counters(from: poisoned)
+        let allocator = SeqAllocator(database: databaseManager, profileID: profileID, repoID: "r", initial: counters.lastSeq)
+
+        try await allocator.observeRemoteMax(7)
+        let next = try await allocator.allocate()
+
+        XCTAssertEqual(next, 8)
+        let reloaded = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        XCTAssertEqual(reloaded?.lastSeq, 8)
+    }
+
+    func testSeqAllocatorSanitizesUntrustedInitialSeqAboveCeiling() async throws {
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+
+        let allocator = SeqAllocator(
+            database: databaseManager,
+            profileID: profileID,
+            repoID: "r",
+            initial: RepoStateAuthority.maxPersistableSeq + 1
+        )
+
+        let initialValue = await allocator.value()
+        XCTAssertEqual(initialValue, 0)
+        let next = try await allocator.allocate()
+        XCTAssertEqual(next, 1)
+    }
+
     func testDeleteServerProfileCascadesToRepoState() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -189,6 +301,63 @@ final class RepoStateRecordTests: XCTestCase {
         let resolved = try await identity.findRepoStateByProfile(profileID: profileID)
         XCTAssertEqual(resolved?.repoID, "old-completed",
                        "completed row wins regardless of higher lastSeq on incomplete row")
+    }
+
+    func testFindRepoStateByProfileDoesNotPreferNegativeLastSeqPoison() async throws {
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
+
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID, repoID: "poison",
+                writerID: "w", lastClock: 0, lastSeq: -1,
+                migrationCompleted: 1
+            ).insert(db)
+            try RepoStateRecord(
+                profileID: profileID, repoID: "sane",
+                writerID: "w", lastClock: 0, lastSeq: 10,
+                migrationCompleted: 1
+            ).insert(db)
+        }
+
+        let identity = RepoIdentity(database: databaseManager)
+        let resolved = try await identity.findRepoStateByProfile(profileID: profileID)
+        XCTAssertEqual(resolved?.repoID, "sane")
+    }
+
+    func testFindRepoStateByProfileDoesNotPreferInt64MaxLastSeqPoison() async throws {
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
+
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID, repoID: "positive-poison",
+                writerID: "w", lastClock: 0, lastSeq: Int64.max,
+                migrationCompleted: 1
+            ).insert(db)
+            try RepoStateRecord(
+                profileID: profileID, repoID: "sane",
+                writerID: "w", lastClock: 0, lastSeq: 10,
+                migrationCompleted: 1
+            ).insert(db)
+        }
+
+        let identity = RepoIdentity(database: databaseManager)
+        let resolved = try await identity.findRepoStateByProfile(profileID: profileID)
+        XCTAssertEqual(resolved?.repoID, "sane")
+    }
+
+    func testRepoStateAuthorityDecodesNegativeSeqWithoutTreatingItAsUInt64Max() {
+        let row = RepoStateRecord(
+            profileID: 1,
+            repoID: "r",
+            writerID: "w",
+            lastClock: -1,
+            lastSeq: -1,
+            migrationCompleted: 0
+        )
+
+        let counters = RepoStateAuthority.counters(from: row)
+        XCTAssertEqual(counters.lastSeq, 0)
+        XCTAssertEqual(counters.lastClock, UInt64.max)
     }
 
     func testPersistedLamportClockObserveIgnoresValueAboveSafeCeiling() async throws {

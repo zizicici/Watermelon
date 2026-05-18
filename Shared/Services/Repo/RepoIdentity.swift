@@ -60,10 +60,24 @@ actor RepoIdentity {
     // Allocator state is keyed by repoID; reuse the local row when remote repo.json is missing/unreachable.
     func findRepoStateByProfile(profileID: Int64) throws -> RepoStateRecord? {
         try database.read { db in
-            try RepoStateRecord
+            let rows = try RepoStateRecord
                 .filter(Column("profileID") == profileID)
-                .order(Column("migrationCompleted").desc, Column("lastSeq").desc)
-                .fetchOne(db)
+                .order(Column("migrationCompleted").desc)
+                .fetchAll(db)
+            let candidates = rows.filter { row in
+                RepoStateAuthority.isTrustedFallbackSeq(row.lastSeq)
+            }
+            return candidates.max { lhs, rhs in
+                if lhs.migrationCompleted != rhs.migrationCompleted {
+                    return lhs.migrationCompleted < rhs.migrationCompleted
+                }
+                let lhsSeq = RepoStateAuthority.decodePersistedSeq(lhs.lastSeq).value
+                let rhsSeq = RepoStateAuthority.decodePersistedSeq(rhs.lastSeq).value
+                if lhsSeq != rhsSeq {
+                    return lhsSeq < rhsSeq
+                }
+                return lhs.repoID < rhs.repoID
+            }
         }
     }
 

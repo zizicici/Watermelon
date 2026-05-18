@@ -387,6 +387,154 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         await services.shutdown()
     }
 
+    func testBuild_observesSameWriterRemoteSeq() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+        let identity = RepoIdentity(database: databaseManager)
+        let ourWriterID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+
+        let month = LibraryMonthKey(year: 2026, month: 1)
+
+        let services = try await BackupV2RuntimeBuilder.build(
+            client: client,
+            metadataClient: metadataClient,
+            profile: profile,
+            databaseManager: databaseManager,
+            allowMigration: false,
+            onBootstrap: {
+                do {
+                    let bootstrap = RepoBootstrap(client: client, basePath: self.basePath)
+                    guard let repoID = try await bootstrap.loadRepoID() else {
+                        XCTFail("expected bootstrapped repoID")
+                        return
+                    }
+                    let commitWriter = CommitLogWriter(client: client, basePath: self.basePath)
+                    let header = TestFixtures.makeCommitHeader(
+                        repoID: repoID,
+                        writerID: ourWriterID,
+                        seq: 7,
+                        runID: "same-writer-run",
+                        month: month,
+                        clockMin: 1,
+                        clockMax: 1
+                    )
+                    let op = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                        assetFingerprint: Data(repeating: 0xAC, count: 32),
+                        creationDateMs: nil, backedUpAtMs: 1, resources: []
+                    )))
+                    _ = try await commitWriter.write(header: header, ops: [op], month: month, respectTaskCancellation: false)
+                } catch {
+                    XCTFail("failed to stage same-writer commit: \(error)")
+                }
+            }
+        )
+        let allocatorValue = await services.seqAllocator.value()
+        XCTAssertEqual(allocatorValue, 7)
+        let reloaded = try await identity.loadRepoState(profileID: profile.id!, repoID: services.repoID)
+        XCTAssertEqual(reloaded?.lastSeq, 7)
+        await services.shutdown()
+    }
+
+    func testBuild_ignoresAboveCeilingSameWriterRemoteSeq() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+        let identity = RepoIdentity(database: databaseManager)
+        let ourWriterID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+
+        let month = LibraryMonthKey(year: 2026, month: 1)
+
+        let services = try await BackupV2RuntimeBuilder.build(
+            client: client,
+            metadataClient: metadataClient,
+            profile: profile,
+            databaseManager: databaseManager,
+            allowMigration: false,
+            onBootstrap: {
+                do {
+                    let bootstrap = RepoBootstrap(client: client, basePath: self.basePath)
+                    guard let repoID = try await bootstrap.loadRepoID() else {
+                        XCTFail("expected bootstrapped repoID")
+                        return
+                    }
+                    let commitWriter = CommitLogWriter(client: client, basePath: self.basePath)
+                    let header = TestFixtures.makeCommitHeader(
+                        repoID: repoID,
+                        writerID: ourWriterID,
+                        seq: RepoStateAuthority.maxPersistableSeq + 1,
+                        runID: "same-writer-poison-run",
+                        month: month,
+                        clockMin: 1,
+                        clockMax: 1
+                    )
+                    let op = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                        assetFingerprint: Data(repeating: 0xAD, count: 32),
+                        creationDateMs: nil, backedUpAtMs: 1, resources: []
+                    )))
+                    _ = try await commitWriter.write(header: header, ops: [op], month: month, respectTaskCancellation: false)
+                } catch {
+                    XCTFail("failed to stage above-ceiling same-writer commit: \(error)")
+                }
+            }
+        )
+        let allocatorValue = await services.seqAllocator.value()
+        XCTAssertEqual(allocatorValue, 0)
+        let next = try await services.seqAllocator.allocate()
+        XCTAssertEqual(next, 1)
+        let reloaded = try await identity.loadRepoState(profileID: profile.id!, repoID: services.repoID)
+        XCTAssertEqual(reloaded?.lastSeq, 1)
+        await services.shutdown()
+    }
+
+    func testBuild_sanitizesNegativeLastSeqBeforeAllocatorInit() async throws {
+        let canonicalRepoID = "negative-seq-repo-id"
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: canonicalRepoID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+        let identity = RepoIdentity(database: databaseManager)
+        let ourWriterID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        _ = try await identity.lazyEnsureRepoState(profileID: profile.id!, repoID: canonicalRepoID, writerID: ourWriterID)
+        try databaseManager.write { db in
+            try db.execute(
+                sql: "UPDATE \(RepoStateRecord.databaseTableName) SET lastSeq = -1 WHERE profileID = ? AND repoID = ?",
+                arguments: [profile.id!, canonicalRepoID]
+            )
+        }
+
+        let services = try await BackupV2RuntimeBuilder.build(
+            client: client,
+            metadataClient: metadataClient,
+            profile: profile,
+            databaseManager: databaseManager,
+            allowMigration: false
+        )
+
+        let allocatorValue = await services.seqAllocator.value()
+        XCTAssertEqual(allocatorValue, 0)
+        let next = try await services.seqAllocator.allocate()
+        XCTAssertEqual(next, 1)
+        let reloaded = try await identity.loadRepoState(profileID: profile.id!, repoID: canonicalRepoID)
+        XCTAssertEqual(reloaded?.lastSeq, 1)
+        await services.shutdown()
+    }
+
     func testSelfLivenessSweep_runsEvenWhenRenewalUnsafe() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)

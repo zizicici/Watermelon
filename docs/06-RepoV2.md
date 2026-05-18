@@ -240,10 +240,11 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - `RepoBootstrap.verifyVersionCompatible` 严格化:read 失败 / parse 失败 / format 不等于本地 → 抛 `VersionConflict`(分别 `unreadable` / `mismatchedFormatVersion`),builder 把后者映射成 `unsupportedRemoteFormat`
 - `RemoteIndexSyncService.syncIndexV2` / `BackupRunPreparation.verifyMonthV2`:V2 repo 的 `.absent` repo.json 不再降级到 `expectedRepoID = nil`,直接抛错(broken identity state,backup-flow 才能修)
 - `RepoMaterializer` commit 收集阶段从 filename 推进 `observedSeqByWriter`,corrupt / 错名 commit 也把 seq 计入 cold-start max,allocator 不会再撞名循环耗尽 4 次重试
+- `RepoStateAuthority` 统一 `repo_state` counter 边界：`lastSeq` 以 `maxPersistableSeq = UInt64(Int64.max)` 为上限，因为 SQLite `INTEGER` 是 signed storage；负数 `lastSeq` 读入按 `0` 修复，same-writer remote seq 只有在不超过该上限时才推进本 writer allocator，越界 observation 不持久化/不进入 actor-local state，foreign-writer seq 不参与本地 allocator；remote clock 仍通过 `PersistedLamportClock.observe` 的既有 ceiling/repair 语义采纳，不经 `RepoStateAuthority` 包装
 - `BackupParallelExecutor` / `BackgroundBackupRunner` flushDelta 处理同时消费 `committedV2AssetFingerprints` 和 `committedV2TombstoneFingerprints`:tombstone 也从 uncommittedV2 集合中移除,不再残留到下次全量 materialize
 - `SnapshotRowMapper.decodeHeader` 严格 covered 解析:bad pair / 类型错误 → 抛 `SnapshotWireError.malformed`,不再静默降级为空 covered 让坏 snapshot 当 baseline
 - `LocalVolumeClient.atomicCreate` 修 cleanup gap:source 打开失败也清空 destination;destination close 错误 surface(外接盘 unmount/写满有时只在 close 时报)
-- `SeqAllocator.persist` / `PersistedLamportClock.persist` 改 conditional UPDATE(`AND lastSeq < ?` / `AND lastClock < ?`):跨进程并发(BG runner + foreground)的回退场景下不再覆盖更高的持久化值
+- `SeqAllocator` 在 write transaction 内读取 DB high-water 后写 signed-safe `lastSeq`，不再用 signed `lastSeq < ?` 比较 high-bit 值；`PersistedLamportClock.persist` 仍用 conditional advance 保护 clock high-water
 - `RestoreService` 三个补丁:`fileName` 走 `RemotePathBuilder.sanitizeFilename`(防路径穿越);失败路径加 `removeItem(at: tempURL)`(漏 cleanup);保留 disconnect fire-and-forget(动 API 边界,留给 Stage 2)
 - `CommitOpMapper` / `SnapshotRowMapper` 所有 hex → Data 解码加 `!fp.isEmpty` 守卫:`Data(hexString: "")` 返回 `Data()` 不是 nil,空 fingerprint commit/snapshot 不会再被接受
 

@@ -1075,6 +1075,75 @@ final class V2FlushTests: XCTestCase {
                                     "retry must re-tick Lamport so clockMin advances past the failed-attempt tick of 1")
     }
 
+    func testFlushV2_snapshotRetryUsesFreshLamportFilename() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let firstSnapshotPath = RepoLayout.snapshotFilePath(
+            base: basePath,
+            month: monthKey,
+            lamport: 2,
+            writerID: writerID,
+            runID: runID
+        )
+        await client.injectFile(path: firstSnapshotPath, data: Data("occupied snapshot".utf8))
+
+        let asset = RemoteManifestAsset(
+            year: year, month: month,
+            assetFingerprint: TestFixtures.fingerprint(0xFA),
+            creationDateMs: 1_700_000_000_000,
+            backedUpAtMs: 1_700_000_001_000,
+            resourceCount: 1,
+            totalFileSizeBytes: 100
+        )
+        let hash = TestFixtures.fingerprint(0xFB)
+        let resource = RemoteManifestResource(
+            year: year,
+            month: month,
+            physicalRemotePath: "2026/01/snapshot-retry.jpg",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 0
+        )
+        let link = RemoteAssetResourceLink(
+            year: year,
+            month: month,
+            assetFingerprint: asset.assetFingerprint,
+            resourceHash: hash,
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            logicalName: "snapshot-retry.jpg"
+        )
+        _ = try store.upsertResource(resource)
+        try store.upsertAsset(asset, links: [link])
+
+        do {
+            _ = try await store.flushToRemote()
+            XCTFail("expected first snapshot write to fail on occupied path")
+        } catch V2MonthSession.FlushError.snapshotWriteFailed(let committedAssets, _, _) {
+            XCTAssertEqual(committedAssets, [asset.assetFingerprint])
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+
+        _ = try await store.flushToRemote()
+        let retrySnapshotPath = RepoLayout.snapshotFilePath(
+            base: basePath,
+            month: monthKey,
+            lamport: 3,
+            writerID: writerID,
+            runID: runID
+        )
+        let retrySnapshotExists = await client.hasFile(retrySnapshotPath)
+        XCTAssertTrue(retrySnapshotExists)
+    }
+
 
     private func makeV2Services(client: InMemoryRemoteStorageClient) async throws -> BackupV2RuntimeServices {
         let profileID = try insertProfile()

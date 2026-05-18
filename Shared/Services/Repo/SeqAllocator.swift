@@ -1,5 +1,8 @@
 import Foundation
 import GRDB
+import os.log
+
+private let seqAllocatorLog = Logger(subsystem: "com.zizicici.watermelon", category: "SeqAllocator")
 
 actor SeqAllocator {
     private let database: DatabaseManager
@@ -11,7 +14,7 @@ actor SeqAllocator {
         self.database = database
         self.profileID = profileID
         self.repoID = repoID
-        self.current = initial
+        self.current = RepoStateAuthority.sanitizeInitialSeq(initial).value
     }
 
     func value() -> UInt64 {
@@ -19,31 +22,27 @@ actor SeqAllocator {
     }
 
     func observeRemoteMax(_ remoteMax: UInt64) throws {
+        let repoID = self.repoID
+        guard remoteMax <= RepoStateAuthority.maxPersistableSeq else {
+            seqAllocatorLog.warning("ignore remote seq above persistable ceiling repo=\(repoID, privacy: .public) seq=\(remoteMax, privacy: .public)")
+            return
+        }
         guard remoteMax > current else { return }
-        // persist returns the post-write DB high-water; if a concurrent allocator
-        // already pushed it past `remoteMax`, our actor-local `current` must adopt
-        // the higher value rather than regress to `remoteMax`.
         let dbHighWater = try persist(value: remoteMax)
         current = max(remoteMax, dbHighWater)
     }
 
-    /// Allocates the next seq under a single write-transaction read-then-write so
-    /// concurrent allocators (FG + BG on the same profile) can't both return the same
-    /// seq from stale local state. The conditional UPDATE alone wasn't enough — its
-    /// "WHERE lastSeq < ?" silently skips when DB is ahead, but we'd still bump our
-    /// local `current` and return a seq someone else already used.
     func allocate() throws -> UInt64 {
         let next = try database.write { [profileID, repoID, current] db in
             guard let dbCurrent = try Self.readPersistedSeq(db: db, profileID: profileID, repoID: repoID) else {
                 throw SeqAllocatorError.missingRepoState(profileID: profileID, repoID: repoID)
             }
             let effective = max(current, dbCurrent)
-            // `&+ 1` would wrap to 0 and overwrite an earlier commit at the same `(writerID, seq)` path.
-            guard effective < UInt64.max else {
+            guard effective < RepoStateAuthority.maxPersistableSeq else {
                 throw SeqAllocatorError.exhausted
             }
             let next = effective + 1
-            let signed = Int64(bitPattern: next)
+            let signed = try RepoStateAuthority.encodeSeq(next)
             try db.execute(
                 sql: """
                 UPDATE \(RepoStateRecord.databaseTableName)
@@ -64,25 +63,27 @@ actor SeqAllocator {
     }
 
     private func persist(value: UInt64) throws -> UInt64 {
-        // Bumps the persisted seq if `value` is higher than what the DB currently holds.
-        // Used by `observeRemoteMax` where conditional advance is the desired semantic.
-        // Returns the post-write DB value so the caller can match in-memory `current`
-        // to it; otherwise a rejected UPDATE would leave `current < dbValue` and
-        // future `value()` reads would under-report.
-        let signed = Int64(bitPattern: value)
         return try database.write { [profileID, repoID] db in
             guard let before = try Self.readPersistedSeq(db: db, profileID: profileID, repoID: repoID) else {
                 throw SeqAllocatorError.missingRepoState(profileID: profileID, repoID: repoID)
             }
+            guard value <= RepoStateAuthority.maxPersistableSeq else {
+                seqAllocatorLog.warning("ignore persist seq above persistable ceiling repo=\(repoID, privacy: .public) seq=\(value, privacy: .public)")
+                return before
+            }
+            guard value > before else {
+                return before
+            }
+            let signed = try RepoStateAuthority.encodeSeq(value)
             try db.execute(
                 sql: """
                 UPDATE \(RepoStateRecord.databaseTableName)
                 SET lastSeq = ?
-                WHERE profileID = ? AND repoID = ? AND lastSeq < ?
+                WHERE profileID = ? AND repoID = ?
                 """,
-                arguments: [signed, profileID, repoID, signed]
+                arguments: [signed, profileID, repoID]
             )
-            return max(before, value)
+            return value
         }
     }
 
@@ -95,6 +96,6 @@ actor SeqAllocator {
               let signed = row["lastSeq"] as? Int64 else {
             return nil
         }
-        return UInt64(bitPattern: signed)
+        return RepoStateAuthority.decodePersistedSeq(signed).value
     }
 }

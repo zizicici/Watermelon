@@ -196,10 +196,9 @@ enum BackupV2RuntimeBuilder {
         }
 
         let state = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: resolvedRepoID, writerID: writerID)
-        let initialSeq = UInt64(bitPattern: state.lastSeq)
-        let initialClock = UInt64(bitPattern: state.lastClock)
-        let allocator = SeqAllocator(database: databaseManager, profileID: profileID, repoID: resolvedRepoID, initial: initialSeq)
-        let lamport = PersistedLamportClock(database: databaseManager, profileID: profileID, repoID: resolvedRepoID, initial: initialClock)
+        let counters = RepoStateAuthority.counters(from: state)
+        let allocator = SeqAllocator(database: databaseManager, profileID: profileID, repoID: resolvedRepoID, initial: counters.lastSeq)
+        let lamport = PersistedLamportClock(database: databaseManager, profileID: profileID, repoID: resolvedRepoID, initial: counters.lastClock)
         // Dedicated metadata connection so commits/snapshots/liveness don't contend with worker uploads.
         let commitWriter = CommitLogWriter(client: metadataClient, basePath: profile.basePath)
         let snapshotWriter = SnapshotWriter(client: metadataClient, basePath: profile.basePath)
@@ -210,19 +209,12 @@ enum BackupV2RuntimeBuilder {
         // density and produce non-contiguous commit filenames for our writer.
         let materializer = RepoMaterializer(client: client, basePath: profile.basePath)
         let output = try await materializer.materialize(expectedRepoID: resolvedRepoID)
-        let remoteSeqMax = output.observedSeqByWriter[writerID] ?? 0
-        if remoteSeqMax > initialSeq {
-            try await allocator.observeRemoteMax(remoteSeqMax)
-        }
-        // Always observe: comparing the sanitized `output.state.observedClock`
-        // against a raw `initialClock` would skip recovery when the persisted
-        // row was poisoned (raw poison is numerically larger than any safe
-        // remote). The actor short-circuits when `external <= current`, and
-        // its persist path now overwrites a poisoned DB row.
+        try await RepoStateAuthority.observeSameWriterSeq(
+            writerID: writerID,
+            observedSeqByWriter: output.observedSeqByWriter,
+            allocator: allocator
+        )
         try await lamport.observe(output.state.observedClock)
-        // Belt-and-suspenders for the case where observe was a no-op (e.g.
-        // observedClock == 0 because no peer ops survived sanitisation): the
-        // DB row would otherwise stay poisoned until the next tickRange.
         try await lamport.repairPoisonedDBIfNeeded()
         let initialMaterialize: RepoMaterializer.MaterializeOutput? = output
 

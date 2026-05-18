@@ -126,8 +126,11 @@ actor V1MigrationService {
                     // Local DB high-water can lag remote when a peer already commits at this writerID
                     // (e.g. fresh install pulling existing repo): allocator would collide on same-writer
                     // seq, clock would emit values LWW-stale vs. existing V2 state.
-                    let remoteSeqMax = output.observedSeqByWriter[writerID] ?? 0
-                    try await allocator.observeRemoteMax(remoteSeqMax)
+                    try await RepoStateAuthority.observeSameWriterSeq(
+                        writerID: writerID,
+                        observedSeqByWriter: output.observedSeqByWriter,
+                        allocator: allocator
+                    )
                     try await clock.observe(output.state.observedClock)
                     existingV2Output = output
                 }
@@ -449,7 +452,7 @@ actor V1MigrationService {
         guard let row = try await identity.loadRepoState(profileID: profileID, repoID: repoID) else {
             return 0
         }
-        return UInt64(bitPattern: row.lastSeq)
+        return RepoStateAuthority.counters(from: row).lastSeq
     }
 
     private static func shouldRetryMigrationCommitWrite(_ error: Error) -> Bool {
@@ -466,6 +469,6 @@ actor V1MigrationService {
         guard let row = try await identity.loadRepoState(profileID: profileID, repoID: repoID) else {
             return 0
         }
-        return UInt64(bitPattern: row.lastClock)
+        return RepoStateAuthority.counters(from: row).lastClock
     }
 }
