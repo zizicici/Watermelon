@@ -258,6 +258,15 @@ final class V2MonthSession: BackupMonthStore {
 
 
     @discardableResult
+    func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta {
+        guard beginFlush() else {
+            throw FlushError.concurrentFlushRejected
+        }
+        defer { endFlush() }
+        return try await commitPendingAssetToRemoteLocked(ignoreCancellation: ignoreCancellation)
+    }
+
+    @discardableResult
     func flushToRemote(ignoreCancellation: Bool = false) async throws -> MonthManifestStore.FlushDelta {
         guard beginFlush() else {
             throw FlushError.concurrentFlushRejected
@@ -268,22 +277,56 @@ final class V2MonthSession: BackupMonthStore {
         }
         if !ignoreCancellation { try Task.checkCancellation() }
 
-        // Stranded snapshot retry from a prior flush's commit-OK / snapshot-FAIL.
-        // Runs only when indexes have no new pending ops, so the pinned seq still
-        // matches the in-memory state.
+        let commitResult: V2MonthCommitFlusher.Result?
         do {
-            if try await snapshotFlusher.flushRetryIfPending(ignoreCancellation: ignoreCancellation) {
-                dirty = false
-                return .none
-            }
+            commitResult = try await commitPendingAssetToRemoteLockedResult(
+                services: services,
+                ignoreCancellation: ignoreCancellation
+            )
         } catch {
+            throw error
+        }
+
+        let wroteSnapshot: Bool
+        do {
+            wroteSnapshot = try await snapshotFlusher.flushSnapshotIfPending(ignoreCancellation: ignoreCancellation)
+            dirty = indexes.hasUncommittedOps || snapshotFlusher.hasPendingSnapshotWork
+        } catch {
+            dirty = true
             throw FlushError.snapshotWriteFailed(
-                committedAssets: [],
-                committedTombstones: [],
+                committedAssets: commitResult?.committedAssets ?? [],
+                committedTombstones: commitResult?.committedTombstones ?? [],
                 underlying: error
             )
         }
 
+        return MonthManifestStore.FlushDelta(
+            didFlush: commitResult != nil || wroteSnapshot,
+            committedV2AssetFingerprints: commitResult?.committedAssets ?? [],
+            committedV2TombstoneFingerprints: commitResult?.committedTombstones ?? []
+        )
+    }
+
+    private func commitPendingAssetToRemoteLocked(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta {
+        guard let services = v2Services else { return .none }
+        guard let result = try await commitPendingAssetToRemoteLockedResult(
+            services: services,
+            ignoreCancellation: ignoreCancellation
+        ) else {
+            return .none
+        }
+        return MonthManifestStore.FlushDelta(
+            didFlush: true,
+            committedV2AssetFingerprints: result.committedAssets,
+            committedV2TombstoneFingerprints: result.committedTombstones
+        )
+    }
+
+    private func commitPendingAssetToRemoteLockedResult(
+        services: BackupV2RuntimeServices,
+        ignoreCancellation: Bool
+    ) async throws -> V2MonthCommitFlusher.Result? {
+        if !ignoreCancellation { try Task.checkCancellation() }
         let monthKey = LibraryMonthKey(year: year, month: month)
         let commitFlusher = V2MonthCommitFlusher(
             services: services,
@@ -296,37 +339,11 @@ final class V2MonthSession: BackupMonthStore {
             sessionWrittenCovered: snapshotFlusher.sessionWrittenCovered,
             ignoreCancellation: ignoreCancellation
         ) else {
-            // dirty + no ops = rebaseline request (corrupted snapshot at load).
-            do {
-                _ = try await snapshotFlusher.flushRebaselineIfPending(ignoreCancellation: ignoreCancellation)
-            } catch {
-                throw FlushError.snapshotWriteFailed(
-                    committedAssets: [],
-                    committedTombstones: [],
-                    underlying: error
-                )
-            }
-            dirty = false
-            return .none
+            return nil
         }
-
-        dirty = false
-        do {
-            try await snapshotFlusher.flushAfterCommit(seq: result.lastSeq, ignoreCancellation: ignoreCancellation)
-        } catch {
-            dirty = true
-            throw FlushError.snapshotWriteFailed(
-                committedAssets: result.committedAssets,
-                committedTombstones: result.committedTombstones,
-                underlying: error
-            )
-        }
-
-        return MonthManifestStore.FlushDelta(
-            didFlush: true,
-            committedV2AssetFingerprints: result.committedAssets,
-            committedV2TombstoneFingerprints: result.committedTombstones
-        )
+        snapshotFlusher.recordCommitted(seq: result.lastSeq)
+        dirty = true
+        return result
     }
 
     private func beginFlush() -> Bool {

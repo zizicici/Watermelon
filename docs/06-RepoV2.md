@@ -139,7 +139,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - `RepoMaterializer` 单 month snapshot 损坏 fallback：按 lamport 降序遍历该 month 的 snapshot，corrupt 的跳过取下一个；全损坏时回退到 empty + commit replay
 - BackupV2RuntimeServices 持有专用 `metadataClient`：commit / snapshot / liveness 不再与 worker upload 抢占同一 connection；shutdown 时 disconnect
 - `BackupCompatibilityError` 新增 `.repoIdentityMismatch` / `.requiresForegroundMigration`（i18n 14 locales），`prepareV2Runtime` / `verifyMonthV2` 把 `BackupV2RuntimeBuildError` 映射成它们，UI 不再看到 enum 名 + hex UUID
-- `RemoteIndexSyncService.committedAssetFingerprints()` 减去 `uncommittedV2Fingerprints`，V2 `flushToRemote` 返回 `FlushDelta`，BackupParallelExecutor / BackgroundBackupRunner flush 成功后 `markCommittedV2(delta)`：resume planner 不再跳过「物理文件已上传但 V2 commit 未 flush」的 asset
+- Unit 8 后，V2 row-writing asset 在 result 返回前已写 per-asset commit；`RemoteIndexSyncService.committedAssetFingerprints()` 不再扣 uncommitted-cache，只保留 physical-missing subtraction
 - `CommitLogWriter.alreadyExists` retry：V2 commit flush 在 alreadyExists 后 re-allocate seq 重写最多 4 次，覆盖本地 lastSeq drift / 多端写同 seq 文件名场景
 - `CommitLogWriter` 在 `bestEffortRetry` 路径上做 download + sha256 verify：非原子后端（SMB exists+upload）写完做一次回读校验，不一致时按 alreadyExists 处理触发上层 retry
 - `RepoVerifyMonthService` 物理路径 multi-path：以 `pathsByHash[hash]` 集合做 OR 命中，多 writer 同 hash 不同 leaf 不再被误判 missing
@@ -154,7 +154,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - V2 path 也走 `ensureRepoJSON`:`BackupV2RuntimeBuilder.build` 在 `.v2` 分支不再 lazy 读 repo.json,而是用 local DB 的 repoID 调 ensureRepoJSON 落盘。version 写成但 repo.json 写失败的半成品状态会被这次重写补齐;否则后续每次 session 都生成新 UUID
 - `SnapshotHeader` 加 `repoID` 字段(legacy 空字符串 backward-compat),materializer 同时按 repoID 过滤 snapshot 与 commit;之前只过滤 commit,foreign-repo snapshot 仍会污染 state/covered
 - 当时的 `makeSeedFromV2State` bridge 需要 dedup multi-path same hash：V2 允许同 hash 多 physical path(多 writer 撞名),但 V1 sqlite UNIQUE(contentHash) 不允许。该 bridge 已被 Iter 7 删除；当前 multi-path 由 `V2MonthSession` 原生保留
-- `processWithLocalCache` 的 `resources_reused_cached` 分支补 `markUncommittedV2`:之前只有 full upload 路径标记,cached-reuse 写完 asset+cache 但漏 mark,在 V2 commit 落盘前 pause/resume 会让 resume planner 跳过这条 fingerprint
+- `processWithLocalCache` 的 `resources_reused_cached` 分支和 full upload 一样走 `commitPendingAssetToRemote(ignoreCancellation: false)`，commit 成功后才 publish asset / 写本地 hash-index
 - BackupParallelExecutor / BackgroundBackupRunner 把 batch flush 触发条件从 `result.status == .success` 放宽到 `result.status != .failed`,让 cached-reuse `.skipped` 路径(monthStore 已 dirty)也参与 10-asset batch 提交节奏
 - `RepoBootstrap.ensureRepoJSON` 在 `.bestEffortRetry` 分支也回读 remote repo.json:非原子后端(SMB exists+upload TOCTOU)两个设备并发 bootstrap 时,各自都以为 created,read-back 后用对方真正落盘的 id 收敛
 - `AssetProcessor+Upload` `.bestEffortRetry` 路径加 remote size verify:size 不一致 → 视为 race → 触发 collision rename retry,避免 SMB 并发同名上传互相覆盖
@@ -229,7 +229,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - `WatermelonTests/RestoreServiceFallbackTests.swift`
 - `WatermelonTests/ConcurrentBootstrapRaceTests.swift`
 
-**Per-asset commit 仍延后**(plan §11):batch flush + `pendingV2*` + `markCommittedV2` 机制保留,直到 Stage 2 compaction 落地。详见 `docs/05-OpenIssues.md` §13。
+**Per-asset commit 已落地**：batch flush + `markCommittedV2` / inflight subtraction 机制已删除。当前每个 row-writing asset 写 commit；batch / final flush 写 snapshot cadence。剩余风险是旧 commit 文件 retention / compaction，见 `docs/05-OpenIssues.md` §12。
 
 ### Iter 6 加固
 
@@ -241,7 +241,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - `RemoteIndexSyncService.syncIndexV2` / `BackupRunPreparation.verifyMonthV2`:V2 repo 的 `.absent` repo.json 不再降级到 `expectedRepoID = nil`,直接抛错(broken identity state,backup-flow 才能修)
 - `RepoMaterializer` commit 收集阶段从 filename 推进 `observedSeqByWriter`,corrupt / 错名 commit 也把 seq 计入 cold-start max,allocator 不会再撞名循环耗尽 4 次重试
 - `RepoStateAuthority` 统一 `repo_state` counter 边界：`lastSeq` 以 `maxPersistableSeq = UInt64(Int64.max)` 为上限，因为 SQLite `INTEGER` 是 signed storage；负数 `lastSeq` 读入按 `0` 修复，same-writer remote seq 只有在不超过该上限时才推进本 writer allocator，越界 observation 不持久化/不进入 actor-local state，foreign-writer seq 不参与本地 allocator；remote clock 仍通过 `PersistedLamportClock.observe` 的既有 ceiling/repair 语义采纳，不经 `RepoStateAuthority` 包装
-- `BackupParallelExecutor` / `BackgroundBackupRunner` flushDelta 处理同时消费 `committedV2AssetFingerprints` 和 `committedV2TombstoneFingerprints`:tombstone 也从 uncommittedV2 集合中移除,不再残留到下次全量 materialize
+- `BackupParallelExecutor` / `BackgroundBackupRunner` 的 flush helper 同时消费 `committedV2AssetFingerprints` 和 `committedV2TombstoneFingerprints`:若防御性 flush 提交了遗留 pending ops，就用 `unsortedSnapshot()` publish 整个月到 `RepoCommittedView`
 - `SnapshotRowMapper.decodeHeader` 严格 covered 解析:bad pair / 类型错误 → 抛 `SnapshotWireError.malformed`,不再静默降级为空 covered 让坏 snapshot 当 baseline
 - `LocalVolumeClient.atomicCreate` 修 cleanup gap:source 打开失败也清空 destination;destination close 错误 surface(外接盘 unmount/写满有时只在 close 时报)
 - `SeqAllocator` 在 write transaction 内读取 DB high-water 后写 signed-safe `lastSeq`，不再用 signed `lastSeq < ?` 比较 high-bit 值；`PersistedLamportClock.persist` 仍用 conditional advance 保护 clock high-water
@@ -251,7 +251,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 ### `BackupResumePlanner` 切 `RemoteViewHandle`
 
 - `makePlan` 接受 `BackupResumeDedupMode`：V1 用 `completedAssetIDs`，V2 用 `RemoteViewHandle`
-- V2 模式用 `RemoteViewHandle.committedAssetFingerprintsByMonth` 去重；`RemoteIndexSyncService` 已经从 handle 中扣掉 uncommitted fingerprints，pre-flush pause 不会被误判完成
+- V2 模式用 `RemoteViewHandle.committedAssetFingerprintsByMonth` 去重；该 handle 直接反映 durable per-asset commits，并扣掉 physical-missing resources
 - retry / scoped / full 共用这条 fingerprint 覆盖过滤路径
 
 ### Iter 9 加固：`.perKey` 数据路径走 writerID / runID 后缀

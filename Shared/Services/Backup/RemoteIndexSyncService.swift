@@ -149,7 +149,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     }
 
     private let committedView: RepoCommittedView
-    private let inflightTracker: OptimisticInflightTracker
     private let optimisticMutationLock = NSLock()
     private var physicalPresenceOverlayFreshMonths: Set<LibraryMonthKey> = []
     private let syncGate = SyncGate()
@@ -159,15 +158,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         snapshotCache: RemoteLibrarySnapshotCache = RemoteLibrarySnapshotCache()
     ) {
         self.committedView = RepoCommittedView(cache: snapshotCache)
-        self.inflightTracker = OptimisticInflightTracker()
     }
 
     init(
-        committedView: RepoCommittedView,
-        inflightTracker: OptimisticInflightTracker
+        committedView: RepoCommittedView
     ) {
         self.committedView = committedView
-        self.inflightTracker = inflightTracker
     }
 
     func syncIndex(
@@ -236,10 +232,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 }
                 let overlayFresh = revisionUnchanged && probe.fresh
                 let (revision, snapshot) = committedView.currentSnapshotWithRevision()
-                let fingerprints = Self.committedFingerprints(
-                    from: snapshot,
-                    subtractingInflight: inflightTracker
-                )
+                let fingerprints = Self.committedFingerprints(from: snapshot)
                 let handle = RemoteViewHandle(
                     revision: revision,
                     committedAssetFingerprintsByMonth: fingerprints,
@@ -258,10 +251,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     private func handleFromCurrentSnapshot(overlayFresh: Bool) -> RemoteViewHandle {
         let captured = optimisticMutationLock.withLock {
             let (revision, snapshot) = committedView.currentSnapshotWithRevision()
-            let fingerprints = Self.committedFingerprints(
-                from: snapshot,
-                subtractingInflight: inflightTracker
-            )
+            let fingerprints = Self.committedFingerprints(from: snapshot)
             return (revision: revision, fingerprints: fingerprints)
         }
         return RemoteViewHandle(
@@ -290,7 +280,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
         let shouldResetSnapshot = await state.ensureRemoteContext(profileKey: Self.remoteProfileKey(profile))
         if shouldResetSnapshot {
-            resetCommittedViewAndUncommitted()
+            resetCommittedViewAndOverlayFreshness()
         }
 
         let alreadyV2 = await state.isV2Repo() == true
@@ -413,7 +403,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             basePath: profile.basePath,
             preMaterialized: preMaterialized
         )
-        let priorOverlay = resetUncommittedAndLoadMaterialize(output)
+        let priorOverlay = loadMaterializedCommittedView(output)
         do {
             _ = try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
         } catch is CancellationError {
@@ -556,26 +546,13 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     func remoteMonthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
         optimisticMutationLock.withLock {
             guard let delta = committedView.monthRawData(for: month) else { return nil }
-            let uncommitted = inflightTracker.readUncommittedAssets { $0[month] ?? [] }
-            return Self.filterHomeFacingDelta(delta, excludingAssetFingerprints: uncommitted)
+            return delta
         }
     }
 
     func currentState(since revision: UInt64?) -> RemoteLibrarySnapshotState {
         optimisticMutationLock.withLock {
-            let state = committedView.state(since: revision)
-            let uncommitted = inflightTracker.readUncommittedAssets { $0 }
-            guard !uncommitted.isEmpty else { return state }
-            return RemoteLibrarySnapshotState(
-                revision: state.revision,
-                isFullSnapshot: state.isFullSnapshot,
-                monthDeltas: state.monthDeltas.map { delta in
-                    Self.filterHomeFacingDelta(
-                        delta,
-                        excludingAssetFingerprints: uncommitted[delta.month] ?? []
-                    )
-                }
-            )
+            committedView.state(since: revision)
         }
     }
 
@@ -595,68 +572,29 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
     }
 
-    fileprivate func _markUncommitted(month: LibraryMonthKey, fingerprints: Set<Data>) {
-        optimisticMutationLock.withLock {
-            inflightTracker.markUncommittedAssets(month: month, fingerprints: fingerprints)
-        }
-    }
-
     fileprivate func _appendOptimisticAsset(
         _ asset: RemoteManifestAsset,
-        links: [RemoteAssetResourceLink]?,
-        markUncommitted: Bool
+        links: [RemoteAssetResourceLink]?
     ) {
         optimisticMutationLock.withLock {
-            if markUncommitted {
-                let month = LibraryMonthKey(year: asset.year, month: asset.month)
-                inflightTracker.markUncommittedAssets(month: month, fingerprints: [asset.assetFingerprint])
-            }
             committedView.applyOptimisticUpsert(asset: asset, links: links)
         }
     }
 
-    func recordCommittedFromFlushError(month: LibraryMonthKey, _ error: Error) {
-        if case let V2MonthSession.FlushError.snapshotWriteFailed(assets, tombstones, _) = error {
-            markCommittedV2(month: month, fingerprints: assets.union(tombstones))
-        } else {
-            syncLog.info("[SyncTiming] flush error before durable snapshot handoff for \(month.text): \(error.localizedDescription)")
-        }
-    }
-
-    func markCommittedV2(month: LibraryMonthKey, fingerprints: Set<Data>) {
-        guard !fingerprints.isEmpty else { return }
-        optimisticMutationLock.withLock {
-            if inflightTracker.markCommitted(month: month, fingerprints: fingerprints) {
-                committedView.markMonthsChanged([month])
-            }
-        }
-    }
-
-    func resetUncommittedV2() {
-        optimisticMutationLock.withLock {
-            let months = inflightTracker.reset()
-            if !months.isEmpty {
-                committedView.markMonthsChanged(months)
-            }
-        }
-    }
-
     func resetForProfileSwitch() async {
-        resetCommittedViewAndUncommitted()
+        resetCommittedViewAndOverlayFreshness()
         await state.reset()
     }
 
-    private func resetUncommittedAndLoadMaterialize(_ output: RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] {
+    private func loadMaterializedCommittedView(_ output: RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] {
         optimisticMutationLock.withLock {
-            _ = inflightTracker.reset()
             clearPhysicalPresenceOverlayFreshnessLocked()
             return committedView.loadFromMaterialize(output)
         }
     }
 
-    private func resetCommittedViewAndUncommitted() {
+    private func resetCommittedViewAndOverlayFreshness() {
         optimisticMutationLock.withLock {
-            _ = inflightTracker.reset()
             committedView.reset()
             clearPhysicalPresenceOverlayFreshnessLocked()
         }
@@ -688,31 +626,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     func committedAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
         optimisticMutationLock.withLock {
-            Self.committedFingerprints(
-                from: committedView.current(),
-                subtractingInflight: inflightTracker
-            )
+            Self.committedFingerprints(from: committedView.current())
         }
     }
 
-    private static func filterHomeFacingDelta(
-        _ delta: RemoteLibraryMonthDelta,
-        excludingAssetFingerprints: Set<Data>
-    ) -> RemoteLibraryMonthDelta {
-        guard !excludingAssetFingerprints.isEmpty else { return delta }
-        return RemoteLibraryMonthDelta(
-            month: delta.month,
-            resources: delta.resources,
-            assets: delta.assets.filter { !excludingAssetFingerprints.contains($0.assetFingerprint) },
-            assetResourceLinks: delta.assetResourceLinks.filter { !excludingAssetFingerprints.contains($0.assetFingerprint) },
-            physicallyMissingHashes: delta.physicallyMissingHashes
-        )
-    }
-
-    private static func committedFingerprints(
-        from snapshot: RemoteLibrarySnapshot,
-        subtractingInflight inflightTracker: OptimisticInflightTracker
-    ) -> PerMonth<Set<Data>> {
+    private static func committedFingerprints(from snapshot: RemoteLibrarySnapshot) -> PerMonth<Set<Data>> {
         var linksByMonthFP: [LibraryMonthKey: [Data: [RemoteAssetResourceLink]]] = [:]
         for link in snapshot.assetResourceLinks {
             let month = LibraryMonthKey(year: link.year, month: link.month)
@@ -738,13 +656,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             )
             if state.isHealthy {
                 byMonth.insert(asset.assetFingerprint, for: month)
-            }
-        }
-        inflightTracker.readUncommittedAssets { uncommittedAssets in
-            for month in uncommittedAssets.months {
-                if let fps = uncommittedAssets[month] {
-                    byMonth.subtract(fps, from: month)
-                }
             }
         }
         return byMonth
@@ -882,20 +793,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 struct OptimisticAssetWriter: Sendable {
     fileprivate let service: RemoteIndexSyncService
 
-    /// Inflight must be marked before publish — reverse ordering lets a reader see the asset as committed but not inflight, and skip it as done.
     func appendAsset(
         _ asset: RemoteManifestAsset,
-        links: [RemoteAssetResourceLink]?,
-        markUncommitted: Bool
+        links: [RemoteAssetResourceLink]?
     ) {
-        service._appendOptimisticAsset(asset, links: links, markUncommitted: markUncommitted)
+        service._appendOptimisticAsset(asset, links: links)
     }
 
     func appendResource(_ resource: RemoteManifestResource) {
         service._optimisticUpsertResource(resource)
-    }
-
-    func markUncommitted(month: LibraryMonthKey, fingerprints: Set<Data>) {
-        service._markUncommitted(month: month, fingerprints: fingerprints)
     }
 }

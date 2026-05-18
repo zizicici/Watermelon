@@ -44,6 +44,10 @@ private actor BackupThermalThrottle {
 struct BackupParallelExecutor: Sendable {
     static let flushInterval = BackupV2Constants.batchFlushInterval
 
+    static func foregroundFinalFlushIgnoresCancellation(paused: Bool, hasV2Services: Bool) -> Bool {
+        paused && !hasV2Services
+    }
+
     private let hashIndexRepository: ContentHashIndexRepository
     private let assetProcessor: AssetProcessor
     private let remoteIndexService: RemoteIndexSyncService
@@ -415,22 +419,17 @@ struct BackupParallelExecutor: Sendable {
                                 uploadsSinceFlush += 1
                                 if uploadsSinceFlush >= Self.flushInterval {
                                     do {
-                                        let delta = try await monthStore.flushToRemote(ignoreCancellation: false)
-                                        // Tombstones clear uncommittedV2 the same as commits do.
-                                        remoteIndexService.markCommittedV2(
+                                        _ = try await Self.flushMonthStorePublishingDefensiveCommits(
+                                            monthStore: monthStore,
                                             month: monthKey,
-                                            fingerprints: delta.committedV2AssetFingerprints
-                                                .union(delta.committedV2TombstoneFingerprints)
+                                            remoteIndexService: remoteIndexService,
+                                            ignoreCancellation: false
                                         )
                                     } catch {
                                         if let flushError = error as? V2MonthSession.FlushError,
                                            case .concurrentFlushRejected = flushError {
                                             uploadsSinceFlush = 0
                                             continue
-                                        }
-                                        if let flushError = error as? V2MonthSession.FlushError,
-                                           case .snapshotWriteFailed = flushError {
-                                            remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                                         }
                                         if error is CancellationError
                                             || (error as? V2MonthSession.FlushError)?.cancellationCause != nil {
@@ -555,11 +554,14 @@ struct BackupParallelExecutor: Sendable {
                     )
                 } else {
                     do {
-                        let delta = try await monthStore.flushToRemote(ignoreCancellation: workerState.paused)
-                        remoteIndexService.markCommittedV2(
+                        _ = try await Self.flushMonthStorePublishingDefensiveCommits(
+                            monthStore: monthStore,
                             month: monthKey,
-                            fingerprints: delta.committedV2AssetFingerprints
-                                .union(delta.committedV2TombstoneFingerprints)
+                            remoteIndexService: remoteIndexService,
+                            ignoreCancellation: Self.foregroundFinalFlushIgnoresCancellation(
+                                paused: workerState.paused,
+                                hasV2Services: monthStore.v2Services != nil
+                            )
                         )
                         if shouldFinishMonth {
                             let emitCompleted: () -> Void = {
@@ -660,7 +662,6 @@ struct BackupParallelExecutor: Sendable {
                             let isSnapshotWriteFailed: Bool
                             if let flushError = error as? V2MonthSession.FlushError,
                                case .snapshotWriteFailed = flushError {
-                                remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                                 isSnapshotWriteFailed = true
                             } else {
                                 isSnapshotWriteFailed = false
@@ -776,6 +777,74 @@ struct BackupParallelExecutor: Sendable {
             }
         }
         return true
+    }
+
+    @discardableResult
+    static func flushMonthStorePublishingDefensiveCommits(
+        monthStore: any BackupMonthStore,
+        month: LibraryMonthKey,
+        remoteIndexService: RemoteIndexSyncService,
+        ignoreCancellation: Bool
+    ) async throws -> MonthManifestStore.FlushDelta {
+        do {
+            let delta = try await monthStore.flushToRemote(ignoreCancellation: ignoreCancellation)
+            publishDefensiveFlushSnapshotIfNeeded(
+                monthStore: monthStore,
+                month: month,
+                remoteIndexService: remoteIndexService,
+                delta: delta
+            )
+            return delta
+        } catch {
+            publishDefensiveFlushSnapshotIfNeeded(
+                monthStore: monthStore,
+                month: month,
+                remoteIndexService: remoteIndexService,
+                error: error
+            )
+            throw error
+        }
+    }
+
+    static func publishDefensiveFlushSnapshotIfNeeded(
+        monthStore: any BackupMonthStore,
+        month: LibraryMonthKey,
+        remoteIndexService: RemoteIndexSyncService,
+        delta: MonthManifestStore.FlushDelta
+    ) {
+        let committed = delta.committedV2AssetFingerprints.union(delta.committedV2TombstoneFingerprints)
+        guard !committed.isEmpty else { return }
+        publishMonthSnapshot(monthStore: monthStore, month: month, remoteIndexService: remoteIndexService)
+    }
+
+    static func publishDefensiveFlushSnapshotIfNeeded(
+        monthStore: any BackupMonthStore,
+        month: LibraryMonthKey,
+        remoteIndexService: RemoteIndexSyncService,
+        error: Error
+    ) {
+        guard case let V2MonthSession.FlushError.snapshotWriteFailed(assets, tombstones, _) = error,
+              !assets.union(tombstones).isEmpty else {
+            return
+        }
+        publishMonthSnapshot(monthStore: monthStore, month: month, remoteIndexService: remoteIndexService)
+    }
+
+    private static func publishMonthSnapshot(
+        monthStore: any BackupMonthStore,
+        month: LibraryMonthKey,
+        remoteIndexService: RemoteIndexSyncService
+    ) {
+        let snapshot = monthStore.unsortedSnapshot()
+        remoteIndexService.replaceCachedMonth(
+            month,
+            resources: snapshot.resources,
+            assets: snapshot.assets,
+            links: snapshot.links,
+            physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
+                ? monthStore.physicallyMissingHashesSnapshot()
+                : nil
+        )
     }
 
     private func emitProgress(

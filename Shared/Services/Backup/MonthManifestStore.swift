@@ -597,7 +597,7 @@ final class MonthManifestStore {
 
     struct FlushDelta: Sendable {
         let didFlush: Bool
-        /// Asset fingerprints transitioned from "uploaded but uncommitted" to "V2 committed".
+        /// V2 fingerprints durably committed by this call, normally only from defensive flushes.
         let committedV2AssetFingerprints: Set<Data>
         let committedV2TombstoneFingerprints: Set<Data>
 

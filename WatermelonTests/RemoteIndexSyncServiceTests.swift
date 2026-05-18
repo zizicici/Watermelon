@@ -37,62 +37,17 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
             assetFingerprint: fp, resourceHash: contentHash,
             role: role, slot: slot, logicalName: "x.jpg"
         )
-        writer.appendAsset(asset, links: [link], markUncommitted: false)
+        writer.appendAsset(asset, links: [link])
         return fp
     }
 
-    func testCrossMonthSameFingerprint_committingMonthAKeepsMonthBPending() {
+    func testOptimisticallyAppendedAssetIsCommittedWithoutClearCall() {
         let service = RemoteIndexSyncService()
         let hash = TestFixtures.fingerprint(0xAB)
-
-        // Seed BOTH months complete so committed-by-month sees them. Without the
-        // resource+link, the asset would be filtered as phantom and the test
-        // wouldn't exercise the per-month uncommitted subtraction at all.
         let fp = seedCompleteAsset(in: service, month: monthA, contentHash: hash)
-        _ = seedCompleteAsset(in: service, month: monthB, contentHash: hash)
-
-        // Both workers upsert the same fingerprint optimistically.
-        let writer = service.makeOptimisticAssetWriter()
-        writer.markUncommitted(month: monthA, fingerprints: [fp])
-        writer.markUncommitted(month: monthB, fingerprints: [fp])
-
-        // A's flush completes — clears uncommitted only for monthA.
-        service.markCommittedV2(month: monthA, fingerprints: [fp])
-
         let byMonth = service.committedAssetFingerprintsByMonth()
-        // monthA: cached + uncommitted cleared → committed contains fp
-        XCTAssertTrue(byMonth[monthA]?.contains(fp) == true,
-                      "month A's flush succeeded — fp must be in committed for A")
-        // monthB: monthB's uncommitted still has fp → must NOT be committed for B.
-        XCTAssertNil(byMonth[monthB],
-                     "month B's flush hasn't run — fp must NOT be in committed for B")
-    }
-
-    func testResetUncommittedV2ClearsAllMonths() {
-        let service = RemoteIndexSyncService()
-        let h1 = TestFixtures.fingerprint(0xAA)
-        let h2 = TestFixtures.fingerprint(0xBB)
-        let fp1 = seedCompleteAsset(in: service, month: monthA, contentHash: h1)
-        let fp2 = seedCompleteAsset(in: service, month: monthB, contentHash: h2)
-        let writer = service.makeOptimisticAssetWriter()
-        writer.markUncommitted(month: monthA, fingerprints: [fp1])
-        writer.markUncommitted(month: monthB, fingerprints: [fp2])
-
-        // Before reset: both months have fp uncommitted → committed by-month is empty.
-        let before = service.committedAssetFingerprintsByMonth()
-        XCTAssertTrue(before.isEmpty, "uncommitted everywhere → no committed yet")
-
-        service.resetUncommittedV2()
-
-        let after = service.committedAssetFingerprintsByMonth()
-        XCTAssertEqual(after[monthA], [fp1])
-        XCTAssertEqual(after[monthB], [fp2])
-    }
-
-    func testMarkCommittedV2EmptySetNoOp() {
-        let service = RemoteIndexSyncService()
-        service.markCommittedV2(month: monthA, fingerprints: [])
-        XCTAssertTrue(service.committedAssetFingerprintsByMonth().isEmpty)
+        XCTAssertEqual(byMonth[monthA], [fp],
+                       "append happens after per-asset commit, so no separate commit-clear is needed")
     }
 
     func testCommittedFingerprints_excludesPhantomAsset() {
@@ -102,7 +57,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
             year: monthA.year, month: monthA.month, assetFingerprint: fp,
             creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
         )
-        service.makeOptimisticAssetWriter().appendAsset(phantom, links: nil, markUncommitted: false)
+        service.makeOptimisticAssetWriter().appendAsset(phantom, links: nil)
         let byMonth = service.committedAssetFingerprintsByMonth()
         XCTAssertNil(byMonth[monthA],
                      "phantom asset (no links) must not appear as committed")
@@ -126,7 +81,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
             assetFingerprint: fp, resourceHash: hash,
             role: role, slot: slot, logicalName: "x.jpg"
         )
-        service.makeOptimisticAssetWriter().appendAsset(asset, links: [link], markUncommitted: false)
+        service.makeOptimisticAssetWriter().appendAsset(asset, links: [link])
         let byMonth = service.committedAssetFingerprintsByMonth()
         XCTAssertNil(byMonth[monthA],
                      "asset with missing resource must not appear as committed")
@@ -158,7 +113,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         )
         let writer = service.makeOptimisticAssetWriter()
         writer.appendResource(resource)
-        writer.appendAsset(asset, links: [link], markUncommitted: false)
+        writer.appendAsset(asset, links: [link])
 
         XCTAssertTrue(service.committedAssetFingerprintsByMonth()[monthA]?.contains(fp) ?? false)
 

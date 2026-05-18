@@ -40,6 +40,9 @@ protocol BackupMonthStore: AnyObject {
     var physicallyMissingHashesAreAuthoritative: Bool { get }
 
     @discardableResult
+    func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta
+
+    @discardableResult
     func flushToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta
 }
 
@@ -52,5 +55,10 @@ extension MonthManifestStore: BackupMonthStore {
 extension BackupMonthStore {
     func upsertAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]) throws {
         try upsertAsset(asset, links: links, replacingSubsetFingerprints: [])
+    }
+
+    @discardableResult
+    func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta {
+        .none
     }
 }

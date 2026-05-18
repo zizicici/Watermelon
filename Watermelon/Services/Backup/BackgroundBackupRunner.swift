@@ -17,6 +17,14 @@ final class BackgroundBackupRunner {
     private static let profileCooldownHours = 18
     private static let profileCooldownInterval: TimeInterval = TimeInterval(profileCooldownHours) * 60 * 60
 
+    static func backgroundIntervalFlushIgnoresCancellation() -> Bool {
+        false
+    }
+
+    static func backgroundFinalFlushIgnoresCancellation() -> Bool {
+        true
+    }
+
     private let databaseManager: DatabaseManager
     private let keychainService: KeychainService
     private let storageClientFactory: StorageClientFactory
@@ -488,11 +496,11 @@ final class BackgroundBackupRunner {
                     uploadsSinceFlush += 1
                     if uploadsSinceFlush >= Self.flushInterval {
                         do {
-                            let delta = try await monthStore.flushToRemote(ignoreCancellation: true)
-                            assetProcessor.remoteIndexService.markCommittedV2(
+                            _ = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+                                monthStore: monthStore,
                                 month: monthKey,
-                                fingerprints: delta.committedV2AssetFingerprints
-                                    .union(delta.committedV2TombstoneFingerprints)
+                                remoteIndexService: assetProcessor.remoteIndexService,
+                                ignoreCancellation: Self.backgroundIntervalFlushIgnoresCancellation()
                             )
                         } catch {
                             if let flushError = error as? V2MonthSession.FlushError,
@@ -500,7 +508,6 @@ final class BackgroundBackupRunner {
                                 uploadsSinceFlush = 0
                                 continue
                             }
-                            assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                             let isCancel = error is CancellationError
                                 || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
                             if !isCancel {
@@ -531,18 +538,17 @@ final class BackgroundBackupRunner {
                 break
             }
             do {
-                let delta = try await monthStore.flushToRemote(ignoreCancellation: true)
-                assetProcessor.remoteIndexService.markCommittedV2(
+                _ = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+                    monthStore: monthStore,
                     month: monthKey,
-                    fingerprints: delta.committedV2AssetFingerprints
-                        .union(delta.committedV2TombstoneFingerprints)
+                    remoteIndexService: assetProcessor.remoteIndexService,
+                    ignoreCancellation: Self.backgroundFinalFlushIgnoresCancellation()
                 )
             } catch {
                 if let flushError = error as? V2MonthSession.FlushError,
                    case .concurrentFlushRejected = flushError {
                     continue
                 }
-                assetProcessor.remoteIndexService.recordCommittedFromFlushError(month: monthKey, error)
                 let isCancel = error is CancellationError
                     || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
                 if !isCancel {

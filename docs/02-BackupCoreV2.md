@@ -118,7 +118,7 @@
    - 批量读取本地 hash cache
    - 逐 asset 调 `AssetProcessor.process(...)`
 5. 每处理 10 个非 failed 结果，就对当前 `BackupMonthStore` 调一次 batch `flushToRemote(...)`；月末仍兜底 flush
-6. V2 flush 的 `FlushDelta` 会清理 `RemoteIndexSyncService` 的 uncommitted fingerprints；snapshot 写失败但 commit 已落盘时也会记录已 durable 的 fingerprints
+6. V2 asset row 写入后立刻通过 per-asset commit 落盘；批量 flush 主要写 snapshot，若防御性 commit 了遗留 pending ops，调用方会先 publish 月快照
 7. 最终 flush 成功后若提供了 `onMonthUploaded`，会先执行月级收尾；收尾 `.success` 才发出 `.monthChanged(.completed)`，`.downloadIncomplete` 会发出对应状态，`.failed` 走 fatal failure
 
 ## 6. 单 asset 处理
@@ -221,10 +221,11 @@
 V2 当前主路径：
 
 1. `V2MonthSession` 在内存里维护当月 resources / assets / links / tombstones
-2. `flushToRemote(...)` 先通过 `V2MonthCommitFlusher` 写 commit jsonl，再通过 `V2MonthSnapshotFlusher` 写 snapshot jsonl
-3. 每 10 个非 failed asset 触发一次 batch flush，月末或 pause/connection-loss 收束时再兜底 flush
-4. commit 已落盘但 snapshot 写失败时，错误会携带 `committedAssets / committedTombstones`，调用方必须先清理对应 uncommitted fingerprints 再继续传播错误
-5. `V2MonthSession.loadOrCreate(...)` 会列出真实月份目录，避免“文件已存在但 V2 metadata 未 flush”的 orphan 造成重名冲突
+2. `commitPendingAssetToRemote(...)` 对 row-writing asset 写 commit jsonl，不写 snapshot
+3. `flushToRemote(...)` 防御性提交遗留 pending ops 后，通过 `V2MonthSnapshotFlusher` 写覆盖当前 durable commits 的 snapshot
+4. 每 10 个非 failed asset 触发一次 snapshot-cadence flush，月末或 pause/connection-loss 收束时再兜底 flush
+5. commit 已落盘但 snapshot 写失败时，错误会携带 `committedAssets / committedTombstones`；调用方先 publish 月快照再继续传播错误
+6. `V2MonthSession.loadOrCreate(...)` 会列出真实月份目录，避免“文件已存在但 V2 metadata 未 flush”的 orphan 造成重名冲突
 
 V1 兼容路径仍由 `MonthManifestStore` 维护 sqlite manifest：本地 sqlite 改动先落临时文件，月末 `flushToRemote(...)` 上传 `.watermelon_manifest.sqlite`。`MonthManifestStore` 实现拆为三段：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。
 

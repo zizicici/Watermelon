@@ -220,7 +220,7 @@
 4. 分批读取 PHAsset（每批 500）
 5. 调 `AssetProcessor.process(...)` 执行单 asset 上传
 6. 每 10 个非 failed asset result 对当前 `BackupMonthStore` 做一次 batch flush；月末仍兜底 flush
-7. V2 flush 通过 `FlushDelta` 清理 `RemoteIndexSyncService` 的 uncommitted fingerprints；最终 flush 后先执行 `onMonthUploaded` 月级收尾，再按结果进入 `completed` / `downloadIncomplete` / fatal failure
+7. V2 asset result 返回前已写 durable commit；每 10 个非 failed asset 的 flush 主要写 snapshot，防御性 commit delta 会先 publish 月快照；最终 flush 后先执行 `onMonthUploaded` 月级收尾，再按结果进入 `completed` / `downloadIncomplete` / fatal failure
 
 ### `AssetProcessor`（`AssetProcessor.swift` + `+Naming` + `+Upload`）
 
@@ -249,7 +249,7 @@
 ### `RemoteIndexSyncService` / `RemoteLibrarySnapshotCache`（`Shared/Services/Backup/`）
 
 1. `RemoteIndexSyncService` 先 inspect 远端格式：V2 走 `RepoMaterializer.materialize(expectedRepoID:)`，V1 扫描 `YYYY/MM/.watermelon_manifest.sqlite` 摘要并按 changed/removed months 增量下载
-2. V2 同步还会刷新 physical-presence overlay，并把 `uncommittedV2` fingerprints 从 Home-facing snapshot 中扣掉，避免 pause/resume 把未 durable 的 asset 当成已完成
+2. V2 同步还会刷新 physical-presence overlay；Home-facing committed fingerprints 只扣掉物理文件缺失的资源，per-asset commit 已移除 uncommitted-cache 层
 3. `RemoteLibrarySnapshotCache` 维护内存态完整快照与 `revision`，向 Home 暴露 `currentState(since:)` / `monthRawData(for:)` 等接口
 
 ### `RemoteMaintenanceController`（`Watermelon/Services/Backup/`）

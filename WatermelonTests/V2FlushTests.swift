@@ -116,6 +116,214 @@ final class V2FlushTests: XCTestCase {
         XCTAssertEqual(materializedLink.logicalName, "photo.jpg")
     }
 
+    func testCommitPendingAssetWritesCommitWithoutSnapshot() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        let rows = makeSingleAssetRows(assetByte: 0xA1, hashByte: 0xA2, name: "commit-only.jpg")
+        _ = try store.upsertResource(rows.resource)
+        try store.upsertAsset(rows.asset, links: [rows.link])
+
+        let delta = try await store.commitPendingAssetToRemote(ignoreCancellation: false)
+
+        XCTAssertTrue(delta.didFlush)
+        XCTAssertEqual(delta.committedV2AssetFingerprints, [rows.asset.assetFingerprint])
+        let counts = await repoMetadataCounts(client)
+        XCTAssertEqual(counts.commits, 1)
+        XCTAssertEqual(counts.snapshots, 0)
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        XCTAssertNotNil(output.state.months[monthKey]?.assets[rows.asset.assetFingerprint])
+    }
+
+    func testCommitPendingAssetNoOpWhenNoPendingOps() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let delta = try await store.commitPendingAssetToRemote(ignoreCancellation: false)
+
+        XCTAssertFalse(delta.didFlush)
+        let counts = await repoMetadataCounts(client)
+        XCTAssertEqual(counts.commits, 0)
+        XCTAssertEqual(counts.snapshots, 0)
+        let lamportValue = await v2.lamport.value()
+        let seqValue = await v2.seqAllocator.value()
+        XCTAssertEqual(lamportValue, 0)
+        XCTAssertEqual(seqValue, 0)
+    }
+
+    func testFlushIgnoreCancellationBoundaryDecisions() {
+        XCTAssertFalse(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
+            paused: true,
+            hasV2Services: true
+        ))
+        XCTAssertTrue(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
+            paused: true,
+            hasV2Services: false
+        ))
+        XCTAssertFalse(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
+            paused: false,
+            hasV2Services: false
+        ))
+        XCTAssertFalse(BackgroundBackupRunner.backgroundIntervalFlushIgnoresCancellation())
+        XCTAssertTrue(BackgroundBackupRunner.backgroundFinalFlushIgnoresCancellation())
+    }
+
+    func testFlushWritesSnapshotOverPriorPerAssetCommits() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let first = makeSingleAssetRows(assetByte: 0xB1, hashByte: 0xB2, name: "first.jpg")
+        _ = try store.upsertResource(first.resource)
+        try store.upsertAsset(first.asset, links: [first.link])
+        _ = try await store.commitPendingAssetToRemote(ignoreCancellation: false)
+
+        let second = makeSingleAssetRows(assetByte: 0xB3, hashByte: 0xB4, name: "second.jpg")
+        _ = try store.upsertResource(second.resource)
+        try store.upsertAsset(second.asset, links: [second.link])
+        _ = try await store.commitPendingAssetToRemote(ignoreCancellation: false)
+
+        let delta = try await store.flushToRemote(ignoreCancellation: false)
+
+        XCTAssertTrue(delta.didFlush)
+        XCTAssertTrue(delta.committedV2AssetFingerprints.isEmpty)
+        let counts = await repoMetadataCounts(client)
+        XCTAssertEqual(counts.commits, 2)
+        XCTAssertEqual(counts.snapshots, 1)
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[monthKey])
+        XCTAssertNotNil(monthState.assets[first.asset.assetFingerprint])
+        XCTAssertNotNil(monthState.assets[second.asset.assetFingerprint])
+        let covered = output.coveredByMonth[monthKey] ?? .empty
+        XCTAssertTrue(covered.contains(writerID: writerID, seq: 1))
+        XCTAssertTrue(covered.contains(writerID: writerID, seq: 2))
+    }
+
+    func testSnapshotRetryCoversCommitsInterleavedAfterFailedAttempt() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let first = makeSingleAssetRows(assetByte: 0xD1, hashByte: 0xD2, name: "first.jpg")
+        _ = try store.upsertResource(first.resource)
+        try store.upsertAsset(first.asset, links: [first.link])
+        _ = try await store.commitPendingAssetToRemote(ignoreCancellation: false)
+
+        let occupiedSnapshotPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 2, writerID: writerID, runID: runID
+        )
+        await client.injectFile(path: occupiedSnapshotPath, data: Data("occupied".utf8))
+        do {
+            _ = try await store.flushToRemote(ignoreCancellation: false)
+            XCTFail("expected occupied snapshot path to fail")
+        } catch V2MonthSession.FlushError.snapshotWriteFailed {
+        }
+
+        let second = makeSingleAssetRows(assetByte: 0xD3, hashByte: 0xD4, name: "second.jpg")
+        _ = try store.upsertResource(second.resource)
+        try store.upsertAsset(second.asset, links: [second.link])
+        _ = try await store.commitPendingAssetToRemote(ignoreCancellation: false)
+        _ = try await store.flushToRemote(ignoreCancellation: false)
+
+        let reader = SnapshotReader(client: client, basePath: basePath)
+        let snapshots = try await reader.listSnapshotFilenames()
+            .compactMap { filename -> (filename: String, parsed: RepoLayout.ParsedSnapshotFilename)? in
+                guard let parsed = RepoLayout.parseSnapshotFilename(filename),
+                      parsed.month == monthKey else {
+                    return nil
+                }
+                return (filename, parsed)
+            }
+        let latest = try XCTUnwrap(snapshots.max { $0.parsed.lamport < $1.parsed.lamport })
+        let snapshot = try await reader.read(filename: latest.filename)
+
+        XCTAssertTrue(snapshot.header.covered.contains(writerID: writerID, seq: 1))
+        XCTAssertTrue(snapshot.header.covered.contains(writerID: writerID, seq: 2))
+        XCTAssertEqual(
+            Set(snapshot.assets.map(\.assetFingerprint)),
+            [first.asset.assetFingerprint, second.asset.assetFingerprint]
+        )
+    }
+
+    func testDefensiveFlushPublishesCommittedSnapshotAtCallSite() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        let rows = makeSingleAssetRows(assetByte: 0xC1, hashByte: 0xC2, name: "defensive.jpg")
+        _ = try store.upsertResource(rows.resource)
+        try store.upsertAsset(rows.asset, links: [rows.link])
+        let remoteIndexService = RemoteIndexSyncService()
+
+        let delta = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+            monthStore: store,
+            month: monthKey,
+            remoteIndexService: remoteIndexService,
+            ignoreCancellation: false
+        )
+
+        XCTAssertEqual(delta.committedV2AssetFingerprints, [rows.asset.assetFingerprint])
+        XCTAssertEqual(remoteIndexService.committedAssetFingerprintsByMonth()[monthKey], [rows.asset.assetFingerprint])
+    }
+
+    func testDefensiveFlushPublishesBeforeSnapshotFailurePropagation() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        let occupiedSnapshotPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: monthKey, lamport: 2, writerID: writerID, runID: runID
+        )
+        await client.injectFile(path: occupiedSnapshotPath, data: Data("occupied".utf8))
+        let rows = makeSingleAssetRows(assetByte: 0xC3, hashByte: 0xC4, name: "snapshot-fail.jpg")
+        _ = try store.upsertResource(rows.resource)
+        try store.upsertAsset(rows.asset, links: [rows.link])
+        let remoteIndexService = RemoteIndexSyncService()
+
+        do {
+            _ = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+                monthStore: store,
+                month: monthKey,
+                remoteIndexService: remoteIndexService,
+                ignoreCancellation: false
+            )
+            XCTFail("expected occupied snapshot path to fail")
+        } catch V2MonthSession.FlushError.snapshotWriteFailed(let committedAssets, _, _) {
+            XCTAssertEqual(committedAssets, [rows.asset.assetFingerprint])
+        }
+
+        XCTAssertEqual(remoteIndexService.committedAssetFingerprintsByMonth()[monthKey], [rows.asset.assetFingerprint])
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        XCTAssertNotNil(output.state.months[monthKey]?.assets[rows.asset.assetFingerprint])
+
+        _ = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+            monthStore: store,
+            month: monthKey,
+            remoteIndexService: remoteIndexService,
+            ignoreCancellation: false
+        )
+        let counts = await repoMetadataCounts(client)
+        XCTAssertEqual(counts.snapshots, 2, "occupied test file plus retry snapshot should both be present")
+    }
+
     func testFlushV2ReturnsTombstoneFingerprintsInDelta() async throws {
         // Tombstone-only flush: applyDeletions adds to pending tombstones; flush
         // reports them in committedV2TombstoneFingerprints.
@@ -164,7 +372,7 @@ final class V2FlushTests: XCTestCase {
 
         let delta = try await store.flushToRemote(ignoreCancellation: false)
         XCTAssertTrue(delta.committedV2TombstoneFingerprints.contains(fp),
-                      "tombstone fingerprint must be reported in FlushDelta so caller can clear uncommittedV2")
+                      "tombstone fingerprint must be reported in FlushDelta for defensive publication")
         XCTAssertTrue(delta.committedV2AssetFingerprints.contains(newFP),
                       "superseding asset must be reported in FlushDelta")
 
@@ -1170,6 +1378,59 @@ final class V2FlushTests: XCTestCase {
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),
             sweepTask: nil
+        )
+    }
+
+    private func makeSingleAssetRows(
+        assetByte: UInt8,
+        hashByte: UInt8,
+        name: String
+    ) -> (
+        asset: RemoteManifestAsset,
+        resource: RemoteManifestResource,
+        link: RemoteAssetResourceLink
+    ) {
+        let hash = TestFixtures.fingerprint(hashByte)
+        let assetFingerprint = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let physicalPath = "2026/01/\(name)"
+        let asset = RemoteManifestAsset(
+            year: year,
+            month: month,
+            assetFingerprint: assetFingerprint,
+            creationDateMs: 1_700_000_000_000,
+            backedUpAtMs: 1_700_000_001_000,
+            resourceCount: 1,
+            totalFileSizeBytes: 100
+        )
+        let resource = RemoteManifestResource(
+            year: year,
+            month: month,
+            physicalRemotePath: physicalPath,
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 0
+        )
+        let link = RemoteAssetResourceLink(
+            year: year,
+            month: month,
+            assetFingerprint: assetFingerprint,
+            resourceHash: hash,
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            logicalName: name
+        )
+        return (asset, resource, link)
+    }
+
+    private func repoMetadataCounts(_ client: InMemoryRemoteStorageClient) async -> (commits: Int, snapshots: Int) {
+        let files = await client.snapshotFiles().keys
+        return (
+            files.filter { $0.hasPrefix(RepoLayout.commitsDirectoryPath(base: basePath) + "/") }.count,
+            files.filter { $0.hasPrefix(RepoLayout.snapshotsDirectoryPath(base: basePath) + "/") }.count
         )
     }
 

@@ -9,11 +9,14 @@ final class V2MonthSnapshotFlusher {
     /// Tracks durable commits so later snapshots do not replay them.
     private(set) var sessionWrittenCovered: CoveredRanges = .empty
 
-    /// Stranded commits must be snapshotted before new ops.
-    private(set) var pendingSnapshotRetrySeq: UInt64?
+    private var pendingSnapshotWork = false
 
     /// Corrupted snapshots force a clean baseline before normal flushing resumes.
     private(set) var pendingRebaselineOnly: Bool = false
+
+    var hasPendingSnapshotWork: Bool {
+        pendingSnapshotWork || pendingRebaselineOnly
+    }
 
     init(
         services: BackupV2RuntimeServices,
@@ -31,45 +34,24 @@ final class V2MonthSnapshotFlusher {
         pendingRebaselineOnly = true
     }
 
-    func flushRetryIfPending(ignoreCancellation: Bool) async throws -> Bool {
-        guard let retrySeq = pendingSnapshotRetrySeq, !indexes.hasUncommittedOps else {
-            return false
-        }
-        try await writeSnapshot(ownCommitSeq: retrySeq, ignoreCancellation: ignoreCancellation)
-        pendingSnapshotRetrySeq = nil
-        pendingRebaselineOnly = false
-        return true
-    }
-
-    func flushRebaselineIfPending(ignoreCancellation: Bool) async throws -> Bool {
-        guard pendingRebaselineOnly else { return false }
-        try await writeSnapshot(ownCommitSeq: nil, ignoreCancellation: ignoreCancellation)
-        pendingRebaselineOnly = false
-        return true
-    }
-
-    func flushAfterCommit(seq: UInt64, ignoreCancellation: Bool) async throws {
-        // Record covered seq before snapshot write so retry does not replay a durable commit.
+    func recordCommitted(seq: UInt64) {
         sessionWrittenCovered.add(writerID: services.writerID, seq: seq)
-        do {
-            try await writeSnapshot(ownCommitSeq: seq, ignoreCancellation: ignoreCancellation)
-            pendingSnapshotRetrySeq = nil
-            pendingRebaselineOnly = false
-        } catch {
-            pendingSnapshotRetrySeq = seq
-            pendingRebaselineOnly = false
-            throw error
-        }
+        pendingSnapshotWork = true
+        pendingRebaselineOnly = false
     }
 
-    private func writeSnapshot(ownCommitSeq: UInt64?, ignoreCancellation: Bool) async throws {
+    func flushSnapshotIfPending(ignoreCancellation: Bool) async throws -> Bool {
+        guard hasPendingSnapshotWork else { return false }
+        try await writeSnapshot(ignoreCancellation: ignoreCancellation)
+        pendingSnapshotWork = false
+        pendingRebaselineOnly = false
+        return true
+    }
+
+    private func writeSnapshot(ignoreCancellation: Bool) async throws {
         // Snapshot state must stay unfiltered to preserve covered-range replay.
         let snapshotState = indexes.currentMaterializedState()
-        var covered = materializedCovered.merging(sessionWrittenCovered)
-        // Peer-derived rebaseline values come through materializedCovered, not own seqs.
-        if let ownSeq = ownCommitSeq {
-            covered.add(writerID: services.writerID, seq: ownSeq)
-        }
+        let covered = materializedCovered.merging(sessionWrittenCovered)
         let header = SnapshotHeader(
             version: SnapshotHeader.currentVersion,
             scope: CommitHeader.monthScope(monthKey),

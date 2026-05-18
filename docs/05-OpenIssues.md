@@ -89,18 +89,11 @@ V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1
 2. `SFTPConnectionParams` / `SFTPCredentialBlob` / `RemotePathBuilder` 已加 `nonisolated`；遗留的 `ExternalVolumeConnectionParams` / `WebDAVConnectionParams` / `S3ConnectionParams` 还没加，目前是 warning（"main actor-isolated conformance ... cannot be used in nonisolated context; this is an error in the Swift 6 language mode"），未来打开 Swift 6 模式会变 error。
 3. 修法是给这三个类型也加 `nonisolated`，与 SFTP 的处理一致；本仓库未跟 SFTP 的改动一起做，避免扩大 PR 范围。
 
-## 12. V2 batch-flush + uncommitted-cache 机制保留(直到 Stage 2 compaction)
+## 12. V2 batch-flush + uncommitted-cache 机制（已由 Unit 8 解决）
 
-V2 cutover 后,`MonthManifestStore` 的 V2 路径在 Iter 7 已迁出到 `V2MonthSession`(in-memory,无 sqlite)。但「optimistic-cache + deferred V2 commit」的复杂度仍在:
+Unit 8 已把 V2 row-writing asset 改为 per-asset commit：`AssetProcessor` 在 publish asset / 写本地 hash-index 前调用 `commitPendingAssetToRemote(ignoreCancellation: false)`。每 10 个非 failed 结果的 flush cadence 保留，但职责变为写 compacting snapshot；`markUncommittedV2` / `markCommittedV2` / inflight subtraction 链已删除。
 
-- 每 10 个非 failed 结果才 flush 一次 commit + snapshot(`BackupV2Constants.batchFlushInterval`)
-- AssetProcessor 把刚 upsert 的 fingerprint 标记为 `markUncommittedV2`,resume planner 用 `committedAssetFingerprints()` 减去这部分
-- `flushToRemote` 返回 `FlushDelta`,callers 调 `markCommittedV2(asset ∪ tombstone)` 把已 commit 的从 uncommitted 集合清掉
-- 这套机制天生 race-prone,review 第 3-6 轮发现的 bug 大部分集中在「漏 mark / 漏清 / 漏 union 」这条链上(R1.4 / R1.5 / 5R.8 / 6R.8)
-
-**真消除方案** = per-asset commit(plan §11 / Stage 2):每个 asset 写一个微 commit,无 batch / 无 pending / 无 cache 标记。代价是 commit 文件数量 10×,需要先建 compaction 基础设施(把多个微 commit 合并成一个)才能 ship。
-
-**当前决定:保留现状直到 Stage 2 compaction 落地。** 锁定语义靠 `WatermelonTests/V2FlushTests.swift`(round-trip flush + tombstone delta)。
+仍未解决的是 commit 文件长期增长：当前 snapshot 降低 replay 成本，但不删除旧 commit。安全 compaction / retention policy 仍需单独设计。
 
 ## 13. V2 元数据 atomic-create 在 `.overwritePossible` 后端的残留风险
 
