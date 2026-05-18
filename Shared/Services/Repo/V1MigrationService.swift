@@ -453,65 +453,13 @@ actor V1MigrationService {
     }
 
     private static func shouldRetryMigrationCommitWrite(_ error: Error) -> Bool {
-        if error is CancellationError { return false }
+        if RemoteWriteClassifier.isCancellation(error) { return false }
         if case CommitLogWriter.WriteError.alreadyExists = error { return true }
         if case CommitLogWriter.WriteError.encodingFailed(_) = error { return false }
         if case CommitLogWriter.WriteError.ioFailure(let underlying) = error {
-            return isTransientMigrationCommitWriteError(underlying)
+            return RemoteWriteClassifier.classifyVerifyFailure(underlying) == .transient
         }
-        return isTransientMigrationCommitWriteError(error)
-    }
-
-    private static func isTransientMigrationCommitWriteError(_ error: Error) -> Bool {
-        if error is CancellationError { return false }
-        if isStorageNotFoundError(error) { return false }
-        if let storage = error as? RemoteStorageClientError {
-            switch storage {
-            case .notConnected, .unavailable:
-                return true
-            case .externalStorageUnavailable, .invalidConfiguration, .unsupportedStorageType(_):
-                return false
-            case .underlying(let underlying):
-                return isTransientMigrationCommitWriteError(underlying)
-            }
-        }
-        if SMBErrorClassifier.isConnectionUnavailable(error) ||
-            WebDAVErrorClassifier.isConnectionUnavailable(error) ||
-            S3ErrorClassifier.isConnectionUnavailable(error) ||
-            SFTPErrorClassifier.isConnectionUnavailable(error) {
-            return true
-        }
-        for nsError in nsErrorChain(error) {
-            if nsError.domain == WebDAVClient.errorDomain,
-               (500 ... 599).contains(nsError.code) || nsError.code == 408 || nsError.code == 429 {
-                return true
-            }
-            if nsError.domain == S3ErrorClassifier.errorDomain {
-                if let status = nsError.userInfo[S3ErrorClassifier.userInfoStatusCodeKey] as? Int,
-                   (500 ... 599).contains(status) || status == 408 || status == 429 {
-                    return true
-                }
-                if let serverCode = nsError.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String,
-                   serverCode == "InternalError" || serverCode == "SlowDown" || serverCode == "ServiceUnavailable" {
-                    return true
-                }
-            }
-        }
-        return false
-    }
-
-    private static func nsErrorChain(_ error: Error) -> [NSError] {
-        var collected: [NSError] = []
-        var pending: [NSError] = [error as NSError]
-        var visited: Set<ObjectIdentifier> = []
-        while let current = pending.popLast() {
-            guard visited.insert(ObjectIdentifier(current)).inserted else { continue }
-            collected.append(current)
-            if let underlying = current.userInfo[NSUnderlyingErrorKey] as? Error {
-                pending.append(underlying as NSError)
-            }
-        }
-        return collected
+        return RemoteWriteClassifier.classifyVerifyFailure(error) == .transient
     }
 
     private func initialClock(repoID: String, profileID: Int64) async throws -> UInt64 {

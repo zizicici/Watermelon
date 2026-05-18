@@ -44,7 +44,7 @@ nonisolated struct IdentityClaimStore: Sendable {
         } catch {
             // Missing identity directory is legitimate pre-claim state.
             if isStorageNotFoundError(error) { return ClaimElectionResult(repoID: nil, ignoredSelfCorrupt: false) }
-            throw error
+            throw RemoteWriteClassifier.normalizedCancellation(error)
         }
         if let malformedDirectory = entries.first(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
             throw malformedMetadataDirectoryError(
@@ -123,32 +123,34 @@ nonisolated struct IdentityClaimStore: Sendable {
             try await client.download(remotePath: claimPath, localURL: temp)
         } catch {
             if isStorageNotFoundError(error) { return nil }
-            throw error
+            throw RemoteWriteClassifier.normalizedCancellation(error)
         }
         let data = try Data(contentsOf: temp)
-        guard let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let landedRepoID = dict["repo_id"] as? String, !landedRepoID.isEmpty,
-              let landedWriterID = dict["writer_id"] as? String, landedWriterID == writerID,
-              let landedTs = Self.strictInt64(dict["created_at_ms"]) else {
+        guard let wire = try? IdentityClaimWire(data: data),
+              wire.writerID == writerID else {
             return nil
         }
-        return IdentityClaim(repoID: landedRepoID, writerID: landedWriterID, createdAtMs: landedTs)
+        return IdentityClaim(repoID: wire.repoID, writerID: wire.writerID, createdAtMs: wire.createdAtMs)
     }
 
 
     /// Only 0-byte (atomicCreate half-failed) is safe to clear; any other content might be canonical.
     func healZeroByteSelfClaim(writerID: String) async throws {
-        let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
-        guard let meta = try await metadataFileIfPresent(path: claimPath, description: "identity claim", code: 16) else { return }
-        if meta.size > 0 { return }
-        let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("self-claim-preflight-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: temp) }
-        try await client.download(remotePath: claimPath, localURL: temp)
-        // Surface local-read failures: silently treating them as empty would delete a non-zero remote claim under disk pressure.
-        let data = try Data(contentsOf: temp)
-        guard data.isEmpty else { return }
-        try await client.delete(path: claimPath)
+        do {
+            let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
+            guard let meta = try await metadataFileIfPresent(path: claimPath, description: "identity claim", code: 16) else { return }
+            if meta.size > 0 { return }
+            let temp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("self-claim-preflight-\(UUID().uuidString).json")
+            defer { try? FileManager.default.removeItem(at: temp) }
+            try await client.download(remotePath: claimPath, localURL: temp)
+            // Surface local-read failures: silently treating them as empty would delete a non-zero remote claim under disk pressure.
+            let data = try Data(contentsOf: temp)
+            guard data.isEmpty else { return }
+            try await client.delete(path: claimPath)
+        } catch {
+            throw RemoteWriteClassifier.normalizedCancellation(error)
+        }
     }
 
 
@@ -160,15 +162,12 @@ nonisolated struct IdentityClaimStore: Sendable {
         // Surface local-read failures: silently classifying as zero-byte would delete and reclaim a healthy remote on disk pressure.
         let data = try Data(contentsOf: temp)
         if data.isEmpty { return .zeroByte }
-        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let landedWriterID = dict["writer_id"] as? String,
-              landedWriterID == writerID,
-              let landedRepoID = dict["repo_id"] as? String, !landedRepoID.isEmpty,
-              Self.strictInt64(dict["created_at_ms"]) != nil else {
+        guard let wire = try? IdentityClaimWire(data: data),
+              wire.writerID == writerID else {
             identityClaimStoreLog.warning("claim at \(claimPath, privacy: .public) corrupt or carries a foreign writerID — reclaiming")
             return .corrupt
         }
-        if landedRepoID != suggestedRepoID {
+        if wire.repoID != suggestedRepoID {
             return .staleRepoID
         }
         return .ours
@@ -176,25 +175,26 @@ nonisolated struct IdentityClaimStore: Sendable {
 
 
     func writeOwnClaim(repoID: String, writerID: String, createdAtMs: Int64) async throws {
-        let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
-        if try await metadataFileIfPresent(path: claimPath, description: "identity claim", code: 15) != nil {
-            switch try await classifyExistingClaim(claimPath: claimPath, writerID: writerID, suggestedRepoID: repoID) {
-            case .ours:
-                return
-            case .zeroByte, .staleRepoID, .corrupt:
-                try await client.delete(path: claimPath)
+        do {
+            let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
+            if try await metadataFileIfPresent(path: claimPath, description: "identity claim", code: 15) != nil {
+                switch try await classifyExistingClaim(claimPath: claimPath, writerID: writerID, suggestedRepoID: repoID) {
+                case .ours:
+                    return
+                case .zeroByte, .staleRepoID, .corrupt:
+                    try await client.delete(path: claimPath)
+                }
             }
+            let temp = try makeTempJSON(
+                IdentityClaimWire(repoID: repoID, createdAtMs: createdAtMs, writerID: writerID).encode(),
+                prefix: "repo-identity-claim"
+            )
+            defer { try? FileManager.default.removeItem(at: temp) }
+            let result = try await client.atomicCreate(localURL: temp, remotePath: claimPath, respectTaskCancellation: false)
+            try await verifyOwnClaim(repoID: repoID, writerID: writerID, createdAtMs: createdAtMs, claimPath: claimPath, atomicResult: result)
+        } catch {
+            throw RemoteWriteClassifier.normalizedCancellation(error)
         }
-        let dict: [String: Any] = [
-            "v": 1,
-            "repo_id": repoID,
-            "created_at_ms": createdAtMs,
-            "writer_id": writerID
-        ]
-        let temp = try makeTempJSON(dict: dict, prefix: "repo-identity-claim")
-        defer { try? FileManager.default.removeItem(at: temp) }
-        let result = try await client.atomicCreate(localURL: temp, remotePath: claimPath, respectTaskCancellation: false)
-        try await verifyOwnClaim(repoID: repoID, writerID: writerID, createdAtMs: createdAtMs, claimPath: claimPath, atomicResult: result)
     }
 
 
@@ -217,7 +217,7 @@ nonisolated struct IdentityClaimStore: Sendable {
                     lastRead = current
                     stableReads = 0
                 }
-            } catch is CancellationError {
+            } catch let error where RemoteWriteClassifier.isCancellation(error) {
                 throw CancellationError()
             } catch {
                 lastRead = nil
@@ -243,19 +243,16 @@ nonisolated struct IdentityClaimStore: Sendable {
             try await downloadWithRetry(remotePath: path, localURL: temp, attempts: 3)
         } catch {
             if isStorageNotFoundError(error) { return .none }
-            throw error
+            throw RemoteWriteClassifier.normalizedCancellation(error)
         }
         let data = try Data(contentsOf: temp)
-        let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         // Filename must be a `<writerID>.json` shape; payload's writer_id must match —
         // otherwise a stray .json with a forged older timestamp could win election.
         let expectedWriterID = entryName.hasSuffix(".json") ? String(entryName.dropLast(5)) : entryName
-        if let dict = parsed,
-           let id = dict["repo_id"] as? String, !id.isEmpty,
-           let wid = dict["writer_id"] as? String, !wid.isEmpty, wid == expectedWriterID,
-           RepoLayout.isValidWriterID(wid),
-           let ts = Self.strictInt64(dict["created_at_ms"]) {
-            return .claim(IdentityClaim(repoID: id, writerID: wid, createdAtMs: ts))
+        if let wire = try? IdentityClaimWire(data: data),
+           wire.writerID == expectedWriterID,
+           RepoLayout.isValidWriterID(wire.writerID) {
+            return .claim(IdentityClaim(repoID: wire.repoID, writerID: wire.writerID, createdAtMs: wire.createdAtMs))
         }
         // A writerID-shaped filename could have been canonical (lex-min); quarantining would silently flip the adopted repoID.
         if RepoLayout.isValidWriterID(expectedWriterID) {
@@ -299,13 +296,7 @@ nonisolated struct IdentityClaimStore: Sendable {
         defer { try? FileManager.default.removeItem(at: temp) }
         try await client.download(remotePath: claimPath, localURL: temp)
         let data = try Data(contentsOf: temp)
-        // Use try? so non-JSON readback (peer overwrote between atomicCreate and verify)
-        // routes through the typed "unparseable after write" diagnosis rather than leaking
-        // raw NSCocoaError. Parity with fetchClaim / classifyExistingClaim.
-        guard let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let landedRepoID = dict["repo_id"] as? String,
-              let landedWriterID = dict["writer_id"] as? String,
-              let landedTs = Self.strictInt64(dict["created_at_ms"]) else {
+        guard let wire = try? IdentityClaimWire(data: data) else {
             throw RepoBootstrap.BootstrapError.ioFailure(NSError(
                 domain: "RepoBootstrap",
                 code: 4,
@@ -313,20 +304,20 @@ nonisolated struct IdentityClaimStore: Sendable {
             ))
         }
         if atomicResult == .alreadyExists {
-            guard landedRepoID == repoID, landedWriterID == writerID else {
+            guard wire.repoID == repoID, wire.writerID == writerID else {
                 throw RepoBootstrap.BootstrapError.ioFailure(NSError(
                     domain: "RepoBootstrap",
                     code: 5,
-                    userInfo: [NSLocalizedDescriptionKey: "identity claim content drift at \(claimPath): expected \(writerID) got \(landedWriterID)"]
+                    userInfo: [NSLocalizedDescriptionKey: "identity claim content drift at \(claimPath): expected \(writerID) got \(wire.writerID)"]
                 ))
             }
             return
         }
-        guard landedRepoID == repoID, landedWriterID == writerID, landedTs == createdAtMs else {
+        guard wire.repoID == repoID, wire.writerID == writerID, wire.createdAtMs == createdAtMs else {
             throw RepoBootstrap.BootstrapError.ioFailure(NSError(
                 domain: "RepoBootstrap",
                 code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "identity claim content drift at \(claimPath): expected (\(writerID), \(createdAtMs)) got (\(landedWriterID), \(landedTs))"]
+                userInfo: [NSLocalizedDescriptionKey: "identity claim content drift at \(claimPath): expected (\(writerID), \(createdAtMs)) got (\(wire.writerID), \(wire.createdAtMs))"]
             ))
         }
     }
@@ -340,6 +331,7 @@ nonisolated struct IdentityClaimStore: Sendable {
             } catch {
                 lastError = error
                 if isStorageNotFoundError(error) { throw error }  // 404 isn't transient
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 if attempt + 1 < attempts {
                     try await Task.sleep(for: .milliseconds(200 * (1 << attempt)))
                 }
@@ -348,23 +340,13 @@ nonisolated struct IdentityClaimStore: Sendable {
         throw lastError ?? NSError(domain: "RepoBootstrap", code: 7, userInfo: [NSLocalizedDescriptionKey: "download retries exhausted at \(remotePath)"])
     }
 
-    /// JSON `true`/`false` bridges to NSNumber that `as? Int`-casts to 1/0;
-    /// a foreign claim with `"created_at_ms": true` would otherwise be treated
-    /// as a valid claim at timestamp 1 and could win lex-min election.
-    private static func strictInt64(_ raw: Any?) -> Int64? {
-        guard let raw else { return nil }
-        if CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID() { return nil }
-        if let v = raw as? Int64, v >= 0 { return v }
-        if let v = raw as? Int, v >= 0 { return Int64(v) }
-        return nil
-    }
-
     private func metadataFileIfPresent(path: String, description: String, code: Int) async throws -> RemoteStorageEntry? {
         let metadata: RemoteStorageEntry?
         do {
             metadata = try await client.metadata(path: path)
         } catch {
             if isStorageNotFoundError(error) { return nil }
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             throw error
         }
         guard let metadata else { return nil }
@@ -385,8 +367,7 @@ nonisolated struct IdentityClaimStore: Sendable {
     // Local encode/write errors stay raw so callers don't conflate "our disk is full"
     // with the `BootstrapError.ioFailure → damagedV2Repo` mapping reserved for
     // malformed remote V2 metadata.
-    private func makeTempJSON(dict: [String: Any], prefix: String) throws -> URL {
-        let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys, .prettyPrinted])
+    private func makeTempJSON(_ data: Data, prefix: String) throws -> URL {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(prefix)-\(UUID().uuidString).json")
         try data.write(to: temp, options: .atomic)

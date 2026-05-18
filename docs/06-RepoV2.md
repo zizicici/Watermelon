@@ -10,7 +10,7 @@ V1（per-month manifest sqlite）→ V2（commit log + snapshot）格式重构�
 - Snapshot baseline plus uncovered commits must materialize to the same state as replaying all valid commits from genesis for the same repo; equality includes assets, resources, asset-resource links, deleted keys/stamps, observed seq by writer, and observed clock.
 - Presence/freshness handles fail closed: transport/probe uncertainty cannot be published as fresh authoritative absence.
 - Identity source resolution converges only when authoritative sources agree; own current claim can repair wipe-and-reuse missing DB exact row, foreign claim cannot.
-- Metadata create outcome `verifiedAgainstLocalContent == true` means remote bytes matched the local payload during the gate's verification window.
+- Metadata create outcome `verification == .verifiedLocalBytes` means remote bytes matched the local payload during the gate's verification window.
 - `MonthManifestStore.loadSeeded(...)` must surface V1 seeded-manifest orphans by listing the actual remote directory; this is retained for current app behavior, not V2 materializer semantics.
 - Concurrent state allocation must not produce duplicate same-writer seq values or emit clocks below accepted remote observation.
 

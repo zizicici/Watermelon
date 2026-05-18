@@ -610,33 +610,33 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
     }
 
 
-    func testIsMetadataGateCancellation_stagingVerificationFailed_withURLErrorCancelled_isCancellation() {
+    func testRemoteWriteClassifierMetadataGateCancellation_stagingVerificationFailedWithURLErrorCancelled_isCancellation() {
         let underlying = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled, userInfo: nil)
         let gateError = MetadataCreateGate.Error.stagingVerificationFailed(remotePath: "/x", underlying: underlying)
-        XCTAssertTrue(CommitLogWriter.isMetadataGateCancellation(gateError))
+        XCTAssertTrue(RemoteWriteClassifier.isMetadataGateCancellation(gateError))
     }
 
-    func testIsMetadataGateCancellation_finalVerificationFailed_withWrappedURLCancellation_isCancellation() {
+    func testRemoteWriteClassifierMetadataGateCancellation_finalVerificationFailedWithWrappedURLCancellation_isCancellation() {
         let url = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled, userInfo: nil)
         let wrapped = RemoteStorageClientError.underlying(url)
         let gateError = MetadataCreateGate.Error.finalVerificationFailed(remotePath: "/x", underlying: wrapped)
-        XCTAssertTrue(CommitLogWriter.isMetadataGateCancellation(gateError))
+        XCTAssertTrue(RemoteWriteClassifier.isMetadataGateCancellation(gateError))
     }
 
-    func testIsMetadataGateCancellation_nonExclusiveFinalization_isNotCancellation() {
+    func testRemoteWriteClassifierMetadataGateCancellation_nonExclusiveFinalization_isNotCancellation() {
         let gateError = MetadataCreateGate.Error.nonExclusiveFinalization(remotePath: "/x")
-        XCTAssertFalse(CommitLogWriter.isMetadataGateCancellation(gateError))
+        XCTAssertFalse(RemoteWriteClassifier.isMetadataGateCancellation(gateError))
     }
 
-    func testIsMetadataGateCancellation_stagingVerificationFailed_withPermissionDenied_isNotCancellation() {
+    func testRemoteWriteClassifierMetadataGateCancellation_stagingVerificationFailedWithPermissionDenied_isNotCancellation() {
         let underlying = NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError, userInfo: nil)
         let gateError = MetadataCreateGate.Error.stagingVerificationFailed(remotePath: "/x", underlying: underlying)
-        XCTAssertFalse(CommitLogWriter.isMetadataGateCancellation(gateError))
+        XCTAssertFalse(RemoteWriteClassifier.isMetadataGateCancellation(gateError))
     }
 
-    func testIsMetadataGateCancellation_finalVerificationFailed_nilUnderlying_isNotCancellation() {
+    func testRemoteWriteClassifierMetadataGateCancellation_finalVerificationFailedNilUnderlying_isNotCancellation() {
         let gateError = MetadataCreateGate.Error.finalVerificationFailed(remotePath: "/x", underlying: nil)
-        XCTAssertFalse(CommitLogWriter.isMetadataGateCancellation(gateError))
+        XCTAssertFalse(RemoteWriteClassifier.isMetadataGateCancellation(gateError))
     }
 
     func testBestEffortVerify_unparseableRemoteBytes_shouldClassifyAsAlreadyExists() async throws {

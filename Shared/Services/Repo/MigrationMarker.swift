@@ -19,6 +19,7 @@ struct ParsedMigrationMarker: Sendable {
 
 enum MigrationMarkerError: Error {
     case filenameUnparseable(name: String)
+    case unsupportedVersion(raw: Int)
     case writerIDMismatch(filename: String, jsonWriter: String)
     case writerIDWrongType
     case phaseWrongType
@@ -34,13 +35,15 @@ enum MigrationMarker {
         guard let parsedName = RepoLayout.parseMigrationMarkerFilename(filename) else {
             throw MigrationMarkerError.filenameUnparseable(name: filename)
         }
-        guard let dict = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
+        let wire: MigrationMarkerWire
+        do {
+            wire = try MigrationMarkerWire(data: bytes)
+        } catch let error as MigrationMarkerError {
+            throw error
+        } catch {
             throw MigrationMarkerError.malformedJSON
         }
-        if let rawWriter = dict["writer_id"] {
-            guard let jsonWriter = rawWriter as? String else {
-                throw MigrationMarkerError.writerIDWrongType
-            }
+        if let jsonWriter = wire.writerID {
             if jsonWriter != parsedName.writerID {
                 throw MigrationMarkerError.writerIDMismatch(
                     filename: filename,
@@ -48,55 +51,22 @@ enum MigrationMarker {
                 )
             }
         }
-        let phase: MigrationMarkerPhase
-        if let rawPhase = dict["phase"] {
-            // JSON booleans bridge through `as? Int` via NSNumber (true → 1); detect CFBoolean
-            // by CF type-id rather than `is Bool`, which also matches numeric NSNumber(0/1).
-            if let number = rawPhase as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
-                throw MigrationMarkerError.phaseWrongType
-            }
-            guard let raw = rawPhase as? Int else {
-                throw MigrationMarkerError.phaseWrongType
-            }
-            guard let mapped = MigrationMarkerPhase(rawValue: raw) else {
-                throw MigrationMarkerError.unknownPhase(raw: raw)
-            }
-            phase = mapped
-        } else {
-            // Pre-v:2 markers omit `phase`; treat as phase1.
-            phase = .phase1
-        }
-        let runID = dict["run_id"] as? String
-        let startedAtMs = strictInt64(dict["started_at_ms"])
-        let lastStepMs = strictInt64(dict["last_step_at_ms"])
         return ParsedMigrationMarker(
             writerID: parsedName.writerID,
-            phase: phase,
-            runID: runID,
-            startedAtMs: startedAtMs,
-            lastStepMs: lastStepMs
+            phase: wire.phase,
+            runID: wire.runID,
+            startedAtMs: wire.startedAtMs,
+            lastStepMs: wire.lastStepMs
         )
     }
 
-    /// JSON booleans bridge through `as? Int` (true→1); reject CFBoolean so a
-    /// corrupt `started_at_ms: true` can't anchor later phase writes at 1ms.
-    private static func strictInt64(_ raw: Any?) -> Int64? {
-        guard let raw else { return nil }
-        if CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID() { return nil }
-        if let v = raw as? Int64 { return v }
-        if let v = raw as? Int { return Int64(v) }
-        return nil
-    }
-
     static func encode(_ marker: ParsedMigrationMarker) throws -> Data {
-        var dict: [String: Any] = [
-            "v": currentFormatVersion,
-            "writer_id": marker.writerID,
-            "phase": marker.phase.rawValue
-        ]
-        if let runID = marker.runID { dict["run_id"] = runID }
-        if let startedAtMs = marker.startedAtMs { dict["started_at_ms"] = startedAtMs }
-        if let lastStepMs = marker.lastStepMs { dict["last_step_at_ms"] = lastStepMs }
-        return try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
+        try MigrationMarkerWire(
+            writerID: marker.writerID,
+            phase: marker.phase,
+            runID: marker.runID,
+            startedAtMs: marker.startedAtMs,
+            lastStepMs: marker.lastStepMs
+        ).encode()
     }
 }

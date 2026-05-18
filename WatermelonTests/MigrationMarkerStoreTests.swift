@@ -265,7 +265,7 @@ final class MigrationMarkerStoreTests: XCTestCase {
         XCTAssertNil(startedAt)
     }
 
-    func testCurrentPhase_swallowsCancellationFromDownloadAndReturnsPhase1WhenMetadataPresent() async throws {
+    func testCurrentPhase_propagatesCancellationFromDownloadWhenMetadataPresent() async throws {
         let inner = InMemoryRemoteStorageClient()
         try await inner.connect()
         let canonical = RepoLayout.migrationMarkerPath(base: basePath, writerID: validWriterID)
@@ -273,8 +273,11 @@ final class MigrationMarkerStoreTests: XCTestCase {
         let client = CancellingDownloadClient(inner: inner)
         let store = MigrationMarkerStore(client: client, basePath: basePath)
 
-        let phase = try await store.currentPhase(writerID: validWriterID)
-        XCTAssertEqual(phase, .phase1, "tolerant parser must swallow CancellationError and fall back to sawMarker → phase1")
+        do {
+            _ = try await store.currentPhase(writerID: validWriterID)
+            XCTFail("expected CancellationError")
+        } catch is CancellationError {
+        }
     }
 
 
@@ -462,7 +465,7 @@ final class MigrationMarkerStoreTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         // `.exclusive` + `.bestEffort` → gate returns .bestEffortRetry with
-        // verifiedAgainstLocalContent=false, so the store invokes verify().
+        // unverified bytes, so the store invokes verify().
         // `stageBestEffortRace` ensures the persisted bytes diverge from local.
         client.setAtomicCreateGuarantee(.exclusive)
         await client.setAtomicCreateMode(.bestEffort)

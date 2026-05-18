@@ -503,7 +503,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
             respectTaskCancellation: false
         )
         XCTAssertEqual(stagedOutcome.result, .created)
-        XCTAssertTrue(stagedOutcome.verifiedAgainstLocalContent)
+        XCTAssertEqual(stagedOutcome.verification, .verifiedLocalBytes)
         try await assertVerifiedOutcomeMeansRemoteBytesMatch(
             stagedOutcome,
             client: stagingClient,
@@ -523,7 +523,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
             respectTaskCancellation: false
         )
         XCTAssertEqual(matchingOutcome.result, .created)
-        XCTAssertTrue(matchingOutcome.verifiedAgainstLocalContent)
+        XCTAssertEqual(matchingOutcome.verification, .verifiedLocalBytes)
         try await assertVerifiedOutcomeMeansRemoteBytesMatch(
             matchingOutcome,
             client: alreadyExistsClient,
@@ -750,7 +750,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws {
-        guard outcome.verifiedAgainstLocalContent else { return }
+        guard outcome.verification == .verifiedLocalBytes else { return }
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: temp) }
         try await client.download(remotePath: path, localURL: temp)

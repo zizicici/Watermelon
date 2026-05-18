@@ -8,10 +8,14 @@ enum MetadataCreateGate {
         case requireExclusiveMove
     }
 
-    /// SHA-confirmed gate writes let callers skip their own readback loop.
+    nonisolated enum MetadataWriteVerification: Sendable, Equatable {
+        case verifiedLocalBytes
+        case unverified
+    }
+
     struct CreateOutcome: Sendable {
         let result: AtomicCreateResult
-        let verifiedAgainstLocalContent: Bool
+        let verification: MetadataWriteVerification
     }
 
     enum Error: LocalizedError {
@@ -53,8 +57,6 @@ enum MetadataCreateGate {
         ).result
     }
 
-    /// Gate does NOT post-verify on `.exclusive`-direct `.created` (no readback)
-    /// so the outcome's `verifiedAgainstLocalContent` is `false` there.
     static func createWithStagingFallbackOutcome(
         client: any RemoteStorageClientProtocol,
         localURL: URL,
@@ -78,7 +80,7 @@ enum MetadataCreateGate {
                     respectTaskCancellation: respectTaskCancellation
                 )
             } catch {
-                if Self.isCancellationError(error) { throw CancellationError() }
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 throw error
             }
             // S3 single-part PUT phantom: server wrote our bytes but client timed out;
@@ -89,20 +91,16 @@ enum MetadataCreateGate {
             if case .alreadyExists = result {
                 do {
                     if try await verifyMatchesLocalWithRetries(client: client, remotePath: remotePath, localURL: localURL) {
-                        return CreateOutcome(result: .created, verifiedAgainstLocalContent: true)
+                        return CreateOutcome(result: .created, verification: .verifiedLocalBytes)
                     }
                 } catch is CancellationError {
                     throw CancellationError()
-                } catch let error where CommitLogWriter.isTransientVerifyDownloadFailure(error) {
-                    // Transient — fall through to surface .alreadyExists for caller-side retry.
+                } catch let error where RemoteWriteClassifier.classifyVerifyFailure(error) == .transient {
                 } catch {
-                    // Permanent verify failure (permission, auth, config) must not be silently
-                    // demoted to .alreadyExists; the actionable cause would be masked by the
-                    // caller's collision interpretation.
                     throw Error.finalVerificationFailed(remotePath: remotePath, underlying: error)
                 }
             }
-            return CreateOutcome(result: result, verifiedAgainstLocalContent: false)
+            return CreateOutcome(result: result, verification: .unverified)
         case .overwritePossible:
             let stagingPath = "\(remotePath).staging-\(UUID().uuidString)"
             let stagingResult: AtomicCreateResult
@@ -113,7 +111,7 @@ enum MetadataCreateGate {
                     respectTaskCancellation: respectTaskCancellation
                 )
             } catch {
-                if Self.isCancellationError(error) { throw CancellationError() }
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 throw error
             }
             switch stagingResult {
@@ -165,21 +163,18 @@ enum MetadataCreateGate {
                     do {
                         if try await verifyMatchesLocalWithRetries(client: client, remotePath: remotePath, localURL: localURL) {
                             try? await client.delete(path: stagingPath)
-                            return CreateOutcome(result: .created, verifiedAgainstLocalContent: true)
+                            return CreateOutcome(result: .created, verification: .verifiedLocalBytes)
                         }
                     } catch is CancellationError {
                         try? await client.delete(path: stagingPath)
                         throw CancellationError()
-                    } catch let error where CommitLogWriter.isTransientVerifyDownloadFailure(error) {
-                        // Transient — fall through; caller re-allocates seq and retries.
+                    } catch let error where RemoteWriteClassifier.classifyVerifyFailure(error) == .transient {
                     } catch {
-                        // Permanent verify failure (permission, auth, config) must escape so
-                        // the actionable cause isn't masked by a phantom `.alreadyExists` retry.
                         try? await client.delete(path: stagingPath)
                         throw Error.finalVerificationFailed(remotePath: remotePath, underlying: error)
                     }
                     try? await client.delete(path: stagingPath)
-                    return CreateOutcome(result: .alreadyExists, verifiedAgainstLocalContent: false)
+                    return CreateOutcome(result: .alreadyExists, verification: .unverified)
                 }
             } catch {
                 try? await client.delete(path: stagingPath)
@@ -187,7 +182,7 @@ enum MetadataCreateGate {
                 // metadata on URLSession-backed clients; normalize so direct callers
                 // (SnapshotWriter, V1MigrationService) get CancellationError instead
                 // of a wrapped finalization failure.
-                if Self.isCancellationError(error) { throw CancellationError() }
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 throw error
             }
             try? await client.delete(path: stagingPath)
@@ -199,20 +194,15 @@ enum MetadataCreateGate {
                 ) else {
                     throw Error.finalVerificationFailed(remotePath: remotePath, underlying: nil)
                 }
-                return CreateOutcome(result: .created, verifiedAgainstLocalContent: true)
+                return CreateOutcome(result: .created, verification: .verifiedLocalBytes)
             } catch is CancellationError {
                 throw CancellationError()
             } catch let error as Error {
                 throw error
-            } catch let error where Self.isCancellationError(error) {
+            } catch let error where RemoteWriteClassifier.isCancellation(error) {
                 throw CancellationError()
-            } catch let error where CommitLogWriter.isTransientVerifyDownloadFailure(error) {
-                // Bytes ARE at the destination (move/copy succeeded) but readback was
-                // inconclusive. Surface as .bestEffortRetry so callers (SnapshotWriter,
-                // MigrationMarkerStore, RepoBootstrap) can apply their own policy —
-                // e.g. SnapshotWriter logs and relies on commit-log rebuild — instead
-                // of aborting on a recoverable transport failure.
-                return CreateOutcome(result: .bestEffortRetry, verifiedAgainstLocalContent: false)
+            } catch let error where RemoteWriteClassifier.classifyVerifyFailure(error) == .transient {
+                return CreateOutcome(result: .bestEffortRetry, verification: .unverified)
             } catch {
                 throw Error.finalVerificationFailed(remotePath: remotePath, underlying: error)
             }
@@ -251,10 +241,7 @@ enum MetadataCreateGate {
                 }
                 lastError = nil
             } catch {
-                // URLSession-backed cancellation arrives as NSURLErrorCancelled (raw or wrapped);
-                // without normalization the retry loop swallows it as lastError, then upstream
-                // demotes it to .alreadyExists/verify-inconclusive and the user-stop is lost.
-                if Self.isCancellationError(error) { throw CancellationError() }
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 lastError = error
             }
             // Same-size stale reads after our own write also need the grace window;
@@ -266,26 +253,6 @@ enum MetadataCreateGate {
             try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
             attempt += 1
         }
-    }
-
-    private static func isCancellationError(_ error: Swift.Error) -> Bool {
-        if error is CancellationError { return true }
-        if let storageError = error as? RemoteStorageClientError {
-            switch storageError {
-            case .underlying(let underlying):
-                return isCancellationError(underlying)
-            default:
-                return false
-            }
-        }
-        let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
-            return true
-        }
-        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Swift.Error {
-            return isCancellationError(underlying)
-        }
-        return false
     }
 
     private static func verifyMatchesLocal(

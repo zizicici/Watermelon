@@ -50,15 +50,14 @@ nonisolated struct VersionManifestStore: Sendable {
         defer { try? FileManager.default.removeItem(at: temp) }
         try await client.download(remotePath: path, localURL: temp)
         let data = try Data(contentsOf: temp)
-        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let formatVersion = Self.strictFormatVersion(dict["format_version"]) else {
+        guard let wire = try? VersionManifestWire(data: data) else {
             throw RepoBootstrap.VersionConflict.unreadable(nil)
         }
         return .found(VersionManifest(
-            formatVersion: formatVersion,
-            minAppVersion: dict["min_app_version"] as? String,
-            createdAtMs: Self.strictInt64(dict["created_at_ms"]),
-            createdByWriter: dict["created_by_writer"] as? String
+            formatVersion: wire.formatVersion,
+            minAppVersion: wire.minAppVersion,
+            createdAtMs: wire.createdAtMs,
+            createdByWriter: wire.createdByWriter
         ))
     }
 
@@ -81,42 +80,49 @@ nonisolated struct VersionManifestStore: Sendable {
     /// proceeds to publish. Returns whether the caller still needs to readback-verify.
     @discardableResult
     func writeIfAbsent(writerID: String) async throws -> WriteOutcome {
-        try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
-        let versionPath = RepoLayout.versionFilePath(base: basePath)
-        if let entry = try await metadataFileIfPresent(path: versionPath) {
-            // Hard-fail directory-at-path before readback; otherwise the 3s retry collapses it to `.unreadable`.
-            if entry.isDirectory {
-                throw RepoBootstrap.BootstrapError.ioFailure(NSError(
-                    domain: "RepoBootstrap",
-                    code: 18,
-                    userInfo: [NSLocalizedDescriptionKey: "version manifest at \(versionPath) is a directory"]
-                ))
+        do {
+            try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
+            let versionPath = RepoLayout.versionFilePath(base: basePath)
+            if let entry = try await metadataFileIfPresent(path: versionPath) {
+                // Hard-fail directory-at-path before readback; otherwise the 3s retry collapses it to `.unreadable`.
+                if entry.isDirectory {
+                    throw RepoBootstrap.BootstrapError.ioFailure(NSError(
+                        domain: "RepoBootstrap",
+                        code: 18,
+                        userInfo: [NSLocalizedDescriptionKey: "version manifest at \(versionPath) is a directory"]
+                    ))
+                }
+                try await verifyCompatibleWithRetries()
+                return .requiresCompatibilityReadback
+            }
+
+            let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let temp = try makeTempJSON(
+                VersionManifestWire(
+                    formatVersion: RepoLayout.formatVersion,
+                    minAppVersion: RepoLayout.minAppVersionPlaceholder,
+                    createdAtMs: createdAtMs,
+                    createdByWriter: writerID
+                ).encode(),
+                prefix: "repo-version"
+            )
+            defer { try? FileManager.default.removeItem(at: temp) }
+            let outcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
+                client: client,
+                localURL: temp,
+                remotePath: versionPath,
+                respectTaskCancellation: false,
+                finalizationPolicy: .requireExclusiveMove
+            )
+            if outcome.verification == .verifiedLocalBytes {
+                return .wroteVerifiedBytes
             }
             try await verifyCompatibleWithRetries()
             return .requiresCompatibilityReadback
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            throw error
         }
-
-        let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let versionDict: [String: Any] = [
-            "format_version": RepoLayout.formatVersion,
-            "min_app_version": RepoLayout.minAppVersionPlaceholder,
-            "created_at_ms": createdAtMs,
-            "created_by_writer": writerID
-        ]
-        let temp = try makeTempJSON(dict: versionDict, prefix: "repo-version")
-        defer { try? FileManager.default.removeItem(at: temp) }
-        let outcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
-            client: client,
-            localURL: temp,
-            remotePath: versionPath,
-            respectTaskCancellation: false,
-            finalizationPolicy: .requireExclusiveMove
-        )
-        if outcome.verifiedAgainstLocalContent {
-            return .wroteVerifiedBytes
-        }
-        try await verifyCompatibleWithRetries()
-        return .requiresCompatibilityReadback
     }
 
 
@@ -129,7 +135,7 @@ nonisolated struct VersionManifestStore: Sendable {
                 try await verifyCompatible()
                 return
             } catch RepoBootstrap.VersionConflict.unreadable(let underlying) {
-                if underlying is CancellationError { throw CancellationError() }
+                if let underlying, RemoteWriteClassifier.isCancellation(underlying) { throw CancellationError() }
                 lastUnreadable = .unreadable(underlying)
             } catch is CancellationError {
                 throw CancellationError()
@@ -158,12 +164,10 @@ nonisolated struct VersionManifestStore: Sendable {
         } catch {
             throw RepoBootstrap.VersionConflict.unreadable(error)
         }
-        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let remoteFormat = Self.strictFormatVersion(dict["format_version"]) else {
+        guard let wire = try? VersionManifestWire(data: data) else {
             throw RepoBootstrap.VersionConflict.unreadable(nil)
         }
-        let minApp = dict["min_app_version"] as? String
-        try Self.classify(remoteFormat: remoteFormat, minAppVersion: minApp)
+        try Self.classify(remoteFormat: wire.formatVersion, minAppVersion: wire.minAppVersion)
     }
 
     /// Shared classifier so the bootstrap-side and inspect-side arms can never drift
@@ -186,29 +190,12 @@ nonisolated struct VersionManifestStore: Sendable {
         }
     }
 
-
-    /// JSON `true`/`false` bridges to NSNumber that `as? Int`-casts to 1/0; reject CFBoolean before classification.
-    private static func strictFormatVersion(_ raw: Any?) -> Int? {
-        guard let raw else { return nil }
-        if CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID() { return nil }
-        return raw as? Int
-    }
-
-    /// Same CFBoolean defense as `strictFormatVersion`, applied to ms-since-epoch fields so
-    /// `created_at_ms: true` cannot bridge to `1` and anchor a future writer at 1 ms.
-    private static func strictInt64(_ raw: Any?) -> Int64? {
-        guard let raw else { return nil }
-        if CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID() { return nil }
-        if let value = raw as? Int64 { return value }
-        if let value = raw as? Int { return Int64(value) }
-        return nil
-    }
-
     private func metadataFileIfPresent(path: String) async throws -> RemoteStorageEntry? {
         do {
             return try await client.metadata(path: path)
         } catch {
             if isStorageNotFoundError(error) { return nil }
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             throw error
         }
     }
@@ -216,8 +203,7 @@ nonisolated struct VersionManifestStore: Sendable {
     // Local encode/write errors stay raw so callers don't conflate "our disk is full"
     // with the `BootstrapError.ioFailure → damagedV2Repo` mapping reserved for
     // malformed remote V2 metadata.
-    private func makeTempJSON(dict: [String: Any], prefix: String) throws -> URL {
-        let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys, .prettyPrinted])
+    private func makeTempJSON(_ data: Data, prefix: String) throws -> URL {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(prefix)-\(UUID().uuidString).json")
         try data.write(to: temp, options: .atomic)

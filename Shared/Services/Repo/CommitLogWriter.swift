@@ -71,8 +71,7 @@ actor CommitLogWriter {
                     respectTaskCancellation: respectTaskCancellation
                 )
             } catch {
-                // Normalize URLSession cancellation so user stop is not reported as transport failure.
-                if Self.isCancellationError(error) { throw CancellationError() }
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 throw WriteError.ioFailure(error)
             }
             switch result {
@@ -105,10 +104,10 @@ actor CommitLogWriter {
                     finalizationPolicy: .requireExclusiveMove
                 )
             } catch let error as MetadataCreateGate.Error {
-                if Self.isMetadataGateCancellation(error) { throw CancellationError() }
+                if RemoteWriteClassifier.isMetadataGateCancellation(error) { throw CancellationError() }
                 throw WriteError.ioFailure(error)
             } catch {
-                if Self.isCancellationError(error) { throw CancellationError() }
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 throw WriteError.ioFailure(error)
             }
             switch result {
@@ -141,8 +140,15 @@ actor CommitLogWriter {
                 expectedSha: expectedSha,
                 expectedRowCount: expectedRowCount
             )
-        } catch WriteError.ioFailure(let underlying) where Self.isTransientVerifyDownloadFailure(underlying) {
-            throw WriteError.alreadyExists
+        } catch WriteError.ioFailure(let underlying) {
+            switch RemoteWriteClassifier.classifyVerifyFailure(underlying) {
+            case .cancelled:
+                throw CancellationError()
+            case .transient:
+                throw WriteError.alreadyExists
+            case .permanent:
+                throw WriteError.ioFailure(underlying)
+            }
         }
     }
 
@@ -157,8 +163,7 @@ actor CommitLogWriter {
         do {
             try await client.download(remotePath: remotePath, localURL: verifyURL)
         } catch {
-            // Normalize URLSession cancellation so user stop is not reported as transport failure.
-            if Self.isCancellationError(error) {
+            if RemoteWriteClassifier.isCancellation(error) {
                 throw CancellationError()
             }
             throw WriteError.ioFailure(error)
@@ -174,91 +179,4 @@ actor CommitLogWriter {
         }
     }
 
-    /// Unwrap gate verification errors so URLSession cancellation still means user stop.
-    static func isMetadataGateCancellation(_ error: MetadataCreateGate.Error) -> Bool {
-        switch error {
-        case .stagingVerificationFailed(_, let underlying),
-             .finalVerificationFailed(_, let underlying):
-            if let underlying { return isCancellationError(underlying) }
-            return false
-        case .nonExclusiveFinalization:
-            return false
-        }
-    }
-
-    /// Permanent failures must not collapse into alreadyExists retry exhaustion.
-    static func isTransientVerifyDownloadFailure(_ error: Error) -> Bool {
-        if isCancellationError(error) { return false }
-        if isStorageNotFoundError(error) { return false }
-        if let storage = error as? RemoteStorageClientError {
-            switch storage {
-            case .notConnected, .unavailable:
-                return true
-            case .externalStorageUnavailable, .invalidConfiguration, .unsupportedStorageType:
-                return false
-            case .underlying(let underlying):
-                return isTransientVerifyDownloadFailure(underlying)
-            }
-        }
-        if SMBErrorClassifier.isConnectionUnavailable(error)
-            || WebDAVErrorClassifier.isConnectionUnavailable(error)
-            || S3ErrorClassifier.isConnectionUnavailable(error)
-            || SFTPErrorClassifier.isConnectionUnavailable(error) {
-            return true
-        }
-        for nsError in nsErrorChain(error) {
-            if nsError.domain == WebDAVClient.errorDomain,
-               (500 ... 599).contains(nsError.code) || nsError.code == 408 || nsError.code == 429 {
-                return true
-            }
-            if nsError.domain == S3ErrorClassifier.errorDomain {
-                if let status = nsError.userInfo[S3ErrorClassifier.userInfoStatusCodeKey] as? Int,
-                   (500 ... 599).contains(status) || status == 408 || status == 429 {
-                    return true
-                }
-                if let serverCode = nsError.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String,
-                   serverCode == "InternalError" || serverCode == "SlowDown" || serverCode == "ServiceUnavailable" {
-                    return true
-                }
-            }
-        }
-        return false
-    }
-
-    private static func nsErrorChain(_ error: Error) -> [NSError] {
-        var collected: [NSError] = []
-        var pending: [NSError] = [error as NSError]
-        var visited: Set<ObjectIdentifier> = []
-        while let current = pending.popLast() {
-            guard visited.insert(ObjectIdentifier(current)).inserted else { continue }
-            collected.append(current)
-            if let underlying = current.userInfo[NSUnderlyingErrorKey] as? Error {
-                pending.append(underlying as NSError)
-            }
-        }
-        return collected
-    }
-
-    /// Recognise both literal `CancellationError` and URLSession-style
-    /// `NSURLErrorCancelled` (S3 + any other URLSession-backed client) and unwrap
-    /// `RemoteStorageClientError.underlying` plus `NSUnderlyingErrorKey` chains.
-    static func isCancellationError(_ error: Error) -> Bool {
-        if error is CancellationError { return true }
-        if let storageError = error as? RemoteStorageClientError {
-            switch storageError {
-            case .underlying(let underlying):
-                return isCancellationError(underlying)
-            default:
-                return false
-            }
-        }
-        let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
-            return true
-        }
-        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
-            return isCancellationError(underlying)
-        }
-        return false
-    }
 }

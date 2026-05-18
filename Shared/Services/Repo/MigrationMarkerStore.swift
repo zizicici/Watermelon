@@ -23,7 +23,7 @@ nonisolated struct MigrationMarkerStore: Sendable {
             return try await client.list(path: dir)
         } catch {
             if isStorageNotFoundError(error) { return [] }
-            throw error
+            throw RemoteWriteClassifier.normalizedCancellation(error)
         }
     }
 
@@ -44,7 +44,7 @@ nonisolated struct MigrationMarkerStore: Sendable {
                 paths.insert(RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name))
             }
         } catch {
-            if !isStorageNotFoundError(error) { throw error }
+            if !isStorageNotFoundError(error) { throw RemoteWriteClassifier.normalizedCancellation(error) }
         }
         return Array(paths)
     }
@@ -90,7 +90,7 @@ nonisolated struct MigrationMarkerStore: Sendable {
                 bestPhase = Self.maxPhase(bestPhase, .phase1)
                 continue
             }
-            guard let info = await tolerantMarkerInfo(path: path, writerID: writerID) else {
+            guard let info = try await tolerantMarkerInfo(path: path, writerID: writerID) else {
                 bestPhase = Self.maxPhase(bestPhase, .phase1)
                 continue
             }
@@ -102,7 +102,7 @@ nonisolated struct MigrationMarkerStore: Sendable {
 
     func startedAt(writerID: String) async throws -> Int64? {
         for path in try await pathsFor(writerID: writerID) {
-            if let info = await tolerantMarkerInfo(path: path, writerID: writerID),
+            if let info = try await tolerantMarkerInfo(path: path, writerID: writerID),
                let startedAtMs = info.startedAtMs {
                 return startedAtMs
             }
@@ -128,6 +128,7 @@ nonisolated struct MigrationMarkerStore: Sendable {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 if !isStorageNotFoundError(error) { throw error }
                 continue
             }
@@ -146,41 +147,46 @@ nonisolated struct MigrationMarkerStore: Sendable {
 
 
     func writePhase(writerID: String, phase: MigrationMarkerPhase, runID: String) async throws {
-        try await client.createDirectory(path: RepoLayout.migrationsDirectoryPath(base: basePath))
-        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let startedAtMs = try await startedAt(writerID: writerID) ?? nowMs
-        let marker = ParsedMigrationMarker(
-            writerID: writerID,
-            phase: phase,
-            runID: runID,
-            startedAtMs: startedAtMs,
-            lastStepMs: nowMs
-        )
-        let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("migration-marker-\(UUID().uuidString).json")
-        try MigrationMarker.encode(marker).write(to: temp, options: .atomic)
-        defer { try? FileManager.default.removeItem(at: temp) }
+        do {
+            try await client.createDirectory(path: RepoLayout.migrationsDirectoryPath(base: basePath))
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            let startedAtMs = try await startedAt(writerID: writerID) ?? nowMs
+            let marker = ParsedMigrationMarker(
+                writerID: writerID,
+                phase: phase,
+                runID: runID,
+                startedAtMs: startedAtMs,
+                lastStepMs: nowMs
+            )
+            let temp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("migration-marker-\(UUID().uuidString).json")
+            try MigrationMarker.encode(marker).write(to: temp, options: .atomic)
+            defer { try? FileManager.default.removeItem(at: temp) }
 
-        if phase == .phase1 {
-            let canonical = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
-            if try await metadataIfPresent(path: canonical) == nil {
-                let outcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
-                    client: client,
-                    localURL: temp,
-                    remotePath: canonical,
-                    respectTaskCancellation: false
-                )
-                if case .alreadyExists = outcome.result {
-                    try await writeUnique(writerID: writerID, phase: phase, localURL: temp)
+            if phase == .phase1 {
+                let canonical = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
+                if try await metadataIfPresent(path: canonical) == nil {
+                    let outcome = try await MetadataCreateGate.createWithStagingFallbackOutcome(
+                        client: client,
+                        localURL: temp,
+                        remotePath: canonical,
+                        respectTaskCancellation: false
+                    )
+                    if case .alreadyExists = outcome.result {
+                        try await writeUnique(writerID: writerID, phase: phase, localURL: temp)
+                        return
+                    }
+                    if outcome.verification != .verifiedLocalBytes {
+                        try await verify(remotePath: canonical, localURL: temp)
+                    }
                     return
                 }
-                if !outcome.verifiedAgainstLocalContent {
-                    try await verify(remotePath: canonical, localURL: temp)
-                }
-                return
             }
+            try await writeUnique(writerID: writerID, phase: phase, localURL: temp)
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            throw error
         }
-        try await writeUnique(writerID: writerID, phase: phase, localURL: temp)
     }
 
 
@@ -202,7 +208,7 @@ nonisolated struct MigrationMarkerStore: Sendable {
             if case .alreadyExists = outcome.result {
                 continue
             }
-            if !outcome.verifiedAgainstLocalContent {
+            if outcome.verification != .verifiedLocalBytes {
                 try await verify(remotePath: path, localURL: localURL)
             }
             return
@@ -233,6 +239,7 @@ nonisolated struct MigrationMarkerStore: Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             if let nsError = error as NSError?, nsError.domain == "V1MigrationService", nsError.code == -41 {
                 throw error
             }
@@ -247,15 +254,15 @@ nonisolated struct MigrationMarkerStore: Sendable {
         }
     }
 
-    /// V1 `requireValid: false` policy — every failure (transport, decode, parser,
-    /// writerID mismatch, even `CancellationError`) collapses to `nil`.
-    private func tolerantMarkerInfo(path: String, writerID: String) async -> ParsedMigrationMarker? {
+    /// V1 `requireValid: false` policy — non-cancellation failures collapse to `nil`.
+    private func tolerantMarkerInfo(path: String, writerID: String) async throws -> ParsedMigrationMarker? {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("migration-marker-existing-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
         do {
             try await client.download(remotePath: path, localURL: temp)
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             return nil
         }
         let data: Data
@@ -279,6 +286,7 @@ nonisolated struct MigrationMarkerStore: Sendable {
             return try await client.metadata(path: path)
         } catch {
             if isStorageNotFoundError(error) { return nil }
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             throw error
         }
     }

@@ -177,6 +177,62 @@ final class IdentityClaimStoreTests: XCTestCase {
         }
     }
 
+    func testCanonicalElection_foreignUnsupportedVersionClaim_throws() async throws {
+        let (client, store) = await makeStore()
+        let path = RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter)
+        let dict: [String: Any] = [
+            "v": 999,
+            "repo_id": "repo-B",
+            "created_at_ms": 1,
+            "writer_id": otherWriter
+        ]
+        await client.injectFile(path: path, data: try JSONSerialization.data(withJSONObject: dict))
+
+        do {
+            _ = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
+            XCTFail("expected writerID-shaped peer claim with unsupported v to fail closed")
+        } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
+            XCTAssertEqual(error.domain, "RepoBootstrap")
+            XCTAssertEqual(error.code, 9)
+        }
+    }
+
+    func testCanonicalElection_foreignMalformedVersionClaim_throws() async throws {
+        let (client, store) = await makeStore()
+        let path = RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter)
+        let dict: [String: Any] = [
+            "v": true,
+            "repo_id": "repo-B",
+            "created_at_ms": 1,
+            "writer_id": otherWriter
+        ]
+        await client.injectFile(path: path, data: try JSONSerialization.data(withJSONObject: dict))
+
+        do {
+            _ = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
+            XCTFail("expected writerID-shaped peer claim with malformed v to fail closed")
+        } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
+            XCTAssertEqual(error.domain, "RepoBootstrap")
+            XCTAssertEqual(error.code, 9)
+        }
+    }
+
+    func testCanonicalElection_selfMalformedVersionClaim_isSoftSelfCorrupt() async throws {
+        let (client, store) = await makeStore()
+        let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        let dict: [String: Any] = [
+            "v": true,
+            "repo_id": "repo-A",
+            "created_at_ms": 1,
+            "writer_id": selfWriter
+        ]
+        await client.injectFile(path: path, data: try JSONSerialization.data(withJSONObject: dict))
+
+        let result = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
+        XCTAssertNil(result.repoID)
+        XCTAssertTrue(result.ignoredSelfCorrupt)
+    }
+
     func testCanonicalElection_ownCorruptClaim_noOtherClaim_returnsSoftSignal() async throws {
         let (client, store) = await makeStore()
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
