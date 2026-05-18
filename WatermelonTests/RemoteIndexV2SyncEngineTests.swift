@@ -1,0 +1,65 @@
+import CryptoKit
+import XCTest
+@testable import Watermelon
+
+final class RemoteIndexV2SyncEngineTests: XCTestCase {
+    private let basePath = "/repo"
+    private let month = LibraryMonthKey(year: 2026, month: 5)
+
+    func testPreMaterializedOutputBypassesRepoIdentityRead() async throws {
+        let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "repo-a")
+        let bytes = Data(repeating: 0, count: 100)
+        let hash = Data(SHA256.hash(data: bytes))
+        let fingerprint = TestFixtures.computedFingerprint(for: [
+            (role: ResourceTypeCode.photo, slot: 0, contentHash: hash)
+        ])
+        _ = try await builder.addAsset(month: month, fingerprint: fingerprint, contentHash: hash, fileSize: Int64(bytes.count))
+        let preMaterialized = try await builder.materialize()
+
+        let absentIdentityClient = InMemoryRemoteStorageClient()
+        try await absentIdentityClient.connect()
+
+        let output = try await RemoteIndexV2SyncEngine().materialize(
+            client: absentIdentityClient,
+            basePath: basePath,
+            preMaterialized: preMaterialized
+        )
+
+        XCTAssertEqual(output.state.months.keys, preMaterialized.state.months.keys)
+    }
+
+    func testNilPreMaterializedWithAbsentIdentityThrowsSyncError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        do {
+            _ = try await RemoteIndexV2SyncEngine().materialize(
+                client: client,
+                basePath: basePath,
+                preMaterialized: nil
+            )
+            XCTFail("expected absent identity to throw")
+        } catch let error as NSError {
+            XCTAssertEqual(error.domain, "RemoteIndexSyncService")
+            XCTAssertEqual(error.code, -50)
+        }
+    }
+
+    func testNilPreMaterializedLoadsIdentityAndRunsMaterializeWithoutThrowing() async throws {
+        let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "repo-b")
+        let bytes = Data(repeating: 0, count: 100)
+        let hash = Data(SHA256.hash(data: bytes))
+        let fingerprint = TestFixtures.computedFingerprint(for: [
+            (role: ResourceTypeCode.photo, slot: 0, contentHash: hash)
+        ])
+        _ = try await builder.addAsset(month: month, fingerprint: fingerprint, contentHash: hash, fileSize: Int64(bytes.count))
+
+        let output = try await RemoteIndexV2SyncEngine().materialize(
+            client: builder.client,
+            basePath: basePath,
+            preMaterialized: nil
+        )
+
+        XCTAssertTrue(output.state.months.isEmpty)
+    }
+}

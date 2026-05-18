@@ -310,6 +310,171 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         }
     }
 
+    func testSyncIndex_freshRemoteLeavesRepoFormatUnknown() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        _ = try await service.syncIndex(client: client, profile: profile)
+
+        let format = await service.currentRepoIsV2()
+        XCTAssertNil(format, "fresh route must not mark the remote as V1")
+    }
+
+    func testSyncIndex_unchangedV1DigestSecondSyncEmitsNoWorkAndKeepsSnapshot() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await seedV1Manifest(client: client, basePath: basePath, month: monthA, marker: 0x11)
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+        let service = RemoteIndexSyncService()
+
+        let firstDigest = try await service.syncIndex(client: client, profile: profile)
+        let firstSnapshot = service.fullSnapshot()
+        let secondProgress = RemoteSyncProgressRecorder()
+
+        let secondDigest = try await service.syncIndex(
+            client: client,
+            profile: profile,
+            onSyncProgress: { progress in
+                secondProgress.append(progress)
+            }
+        )
+        let secondSnapshot = service.fullSnapshot()
+
+        XCTAssertEqual(firstDigest.assetCount, secondDigest.assetCount)
+        XCTAssertEqual(firstDigest.resourceCount, secondDigest.resourceCount)
+        XCTAssertEqual(Set(firstSnapshot.assets), Set(secondSnapshot.assets))
+        XCTAssertEqual(Set(firstSnapshot.resources), Set(secondSnapshot.resources))
+        let captured = secondProgress.values()
+        XCTAssertEqual(captured.map(\.current), [0])
+        XCTAssertEqual(captured.map(\.total), [0])
+    }
+
+    func testSyncIndex_removedOnlyV1SyncAppliesRemovalProgressAndClearsDigest() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await seedV1Manifest(client: client, basePath: basePath, month: monthA, marker: 0x12)
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+        let service = RemoteIndexSyncService()
+        _ = try await service.syncIndex(client: client, profile: profile)
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map { LibraryMonthKey(year: $0.year, month: $0.month) }), [monthA])
+
+        try await client.delete(path: String(format: "%@/%04d/%02d", basePath, monthA.year, monthA.month))
+        let removalProgress = RemoteSyncProgressRecorder()
+        _ = try await service.syncIndex(
+            client: client,
+            profile: profile,
+            onSyncProgress: { progress in
+                removalProgress.append(progress)
+            }
+        )
+
+        let removedSnapshot = service.fullSnapshot()
+        XCTAssertTrue(removedSnapshot.assets.isEmpty)
+        XCTAssertTrue(removedSnapshot.resources.isEmpty)
+        XCTAssertEqual(removalProgress.values().map(\.current), [0, 1])
+        XCTAssertEqual(removalProgress.values().map(\.total), [1, 1])
+
+        let noWorkProgress = RemoteSyncProgressRecorder()
+        _ = try await service.syncIndex(
+            client: client,
+            profile: profile,
+            onSyncProgress: { progress in
+                noWorkProgress.append(progress)
+            }
+        )
+        XCTAssertEqual(noWorkProgress.values().map(\.current), [0])
+        XCTAssertEqual(noWorkProgress.values().map(\.total), [0])
+    }
+
+    func testSyncIndex_nonNotFoundYearListErrorDoesNotMutateSnapshotOrAdvanceDigests() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await seedV1Manifest(client: client, basePath: basePath, month: monthA, marker: 0x21)
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+        let service = RemoteIndexSyncService()
+        _ = try await service.syncIndex(client: client, profile: profile)
+        let snapshotBeforeFailure = service.fullSnapshot()
+
+        try await seedV1Manifest(client: client, basePath: basePath, month: monthB, marker: 0x22)
+        await client.injectListError(.transport, for: "\(basePath)/\(monthA.year)")
+
+        do {
+            _ = try await service.syncIndex(client: client, profile: profile)
+            XCTFail("expected transport error to propagate")
+        } catch {
+            XCTAssertFalse(isStorageNotFoundError(error))
+        }
+        let snapshotAfterFailure = service.fullSnapshot()
+        XCTAssertEqual(Set(snapshotBeforeFailure.assets), Set(snapshotAfterFailure.assets))
+        XCTAssertEqual(Set(snapshotBeforeFailure.resources), Set(snapshotAfterFailure.resources))
+
+        let recoveryProgress = RemoteSyncProgressRecorder()
+        _ = try await service.syncIndex(
+            client: client,
+            profile: profile,
+            onSyncProgress: { progress in
+                recoveryProgress.append(progress)
+            }
+        )
+
+        let recovered = service.fullSnapshot()
+        XCTAssertEqual(Set(recovered.assets.map { LibraryMonthKey(year: $0.year, month: $0.month) }), [monthA, monthB])
+        XCTAssertEqual(recoveryProgress.values().first?.total, 1)
+    }
+
+    func testPhysicalPresenceOverlayProbe_serialOnlyClientRunsOneOperationAtATime() async throws {
+        let basePath = "/repo"
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        var resources: [RemoteManifestResource] = []
+
+        for offset in 0..<3 {
+            let month = LibraryMonthKey(year: 2025, month: offset + 1)
+            let monthRel = String(format: "%04d/%02d", month.year, month.month)
+            let bytes = Data("serial-overlay-\(offset)".utf8)
+            let hash = Data(SHA256.hash(data: bytes))
+            let name = "f\(offset).jpg"
+            resources.append(RemoteManifestResource(
+                year: month.year,
+                month: month.month,
+                physicalRemotePath: "\(monthRel)/\(name)",
+                contentHash: hash,
+                fileSize: Int64(bytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil,
+                backedUpAtMs: 0
+            ))
+            await inner.injectFile(path: "\(basePath)/\(monthRel)/\(name)", data: bytes)
+        }
+        let serialOnly = SerialOnlyOverlayProbeClient(inner: inner)
+
+        let result = try await RemoteIndexPhysicalPresenceOverlayProbe().probe(
+            snapshot: RemoteLibrarySnapshot(resources: resources, assets: []),
+            client: serialOnly,
+            basePath: basePath,
+            fallback: [:],
+            budget: nil,
+            staleFallbackPolicy: .preserveFallback,
+            concurrencyCap: 4
+        )
+
+        XCTAssertTrue(result.fresh)
+        XCTAssertTrue(result.missingByMonth.values.allSatisfy(\.isEmpty))
+        let maxOperations = await serialOnly.maxConcurrentOperations()
+        let listCount = await serialOnly.listCount()
+        let downloadCount = await serialOnly.downloadCount()
+        XCTAssertEqual(maxOperations, 1)
+        XCTAssertEqual(listCount, 3)
+        XCTAssertEqual(downloadCount, 3)
+    }
+
     func testSyncOverlayAndCaptureHandle_budgetExhausted_remainsFreshUnderFailClosedPolicy() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -616,5 +781,247 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
             XCTAssertEqual(err.domain, "RemoteIndexSyncService")
             XCTAssertEqual(err.code, -60)
         }
+    }
+
+    func testVerifyMonth_v1Path_refusesWhenVersionJSONIsDirectory() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let versionPath = RepoLayout.versionFilePath(base: basePath)
+        try await client.createDirectory(path: versionPath)
+
+        let service = RemoteIndexSyncService()
+        do {
+            try await service.verifyMonth(client: client, basePath: basePath, month: monthA)
+            XCTFail("expected directory version fence to refuse V1 verifyMonth")
+        } catch let err as NSError {
+            XCTAssertEqual(err.domain, "RemoteIndexSyncService")
+            XCTAssertEqual(err.code, -62)
+        }
+    }
+
+    func testVerifyMonth_v1Path_refusesWhenV2DataExistsWithoutVersionJSON() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let commitsPath = RepoLayout.commitsDirectoryPath(base: basePath)
+        try await client.createDirectory(path: commitsPath)
+        await client.injectFile(path: "\(commitsPath)/leftover.jsonl", contents: "stale")
+
+        let service = RemoteIndexSyncService()
+        do {
+            try await service.verifyMonth(client: client, basePath: basePath, month: monthA)
+            XCTFail("expected V2 data fence to refuse V1 verifyMonth")
+        } catch let err as NSError {
+            XCTAssertEqual(err.domain, "RemoteIndexSyncService")
+            XCTAssertEqual(err.code, -61)
+        }
+    }
+
+    func testVerifyMonth_v1Path_v2DataProbeTransportErrorPropagatesWithoutMutation() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let service = RemoteIndexSyncService()
+        let hash = TestFixtures.fingerprint(0x61)
+        _ = seedCompleteAsset(in: service, month: monthA, contentHash: hash)
+        let snapshotBeforeFailure = service.fullSnapshot()
+        await client.injectListError(.transport, for: RepoLayout.commitsDirectoryPath(base: basePath))
+
+        do {
+            try await service.verifyMonth(client: client, basePath: basePath, month: monthA)
+            XCTFail("expected V2-data probe transport error to propagate")
+        } catch {
+            XCTAssertFalse(isStorageNotFoundError(error))
+        }
+        let snapshotAfterFailure = service.fullSnapshot()
+        XCTAssertEqual(Set(snapshotBeforeFailure.assets), Set(snapshotAfterFailure.assets))
+        XCTAssertEqual(Set(snapshotBeforeFailure.resources), Set(snapshotAfterFailure.resources))
+    }
+
+    private func seedV1Manifest(
+        client: InMemoryRemoteStorageClient,
+        basePath: String,
+        month: LibraryMonthKey,
+        marker: UInt8
+    ) async throws {
+        let bytes = Data(repeating: marker, count: 8)
+        let hash = TestFixtures.fingerprint(marker)
+        let fingerprint = TestFixtures.computedFingerprint(for: [
+            (role: ResourceTypeCode.photo, slot: 0, contentHash: hash)
+        ])
+        let resource = TestFixtures.remoteResource(
+            year: month.year,
+            month: month.month,
+            contentHash: hash,
+            fileSize: Int64(bytes.count),
+            fileName: "asset-\(marker).jpg"
+        )
+        let asset = TestFixtures.remoteAsset(
+            year: month.year,
+            month: month.month,
+            fingerprint: fingerprint,
+            totalFileSizeBytes: Int64(bytes.count)
+        )
+        let link = TestFixtures.remoteLink(
+            year: month.year,
+            month: month.month,
+            assetFingerprint: fingerprint,
+            resourceHash: hash,
+            logicalName: "asset-\(marker).jpg"
+        )
+        await client.injectFile(path: "\(basePath)/\(resource.physicalRemotePath)", data: bytes)
+        let store = try await MonthManifestStore.loadSeeded(
+            client: client,
+            basePath: basePath,
+            year: month.year,
+            month: month.month,
+            seed: MonthManifestStore.Seed(resources: [resource], assets: [asset], assetResourceLinks: [link])
+        )
+        let manifestPath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: String(format: "%04d/%02d/%@", month.year, month.month, MonthManifestStore.manifestFileName)
+        )
+        try await client.upload(
+            localURL: store.localManifestURL,
+            remotePath: manifestPath,
+            respectTaskCancellation: true,
+            onProgress: nil
+        )
+        await client.setModificationDateForTest(Date(timeIntervalSince1970: TimeInterval(marker)), path: manifestPath)
+    }
+}
+
+private final class RemoteSyncProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [RemoteSyncProgress] = []
+
+    func append(_ value: RemoteSyncProgress) {
+        lock.withLock {
+            storage.append(value)
+        }
+    }
+
+    func values() -> [RemoteSyncProgress] {
+        lock.withLock { storage }
+    }
+}
+
+private actor SerialOnlyOverlayProbeClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated func atomicCreateGuarantee(forFileSize _: Int64, remotePath _: String) -> CreateGuarantee {
+        .exclusive
+    }
+
+    private let inner: InMemoryRemoteStorageClient
+    private var activeOperations = 0
+    private var maxOperations = 0
+    private var totalLists = 0
+    private var totalDownloads = 0
+
+    init(inner: InMemoryRemoteStorageClient) {
+        self.inner = inner
+    }
+
+    func maxConcurrentOperations() -> Int { maxOperations }
+    func listCount() -> Int { totalLists }
+    func downloadCount() -> Int { totalDownloads }
+
+    func connect() async throws {
+        try await inner.connect()
+    }
+
+    func disconnect() async {
+        await inner.disconnect()
+    }
+
+    func storageCapacity() async throws -> RemoteStorageCapacity? {
+        try await inner.storageCapacity()
+    }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        recordOperationStart()
+        totalLists += 1
+        defer { recordOperationEnd() }
+        try await Task.sleep(nanoseconds: 5_000_000)
+        return try await inner.list(path: path)
+    }
+
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        try await inner.metadata(path: path)
+    }
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
+        try await inner.upload(
+            localURL: localURL,
+            remotePath: remotePath,
+            respectTaskCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        )
+    }
+
+    func atomicCreate(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(
+            localURL: localURL,
+            remotePath: remotePath,
+            respectTaskCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        )
+    }
+
+    func setModificationDate(_ date: Date, forPath path: String) async throws {
+        try await inner.setModificationDate(date, forPath: path)
+    }
+
+    func download(remotePath: String, localURL: URL) async throws {
+        recordOperationStart()
+        totalDownloads += 1
+        defer { recordOperationEnd() }
+        try await Task.sleep(nanoseconds: 5_000_000)
+        try await inner.download(remotePath: remotePath, localURL: localURL)
+    }
+
+    func exists(path: String) async throws -> Bool {
+        try await inner.exists(path: path)
+    }
+
+    func delete(path: String) async throws {
+        try await inner.delete(path: path)
+    }
+
+    func createDirectory(path: String) async throws {
+        try await inner.createDirectory(path: path)
+    }
+
+    func move(from sourcePath: String, to destinationPath: String) async throws {
+        try await inner.move(from: sourcePath, to: destinationPath)
+    }
+
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+
+    func copy(from sourcePath: String, to destinationPath: String) async throws {
+        try await inner.copy(from: sourcePath, to: destinationPath)
+    }
+
+    private func recordOperationStart() {
+        activeOperations += 1
+        maxOperations = max(maxOperations, activeOperations)
+    }
+
+    private func recordOperationEnd() {
+        activeOperations -= 1
     }
 }

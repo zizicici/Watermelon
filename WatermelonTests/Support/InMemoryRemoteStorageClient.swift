@@ -246,7 +246,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
                 isDirectory: false,
                 size: Int64(data.count),
                 creationDate: nil,
-                modificationDate: nil
+                modificationDate: injectedMtimes[key]
             )
         }
         if explicitDirectories.contains(key) || hasAnyDescendant(of: key) {
