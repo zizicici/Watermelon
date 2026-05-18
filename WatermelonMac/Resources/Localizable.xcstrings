@@ -2,13 +2,13 @@
   "sourceLanguage" : "en",
   "strings" : {
     "" : {
-      "localizations" : {}
+
     },
     ".." : {
-      "localizations" : {}
+
     },
     "·" : {
-      "localizations" : {}
+
     },
     "%@:%lld" : {
       "localizations" : {
@@ -1231,13 +1231,13 @@
       }
     },
     "fp:%@" : {
-      "localizations" : {}
+
     },
     "http" : {
-      "localizations" : {}
+
     },
     "https" : {
-      "localizations" : {}
+
     },
     "keychain.error.unexpectedPasswordData" : {
       "localizations" : {
@@ -1705,7 +1705,7 @@
       }
     },
     "M" : {
-      "localizations" : {}
+
     },
     "menu.about" : {
       "extractionState" : "manual",
@@ -9758,7 +9758,7 @@
       }
     },
     "SMB…" : {
-      "localizations" : {}
+
     },
     "smb.add.action.connect" : {
       "extractionState" : "manual",
@@ -12343,10 +12343,10 @@
       }
     },
     "Watermelon" : {
-      "localizations" : {}
+
     },
     "WebDAV…" : {
-      "localizations" : {}
+
     },
     "webdav.error.accessDenied" : {
       "localizations" : {

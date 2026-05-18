@@ -14346,6 +14346,7 @@
       }
     },
     "backup.log.remoteSnapshotLarge" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -18658,6 +18659,7 @@
       }
     },
     "backup.remoteIndex.error.missingMonthManifest" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -19450,6 +19452,7 @@
       }
     },
     "backup.session.completed" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -22089,6 +22092,94 @@
         }
       }
     },
+    "compatibility.error.damagedV2Repo" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repository ist beschädigt: Identitätsdateien (repo.json/version.json) fehlen, aber das Verzeichnis enthält noch Commit-/Snapshot-Daten. Manuelle Wiederherstellung erforderlich, um Datenverlust zu vermeiden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repository damaged: identity files (repo.json/version.json) are gone but commit/snapshot data is still present. Manual recovery required to avoid orphaning existing data."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositorio dañado: faltan los archivos de identidad (repo.json/version.json) pero los datos de commit/snapshot siguen presentes. Se requiere recuperación manual para no orfanizar los datos existentes."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositorio dañado: faltan los archivos de identidad (repo.json/version.json) pero los datos de commit/snapshot siguen presentes. Se requiere recuperación manual para no orfanizar los datos existentes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dépôt endommagé : les fichiers d'identité (repo.json/version.json) ont disparu alors que les données de commit/snapshot sont encore présentes. Une récupération manuelle est requise pour ne pas orphaniser les données existantes."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リポジトリが破損しています: 識別ファイル (repo.json/version.json) は失われていますが、commit/snapshot データはまだ残っています。既存データを孤立させないために手動での復旧が必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장소가 손상됐습니다: 식별 파일 (repo.json/version.json) 은 사라졌지만 commit/snapshot 데이터는 아직 남아 있습니다. 기존 데이터를 고립시키지 않으려면 수동 복구가 필요합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositório danificado: os arquivos de identidade (repo.json/version.json) sumiram, mas os dados de commit/snapshot ainda estão presentes. Recuperação manual necessária para não orfanizar os dados existentes."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repositório danificado: os ficheiros de identidade (repo.json/version.json) desapareceram, mas os dados de commit/snapshot ainda estão presentes. Recuperação manual necessária para não orfanizar os dados existentes."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Репозиторий повреждён: файлы идентификации (repo.json/version.json) исчезли, но данные commit/snapshot ещё на месте. Требуется ручное восстановление, чтобы не сделать существующие данные сиротскими."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Репозиторій пошкоджений: файли ідентифікації (repo.json/version.json) зникли, але дані commit/snapshot ще присутні. Потрібне ручне відновлення, щоб не залишити існуючі дані сиротами."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仓库已损坏：身份文件 (repo.json/version.json) 丢失，但 commit/snapshot 数据仍然存在。需要手动恢复以避免孤立现有数据。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "倉庫已損壞:身份檔案 (repo.json/version.json) 遺失,但 commit/snapshot 資料仍然存在。需要手動復原以避免孤立既有資料。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "倉庫已損壞:身份檔案 (repo.json/version.json) 遺失,但 commit/snapshot 資料仍然存在。需要手動復原以避免孤立既有資料。"
+          }
+        }
+      }
+    },
     "compatibility.error.remoteFormatUnsupported" : {
       "localizations" : {
         "de" : {
@@ -22261,94 +22352,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此遠端備份需要 %1$@ %2$@ 或更新版本。請前往 App Store 更新。"
-          }
-        }
-      }
-    },
-    "compatibility.error.damagedV2Repo" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Repository ist beschädigt: Identitätsdateien (repo.json/version.json) fehlen, aber das Verzeichnis enthält noch Commit-/Snapshot-Daten. Manuelle Wiederherstellung erforderlich, um Datenverlust zu vermeiden."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Repository damaged: identity files (repo.json/version.json) are gone but commit/snapshot data is still present. Manual recovery required to avoid orphaning existing data."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Repositorio dañado: faltan los archivos de identidad (repo.json/version.json) pero los datos de commit/snapshot siguen presentes. Se requiere recuperación manual para no orfanizar los datos existentes."
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Repositorio dañado: faltan los archivos de identidad (repo.json/version.json) pero los datos de commit/snapshot siguen presentes. Se requiere recuperación manual para no orfanizar los datos existentes."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dépôt endommagé : les fichiers d'identité (repo.json/version.json) ont disparu alors que les données de commit/snapshot sont encore présentes. Une récupération manuelle est requise pour ne pas orphaniser les données existantes."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "リポジトリが破損しています: 識別ファイル (repo.json/version.json) は失われていますが、commit/snapshot データはまだ残っています。既存データを孤立させないために手動での復旧が必要です。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "저장소가 손상됐습니다: 식별 파일 (repo.json/version.json) 은 사라졌지만 commit/snapshot 데이터는 아직 남아 있습니다. 기존 데이터를 고립시키지 않으려면 수동 복구가 필요합니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Repositório danificado: os arquivos de identidade (repo.json/version.json) sumiram, mas os dados de commit/snapshot ainda estão presentes. Recuperação manual necessária para não orfanizar os dados existentes."
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Repositório danificado: os ficheiros de identidade (repo.json/version.json) desapareceram, mas os dados de commit/snapshot ainda estão presentes. Recuperação manual necessária para não orfanizar os dados existentes."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Репозиторий повреждён: файлы идентификации (repo.json/version.json) исчезли, но данные commit/snapshot ещё на месте. Требуется ручное восстановление, чтобы не сделать существующие данные сиротскими."
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Репозиторій пошкоджений: файли ідентифікації (repo.json/version.json) зникли, але дані commit/snapshot ще присутні. Потрібне ручне відновлення, щоб не залишити існуючі дані сиротами."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "仓库已损坏：身份文件 (repo.json/version.json) 丢失，但 commit/snapshot 数据仍然存在。需要手动恢复以避免孤立现有数据。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "倉庫已損壞:身份檔案 (repo.json/version.json) 遺失,但 commit/snapshot 資料仍然存在。需要手動復原以避免孤立既有資料。"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "倉庫已損壞:身份檔案 (repo.json/version.json) 遺失,但 commit/snapshot 資料仍然存在。需要手動復原以避免孤立既有資料。"
           }
         }
       }
