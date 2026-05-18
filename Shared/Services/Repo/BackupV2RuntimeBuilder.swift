@@ -49,74 +49,42 @@ enum BackupV2RuntimeBuilder {
         case .unsupported(let minAppVersion):
             throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
         case .v2:
-            // Malformed repo.json / repo-identity-final.json inside a V2-shaped repo
-            // surfaces as BootstrapError.ioFailure; map to damagedV2Repo so the user
-            // sees the actionable compatibility diagnosis (same intent as
-            // RemoteFormatCompatibility's VersionManifestStore mapping).
-            do {
-                let sources = try await RepoIdentitySources.collect(
-                    profileID: profileID,
-                    writerID: writerID,
-                    identity: identity,
-                    client: client,
-                    basePath: profile.basePath,
-                    format: format
-                )
-                resolvedRepoID = try await sources.publish(bootstrap: bootstrap, writerID: writerID)
-            } catch let error as RepoBootstrap.BootstrapError {
-                if case .ioFailure = error {
-                    throw BackupV2RuntimeBuildError.damagedV2Repo
-                }
-                throw error
-            }
+            resolvedRepoID = try await resolveAndPublishIdentityForShapedRepo(
+                profileID: profileID,
+                writerID: writerID,
+                identity: identity,
+                dataClient: client,
+                basePath: profile.basePath,
+                format: format,
+                publishBootstrap: bootstrap
+            )
             // WebDAV/SMB/SFTP don't auto-create parents on PUT.
             try await bootstrap.ensureSubdirectories()
         case .v2WithPendingMigrationCleanup(_, let ownerWriterID):
             try await bootstrap.ensureSubdirectories()
-            // Heavy commit/snapshot scan stays on data `client`; publication on the
-            // metadata bootstrap keeps marker writes off the data connection.
-            do {
-                let sources = try await RepoIdentitySources.collect(
-                    profileID: profileID,
+            let cleanupBootstrap = RepoBootstrap(client: metadataClient, basePath: profile.basePath)
+            let cleanup = V1MigrationService(
+                client: metadataClient,
+                basePath: profile.basePath,
+                database: databaseManager,
+                identity: identity,
+                bootstrap: cleanupBootstrap
+            )
+            resolvedRepoID = try await resolveAndPublishIdentityForShapedRepo(
+                profileID: profileID,
+                writerID: writerID,
+                identity: identity,
+                dataClient: client,
+                basePath: profile.basePath,
+                format: format,
+                publishBootstrap: cleanupBootstrap
+            )
+            try await withShapedRepoBootstrapErrorMapping {
+                try await cleanup.runCleanupOnly(
+                    ownerWriterID: ownerWriterID,
                     writerID: writerID,
-                    identity: identity,
-                    client: client,
-                    basePath: profile.basePath,
-                    format: format
+                    runID: runID
                 )
-                let cleanupBootstrap = RepoBootstrap(client: metadataClient, basePath: profile.basePath)
-                let cleanup = V1MigrationService(
-                    client: metadataClient,
-                    basePath: profile.basePath,
-                    database: databaseManager,
-                    identity: identity,
-                    bootstrap: cleanupBootstrap
-                )
-                do {
-                    let resolved = try await sources.publish(bootstrap: cleanupBootstrap, writerID: writerID)
-                    try await cleanup.runCleanupOnly(
-                        ownerWriterID: ownerWriterID,
-                        writerID: writerID,
-                        runID: runID
-                    )
-                    resolvedRepoID = resolved
-                } catch let error as RepoBootstrap.VersionConflict {
-                    switch error {
-                    case .higherFormatVersion(_, _, let minApp),
-                         .mismatchedFormatVersion(_, _, let minApp):
-                        throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
-                    case .unreadable:
-                        // Persistent unreadable after the retry budget burned — corruption,
-                        // not transient. Mirror inspect-side mapping so the user sees the
-                        // actionable damagedV2Repo diagnosis instead of a raw enum render.
-                        throw BackupV2RuntimeBuildError.damagedV2Repo
-                    }
-                }
-            } catch let error as RepoBootstrap.BootstrapError {
-                if case .ioFailure = error {
-                    throw BackupV2RuntimeBuildError.damagedV2Repo
-                }
-                throw error
             }
         case .fresh:
             do {
@@ -146,52 +114,31 @@ enum BackupV2RuntimeBuilder {
             guard allowMigration else {
                 throw BackupV2RuntimeBuildError.requiresForegroundMigration
             }
-            // `.v2WithV1Manifests` is a V2-shaped repo with leftover V1 manifest residue;
-            // a malformed `.watermelon/repo.json` / `repo-identity-final.json` surfaces as
-            // `BootstrapError.ioFailure` from collect/publish and must route to the same
-            // actionable damagedV2Repo diagnosis as the `.v2` arms. On pure `.v1` the
-            // catch is dead (no V2 identity to corrupt) but harmless.
-            do {
-                let sources = try await RepoIdentitySources.collect(
+            let migration = V1MigrationService(
+                client: client,
+                basePath: profile.basePath,
+                database: databaseManager,
+                identity: identity,
+                bootstrap: bootstrap
+            )
+            resolvedRepoID = try await resolveAndPublishIdentityForShapedRepo(
+                profileID: profileID,
+                writerID: writerID,
+                identity: identity,
+                dataClient: client,
+                basePath: profile.basePath,
+                format: format,
+                publishBootstrap: bootstrap
+            )
+            _ = try await withShapedRepoBootstrapErrorMapping {
+                try await migration.runFullMigration(
                     profileID: profileID,
+                    repoID: resolvedRepoID,
                     writerID: writerID,
-                    identity: identity,
-                    client: client,
-                    basePath: profile.basePath,
-                    format: format
+                    runID: runID,
+                    onMigrationStart: onMigrationStart,
+                    onMigrationComplete: onMigrationComplete
                 )
-                let migration = V1MigrationService(
-                    client: client,
-                    basePath: profile.basePath,
-                    database: databaseManager,
-                    identity: identity,
-                    bootstrap: bootstrap
-                )
-                do {
-                    let resolved = try await sources.publish(bootstrap: bootstrap, writerID: writerID)
-                    _ = try await migration.runFullMigration(
-                        profileID: profileID,
-                        repoID: resolved,
-                        writerID: writerID,
-                        runID: runID,
-                        onMigrationStart: onMigrationStart,
-                        onMigrationComplete: onMigrationComplete
-                    )
-                    resolvedRepoID = resolved
-                } catch let error as RepoBootstrap.VersionConflict {
-                    switch error {
-                    case .higherFormatVersion(_, _, let minApp),
-                         .mismatchedFormatVersion(_, _, let minApp):
-                        throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
-                    case .unreadable:
-                        throw BackupV2RuntimeBuildError.damagedV2Repo
-                    }
-                }
-            } catch let error as RepoBootstrap.BootstrapError {
-                if case .ioFailure = error {
-                    throw BackupV2RuntimeBuildError.damagedV2Repo
-                }
-                throw error
             }
         }
 
@@ -275,5 +222,64 @@ enum BackupV2RuntimeBuilder {
             initialMaterializeOutput: InitialMaterializeOutputBox(initialMaterialize),
             sweepTask: sweepTask
         )
+    }
+
+    private static func resolveAndPublishIdentityForShapedRepo(
+        profileID: Int64,
+        writerID: String,
+        identity: RepoIdentity,
+        dataClient: any RemoteStorageClientProtocol,
+        basePath: String,
+        format: RemoteFormatCompatibilityService,
+        publishBootstrap: RepoBootstrap
+    ) async throws -> String {
+        try await withShapedRepoBootstrapErrorMapping {
+            let authority = RepoIdentityAuthority(context: RepoIdentityAuthorityContext(
+                profileID: profileID,
+                writerID: writerID,
+                basePath: basePath,
+                dataClient: dataClient,
+                identity: identity,
+                format: format
+            ))
+            let resolution = try await authority.resolve()
+            return try await authority.publish(resolution, using: publishBootstrap)
+        }
+    }
+
+    private static func withShapedRepoBootstrapErrorMapping<T>(
+        _ operation: () async throws -> T
+    ) async throws -> T {
+        do {
+            return try await operation()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as BackupV2RuntimeBuildError {
+            throw error
+        } catch let error as RepoBootstrap.BootstrapError {
+            switch error {
+            case .ioFailure(let underlying):
+                if RemoteWriteClassifier.isCancellation(underlying) {
+                    throw CancellationError()
+                }
+                throw BackupV2RuntimeBuildError.damagedV2Repo
+            }
+        } catch let error as RepoBootstrap.VersionConflict {
+            switch error {
+            case .higherFormatVersion(_, _, let minApp),
+                 .mismatchedFormatVersion(_, _, let minApp):
+                throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
+            case .unreadable(let underlying):
+                if let underlying, RemoteWriteClassifier.isCancellation(underlying) {
+                    throw CancellationError()
+                }
+                throw BackupV2RuntimeBuildError.damagedV2Repo
+            }
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) {
+                throw CancellationError()
+            }
+            throw error
+        }
     }
 }

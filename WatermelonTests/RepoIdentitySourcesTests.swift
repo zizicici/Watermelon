@@ -44,6 +44,54 @@ final class RepoIdentitySourcesTests: XCTestCase {
         XCTAssertEqual(sources.suggested, "stored-id")
     }
 
+    func testAuthority_finalizationPrecedenceOverStaleClaimAndCache() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let finalizedRepoID = "finalized-repo"
+        await client.injectFile(
+            path: RepoLayout.identityFinalizationFilePath(base: basePath),
+            data: try RepoIdentityFinalizationWire(
+                repoID: finalizedRepoID,
+                formatVersion: RepoLayout.formatVersion,
+                createdAtMs: 0,
+                createdByWriter: "peer"
+            ).encode()
+        )
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "stale-cache")
+        try await injectOwnClaim(client: client, writerID: writerID, repoID: "stale-claim")
+
+        let identity = RepoIdentity(database: databaseManager)
+        let profileID = try TestFixtures.insertServerProfile(
+            in: databaseManager,
+            writerID: writerID,
+            basePath: basePath,
+            storageType: .webdav
+        )
+        let authority = RepoIdentityAuthority(context: RepoIdentityAuthorityContext(
+            profileID: profileID,
+            writerID: writerID,
+            basePath: basePath,
+            dataClient: client,
+            identity: identity,
+            format: RemoteFormatCompatibilityService()
+        ))
+
+        let resolution = try await authority.resolve()
+        XCTAssertNil(resolution.stored)
+        XCTAssertEqual(resolution.remote, finalizedRepoID)
+        XCTAssertNil(resolution.data)
+        XCTAssertEqual(resolution.suggested, finalizedRepoID)
+
+        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
+        let resolved = try await authority.publish(resolution, using: bootstrap)
+
+        XCTAssertEqual(resolved, finalizedRepoID)
+        let loaded = try await bootstrap.loadRepoID()
+        XCTAssertEqual(loaded, finalizedRepoID)
+    }
+
     func testCollect_unparseableV2CommitData_throwsDamagedV2Repo() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

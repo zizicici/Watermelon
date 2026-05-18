@@ -177,6 +177,32 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
+    func testV2Repo_identityReadCancellationPropagatesCancellation() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "remote-canonical")
+        await client.injectDownloadCancellation(for: RepoLayout.repoFilePath(base: basePath))
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        do {
+            _ = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+            XCTFail("expected cancellation")
+        } catch is CancellationError {
+            // expected
+        }
+    }
+
     func testFreshArm_corruptRepoJSON_throwsDamagedV2Repo() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
