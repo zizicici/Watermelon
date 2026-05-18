@@ -106,7 +106,6 @@ final class BackupResumePlannerTests: XCTestCase {
         XCTAssertEqual(pending, ["a", "b"])
     }
 
-    /// V2 stale overlay must reprocess all scoped assets; completedAssetIDs can outrun durable commit-log state.
     func testRetryMode_v2StaleOverlay_ignoresCompletedAssetIDs() async throws {
         let planner = BackupResumePlanner(
             photoLibraryService: PhotoLibraryService(),

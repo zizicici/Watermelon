@@ -5,7 +5,6 @@ struct BackupResumePlan {
     let resumedExecutionMode: BackupRunMode?
 }
 
-/// V2 must not subtract `completedAssetIDs` directly: a pre-flush pause leaves reducer-acked items not yet durable, so resume reads committed-fingerprint state instead.
 enum BackupResumeDedupMode: Sendable {
     case v1CompletedIDs
     case v2(RemoteViewHandle)

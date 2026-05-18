@@ -21,13 +21,13 @@
 1. full backup 或其恢复流程，仍需要重新遍历图库并重新计算 pending 集。
 2. 大图库下，开始执行和恢复执行都会有明显前置耗时。
 
-## 4. 强杀窗口（V2 cutover 后缩小到 batch 粒度，未消除）
+## 4. 强杀窗口（V2 metadata batch 窗口已由 Unit 8 消除）
 
-V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1→V2 migration 流程，详见 `docs/06-RepoV2.md`）。Stage 1 设计目标：把强杀窗口从「月级 flush」缩小到「10-asset batch」，**不消除**。
+V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1→V2 migration 流程，详见 `docs/06-RepoV2.md`）。Unit 8 后，V2 row-writing asset 在 publish asset / 写本地 hash-index 前会先写 per-asset commit；每 10 个非 failed 结果的 flush cadence 仅用于 snapshot。
 
 1. V1 路径（cutover 前）：manifest 在「月份完成」与「任务收尾」时 flush；强杀前一批未 flush 元数据丢失（月级窗口）。
-2. V2 路径（cutover 后）：前台与后台均每 10 个非 failed 结果 flush 一次 commit + snapshot；强杀最多丢未 commit 的 batch（最多 9 个 asset 元数据；物理文件已上传成 orphan）。
-3. 真消除强杀窗口：留 Stage 2 — per-asset commit 或本地 `resource_intents` pending state。
+2. V2 路径（cutover 后）：row-writing asset 逐条写 commit；batch / final flush 写 snapshot cadence，不再有 deferred batch commit 窗口。
+3. 剩余未解决项是旧 commit 文件长期增长；安全 retention / compaction policy 仍需单独设计，见 §12。
 
 ## 5. 首页状态机复杂度依然不低
 
@@ -89,9 +89,9 @@ V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1
 2. `SFTPConnectionParams` / `SFTPCredentialBlob` / `RemotePathBuilder` 已加 `nonisolated`；遗留的 `ExternalVolumeConnectionParams` / `WebDAVConnectionParams` / `S3ConnectionParams` 还没加，目前是 warning（"main actor-isolated conformance ... cannot be used in nonisolated context; this is an error in the Swift 6 language mode"），未来打开 Swift 6 模式会变 error。
 3. 修法是给这三个类型也加 `nonisolated`，与 SFTP 的处理一致；本仓库未跟 SFTP 的改动一起做，避免扩大 PR 范围。
 
-## 12. V2 batch-flush + uncommitted-cache 机制（已由 Unit 8 解决）
+## 12. V2 per-asset commit + snapshot cadence（Unit 8）
 
-Unit 8 已把 V2 row-writing asset 改为 per-asset commit：`AssetProcessor` 在 publish asset / 写本地 hash-index 前调用 `commitPendingAssetToRemote(ignoreCancellation: false)`。每 10 个非 failed 结果的 flush cadence 保留，但职责变为写 compacting snapshot；`markUncommittedV2` / `markCommittedV2` / inflight subtraction 链已删除。
+Unit 8 已把 V2 row-writing asset 改为 per-asset commit：`AssetProcessor` 在 publish asset / 写本地 hash-index 前调用 `commitPendingAssetToRemote(ignoreCancellation: false)`。每 10 个非 failed 结果的 flush cadence 保留，但职责变为写 compacting snapshot；旧 batch commit / optimistic subtraction 链已删除。
 
 仍未解决的是 commit 文件长期增长：当前 snapshot 降低 replay 成本，但不删除旧 commit。安全 compaction / retention policy 仍需单独设计。
 

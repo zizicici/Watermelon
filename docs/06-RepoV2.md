@@ -89,7 +89,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
   - `V2MonthIndexes` 持有 in-memory resources / assets / links / pending asset+tombstone 集合
   - `flushToRemote` 先写 commit jsonl，再写 snapshot jsonl，不再上传 V1 sqlite manifest
   - snapshot 写失败时通过 `FlushError.snapshotWriteFailed(committedAssets:committedTombstones:)` 把已落 commit 的 delta 带回调用方
-- `BackupParallelExecutor` 与 `BackgroundBackupRunner` 同步采用「每 10 个非 failed 结果 flush 一次」（`flushInterval = 10`）的 batch 提交节奏；月末仍有兜底 flush
+- Unit 8 后，row-writing asset 在 result 返回前写 per-asset commit；`BackupParallelExecutor` 与 `BackgroundBackupRunner` 同步采用「每 10 个非 failed 结果 flush 一次」（`flushInterval = 10`）的 snapshot cadence；月末仍有兜底 flush
 - `AssetProcessor+Upload` `client.upload` → `client.atomicCreate`；V2 且 `client.dataPathOverwriteRisk == .perKey` 时强制使用 writerID / runID 后缀候选，避免多 writer 同名覆盖
 - `BackgroundBackupRunner` 加 V1 gate：
   - `BackupV2RuntimeBuilder.build(allowMigration: false)`
@@ -139,7 +139,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - `RepoMaterializer` 单 month snapshot 损坏 fallback：按 lamport 降序遍历该 month 的 snapshot，corrupt 的跳过取下一个；全损坏时回退到 empty + commit replay
 - BackupV2RuntimeServices 持有专用 `metadataClient`：commit / snapshot / liveness 不再与 worker upload 抢占同一 connection；shutdown 时 disconnect
 - `BackupCompatibilityError` 新增 `.repoIdentityMismatch` / `.requiresForegroundMigration`（i18n 14 locales），`prepareV2Runtime` / `verifyMonthV2` 把 `BackupV2RuntimeBuildError` 映射成它们，UI 不再看到 enum 名 + hex UUID
-- Unit 8 后，V2 row-writing asset 在 result 返回前已写 per-asset commit；`RemoteIndexSyncService.committedAssetFingerprints()` 不再扣 uncommitted-cache，只保留 physical-missing subtraction
+- Unit 8 后，V2 row-writing asset 在 result 返回前已写 per-asset commit；`RemoteIndexSyncService.committedAssetFingerprints()` 直接来自 durable committed view，只保留 physical-missing subtraction
 - `CommitLogWriter.alreadyExists` retry：V2 commit flush 在 alreadyExists 后 re-allocate seq 重写最多 4 次，覆盖本地 lastSeq drift / 多端写同 seq 文件名场景
 - `CommitLogWriter` 在 `bestEffortRetry` 路径上做 download + sha256 verify：非原子后端（SMB exists+upload）写完做一次回读校验，不一致时按 alreadyExists 处理触发上层 retry
 - `RepoVerifyMonthService` 物理路径 multi-path：以 `pathsByHash[hash]` 集合做 OR 命中，多 writer 同 hash 不同 leaf 不再被误判 missing
@@ -155,7 +155,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - `SnapshotHeader` 加 `repoID` 字段(legacy 空字符串 backward-compat),materializer 同时按 repoID 过滤 snapshot 与 commit;之前只过滤 commit,foreign-repo snapshot 仍会污染 state/covered
 - 当时的 `makeSeedFromV2State` bridge 需要 dedup multi-path same hash：V2 允许同 hash 多 physical path(多 writer 撞名),但 V1 sqlite UNIQUE(contentHash) 不允许。该 bridge 已被 Iter 7 删除；当前 multi-path 由 `V2MonthSession` 原生保留
 - `processWithLocalCache` 的 `resources_reused_cached` 分支和 full upload 一样走 `commitPendingAssetToRemote(ignoreCancellation: false)`，commit 成功后才 publish asset / 写本地 hash-index
-- BackupParallelExecutor / BackgroundBackupRunner 把 batch flush 触发条件从 `result.status == .success` 放宽到 `result.status != .failed`,让 cached-reuse `.skipped` 路径(monthStore 已 dirty)也参与 10-asset batch 提交节奏
+- BackupParallelExecutor / BackgroundBackupRunner 把 batch flush 触发条件从 `result.status == .success` 放宽到 `result.status != .failed`,让 cached-reuse `.skipped` 路径(monthStore 已 dirty)也参与 10-asset snapshot cadence
 - `RepoBootstrap.ensureRepoJSON` 在 `.bestEffortRetry` 分支也回读 remote repo.json:非原子后端(SMB exists+upload TOCTOU)两个设备并发 bootstrap 时,各自都以为 created,read-back 后用对方真正落盘的 id 收敛
 - `AssetProcessor+Upload` `.bestEffortRetry` 路径加 remote size verify:size 不一致 → 视为 race → 触发 collision rename retry,避免 SMB 并发同名上传互相覆盖
 - `V1MigrationService.scanV1Months` 子目录 list 不再 `try?`:transient list 失败 surface 出去,phase1 不会漏迁某个月,phase3 不会把那个 manifest 误删
@@ -184,7 +184,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 **根因消除:**
 
 - (A) V1 sqlite schema 污染 V2:`V2MonthSession`(in-memory,不带 sqlite)替代 `MonthManifestStore` 的 V2 路径,`v2KnownLogicalNamesByHash` / `makeSeedFromV2State` dedup / `writeV2Snapshot` 多 path 重发 / `loadV2Materialized` 全部删除。multi-path 在 V2MonthSession 里是天然的(`pathsByHash` / `resourcesByPath`)
-- (B) optimistic-cache + deferred V2 commit:留 Stage 2 与 compaction 一起做(per-asset commit 目前会让 commit 文件爆炸)
+- (B) optimistic-cache + deferred V2 commit:当时留 Stage 2；Unit 8 已改为 per-asset commit，剩余未来项只有 commit 文件 retention / compaction
 - (C) bootstrap 状态机:文档化决策表 + Phase A 的 `BootstrapStateMachineTests` 锁定 16 个半成品状态的 inspect 输出。schema 不重构(向后兼容代价大于收益)
 - (D) `try?` / silent catch:Phase B audit 把 `SnapshotReader.list` / `CommitLogReader.list` 改成「list throw + metadata 也 throw → 传播 list 错误」(metadata 探测失败不再吞)
 - (E) 缺端到端测试:Phase A 加 `InMemoryRemoteStorageClient` actor + 6 个测试套(round-trip / V1 migration / bootstrap / restore fallback / V2 flush / concurrent bootstrap)。不要在文档中硬编码总测试数
@@ -229,7 +229,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - `WatermelonTests/RestoreServiceFallbackTests.swift`
 - `WatermelonTests/ConcurrentBootstrapRaceTests.swift`
 
-**Per-asset commit 已落地**：batch flush + `markCommittedV2` / inflight subtraction 机制已删除。当前每个 row-writing asset 写 commit；batch / final flush 写 snapshot cadence。剩余风险是旧 commit 文件 retention / compaction，见 `docs/05-OpenIssues.md` §12。
+**Per-asset commit 已落地**：旧 batch commit / optimistic subtraction 机制已删除。当前每个 row-writing asset 写 commit；batch / final flush 写 snapshot cadence。剩余风险是旧 commit 文件 retention / compaction，见 `docs/05-OpenIssues.md` §12。
 
 ### Iter 6 加固
 
@@ -262,25 +262,24 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 
 仅以下纯 Stage 2 项目未在本次范围：
 
-1. **真消除强杀窗口**：per-asset commit 或本地 `resource_intents` pending state（plan §11）
-2. **commit / 物理文件 GC**：跨 writer 安全的版本（plan §0 / §6.5 明确不做）
-3. **gcOrphan op + 物理文件 refcount + 「从备份删除 asset」UI**
-4. **`reportMissing` / `reportTampered` / `commitCorruption` op**
-5. **跨 writer snapshot GC**（grace + liveness gate + 联合覆盖判定）
-6. **WebDAV `If-None-Match` probe + 缓存**：当前直传 `*`，服务端不支持时回 412 当作 alreadyExists（错误归类正确，语义略有偏差）
-7. **持久化本地 V2 materialized cache**（cold start 进入毫秒级）
-8. **月级 materialize 并发深化**
-9. **E2EE**（modes: plain / e2ee-content-visible / e2ee-private）
-10. **audit / repair 完整 UI**（兜底 pre-1.2.0 客户端误用造成的 desync）
-11. **全局 compaction snapshot（Delta Lake 风格）+ checkpoint**
-12. **`writers/<writerID>.json` 元数据**
-13. **「合并历史 writer」UI**（处理 Keychain 丢失场景）
-14. **`verifyMonth` `partiallyMissing` 类提供 re-upload 动作**
+1. **commit / 物理文件 GC**：跨 writer 安全的版本（plan §0 / §6.5 明确不做）
+2. **gcOrphan op + 物理文件 refcount + 「从备份删除 asset」UI**
+3. **`reportMissing` / `reportTampered` / `commitCorruption` op**
+4. **跨 writer snapshot GC**（grace + liveness gate + 联合覆盖判定）
+5. **WebDAV `If-None-Match` probe + 缓存**：当前直传 `*`，服务端不支持时回 412 当作 alreadyExists（错误归类正确，语义略有偏差）
+6. **持久化本地 V2 materialized cache**（cold start 进入毫秒级）
+7. **月级 materialize 并发深化**
+8. **E2EE**（modes: plain / e2ee-content-visible / e2ee-private）
+9. **audit / repair 完整 UI**（兜底 pre-1.2.0 客户端误用造成的 desync）
+10. **全局 compaction snapshot（Delta Lake 风格）+ checkpoint**
+11. **`writers/<writerID>.json` 元数据**
+12. **「合并历史 writer」UI**（处理 Keychain 丢失场景）
+13. **`verifyMonth` `partiallyMissing` 类提供 re-upload 动作**
 
 ## 关键假设 / 限制
 
 1. `min_app_version "2.0.0"` 是 `RepoLayout.minAppVersionPlaceholder`；发布时换实际下一版本号
 2. 升级**不可逆**：phase 2 翻转后已升级客户端永远无法回退到 V1
-3. 强杀窗口 ~9 asset；真消除留 Stage 2
+3. Unit 8 已消除 V2 deferred batch commit 窗口；batch / final flush 只负责 snapshot cadence
 4. **多端并发**：V2 best-effort，不保证零冲突（特别是 WebDAV）；plan §12 已声明
 5. **pre-1.2.0 V1 客户端**：协议无 sentinel 锁出，依赖用户主动升级所有设备
