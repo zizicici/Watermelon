@@ -655,13 +655,7 @@ final actor S3Client: RemoteStorageClientProtocol {
     }
 
     nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
-        // S3 single-part PUT supports `If-None-Match: *` (server-enforced exclusive
-        // create). Multipart upload completion historically does NOT honor it across
-        // all S3-compatible vendors, so we conservatively report `.overwritePossible`
-        // even where AWS itself supports conditional CompleteMultipartUpload.
-        // Repo metadata (commit/snapshot files) is always small enough to take the
-        // single-part path; large files = asset uploads where collision-rename
-        // already prevents path conflicts in normal operation.
+        // Multipart completion cannot enforce If-None-Match, so stage through exclusive metadata moves.
         if size > Self.multipartThreshold {
             return .overwritePossible
         }

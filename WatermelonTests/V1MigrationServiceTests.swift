@@ -2,12 +2,6 @@ import XCTest
 import GRDB
 @testable import Watermelon
 
-/// V1→V2 migration tests:
-///   - scanV1Months propagates list errors (silent skip + phase3 delete = data loss)
-///   - phase2 writes version.json + flips migrationCompleted
-///   - phase3 deletes scanned V1 manifests
-///   - phase1 e2e: real V1 sqlite → V2 commits/snapshots → re-materializes back to
-///     equivalent state. Only test exercising the V1→V2 schema mapping path.
 final class V1MigrationServiceTests: XCTestCase {
     private let basePath = "/repo"
     private var tempDBURL: URL!
@@ -40,8 +34,6 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertEqual(monthKeys, ["2024-1", "2024-12", "2025-6"])
     }
 
-    /// `try?` on subdirectory list silently skipped months, then phase3's retry-scan
-    /// would delete those manifests as orphans — propagate the error instead.
     func testScanV1MonthsSurfacesListErrors() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -82,7 +74,6 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertEqual(state?.migrationCompleted, 1, "markProfileMigrated must flip the flag")
     }
 
-    /// End-to-end phase1: V1 manifest → V2 commits/snapshots → re-materialize equals input.
     func testPhase1_v1ManifestRoundTripsThroughV2() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -192,8 +183,6 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertFalse(m2)
     }
 
-    /// Phase3 only deletes manifests phase1 scanned — V1 data written between phase1 and
-    /// phase3 by an older peer must survive into the next migration cycle.
     func testPhase3PreservesManifestsAddedAfterPhase1Scan() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -220,9 +209,6 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertTrue(lateSurvived)
     }
 
-    /// Phase3 retried on a fully-cleaned-up repo must not throw — `migrations/<writerID>.json`
-    /// already gone, no V1 manifests left. Critical for the builder's "completed=1 + .v1 routing"
-    /// retry branch: we re-enter phase3 only when ownsMigrationMarker says it's safe.
     func testPhase3IsIdempotent_secondInvocation_noop() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -233,8 +219,6 @@ final class V1MigrationServiceTests: XCTestCase {
         try await service.runPhase3(writerID: "test-writer", runID: "run-1")
     }
 
-    /// ownsMigrationMarker discriminates "our cleanup failed" from "real V2→V1 regression".
-    /// True only after phase1 wrote a marker for OUR writerID; false after phase3 cleared it.
     func testOwnsMigrationMarker_reflectsPhase3Cleanup() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -254,7 +238,6 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertFalse(afterCleanup, "phase3 must remove marker so routing flips to .v2")
     }
 
-    // MARK: - verifyFinalState
 
     func testVerifyFinalState_succeedsAfterCleanRun() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -279,8 +262,6 @@ final class V1MigrationServiceTests: XCTestCase {
         }
     }
 
-    /// Peer markers from prior aborted runs are the next inspection's job, not verify's.
-    /// Treating any-marker-exists as failure would loop full migrations on partial state.
     func testVerifyFinalState_ignoresPeerMarkers() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -290,7 +271,6 @@ final class V1MigrationServiceTests: XCTestCase {
         try await service.verifyFinalState(cleanedWriterID: "w")
     }
 
-    // MARK: - Migration entrypoint integration
 
     func testRun_v1Inspection_executesFullPathAndFlipsMigrationCompleted() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -330,9 +310,6 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertTrue(residueScan.isEmpty, "phase1 must quarantine the V1 manifest")
     }
 
-    /// Cleanup-only path takes over a peer's incomplete migration. Critical asymmetry:
-    /// `markProfileMigrated` is NOT called (preserves pre-refactor behavior — the cleanup writer
-    /// is not the migrating writer, so its profile's `migrationCompleted` stays 0).
     func testRun_v2WithPendingMigrationCleanup_skipsPhase1AndPreservesMigrationCompletedFlag() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
@@ -366,12 +343,6 @@ final class V1MigrationServiceTests: XCTestCase {
                        "cleanup-only path must leave migrationCompleted at 0 (pre-refactor behavior)")
     }
 
-    /// Peer-race tolerance: phase1's empty-manifest branch deletes the source V1
-    /// manifest, but a sibling cleanup may have removed it between our
-    /// `metadataIfPresent` check and our `delete` call. `deleteIfPresent` must
-    /// swallow not-found from non-idempotent backends so phase1 doesn't abort
-    /// the whole migration over a benign race. Non-not-found errors must still
-    /// propagate (transport flap is not the same as a peer who already cleaned up).
     func testDeleteIfPresent_emptyManifestPath_swallowsPeerRaceNotFound() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -402,9 +373,6 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertFalse(manifestStillPresent, "peer-race .notFound must leave the V1 manifest absent")
     }
 
-    /// Parity: deleteIfPresent must still propagate non-not-found delete errors.
-    /// A transport/permission failure is not "peer cleaned it up first" — surfacing
-    /// it keeps real backend faults visible instead of being swallowed as race.
     func testDeleteIfPresent_emptyManifestPath_propagatesNonNotFoundDeleteError() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -444,13 +412,6 @@ final class V1MigrationServiceTests: XCTestCase {
         XCTAssertTrue(manifestStillPresent, ".permission injection must not mutate fake storage")
     }
 
-    /// End-to-end cancellation contract: when URLSession-shape cancellation fires
-    /// inside `CommitLogWriter.atomicCreate` mid-migration, `runFullMigration` must
-    /// throw `CancellationError` — not a `CommitLogWriter.WriteError` variant, not
-    /// retry-exhausted `.alreadyExists`. Per-writer cancellation contracts are pinned
-    /// separately; this test guards the seam: a regression in gate normalization,
-    /// writer catch ordering, or `shouldRetryMigrationCommitWrite`'s classifier
-    /// (any one) breaks end-to-end while individual unit tests still pass.
     func testRunFullMigration_atomicCreateURLErrorCancelled_propagatesCancellation() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -524,15 +485,6 @@ final class V1MigrationServiceTests: XCTestCase {
                       "phase1 cancellation must NOT quarantine the V1 manifest — next run must still see it")
     }
 
-    /// Regression: when an existing V2 repo already contains commits by this
-    /// writerID with higher seq/clock than the local DB high-water (fresh local
-    /// install paired with a populated remote, or peer-restored DB), V1
-    /// migration must observe both before allocating. Otherwise:
-    /// - SeqAllocator returns seq=1..4 that collide with the existing commits
-    ///   and the migration aborts after the retry budget.
-    /// - LamportClock ticks from 0 → migrated rows get clocks below the
-    ///   observed remote, so path-level LWW classifies them as stale relative
-    ///   to existing V2 state.
     func testPhase1_observesRemoteSeqAndClockBeforeAllocating_avoidsCollision() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -626,7 +578,6 @@ final class V1MigrationServiceTests: XCTestCase {
                              "lamport must observe remote clock=\(highestPreExistingClock) before ticking; got \(stamp.clock)")
     }
 
-    // MARK: - Helpers
 
     private func injectMigrationMarker(client: InMemoryRemoteStorageClient, writerID: String, phase: Int) async throws {
         let dict: [String: Any] = [
@@ -656,8 +607,6 @@ final class V1MigrationServiceTests: XCTestCase {
         )
     }
 
-    /// Build a real V1 sqlite manifest with one asset+resource+link. Returns bytes
-    /// so the in-memory client can stage them at the V1 manifest path.
     private static func buildV1ManifestSqlite(
         assetFingerprint: Data,
         resourceHash: Data,
@@ -698,8 +647,6 @@ final class V1MigrationServiceTests: XCTestCase {
         return try Data(contentsOf: dbURL)
     }
 
-    /// Schema-only manifest, no rows. Drives runPhase1 into the empty-manifest branch
-    /// which calls `deleteIfPresent` on the source path.
     private static func buildEmptyV1ManifestSqlite() throws -> Data {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)

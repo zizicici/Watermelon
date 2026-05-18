@@ -85,7 +85,6 @@ actor LivenessTracker {
     }
 
     private func tick() async {
-        // MARK: Phase A — write heartbeat to local temp
         let timestampMs = Int64(Date().timeIntervalSince1970 * 1000)
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("liveness-\(UUID().uuidString).json")
@@ -97,14 +96,11 @@ actor LivenessTracker {
         }
         do { try writeHeartbeat(timestampMs: timestampMs) } catch { return }
         let remotePath = RepoLayout.livenessFilePath(base: basePath, writerID: writerID)
-        // Staging + rename instead of delete-then-create: keeps a file at remotePath
-        // throughout the swap. Peer's snapshotPeerStatuses sweep gate can't see us
-        // as inactive during the brief window between the old delete and the new create.
+        // Publish via staging+rename so peers never observe us absent during heartbeat renewal.
         let stagingPath = remotePath + ".staging-\(UUID().uuidString).tmp"
         var lastFailure: Error?
         var stagingCreated = false
 
-        // MARK: Phase B — publish via staging+move
         // Cancellation must surface so shutdown's stopAndWait can unblock past atomicCreate.
         do {
             _ = try await client.atomicCreate(
@@ -182,7 +178,6 @@ actor LivenessTracker {
             return
         }
 
-        // MARK: Phase C — exclusive atomic-create fallback (only when backend gives exclusive guarantee)
         let heartbeatSize = (try? FileManager.default.attributesOfItem(atPath: temp.path)[.size] as? Int64) ?? 0
         guard client.atomicCreateGuarantee(forFileSize: heartbeatSize, remotePath: remotePath) == .exclusive else {
             try? await client.delete(path: stagingPath)
@@ -203,7 +198,6 @@ actor LivenessTracker {
             livenessLog.warning("[Liveness] heartbeat probe failed before fallback atomic create for \(remotePath, privacy: .public), continuing exclusive create: \(error.localizedDescription, privacy: .public)")
         }
 
-        // MARK: Phase D — overwrite renewal (only when client.supportsLivenessSafeOverwriteUpload)
         // Cancellation must surface here too so stopAndWait can unblock during shutdown.
         do {
             let fallbackTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -340,14 +334,7 @@ actor LivenessTracker {
         return ActiveWritersView(activePeerIDs: active, stalePeerIDs: stale, unknownPeerIDs: unknown)
     }
 
-    /// Single retry on transient transport — without it, a momentary blip on one
-    /// peer's file marks them inactive and sweep can delete their still-active staging.
-    /// Cancellation must surface, not be swallowed.
-    ///
-    /// Returns `.unknown(.vanishedWithinGrace)` for 404s on backends with grace > 0,
-    /// since post-write visibility lag can make a freshly-renewed peer's file 404 briefly.
-    /// Returns nil (peer omitted) when grace = 0 and we got a confident 404 — that
-    /// peer is genuinely gone.
+    /// Retries transient peer-read failures once so a blip cannot make sweep delete active staging.
     private func classifyPeerHeartbeat(
         path: String,
         now: Date,

@@ -1,17 +1,14 @@
 import Foundation
 import CryptoKit
 
-/// Metadata writes (commits, snapshots, repo.json, version.json) on backends
-/// without exclusive create are the durable truth of the repo and cannot
-/// tolerate a peer's bytes silently winning the destination path.
+/// Durable repo metadata must not let peer bytes silently win destination paths.
 enum MetadataCreateGate {
     enum FinalizationPolicy: Equatable {
         case allowBestEffort
         case requireExclusiveMove
     }
 
-    /// `verifiedAgainstLocalContent: true` ⇒ gate SHA-confirmed remote bytes
-    /// match `localURL`, so callers can skip their own readback loop.
+    /// SHA-confirmed gate writes let callers skip their own readback loop.
     struct CreateOutcome: Sendable {
         let result: AtomicCreateResult
         let verifiedAgainstLocalContent: Bool

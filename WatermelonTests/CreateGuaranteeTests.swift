@@ -1,31 +1,19 @@
 import XCTest
 @testable import Watermelon
 
-/// Per-operation guarantee reporting. Backend-by-backend matrix of "what does
-/// the storage layer ACTUALLY promise for this size at this path?" — pinned
-/// down so future changes (S3 multipart If-None-Match, WebDAV server quirks)
-/// are forced to update this matrix and explain why.
 final class CreateGuaranteeTests: XCTestCase {
-    /// Default protocol impl is exists+upload — peer can race in between, so
-    /// `.overwritePossible` is the conservative-but-correct answer.
     func testInMemoryClient_defaultGuarantee_isOverwritePossible() {
         let client = InMemoryRemoteStorageClient()
         let guarantee = client.atomicCreateGuarantee(forFileSize: 1024, remotePath: "/x")
         XCTAssertEqual(guarantee, .overwritePossible)
     }
 
-    /// `AtomicCreateResult.defaultGuarantee` infers from the result. `.bestEffortRetry`
-    /// implies exists+upload happened → overwrite was possible. `.created` implies
-    /// the backend told us the file definitely didn't exist before our write.
     func testAtomicCreateResultDefaultGuarantee_mappingMatrix() {
         XCTAssertEqual(AtomicCreateResult.created.defaultGuarantee, .exclusive)
         XCTAssertEqual(AtomicCreateResult.alreadyExists.defaultGuarantee, .exclusive)
         XCTAssertEqual(AtomicCreateResult.bestEffortRetry.defaultGuarantee, .overwritePossible)
     }
 
-    /// `.overwritePossible` backends route through a UUID-staged path + verify +
-    /// move. The final path receives our integrity-checked bytes; a peer racing
-    /// during the move surfaces as `.alreadyExists` so the writer re-allocates.
     func testCreateWithStagingFallback_overwritePossible_succeedsViaStaging() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -49,10 +37,6 @@ final class CreateGuaranteeTests: XCTestCase {
         XCTAssertEqual(bytes, Data("payload".utf8))
     }
 
-    /// `.exclusive` backend (S3 If-None-Match / POSIX O_EXCL): direct `atomicCreate`
-    /// to the final path, no staging side-path. The in-memory client defaults to
-    /// `.overwritePossible`, so the test must flip the guarantee explicitly — otherwise
-    /// the gate routes through staging+moveIfAbsent and the "direct" path never runs.
     func testCreateWithStagingFallback_exclusive_directCreate() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -77,9 +61,6 @@ final class CreateGuaranteeTests: XCTestCase {
         XCTAssertTrue(landed)
     }
 
-    /// Probe says yes → finalization uses `moveIfAbsent`, not the copy fallback. Even
-    /// with `.overwritePossible` static guarantee, the runtime probe can promote it
-    /// (S3 endpoint with conditional CopyObject support, WebDAV server honoring `Overwrite: F`).
     func testCreateWithStagingFallback_probeYes_usesMoveIfAbsent() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -104,9 +85,6 @@ final class CreateGuaranteeTests: XCTestCase {
         XCTAssertFalse(stagingExists, "staging path must be cleaned up after success")
     }
 
-    /// Probe says no + `.allowBestEffort` → falls through to `bestEffortCopyIfAbsent` instead
-    /// of throwing. The previous design used a post-throw S3-specific error classifier; the
-    /// probe-first design routes directly without try/catch on a vendor error string.
     func testCreateWithStagingFallback_probeNo_allowBestEffort_fallsThroughToCopy() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -132,9 +110,6 @@ final class CreateGuaranteeTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: downloadURL), Data("payload".utf8))
     }
 
-    /// Probe says no + `.requireExclusiveMove` → throws upfront, before `moveIfAbsent` is
-    /// even attempted. Identity finalization (repo-identity.json, version.json) refuses
-    /// non-exclusive backends to keep peer overwrites from corrupting repo identity.
     func testCreateWithStagingFallback_probeNo_requireExclusive_throws() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

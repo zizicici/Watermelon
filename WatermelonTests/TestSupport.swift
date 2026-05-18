@@ -77,7 +77,6 @@ enum TestFixtures {
         []
     }
 
-    // MARK: - RemoteIndex builders
 
     /// Use for any test that exercises the classifier — fake fingerprints trip `.fingerprintMismatch`.
     static func computedFingerprint(for resourceRoleSlotHashes: [(role: Int, slot: Int, contentHash: Data)]) -> Data {
@@ -171,7 +170,6 @@ enum TestFixtures {
         )
     }
 
-    // MARK: - V2 repo / migration test fixtures
 
     /// 32-byte filler used as opaque fingerprint/hash bytes; the byte value carries no
     /// semantics, it just makes the value visually distinguishable in failure logs.

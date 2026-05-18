@@ -1,18 +1,7 @@
 import Foundation
 
-/// Pure-function snapshot builder. The contract: `snapshot.covered = [lo, hi]`
-/// truly means `state == fold(commit ops in [lo, hi])`. The builder does NOT
-/// filter assets/links/resources based on actionability — orphan-resource
-/// handling, filename presence, etc. all belong to the session view layer
-/// (`V2MonthSession.findResourceByHash` etc), NEVER to the snapshot writer.
-///
-/// Earlier rounds collapsed this distinction: writeSnapshot ran an
-/// orphan-link suppression pass, breaking the covered-range invariant
-/// (snapshot dropped state but still claimed to cover the commits that
-/// produced it). Materializer would then skip replaying those commits, losing
-/// historical evidence permanently.
+/// Builds snapshots only when state exactly equals fold(commits in covered).
 enum RepoSnapshotBuilder {
-    /// Build the SnapshotFile bytes from a materialized state + header.
     /// Sorting is identity-stable so the same state always yields the same SHA.
     static func build(
         header: SnapshotHeader,

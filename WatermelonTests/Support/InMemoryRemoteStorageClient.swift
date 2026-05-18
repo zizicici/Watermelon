@@ -2,15 +2,6 @@ import Foundation
 import os
 @testable import Watermelon
 
-/// Fake `RemoteStorageClientProtocol` for V2 backup tests.
-///
-/// Stores files as `[normalizedPath: Data]` in an actor; directories are implicit
-/// (any path with at least one child). Configurable atomicCreate semantics so a single
-/// fixture can simulate POSIX (`.created`), SMB exists+upload (`.bestEffortRetry`), or
-/// concurrent-writer collision (`.alreadyExists`).
-///
-/// Also exposes `injectFile` / `corrupt` / `setListError` test hooks so we can stage
-/// crash-recovery / corruption / transport-failure scenarios without touching real I/O.
 actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     // In-memory `move` unconditionally overwrites the destination dictionary entry.
@@ -18,10 +9,6 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         livenessSafeOverwriteMoveBox.withLock { $0 }
     }
     private nonisolated let livenessSafeOverwriteMoveBox = OSAllocatedUnfairLock(initialState: true)
-    /// Test hook: flip to `false` to simulate SMB / SFTP-style backends where neither
-    /// renewal atom is safe. `supportsLivenessSafeRenewal` (OR of upload + move)
-    /// becomes false and `BackupV2RuntimeBuilder` declines the general orphan sweep
-    /// while still running the targeted self-sweep.
     nonisolated func setSupportsLivenessSafeOverwriteMove(_ value: Bool) {
         livenessSafeOverwriteMoveBox.withLock { $0 = value }
     }
@@ -43,17 +30,8 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private(set) var disconnectCount = 0
 
     private var atomicCreateMode: AtomicCreateMode = .strictlyAtomic
-    /// One-shot injection for `.bestEffort` mode — when set, the next atomicCreate at
-    /// `path` stores the injected bytes (NOT the uploaded ones) and returns
-    /// `.bestEffortRetry`, simulating a peer who raced ahead on a non-atomic backend.
     private var bestEffortRaceBytes: [String: Data] = [:]
-    /// One-shot injection for `.bestEffort` mode — when set, the next atomicCreate at
-    /// `path` OVERWRITES whatever bytes are currently there with the uploader's bytes
-    /// and returns `.bestEffortRetry`, simulating SMB's `exists+upload` TOCTOU where
-    /// the existence check raced ahead and our upload silently replaced a peer's file.
     private var bestEffortOverwritePaths: Set<String> = []
-    /// Per-path operation injection — when set, the next matching call throws this error
-    /// once. Cleared after firing so tests can chain "fail once, then succeed".
     private var listErrorByPath: [String: InjectedError] = [:]
     private var metadataErrorByPath: [String: InjectedError] = [:]
     private var downloadErrorByPath: [String: InjectedError] = [:]
@@ -64,69 +42,43 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     init() {}
 
-    // MARK: - Test hooks
 
     func setAtomicCreateMode(_ mode: AtomicCreateMode) {
         atomicCreateMode = mode
     }
 
-    /// When set, `.alwaysAlreadyExists` mode plants these bytes at the destination
-    /// before returning `.alreadyExists` (only if no file is present). Models
-    /// production reality: `.alreadyExists` from a real backend means a peer's
-    /// bytes ARE at the path; tests that previously relied on the gate swallowing
-    /// the subsequent verify-notFound now stage faithful peer content instead.
     func setAlwaysAlreadyExistsBaselineBytes(_ bytes: Data?) {
         alwaysAlreadyExistsBaselineBytes = bytes
     }
     private var alwaysAlreadyExistsBaselineBytes: Data?
 
-    /// Default mimics `.overwritePossible` so writers exercise the gate's
-    /// staging-fallback path. `setAtomicCreateMode` only affects atomicCreate's
-    /// return shape, not the reported guarantee.
     nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
         atomicCreateGuaranteeBox.withLock { $0 }
     }
     private nonisolated let atomicCreateGuaranteeBox = OSAllocatedUnfairLock(initialState: CreateGuarantee.overwritePossible)
 
-    /// Lets tests flip to `.exclusive` so the gate exercises its direct-atomic path
-    /// (skips staging, skips post-verify on `.created`).
     nonisolated func setAtomicCreateGuarantee(_ guarantee: CreateGuarantee) {
         atomicCreateGuaranteeBox.withLock { $0 = guarantee }
     }
 
-    /// Stage a one-shot bestEffort race: the next `atomicCreate(remotePath:)` will
-    /// return `.bestEffortRetry` after writing `bytes` to the file (instead of the
-    /// caller's uploaded bytes). Use to exercise the verify-on-remote retry path.
     func stageBestEffortRace(at path: String, with bytes: Data) {
         bestEffortRaceBytes[Self.normalize(path)] = bytes
     }
 
-    /// Stage a one-shot bestEffort overwrite of an existing path. Models the
-    /// SMB-style `exists+upload` TOCTOU: a peer's bytes are present at `path`, but
-    /// the next `atomicCreate(remotePath:)` silently replaces them with the local
-    /// uploader's bytes and returns `.bestEffortRetry`. Without this hook the
-    /// in-memory client short-circuits `.alreadyExists` and cannot reproduce the
-    /// silent-overwrite race.
     func stageBestEffortOverwriteOfExistingPath(at path: String) {
         bestEffortOverwritePaths.insert(Self.normalize(path))
     }
 
-    /// Returns true when an unfired `stageBestEffortOverwriteOfExistingPath(at:)` hook
-    /// is still armed for `path`. Use to assert a caller never reached the final-path
-    /// `atomicCreate` codepath (e.g. `CommitLogWriter` must stage via UUID side path).
     func isBestEffortOverwriteStaged(at path: String) -> Bool {
         bestEffortOverwritePaths.contains(Self.normalize(path))
     }
 
-    /// Pre-populate a file at `path` with `data`. Use this to stage half-bootstrapped
-    /// repos, V1 manifests, foreign-repo snapshots, etc. before running the code under test.
     func injectFile(path: String, data: Data) {
         let key = Self.normalize(path)
         files[key] = data
         ensureDirectoryChain(for: key)
     }
 
-    /// Real backends always have an mtime; tests want deterministic age.
     func setModificationDateForTest(_ date: Date, path: String) {
         let key = Self.normalize(path)
         injectedMtimes[key] = date
@@ -136,15 +88,12 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         injectFile(path: path, data: Data(contents.utf8))
     }
 
-    /// Truncate or replace bytes at `path`. Used to simulate `integrityMismatch` /
-    /// `decodeFailure` paths in the snapshot/commit readers.
     func corrupt(path: String, with replacement: Data) {
         let key = Self.normalize(path)
         guard files[key] != nil else { return }
         files[key] = replacement
     }
 
-    /// Truncate file to half its size — produces a SHA mismatch on next read.
     func truncateInHalf(path: String) {
         let key = Self.normalize(path)
         guard let bytes = files[key] else { return }
@@ -163,8 +112,6 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         downloadErrorByPath[Self.normalize(path)] = error
     }
 
-    /// Persists across attempts — every `download` for this path throws until
-    /// `clearPersistentDownloadError` is called. Use for testing retry-loop exhaustion.
     func injectPersistentDownloadError(_ error: InjectedError, for path: String) {
         persistentDownloadErrorByPath[Self.normalize(path)] = error
     }
@@ -173,48 +120,26 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         persistentDownloadErrorByPath.removeValue(forKey: Self.normalize(path))
     }
 
-    /// One-shot: next `download` at `path` throws `CancellationError()` so tests can
-    /// pin caller behavior under task cancellation without going through the generic
-    /// `InjectedError` translation (which produces NSError, not CancellationError).
     func injectDownloadCancellation(for path: String) {
         downloadCancelByPath.insert(Self.normalize(path))
     }
     private var downloadCancelByPath: Set<String> = []
 
-    /// One-shot: next `download` at `path` throws an `NSURLErrorCancelled` shape
-    /// (same surface as URLSession when the underlying task is cancelled). Tests
-    /// can pin that callers normalize this to cancellation rather than wrapping
-    /// it as a transport / IO failure.
     func injectDownloadURLErrorCancelled(for path: String) {
         downloadURLCancelByPath.insert(Self.normalize(path))
     }
     private var downloadURLCancelByPath: Set<String> = []
 
-    /// One-shot: next `download` at `path` throws
-    /// `RemoteStorageClientError.underlying(NSURLErrorCancelled)`. Models a future
-    /// adapter layer that wraps URLSession errors into `.underlying` — exercises
-    /// the recursion arm of CommitLogWriter.isCancellationError so a regression
-    /// dropping that arm shows up as a test failure rather than a silent demotion
-    /// to ioFailure.
     func injectDownloadWrappedURLCancellation(for path: String) {
         downloadWrappedURLCancelByPath.insert(Self.normalize(path))
     }
     private var downloadWrappedURLCancelByPath: Set<String> = []
 
-    /// One-shot: next `atomicCreate` at `path` throws `NSURLErrorCancelled` shape
-    /// (S3 URLSession cancellation surface). Exercises CommitLogWriter's
-    /// cancellation normalization at the primary write boundary, not just the
-    /// verify-on-remote path.
     func injectAtomicCreateURLErrorCancelled(for path: String) {
         atomicCreateURLCancelByPath.insert(Self.normalize(path))
     }
     private var atomicCreateURLCancelByPath: Set<String> = []
 
-    /// One-shot: the next `download` at ANY path throws `NSURLErrorCancelled`.
-    /// `MetadataCreateGate.createWithStagingFallback` stages to a UUID side-path
-    /// the test can't predict, so per-path injection can't reach the gate's
-    /// staging-verify download. This path-agnostic hook lets tests pin the
-    /// gate-boundary cancellation normalization for that arm.
     func injectNextDownloadURLErrorCancelled() {
         nextDownloadURLCancelArmed = true
     }
@@ -224,17 +149,6 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         uploadErrorByPath[Self.normalize(path)] = error
     }
 
-    /// One-shot injection for `delete(path:)` — when set, the next `delete` at `path`
-    /// throws this error and clears the hook. Use to exercise peer-race-during-delete
-    /// branches (e.g. another writer removed the same residue between our metadata
-    /// check and our delete call) where production code is expected to swallow
-    /// `.notFound` while still propagating other errors.
-    ///
-    /// `.notFound` is modeled as a faithful peer-race: the file/directory is removed
-    /// from the fake store before the not-found error is thrown, so the post-throw
-    /// state matches "another writer already deleted it". `.transport`/`.permission`
-    /// are non-mutating — the path stays where it was, matching a backend that
-    /// failed before applying the delete.
     func injectDeleteError(_ error: InjectedError, for path: String) {
         deleteErrorByPath[Self.normalize(path)] = error
     }
@@ -243,12 +157,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         files
     }
 
-    /// Returns true if a file (not directory) exists at the given path.
     func hasFile(_ path: String) -> Bool {
         files[Self.normalize(path)] != nil
     }
 
-    // MARK: - RemoteStorageClientProtocol
 
     func connect() async throws {
         connected = true
@@ -507,15 +419,8 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee {
         moveIfAbsentGuaranteeBox.withLock { $0 }
     }
-    /// Default mirrors AMSMB2 (production's most-used overwrite-possible backend):
-    /// `atomicCreate` is `.overwritePossible` but `moveIfAbsent` is `.exclusive`. This
-    /// is what `CommitLogWriter`'s gate routing now requires to surface peer collisions
-    /// as `.alreadyExists` instead of silently overwriting. Tests modeling other shapes
-    /// (`.overwritePossible` moveIfAbsent for the gate's copy-fallback path, or
-    /// LocalVolume-style fully-exclusive) opt in via `setMoveIfAbsentGuarantee`.
     private nonisolated let moveIfAbsentGuaranteeBox = OSAllocatedUnfairLock(initialState: CreateGuarantee.exclusive)
 
-    /// Lets per-test scenarios swap `.exclusive` ↔ `.overwritePossible` to exercise the gate's two finalization paths.
     nonisolated func setMoveIfAbsentGuarantee(_ guarantee: CreateGuarantee) {
         moveIfAbsentGuaranteeBox.withLock { $0 = guarantee }
     }
@@ -525,7 +430,6 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
     private nonisolated let readAfterWriteGraceBox = OSAllocatedUnfairLock(initialState: TimeInterval(0))
 
-    /// Lets per-test scenarios simulate eventually-consistent backends (R2/MinIO/WebDAV-behind-cache).
     nonisolated func setReadAfterWriteGrace(_ seconds: TimeInterval) {
         readAfterWriteGraceBox.withLock { $0 = seconds }
     }
@@ -537,7 +441,6 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     private var exclusiveMoveProbeOverride: Bool?
 
-    /// Overrides the runtime probe so the gate can be tested with "probe says yes/no" independently of the static guarantee.
     func setExclusiveMoveProbeOverride(_ value: Bool?) {
         exclusiveMoveProbeOverride = value
     }
@@ -545,15 +448,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var moveIfAbsentOutcomeOverride: AtomicCreateResult?
     private var preMoveSourceMutation: (@Sendable (_ sourcePath: String) async -> Void)?
 
-    /// One-shot: next `moveIfAbsent` returns this outcome with production-like remote state.
-    /// `.bestEffortRetry` copies source bytes to destination and leaves the source visible so the
-    /// caller's post-write verifier can equality-check then delete. Cleared on use.
     func setMoveIfAbsentOutcomeOverride(_ outcome: AtomicCreateResult?) {
         moveIfAbsentOutcomeOverride = outcome
     }
 
-    /// One-shot: invoked before the next `moveIfAbsent` materializes its decision, then cleared.
-    /// Lets a test mutate (e.g. delete) the source between the caller's pre-scan and the move.
     func setPreMoveSourceMutation(_ mutation: (@Sendable (_ sourcePath: String) async -> Void)?) {
         preMoveSourceMutation = mutation
     }
@@ -624,7 +522,6 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         ensureDirectoryChain(for: dst)
     }
 
-    // MARK: - Internals
 
     private func ensureDirectoryChain(for path: String) {
         var components = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
@@ -667,7 +564,6 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         }
     }
 
-    /// Normalize to leading-slash, no trailing slash, no `//`. Empty / "." → "/".
     private static func normalize(_ path: String) -> String {
         let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
         guard !trimmed.isEmpty, trimmed != "." else { return "/" }

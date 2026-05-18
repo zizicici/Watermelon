@@ -3,17 +3,13 @@ import os.log
 
 private let v2SessionLog = Logger(subsystem: "com.zizicici.watermelon", category: "V2MonthSession")
 
-/// V2-native in-memory month state, keyed by `physicalRemotePath` so multi-writer
-/// multi-path doesn't need the V1 sqlite UNIQUE(contentHash) workaround. Lives
-/// per-month per-worker; `flushToRemote` writes the commit + snapshot files for
-/// pending changes via `V2MonthCommitFlusher` and `V2MonthSnapshotFlusher`.
 final class V2MonthSession: BackupMonthStore {
     enum FlushError: Error {
         case concurrentFlushRejected
         /// Commit landed; caller must mark these fingerprints committed before rethrowing.
         case snapshotWriteFailed(committedAssets: Set<Data>, committedTombstones: Set<Data>, underlying: Error)
 
-        /// Peels SnapshotWriter errors which can wrap CancellationError.
+        /// SnapshotWriter can wrap CancellationError.
         var cancellationCause: CancellationError? {
             switch self {
             case .concurrentFlushRejected:
@@ -82,9 +78,7 @@ final class V2MonthSession: BackupMonthStore {
 
     private let materializedCovered: CoveredRanges
 
-    /// Lamport clock observed at session load. Per-flush basis adds whatever
-    /// we've ticked since, so tombstones written later in the session don't
-    /// suppress concurrent peer adds whose clock < our latest local watermark.
+    /// Tombstone basis must include local ticks since session load.
     private let observedClockAtLoad: UInt64
 
     private(set) var dirty: Bool = false
@@ -134,7 +128,6 @@ final class V2MonthSession: BackupMonthStore {
         )
     }
 
-    /// Materializes from V2 commit/snapshot + lists month dir for collision-rename input.
     static func loadOrCreate(
         client: any RemoteStorageClientProtocol,
         basePath: String,
@@ -205,7 +198,6 @@ final class V2MonthSession: BackupMonthStore {
         dirty = true
     }
 
-    // MARK: - Read (delegates to indexes)
 
     func containsAssetFingerprint(_ fingerprint: Data) -> Bool {
         indexes.containsAssetFingerprint(fingerprint)
@@ -243,7 +235,6 @@ final class V2MonthSession: BackupMonthStore {
         indexes.physicallyMissingHashesSnapshot()
     }
 
-    // MARK: - Write (delegates + dirty tracking)
 
     @discardableResult
     func upsertResource(_ resource: RemoteManifestResource) throws -> RemoteManifestResource {
@@ -265,7 +256,6 @@ final class V2MonthSession: BackupMonthStore {
         indexes.markRemoteFile(name: name, size: size)
     }
 
-    // MARK: - Flush
 
     @discardableResult
     func flushToRemote(ignoreCancellation: Bool = false) async throws -> MonthManifestStore.FlushDelta {

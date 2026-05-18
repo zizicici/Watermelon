@@ -1,10 +1,6 @@
 import XCTest
 @testable import Watermelon
 
-/// End-to-end materializer round-trips: write commits + snapshots through real
-/// CommitLogWriter / SnapshotWriter, then materialize and assert reconstructed
-/// state. Backstop tests for the V2 cutover — filename mismatch, foreign-repo
-/// filter, snapshot fallback, covered ranges suppression.
 final class RepoMaterializerRoundTripTests: XCTestCase {
     private let basePath = "/repo"
     private let writerA = "11111111-1111-1111-1111-aaaaaaaaaaaa"
@@ -393,9 +389,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
     }
 
-    /// Materializer guards against a misnamed commit being assigned to the wrong
-    /// (month, writer, seq) — pin the skip behavior so a manual file rename or partial
-    /// move can't pollute state under a key that doesn't match the header.
     func testCommitWithFilenameMismatchingHeader_isSkipped() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -464,11 +457,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                      "snapshot whose filename writer disagrees with header must be skipped")
     }
 
-    /// Peer/corrupt metadata with `clock` near `UInt64.max` (whether in a commit
-    /// op or a snapshot filename's lamport) used to crash every later writer by
-    /// poisoning `observedClock` into `tickRange`'s overflow `fatalError`. The
-    /// materializer must now skip-and-log those rows so `observedClock` stays
-    /// within `LamportClock.maxAdvanceableValue`.
     func testPoisonedSnapshotLamportIsSkipped_observedClockStaysBounded() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -575,11 +563,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
     }
 
-    /// Exact-ceiling values are also poison: a peer planting `lamport ==
-    /// maxAdvanceableValue` would otherwise satisfy the prior `<= ceiling`
-    /// guard, get persisted by `observe`, then every later writer's
-    /// `tickRange` would throw `advanceExhausted` because there's no
-    /// headroom left. Strict-`<` keeps a future tick safe.
     func testExactCeilingSnapshotLamportIsSkipped() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -629,7 +612,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
     }
 
-    /// Exact-ceiling commit op clock is also poison (see snapshot test above).
     func testExactCeilingCommitOpClockIsSkipped() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -669,11 +651,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertNil(output.state.months[month]?.assets[poisonedFP])
     }
 
-    /// A snapshot whose filename lamport is safe but whose asset/resource/
-    /// deletedKey row carries an above-ceiling `OpStamp.clock` would otherwise
-    /// smuggle the poisoned stamp into baseline state. Once there, every legit
-    /// replay loses LWW comparisons against it. The materializer must reject
-    /// the snapshot at the boundary.
     func testSnapshotWithPoisonedRowStampClockIsSkipped() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -747,11 +724,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
     }
 
-    /// A snapshot whose row stamp clock is below the ceiling but ABOVE the
-    /// snapshot's own filename lamport violates the legitimate-writer invariant
-    /// (filename lamport tracks the max covered op clock). The materializer
-    /// must reject it: trusting such a stamp would let the peer dominate LWW
-    /// using a "future" clock the filename doesn't admit.
     func testSnapshotWithRowStampAboveFilenameLamportIsSkipped() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -823,13 +795,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
     }
 
-    /// A peer plants a snapshot whose filename lamport is the safe-looking
-    /// boundary `maxAdoptableValue - 1` (one below the outer-guard rejection
-    /// threshold so the candidate enters baseline selection) but whose body
-    /// is corrupt. Baseline selection skips the candidate (read fails), so
-    /// it doesn't enter materialised state — but the filename lamport must
-    /// NOT advance `observedClock` either, or the writer would persist a
-    /// dead-end value and the next `tickRange(1)` would throw `advanceExhausted`.
     func testCorruptSnapshotAtMaxAdoptableMinusOneDoesNotPoisonObservedClock() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -894,12 +859,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertLessThan(range.high, LamportClock.maxAdoptableValue)
     }
 
-    /// A peer plants a snapshot whose filename lamport is `maxAdoptableValue - 1`
-    /// (one below the outer-guard rejection threshold) and whose body parses
-    /// but carries an above-ceiling row-stamp clock — the existing row-stamp
-    /// quarantine skips it from baseline. The filename-only observedClock
-    /// sweep must NOT independently advance the clock to the boundary; the
-    /// writer would otherwise immediately exhaust its allocation.
     func testRowStampRejectedSnapshotAtMaxAdoptableMinusOneDoesNotPoisonObservedClock() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -979,9 +938,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertLessThan(range.high, LamportClock.maxAdoptableValue)
     }
 
-    /// Foreign-repo snapshot variant: header.repoID mismatches `expectedRepoID`,
-    /// so the candidate is skipped before its body is trusted. Its filename
-    /// lamport at `maxAdoptableValue - 1` must not leak into observedClock.
     func testForeignRepoSnapshotAtMaxAdoptableMinusOneDoesNotPoisonObservedClock() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -1049,11 +1005,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertNil(output.state.months[month]?.assets[foreignFP])
     }
 
-    /// The boundary value `maxObservableValue` (one below the absolute emit
-    /// cap) is the new effective rejection threshold for observe + materializer
-    /// guards. A peer planting a snapshot at exactly this lamport must be
-    /// quarantined the same as the exact-ceiling case — otherwise it would be
-    /// accepted, persisted, and immediately exhaust the next allocation.
     func testMaxObservableValueSnapshotLamportIsSkipped() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -1103,12 +1054,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
     }
 
-    /// Codex Reviewer 1 (loop II-VII postfix5 high): a syntactically valid peer
-    /// snapshot named at `maxAdoptableValue` (one above the safe-adoption
-    /// ceiling) used to be accepted by the outer filename guard, observed
-    /// into the persisted clock, and dead-end the next `tickRange(count: 1)`.
-    /// The tightened guard rejects this value so it never reaches
-    /// `observedClock`; `tickRange` succeeds afterward.
     func testValidSnapshotAtMaxAdoptableValueDoesNotDeadEndTickRange() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -1139,8 +1084,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             respectTaskCancellation: false
         )
 
-        // Real, valid snapshot at the new rejection boundary. Pre-fix this
-        // would have been accepted and dead-ended every subsequent tick.
         var boundaryCovered = CoveredRanges()
         boundaryCovered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
         _ = try await snapshotWriter.write(
@@ -1187,7 +1130,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertEqual(range.high, 11)
     }
 
-    /// Same as the snapshot test above but for an op clock at the boundary.
     func testValidCommitOpAtMaxAdoptableValueDoesNotDeadEndTickRange() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -1231,22 +1173,11 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertEqual(range.high, max(6, output.state.observedClock + 1))
     }
 
-    /// Codex Reviewer 2 (loop II-VII postfix5 low): a month whose only
-    /// snapshot filename is filename-quarantined (parseable but lamport
-    /// >= maxAdoptableValue) never enters the task group, so the
-    /// pre-fix logic never flagged it for `corruptedSnapshotMonths`.
-    /// Result: every materialize re-skipped the unworkable file and
-    /// replayed the full uncovered commit log. The fix tracks these
-    /// months and forces a fresh baseline on the next flush.
     func testFilenameRejectedSnapshotForcesMonthRebaseline() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
 
-        // No usable baseline. Only thing on disk is an above-ceiling snapshot
-        // filename — pre-fix this month was silently absent from
-        // `corruptedSnapshotMonths` so `V2MonthSession.loadOrCreate` would not
-        // trigger `requestSnapshotRebaseline()`.
         let poisonedPath = RepoLayout.snapshotFilePath(
             base: basePath,
             month: month,
@@ -1294,14 +1225,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
     }
 
-    /// Direct regression for codex-reviewer-1 (loop II-VII final convergence
-    /// HIGH): a syntactically valid peer snapshot at filename lamport
-    /// `maxAdoptableValue - 1` (the highest accepted by the outer guard)
-    /// used to advance `observedClock` to that value, after which the
-    /// next `tickRange(1)` threw `advanceExhausted` because tick's
-    /// headroom guard shared the same strict-`<` ceiling. The fix
-    /// loosens tick to use `maxObservableValue` so the writer can still
-    /// emit one more tick at `maxAdoptableValue`.
     func testValidSnapshotAtAdoptCeilingMinusOneAllowsNextTick() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -1332,8 +1255,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             respectTaskCancellation: false
         )
 
-        // Valid snapshot at the highest-adopted filename lamport. Pre-fix
-        // tick headroom this would dead-end the next `tickRange(1)`.
         let boundaryLamport = LamportClock.maxAdoptableValue - 1
         var boundaryCovered = CoveredRanges()
         boundaryCovered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
@@ -1382,8 +1303,6 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
     }
 
-    /// Same as the snapshot test above but for an op clock at the
-    /// adopt-ceiling-minus-one boundary.
     func testValidCommitOpAtAdoptCeilingMinusOneAllowsNextTick() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

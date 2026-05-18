@@ -2,12 +2,6 @@ import XCTest
 import GRDB
 @testable import Watermelon
 
-/// Per-month manifest schema migrations run inline in `prepareExistingManifest`
-/// (separate from GRDB's standard migrator since downloaded sqlites don't carry
-/// this build's migration history). Tests pin: legacy *Ns rename+divide, both-
-/// columns-present idempotency (else "duplicate column" on re-rename), schema
-/// validation rejecting missing-column/missing-table manifests, and dbQueue
-/// release on error so the temp file can be deleted.
 final class MonthManifestSchemaTests: XCTestCase {
     private var tempDir: URL!
 
@@ -20,7 +14,6 @@ final class MonthManifestSchemaTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
-    // MARK: - Fresh manifest
 
     func testFreshlyCreated_setsUpFullSchemaAndIndexes() throws {
         let url = tempDir.appendingPathComponent("fresh.sqlite")
@@ -58,12 +51,7 @@ final class MonthManifestSchemaTests: XCTestCase {
         XCTAssertTrue(indexNames.contains("idx_asset_resources_hash"))
     }
 
-    // MARK: - Legacy ns timestamp migration
 
-    /// Real ns timestamps in legacy `creationDateNs` / `backedUpAtNs` columns must be
-    /// renamed and divided by 1e6. Catches a future "rename only" or "divide only"
-    /// regression that would either leave the column unrenamed (caller fails to read)
-    /// or leave nanosecond values in a ms-named column (timestamps off by 1000×).
     func testLegacyNsManifest_isRenamedAndDivided() throws {
         let url = tempDir.appendingPathComponent("legacy-ns.sqlite")
         let creationNs: Int64 = 1_700_000_000_123_000_000
@@ -106,10 +94,6 @@ final class MonthManifestSchemaTests: XCTestCase {
         XCTAssertEqual(row?["backedUpAtMs"], backedUpNs / 1_000_000)
     }
 
-    /// NULL ns timestamps must remain NULL after migration. Without the
-    /// `WHERE ... IS NOT NULL` guard the UPDATE would write `NULL / 1000000 = NULL`
-    /// — but only because of SQLite's NULL propagation. If a future change
-    /// initializes the column with a default or writes 0 for NULL, this test fires.
     func testLegacyNsManifest_nullValuesPreserved() throws {
         let url = tempDir.appendingPathComponent("legacy-null.sqlite")
         try buildLegacyNsManifest(at: url) { db in
@@ -132,11 +116,6 @@ final class MonthManifestSchemaTests: XCTestCase {
         XCTAssertEqual(row?["backedUpAtMs"], 1_700_000_000_000)
     }
 
-    /// `migrateLegacyNsTimestamps` guards on `legacy && !current`: if a manifest
-    /// already has both column names (an unusual half-migrated state from a manual
-    /// recovery, etc.), the rename would fail with "duplicate column name". The
-    /// guard makes that case a no-op. Catches future code that drops the `!current`
-    /// half of the guard.
     func testLegacyManifest_bothColumnNamesPresent_isNoOp() throws {
         let url = tempDir.appendingPathComponent("half-migrated.sqlite")
         let queue = try DatabaseQueue(path: url.path)
@@ -191,10 +170,7 @@ final class MonthManifestSchemaTests: XCTestCase {
         XCTAssertEqual(row?["creationDateNs"], 1_000_000, "legacy column may stay; the guard only blocks rename")
     }
 
-    // MARK: - Schema validation refuses incompatible manifests
 
-    /// A manifest written by a future client that drops a required column must be
-    /// refused with a clear error — not silently read with NULLs in missing columns.
     func testValidate_rejectsManifestMissingResourceColumn() throws {
         let url = tempDir.appendingPathComponent("missing-col.sqlite")
         let queue = try DatabaseQueue(path: url.path)
@@ -243,9 +219,6 @@ final class MonthManifestSchemaTests: XCTestCase {
         }
     }
 
-    /// A manifest without any of the required tables (e.g. opened a non-manifest
-    /// sqlite by accident) must throw, not be silently treated as an empty
-    /// manifest (which would tombstone every asset on subsequent reconcile).
     func testValidate_rejectsManifestMissingTable() throws {
         let url = tempDir.appendingPathComponent("missing-table.sqlite")
         let queue = try DatabaseQueue(path: url.path)
@@ -262,10 +235,6 @@ final class MonthManifestSchemaTests: XCTestCase {
         }
     }
 
-    /// On schema-validation failure, `prepareLocalManifest` must close the dbQueue
-    /// (`try? queue.close()` in the catch) so the underlying file handle is
-    /// released. Otherwise the temp file can't be deleted on the caller's cleanup
-    /// path and we leak file handles every failed manifest open.
     func testValidate_failure_releasesDBQueueSoFileCanBeDeleted() throws {
         let url = tempDir.appendingPathComponent("missing-col.sqlite")
         let queue = try DatabaseQueue(path: url.path)
@@ -284,11 +253,7 @@ final class MonthManifestSchemaTests: XCTestCase {
                          "file must be deletable after a validation failure (queue must have been closed)")
     }
 
-    // MARK: - Idempotency
 
-    /// `ensureSchemaIndexes` is called from both fresh and downloaded paths and uses
-    /// `CREATE INDEX IF NOT EXISTS` — running it twice must not error and must
-    /// leave the indexes in place.
     func testEnsureSchemaIndexes_idempotent() throws {
         let url = tempDir.appendingPathComponent("idempotent.sqlite")
         let prepared = try MonthManifestStore.prepareLocalManifest(localURL: url, origin: .freshlyCreated)
@@ -305,9 +270,6 @@ final class MonthManifestSchemaTests: XCTestCase {
                                     "all production indexes still present after a redundant ensureIndexes call")
     }
 
-    /// A manifest that's already at HEAD schema (no ns columns) must be accepted
-    /// AND `requiresRemoteSync` must be false — there's no upgrade work to flush
-    /// back. Catches a future change that always returns true regardless of work.
     func testHeadSchemaManifest_doesNotRequireRemoteSync() throws {
         let url = tempDir.appendingPathComponent("head.sqlite")
         // First create a fresh manifest at HEAD.
@@ -329,10 +291,7 @@ final class MonthManifestSchemaTests: XCTestCase {
                        "a HEAD-schema manifest must not be re-flushed to remote; that signals churn")
     }
 
-    // MARK: - Helpers
 
-    /// Build a sqlite file matching v1's legacy `*Ns` schema. Caller supplies
-    /// content via `seed` (executed inside a write transaction).
     private func buildLegacyNsManifest(at url: URL, seed: (Database) throws -> Void) throws {
         let queue = try DatabaseQueue(path: url.path)
         try queue.write { db in

@@ -6,10 +6,6 @@ private let migrationMarkerStoreLog = Logger(
     category: "MigrationMarkerStore"
 )
 
-/// Single owner of `.watermelon/migrations/*.json`. Raw/path APIs never download or
-/// parse bytes; tolerant parse APIs swallow every failure mode (V1MigrationService
-/// `requireValid: false` policy); `parseEntries` rethrows cancellation and non-not-found
-/// IO and only skips parse failures with a warning (RemoteFormatCompatibility policy).
 nonisolated struct MigrationMarkerStore: Sendable {
     let client: any RemoteStorageClientProtocol
     let basePath: String
@@ -19,7 +15,6 @@ nonisolated struct MigrationMarkerStore: Sendable {
         self.basePath = basePath
     }
 
-    // MARK: - Raw / path layer (no download, no parse)
 
     /// Fail-closed: list errors throw so a network blip can't be misread as "no migration".
     func migrationsDirectoryEntries() async throws -> [RemoteStorageEntry] {
@@ -80,7 +75,6 @@ nonisolated struct MigrationMarkerStore: Sendable {
         }
     }
 
-    // MARK: - Tolerant parsed access (V1MigrationService policy)
 
     /// Pre-v:2 markers (no `phase` field) report `.phase1`; any unparseable marker
     /// — including a directory squatting at the canonical path — still counts as
@@ -116,7 +110,6 @@ nonisolated struct MigrationMarkerStore: Sendable {
         return nil
     }
 
-    // MARK: - Inspection parsed access (RemoteFormatCompatibility policy)
 
     /// `CancellationError` and non-not-found IO errors propagate so a transport
     /// glitch can't be misread as "no markers"; parse failures log + skip.
@@ -151,7 +144,6 @@ nonisolated struct MigrationMarkerStore: Sendable {
         return results
     }
 
-    // MARK: - Writes
 
     func writePhase(writerID: String, phase: MigrationMarkerPhase, runID: String) async throws {
         try await client.createDirectory(path: RepoLayout.migrationsDirectoryPath(base: basePath))
@@ -191,7 +183,6 @@ nonisolated struct MigrationMarkerStore: Sendable {
         try await writeUnique(writerID: writerID, phase: phase, localURL: temp)
     }
 
-    // MARK: - Internals
 
     private func writeUnique(writerID: String, phase: MigrationMarkerPhase, localURL: URL) async throws {
         for _ in 0..<4 {

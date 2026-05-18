@@ -1,9 +1,6 @@
 import XCTest
 @testable import Watermelon
 
-/// Pins down `(supportsLivenessSafeOverwriteMove, supportsLivenessSafeOverwriteUpload,
-/// supportsLivenessSafeRenewal)` for each production backend so a future backend or
-/// regression can't silently flip the orphan-sweep gate via the protocol default.
 final class StorageCapabilityMatrixTests: XCTestCase {
     func testLocalVolumeTriple() {
         let client = LocalVolumeClient(config: LocalVolumeClient.Config(

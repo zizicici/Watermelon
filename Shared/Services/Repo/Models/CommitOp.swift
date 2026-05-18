@@ -47,32 +47,20 @@ struct CommitAddAssetBody: Equatable, Sendable {
     let resources: [CommitResourceEntry]
 }
 
-/// Basis under which a tombstone was issued. Multi-writer concurrent backup
-/// can heal an asset between verify-observe and tombstone-apply; without a
-/// basis, the tombstone would silently delete the just-healed content.
-///
-/// Materializer skips tombstones whose `lastAddOp` is past the basis on either
-/// dimension:
-/// - `lamportWatermark`: global clock at observation time. Any op with
-///   `clock > watermark` is post-observation.
-/// - `perWriterMaxSeq`: max seq per writer covered at observation. A writer
-///   not in the map is treated as "we saw nothing from them" — any of their
-///   ops counts as post-observation.
+/// Prevents observation tombstones from deleting content healed after the scan.
 struct TombstoneObservationBasis: Equatable, Sendable {
     let perWriterMaxSeq: [String: UInt64]
     let lamportWatermark: UInt64
 }
 
-/// LWW stamp on the producing addAsset op; baseline-load seeds it so a
-/// stale-clock replay can't overwrite a newer baked-in row.
+/// Baseline-load seeds LWW stamps so stale replay cannot overwrite newer baked-in rows.
 struct OpStamp: Hashable, Sendable {
     let writerID: String
     let seq: UInt64
     let clock: UInt64
 }
 
-/// Lex compare on `(clock, writerID, seq)` — matches the cross-commit tiebreak;
-/// opSeq is intra-commit only.
+/// Matches the cross-commit tiebreak; opSeq is intra-commit only.
 func opStampPrecedes(_ a: OpStamp, _ b: OpStamp) -> Bool {
     if a.clock != b.clock { return a.clock < b.clock }
     if a.writerID != b.writerID { return a.writerID < b.writerID }
@@ -87,10 +75,7 @@ struct CommitTombstoneBody: Equatable, Sendable {
     }
     let assetFingerprint: Data
     let reason: Reason
-    /// Optional. nil = command-style (apply unconditionally, legacy semantics).
-    /// Present = observation-style: the materializer may skip the tombstone if
-    /// a healing add op arrived between observation and apply. Additive v2 field;
-    /// both shapes are last-writer-wins safe under any apply order.
+    /// Observation-style tombstones can skip newer healing adds while legacy nil remains unconditional.
     let observedBasis: TombstoneObservationBasis?
 
     init(assetFingerprint: Data, reason: Reason, observedBasis: TombstoneObservationBasis? = nil) {

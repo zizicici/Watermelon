@@ -1,11 +1,6 @@
 import Foundation
 
-/// Writes to `(writerID, seq)`-unique paths; only same-writer concurrent runs
-/// can collide. On `.exclusive` backends we publish directly. On
-/// `.overwritePossible` backends we stage + `moveIfAbsent` via the gate so a
-/// peer commit at the same `(writerID, seq)` path can't be silently overwritten
-/// by an `exists + upload` TOCTOU; gate-detected collisions surface as
-/// `.alreadyExists` so the caller re-allocates seq.
+/// Stages overwrite-prone backends so exists+upload cannot replace a peer commit.
 actor CommitLogWriter {
     enum WriteError: Error {
         case alreadyExists
@@ -76,10 +71,7 @@ actor CommitLogWriter {
                     respectTaskCancellation: respectTaskCancellation
                 )
             } catch {
-                // URLSession-backed clients (S3) surface task cancellation as
-                // NSURLErrorCancelled, not literal CancellationError. Without this
-                // normalization, BackupParallelExecutor's classifier would treat a user
-                // stop as a transport failure rather than a pause.
+                // Normalize URLSession cancellation so user stop is not reported as transport failure.
                 if Self.isCancellationError(error) { throw CancellationError() }
                 throw WriteError.ioFailure(error)
             }
@@ -87,19 +79,14 @@ actor CommitLogWriter {
             case .created:
                 break
             case .alreadyExists:
-                // S3 single-part PUT phantom: bytes landed but the response was lost,
-                // retry hits If-None-Match 412. SHA-verify so our own prior write is
-                // absorbed; mismatched/unparseable bytes still surface as `.alreadyExists`.
-                // A transient transport failure during verify-download maps back to
-                // `.alreadyExists` so the flusher re-allocates seq instead of aborting.
+                // Verify alreadyExists because S3 may have stored our bytes before losing the response.
                 try await verifyAfterAlreadyExists(
                     remotePath: remotePath,
                     expectedSha: sha,
                     expectedRowCount: integrity.rowCount
                 )
             case .bestEffortRetry:
-                // Defensive — `.exclusive` shouldn't return bestEffortRetry, but if it does
-                // (transport timeout after write), SHA-verify so a peer collision still surfaces.
+                // Verify best-effort retries so peer collisions still surface.
                 try await verifyAfterAlreadyExists(
                     remotePath: remotePath,
                     expectedSha: sha,
@@ -107,8 +94,7 @@ actor CommitLogWriter {
                 )
             }
         case .overwritePossible:
-            // SMB exists+upload would TOCTOU-overwrite a peer's commit and self-SHA-verify clean.
-            // Stage + moveIfAbsent so a same-(writer,seq) collision fails closed → .alreadyExists.
+            // Stage SMB-style writes so exists+upload cannot overwrite a peer commit.
             let result: AtomicCreateResult
             do {
                 result = try await MetadataCreateGate.createWithStagingFallback(
@@ -131,10 +117,7 @@ actor CommitLogWriter {
             case .alreadyExists:
                 throw WriteError.alreadyExists
             case .bestEffortRetry:
-                // `.requireExclusiveMove` returns bestEffortRetry only when final-verify
-                // download fails transiently after a successful exclusive move (gate's
-                // recoverable-readback policy). Re-verify so a peer collision still
-                // surfaces and so any genuine corruption fails closed.
+                // Re-verify transient readback failures so peer collisions still surface.
                 try await verifyAfterAlreadyExists(
                     remotePath: remotePath,
                     expectedSha: sha,
@@ -146,10 +129,7 @@ actor CommitLogWriter {
         return CommitFile(header: header, ops: ops, sha256Hex: sha, rowCount: integrity.rowCount)
     }
 
-    /// Only transient verify-download failures collapse back to `.alreadyExists`
-    /// (the flusher re-allocates seq + retries). Permanent failures stay as
-    /// `ioFailure` so the actionable cause surfaces instead of being reported as
-    /// retry-exhausted "already exists".
+    /// Only transient verify failures become alreadyExists retries; permanent causes must surface.
     private func verifyAfterAlreadyExists(
         remotePath: String,
         expectedSha: String,
@@ -177,9 +157,7 @@ actor CommitLogWriter {
         do {
             try await client.download(remotePath: remotePath, localURL: verifyURL)
         } catch {
-            // URLSession-backed clients (S3) surface task cancellation as
-            // NSURLErrorCancelled, not literal CancellationError. Wrapping that as
-            // ioFailure would make user stop look like a transport error up-stack.
+            // Normalize URLSession cancellation so user stop is not reported as transport failure.
             if Self.isCancellationError(error) {
                 throw CancellationError()
             }
@@ -196,10 +174,7 @@ actor CommitLogWriter {
         }
     }
 
-    /// MetadataCreateGate's catches collapse URLSession-shaped cancellation
-    /// (NSURLErrorCancelled from a download/upload inside the gate) into one of
-    /// its `*VerificationFailed(underlying:)` errors. Peek into the underlying so
-    /// callers can still distinguish a user stop from a real I/O failure.
+    /// Unwrap gate verification errors so URLSession cancellation still means user stop.
     static func isMetadataGateCancellation(_ error: MetadataCreateGate.Error) -> Bool {
         switch error {
         case .stagingVerificationFailed(_, let underlying),
@@ -211,10 +186,7 @@ actor CommitLogWriter {
         }
     }
 
-    /// True only for transport failures a fresh-seq retry could plausibly clear:
-    /// connection drops, HTTP 5xx/408/429, S3 throttle signals. Permanent failures
-    /// (cancellation, not-found, permission, invalid config) return false so the
-    /// actionable cause isn't collapsed into a `.alreadyExists` retry that exhausts.
+    /// Permanent failures must not collapse into alreadyExists retry exhaustion.
     static func isTransientVerifyDownloadFailure(_ error: Error) -> Bool {
         if isCancellationError(error) { return false }
         if isStorageNotFoundError(error) { return false }

@@ -1,14 +1,6 @@
 import XCTest
 @testable import Watermelon
 
-/// Per-asset LWW stamps on the snapshot baseline — both add side and deleted
-/// side. Without them, three failure modes manifest:
-/// 1. Observation-tombstone false-delete: heal in baseline → tombstone basis
-///    predates heal → without stamp seed the basis-skip never fires.
-/// 2. Cross-writer add-vs-stale-add LWW: newer add in baseline, stale add
-///    replays → without add-stamp gate, stale wins.
-/// 3. Cross-writer add-vs-stale-tombstone LWW: newer tombstone in baseline,
-///    stale add replays → without deletedAssetStamps gate, stale add resurrects.
 final class SnapshotStampMaterializeTests: XCTestCase {
     private let basePath = "/repo"
     private let writerA = "11111111-1111-1111-1111-aaaaaaaaaaaa"
@@ -17,7 +9,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
     private let runID = "run-stamp-001"
     private let month = LibraryMonthKey(year: 2026, month: 3)
 
-    // MARK: - Test 1: Stamp persists round-trip
 
     func testStampRoundTripsThroughCommitToSnapshotToReMaterialize() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -75,7 +66,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         XCTAssertEqual(assetFromSnapshot.stamp, stamp1, "stamp must persist through encode→decode→re-materialize")
     }
 
-    // MARK: - Test 2: Cross-writer add-vs-stale-add LWW
 
     func testStaleAddDoesNotOverwriteNewerStampedBaseline() async throws {
         // Writer B writes the most recent add at clock=200. Snapshot bakes B's add.
@@ -88,7 +78,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
 
         let fp = TestFixtures.fingerprint(0xA2)
 
-        // A's old commit (uncovered).
         _ = try await commitWriter.write(
             header: makeHeader(seq: 1, clockMin: 100, clockMax: 100, writerID: writerA),
             ops: [CommitOp(opSeq: 0, clock: 100, body: .addAsset(CommitAddAssetBody(
@@ -155,7 +144,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         XCTAssertEqual(asset.backedUpAtMs, 2, "B's row data must survive replay")
     }
 
-    // MARK: - Test 3: Observation-tombstone with stamped baseline (heal baked in)
 
     func testObservationTombstoneSkippedWhenHealStampedInBaseline() async throws {
         // Snapshot baseline contains heal at stamp clock=300 (writer B). Observation
@@ -217,7 +205,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         XCTAssertFalse(monthState.deletedAssetFingerprints.contains(fp))
     }
 
-    // MARK: - Test 4: tombstone-baseline-vs-stale-add LWW (deletedAssetStamps)
 
     func testStaleAddReplayedAgainstTombstoneBaseline_doesNotResurrect() async throws {
         // Snapshot baseline: fp X tombstoned at clock=200 by writer B.
@@ -290,7 +277,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         XCTAssertNil(parsed.stamp, "legacy deletedKey rows must decode with stamp=nil")
     }
 
-    // MARK: - Test 5: Legacy snapshot without stamp field
 
     func testLegacySnapshotWithoutStampDecodes() throws {
         // Encoder writes legacy-shape (no stamp triple). Decoder must accept,
@@ -311,13 +297,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         }
     }
 
-    // MARK: - Test 6: Path-level LWW — stale uncovered add must not clobber newer covered resource row
 
-    /// Two different asset fingerprints wrote the same physicalRemotePath. Writer B's
-    /// newer commit (clock=200, different fp) is covered by the snapshot baseline;
-    /// Writer A's older commit (clock=100, different fp) is uncovered. Pre-fix, the
-    /// replay loop unconditionally assigned state.resources[P] = stale H1, replacing
-    /// B's H2 baseline row. With per-path stamps, the LWW gate must skip the overwrite.
     func testStaleUncoveredAddDoesNotOverwriteNewerResourceRowAtSamePath() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -408,7 +388,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         XCTAssertNotNil(monthState.assets[fpB])
     }
 
-    /// Pure round-trip: SnapshotResourceRow with a stamp must encode and decode losslessly.
     func testResourceRowStampSurvivesWireRoundTrip() throws {
         let row = SnapshotResourceRow(
             physicalRemotePath: "2026/05/IMG.HEIC",
@@ -427,9 +406,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         XCTAssertEqual(parsed.stamp?.clock, 77)
     }
 
-    /// Legacy resource rows without the stamp triple must decode as stamp=nil. The
-    /// materializer then degrades gracefully to last-write-wins-by-replay-order on
-    /// any path whose baseline came from a legacy snapshot.
     func testLegacyResourceRowWithoutStampDecodes() throws {
         let raw = #"{"t":"resource","r":{"physicalRemotePath":"2026/05/IMG.HEIC","contentHash":"\#(String(repeating: "ab", count: 32))","fileSize":100,"resourceType":1,"creationDateMs":null,"backedUpAtMs":100,"crypto":null}}"#
         let decoded = try SnapshotRowMapper.decodeLine(raw)
@@ -437,7 +413,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         XCTAssertNil(parsed.stamp, "legacy resource rows must decode with stamp=nil")
     }
 
-    // MARK: - Helpers
 
     private func makeHeader(seq: UInt64, clockMin: UInt64, clockMax: UInt64, writerID: String) -> CommitHeader {
         TestFixtures.makeCommitHeader(
@@ -456,9 +431,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         )
     }
 
-    /// Copy snapshot files only (drop commit log) so re-materialize must rely on
-    /// the snapshot — proves the stamp survived the wire format, not the in-memory
-    /// replay path.
     private func transplantSnapshotsOnly(from source: InMemoryRemoteStorageClient) async throws -> InMemoryRemoteStorageClient {
         let dest = InMemoryRemoteStorageClient()
         try await dest.connect()

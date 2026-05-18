@@ -80,9 +80,6 @@ final class CommitOpMapperTests: XCTestCase {
         }
     }
 
-    /// `Data(hexString: "")` returns `Data()` (empty), not nil — without an explicit
-    /// `!fp.isEmpty` guard a corrupt commit with `""` hex would pollute state with an
-    /// "empty fingerprint" entry.
     func testEmptyHexFingerprint_addAsset_throws() {
         let raw = #"{"t":"op","opSeq":0,"clock":1,"kind":"addAsset","body":{"assetFingerprint":"","backedUpAtMs":1,"creationDateMs":null,"resources":[]}}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
@@ -119,8 +116,6 @@ final class CommitOpMapperTests: XCTestCase {
         }
     }
 
-    /// JSON `v:true` bridges through `as? Int` as 1, the current version. The decoder
-    /// must reject it rather than silently accepting a boolean as a valid v1 header.
     func testHeaderRejectsBooleanVersion() {
         let raw = #"{"t":"header","v":true,"repoID":"r","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
@@ -130,9 +125,6 @@ final class CommitOpMapperTests: XCTestCase {
         }
     }
 
-    /// JSON `rowCount:true` bridges through `as? Int` as 1; for a header-only
-    /// commit (rowCount=1) the malformed end row could otherwise pass integrity.
-    /// The decoder must reject it.
     func testEndRowRejectsBooleanRowCount() {
         let raw = #"{"t":"end","sha256":"deadbeef","rowCount":true}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
@@ -142,9 +134,6 @@ final class CommitOpMapperTests: XCTestCase {
         }
     }
 
-    /// Fractional NSNumber must not be silently truncated to integer — `clockMin: 1.9`
-    /// landing as 1 changes commit ordering vs the writer's intent. Stringify-roundtrip
-    /// in `requireUInt64` rejects it.
     func testHeaderRejectsFractionalClockValue() {
         let raw = #"{"t":"header","v":1,"repoID":"r","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1.9,"clockMax":2,"bodyKind":"plain"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
@@ -154,8 +143,6 @@ final class CommitOpMapperTests: XCTestCase {
         }
     }
 
-    /// Malformed scope drops the materializer's scope→month mapping, so a corrupt
-    /// commit could silently route to the wrong month or fail to materialize at all.
     func testHeaderRejectsMalformedScope() {
         let raw = #"{"t":"header","v":1,"repoID":"r","writerID":"w","seq":1,"runID":"r","scope":"not-a-scope","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
@@ -165,8 +152,6 @@ final class CommitOpMapperTests: XCTestCase {
         }
     }
 
-    /// `clockMin > clockMax` would fold into covered-range tracking with reversed
-    /// bounds and corrupt the writer's lamport-watermark accounting.
     func testHeaderRejectsClockMinAboveClockMax() {
         let raw = #"{"t":"header","v":1,"repoID":"r","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":10,"clockMax":5,"bodyKind":"plain"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
@@ -176,7 +161,6 @@ final class CommitOpMapperTests: XCTestCase {
         }
     }
 
-    /// Empty repoID disables identity filtering — foreign commits leak into cache.
     func testHeaderRejectsEmptyRepoID() {
         let raw = #"{"t":"header","v":1,"repoID":"","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
@@ -233,10 +217,6 @@ final class CommitOpMapperTests: XCTestCase {
         XCTAssertEqual(parsedBody.resources.first?.crypto, crypto)
     }
 
-    /// Pins the encode→decode contract for tombstone basis seq values above Int64.max.
-    /// The prior encoder used Int64(bitPattern:) which flipped that range to negatives
-    /// and the decoder rejected them; direct UInt64 encoding + NSNumber 'Q' bridging
-    /// must round-trip identically.
     func testTombstoneBasis_perWriterMaxSeq_aboveInt64Max_roundTrips() throws {
         let highSeq = UInt64(Int64.max) + 1
         let basis = TombstoneObservationBasis(

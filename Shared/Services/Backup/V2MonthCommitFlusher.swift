@@ -1,10 +1,5 @@
 import Foundation
 
-/// Writes the commit log entry for a month's pending ops. Returns the
-/// allocated seq + committed fingerprint sets; the caller updates the session
-/// coverage ledger and writes the snapshot.
-///
-/// Stateless — owns nothing mutable beyond its dependencies. Re-instantiated per flush.
 struct V2MonthCommitFlusher {
     let services: BackupV2RuntimeServices
     let monthKey: LibraryMonthKey
@@ -18,8 +13,6 @@ struct V2MonthCommitFlusher {
         let committedTombstones: Set<Data>
     }
 
-    /// Allocates clocks + seq, writes the commit, stamps committed rows on `indexes`,
-    /// and clears pending sets. Returns `nil` when there are no pending ops.
     func flushPending(
         sessionWrittenCovered: CoveredRanges,
         ignoreCancellation: Bool
@@ -35,22 +28,15 @@ struct V2MonthCommitFlusher {
             perWriterMaxSeq[writer] = ranges.map(\.high).max() ?? 0
         }
 
-        // Retry must re-tick Lamport clocks and rebuild ops: a retry that reused the
-        // original clocks would publish under-clocked rows whose LWW ordering against
-        // higher-clock peer commits leaves stale metadata winning at the same path.
-        // Mirrors V1MigrationService's same-shape retry rule.
+        // Retry must re-tick Lamport clocks so path-level LWW reflects the successful attempt.
         let maxRetries = 4
         var lastSeq: UInt64 = 0
         var attempt = 0
         var committedAddAssetClocks: [Data: UInt64] = [:]
         var committedTombstoneClocks: [Data: UInt64] = [:]
-        // Rows are built with the same field projection RepoMaterializer uses on replay
-        // (asset body's creationDateMs/backedUpAtMs), so snapshot baseline == replay output
-        // for the same commit. Later assets overwrite per path in op order, matching the
-        // materializer's last-write-wins replay of multiple addAsset ops referencing one path.
+        // Build rows with replay's projection so snapshot baselines equal materialized commits.
         var committedResources: [String: SnapshotResourceRow] = [:]
-        // Per-path clock — recordCommit needs it to stamp the row with the producing op's
-        // (writerID, seq, clock). seq is unknown until allocator runs, so we defer stamping.
+        // Defer row stamps until seq allocation completes.
         var committedResourceClocks: [String: UInt64] = [:]
         while true {
             let lamportWatermark = max(observedClockAtLoad, await services.lamport.value())

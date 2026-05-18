@@ -1,10 +1,5 @@
 import Foundation
 
-/// Owns `.watermelon/version.json`: presence probe, strict / tolerant read,
-/// pre-check + staged write + post-write compatibility verification,
-/// classification of the remote `format_version` against the local supported range.
-/// Errors surface as `RepoBootstrap.VersionConflict` so existing callers (`BackupV2RuntimeBuilder`,
-/// `RepoBootstrapVersionTests`) observe the same shape as before the extraction.
 nonisolated struct VersionManifest: Sendable {
     let formatVersion: Int
     let minAppVersion: String?
@@ -21,8 +16,7 @@ nonisolated struct VersionManifestStore: Sendable {
     enum WriteOutcome: Sendable {
         /// `MetadataCreateGate` SHA-confirmed our just-written bytes are at the remote path.
         case wroteVerifiedBytes
-        /// Either an existing manifest was present pre-write, or the gate could not verify;
-        /// caller must run `verifyCompatibleWithRetries` to confirm format.
+        /// Unverified writes require compatibility readback before trusting format.
         case requiresCompatibilityReadback
     }
 
@@ -36,7 +30,6 @@ nonisolated struct VersionManifestStore: Sendable {
         self.basePath = basePath
     }
 
-    // MARK: - Read
 
     /// `.absent` only on confirmed not-found; transport/read/parse errors throw so a
     /// transient 401/5xx cannot be silently downgraded to "no manifest, treat as fresh".
@@ -82,7 +75,6 @@ nonisolated struct VersionManifestStore: Sendable {
         }
     }
 
-    // MARK: - Write
 
     /// Pre-check + staged create + post-write compatibility verification, mirroring the
     /// pre-extraction ordering: existing remote metadata wins; only confirmed-absent
@@ -127,7 +119,6 @@ nonisolated struct VersionManifestStore: Sendable {
         return .requiresCompatibilityReadback
     }
 
-    // MARK: - Verify
 
     func verifyCompatibleWithRetries() async throws {
         var lastUnreadable: RepoBootstrap.VersionConflict = .unreadable(nil)
@@ -195,7 +186,6 @@ nonisolated struct VersionManifestStore: Sendable {
         }
     }
 
-    // MARK: - Internals
 
     /// JSON `true`/`false` bridges to NSNumber that `as? Int`-casts to 1/0; reject CFBoolean before classification.
     private static func strictFormatVersion(_ raw: Any?) -> Int? {

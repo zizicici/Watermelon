@@ -4,7 +4,6 @@ import XCTest
 final class V1MigrationResidueQuarantineTests: XCTestCase {
     private let basePath = "/repo"
 
-    // MARK: - quarantine: branch coverage
 
     func testQuarantine_destinationAbsent_movesToCanonicalResidue() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -139,7 +138,6 @@ final class V1MigrationResidueQuarantineTests: XCTestCase {
         XCTAssertEqual(residueBytes, payload)
     }
 
-    // MARK: - sweep: branch coverage
 
     func testSweep_partialMigrationMarkerPresent_preservesResidue() async throws {
         let client = InMemoryRemoteStorageClient()

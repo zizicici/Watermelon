@@ -7,7 +7,6 @@ import XCTest
 /// re-introduce the bool/Set scatter the type was created to eliminate.
 final class RemoteResourcePresenceTests: XCTestCase {
 
-    // MARK: - Per-path queries
 
     func testIsHashVerified_onlyTrueForHashVerified() {
         var map = RemoteMonthPresenceMap()
@@ -52,7 +51,6 @@ final class RemoteResourcePresenceTests: XCTestCase {
         XCTAssertFalse(map.isMissing("/never-marked"))
     }
 
-    // MARK: - Per-hash projection
 
     func testFullyMissingHashes_allPathsMustBeMissing() {
         var map = RemoteMonthPresenceMap()
@@ -80,7 +78,6 @@ final class RemoteResourcePresenceTests: XCTestCase {
                        "empty path set must not be classified as fully-missing")
     }
 
-    // MARK: - Map-level state
 
     func testIsFullyResolved_emptyMapIsResolved() {
         XCTAssertTrue(RemoteMonthPresenceMap().isFullyResolved)
@@ -99,7 +96,6 @@ final class RemoteResourcePresenceTests: XCTestCase {
         XCTAssertTrue(map.isFullyResolved, "after the inconclusive entry leaves, the map is resolved again")
     }
 
-    // MARK: - Mutation
 
     func testClear_removesPath() {
         var map = RemoteMonthPresenceMap()

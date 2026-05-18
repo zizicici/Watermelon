@@ -3,14 +3,9 @@ import os.log
 
 private let cleanupLog = Logger(subsystem: "com.zizicici.watermelon", category: "OrphanMetadataCleanup")
 
-/// Cleans `.staging-<uuid>` orphans from aborted metadata writes. Assumes the
-/// staging window is shorter than `ageThresholdSeconds` — revisit if any metadata
-/// payload grows much larger than KB-scale JSONL.
+/// Age gate assumes metadata staging writes stay KB-scale and short-lived.
 enum OrphanMetadataCleanup {
-    /// Directory + writer-extractor pairing. The extractor takes the "original"
-    /// filename (everything before `.staging-<uuid>...`) and returns the writerID
-    /// if recognizable. Used by the sweep gate to skip files belonging to active
-    /// writers; nil falls through to mtime-only protection.
+    /// Writer extraction keeps active peers protected beyond mtime-only gating.
     struct SweepDirectory: Sendable {
         let path: String
         let parseWriter: @Sendable (String) -> String?
@@ -69,15 +64,7 @@ enum OrphanMetadataCleanup {
         ]
     }
 
-    /// Targeted bootstrap-only sweep of our own writerID's stranded liveness staging
-    /// files. The general `sweep` gate unconditionally protects `activeWriters` —
-    /// which always includes our own writerID — so own-writer liveness stagings
-    /// from prior crashes are otherwise immortal. Run **before** `liveness.start()`
-    /// so no in-flight tick can be racing with us; the age threshold guards same-
-    /// process residue if a backend ever lists a file we just made. Nil mtime
-    /// fails closed (same as the general sweep) — backends that omit
-    /// `modificationDate` would otherwise let us clobber an in-flight tick from a
-    /// concurrent same-writerID instance.
+    /// Sweeps our writerID before liveness starts because the general sweep must treat us as active.
     static func sweepOwnLivenessStagings(
         client: any RemoteStorageClientProtocol,
         basePath: String,
@@ -122,9 +109,7 @@ enum OrphanMetadataCleanup {
         return deleted
     }
 
-    /// Sweep each directory with its own writer parser — without per-directory
-    /// parsers, liveness files (different name shape than snapshots) lose the
-    /// per-writer activeWriters gate and rely on mtime alone, which is weaker.
+    /// Per-directory parsers keep each staging filename shape under the active-writer gate.
     static func sweep(
         client: any RemoteStorageClientProtocol,
         directories: [SweepDirectory],

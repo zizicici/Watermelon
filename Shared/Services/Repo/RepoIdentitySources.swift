@@ -1,22 +1,12 @@
 import Foundation
 
-/// Bundles the three sources of repoID truth (DB, remote `.watermelon/repo.json`
-/// claims, existing V2 commit/snapshot data) and owns the canonical resolution
-/// flow used by `BackupV2RuntimeBuilder` and `V1MigrationService`.
 struct RepoIdentitySources: Sendable {
     let stored: String?
     let remote: String?
     let data: String?
     let suggested: String
 
-    /// Triangulates `(stored, remote, data)` and pre-computes `suggested`.
-    /// `client` is the data-path client — heavy commit/snapshot list+read I/O
-    /// stays off the metadata connection so we don't serialise against liveness
-    /// on `.serialOnly` backends (SMB/SFTP).
-    /// `writerID` enables partial-die wipe-and-reuse recovery: when DB has only
-    /// a stale per-profile fallback row, our own identity claim on the current
-    /// remote proves we already participated in this repo, so the stale row can
-    /// be ignored instead of triggering a false mismatch.
+    /// Data-path identity scans stay off the metadata connection on serial-only backends.
     static func collect(
         profileID: Int64,
         writerID: String,
@@ -35,23 +25,14 @@ struct RepoIdentitySources: Sendable {
         if let remote, let data, remote != data {
             throw BackupV2RuntimeBuildError.repoIdentityMismatch(stored: data, observed: remote)
         }
-        // Prefer the exact (profileID, currentRepoID) row when the remote carries
-        // an identity; the per-profile fallback can otherwise surface a stale row
-        // for an old wiped-and-reused repo and trigger a false identity mismatch.
+        // Prefer the exact repo row so wipe-and-reuse cannot surface a stale fallback.
         let currentRepoID = remote ?? data
         let stored: String?
         if let currentRepoID,
            let exact = try await identity.loadRepoState(profileID: profileID, repoID: currentRepoID) {
             stored = exact.repoID
         } else if let fallback = try await identity.findRepoStateByProfile(profileID: profileID)?.repoID {
-            // Partial-die wipe-and-reuse: previous repo A row exists, remote was
-            // wiped + freshly initialized as repo B, and the app died before
-            // lazyEnsureRepoState wrote the new (profile, B) row. Without this
-            // check the fallback returns A, mismatch fires, and the user is stuck.
-            // Our own identity claim file at `currentRepoID` is the trust anchor
-            // proving we already participated in B (RepoBootstrap.initializeFreshRepo
-            // wrote it via writeOwnClaim). Foreign or absent claim → preserve the
-            // original foreign-repo mismatch behavior.
+            // Own claim for the current repo repairs wipe-and-reuse after the DB row missed initialization.
             if let currentRepoID, fallback != currentRepoID {
                 let claims = IdentityClaimStore(client: client, basePath: basePath)
                 if let ownClaim = try await claims.readOwnClaim(writerID: writerID),

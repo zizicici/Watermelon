@@ -1010,36 +1010,19 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 switch result {
                 case .success(let probe):
                     var missing = probe.missingHashes
-                    // Inconclusive (budget exhausted, transient probe failure) hashes
-                    // must NOT silently drop out of the overlay — replace-semantics in
-                    // markPhysicallyMissing would clear a prior-confirmed missing hash
-                    // and let resume/dedup classify it as remotely covered.
+                    // Keep inconclusive hashes in the overlay so replace semantics do not erase prior misses.
                     var resolvedInconclusives: Set<Data> = []
                     if !probe.inconclusiveHashes.isEmpty {
                         if let stale = fallback[month] {
                             let cover = stale.intersection(probe.inconclusiveHashes)
-                            // Preserve prior evidence: every fallback-covered inconclusive
-                            // stays in `missing` so replace-semantics in
-                            // markPhysicallyMissing don't drop a prior-confirmed missing
-                            // hash. But for the fail-closed freshness gate, only
-                            // budget-exhausted-covered hashes count as resolved.
-                            // Probe-failure (transient 404 / transport) hashes carry NO
-                            // signal even when covered by fallback — counting them as
-                            // resolved would mark the month fresh and republish the
-                            // fallback set as verified-missing on pure transport noise.
+                            // Fallback-covered probe failures remain stale; only budget-exhausted fallback counts as resolved.
                             missing.formUnion(cover)
                             let budgetExhaustedCover = cover.intersection(
                                 probe.inconclusiveHashes(reason: .verifyBudgetExhausted)
                             )
                             resolvedInconclusives.formUnion(budgetExhaustedCover)
                         }
-                        // Under fail-closed, fold ONLY budget-exhausted inconclusives into
-                        // missing. We attempted the probe and ran out of cap — treating those
-                        // as missing under fail-closed is the policy contract (over-mark
-                        // beats miss-real-gap for resume). Probe-failure inconclusives carry
-                        // NO signal (transient 404 / transport) — folding them publishes a
-                        // transport blip as authoritative absence and triggers needless
-                        // re-uploads. They stay inconclusive and keep the month stale.
+                        // Fail-closed folds budget exhaustion, not transport probe failures, into missing.
                         if case .failClosedWhenMissingFallback = staleFallbackPolicy {
                             let budgetExhausted = probe.inconclusiveHashes(reason: .verifyBudgetExhausted)
                             let unresolved = budgetExhausted.subtracting(resolvedInconclusives)
@@ -1047,16 +1030,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                             resolvedInconclusives.formUnion(unresolved)
                         }
                     }
-                    // Freshness is policy-aware.
-                    // Fail-closed: month fresh once every inconclusive has been folded into
-                    //   missing (via fallback intersection or budget-exhausted fold).
-                    //   Remaining probe-failure inconclusives keep the month stale so
-                    //   `verifiedPhysicallyMissingHashes` returns nil and the resume handle's
-                    //   `overlayFreshness` is `.stale`.
-                    // Preserve-fallback: any inconclusive (regardless of fallback cover)
-                    //   stales the month — fallback entries are prior evidence, not current
-                    //   proof, so the worker must wait for a clean probe before treating the
-                    //   overlay as authoritative.
+                    // Overlay freshness depends on policy: preserve-fallback requires a clean current probe.
                     let monthFresh: Bool
                     switch staleFallbackPolicy {
                     case .failClosedWhenMissingFallback:
@@ -1072,12 +1046,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                     missingByMonth[month] = missing
                 case .failure(let error):
                     anyFailure = true
-                    // A whole-month probe failure means we have no current information about
-                    // physical presence. The prior fallback is the best authentic state we
-                    // have; widening to "all hashes missing" under fail-closed would publish
-                    // a transient transport blip into the overlay that Home consumers read
-                    // without the per-month freshness gate, hiding real remote content until
-                    // the next successful sync.
+                    // On whole-month probe failure, reuse fallback only; widening would publish transport noise as absence.
                     if let stale = fallback[month] {
                         missingByMonth[month] = stale
                     } else {
@@ -1122,12 +1091,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             entries = try await client.list(path: monthAbs)
         } catch {
             if isStorageNotFoundError(error) {
-                // A 404 on the month directory while the manifest still names resources
-                // there is a probe failure, not authoritative absence: WebDAV/S3
-                // directory-listing 404s can lag PUTs (visibility/eventual consistency).
-                // Treating it as `.missing` would publish a transient 404 as verified
-                // absence and trigger unnecessary repair uploads. With no manifest
-                // resources, there's nothing to inflate either way.
+                // Directory 404 with manifest resources is inconclusive because listings can lag writes.
                 var presence: [Data: RemoteResourcePresence] = [:]
                 for resource in resources {
                     presence[resource.contentHash] = .inconclusive(.probeFailure)

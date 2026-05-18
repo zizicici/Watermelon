@@ -57,10 +57,6 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertEqual(reloaded?.lastSeq, 3)
     }
 
-    /// A stale in-memory allocator must (a) never return a seq that's already been
-    /// allocated, and (b) never regress the persisted lastSeq. With the read-then-write
-    /// transaction, BG sees the actual DB value at allocate-time and continues from
-    /// there — so its `allocate()` returns 6 (not stale 1) and DB advances to 6.
     func testSeqAllocatorReadsDBOnAllocateToAvoidStaleSeq() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -95,9 +91,6 @@ final class RepoStateRecordTests: XCTestCase {
                        "observe with smaller value must not regress DB")
     }
 
-    /// A stale BG clock must (a) never return a range overlapping FG's, and (b) never
-    /// regress lastClock. Read-then-write transaction in `tickRange` reads DB at
-    /// allocate-time so BG's range starts at 1001 (after FG's 1..1000), DB → 1010.
     func testPersistedLamportClockReadsDBOnTickToAvoidOverlap() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -133,11 +126,6 @@ final class RepoStateRecordTests: XCTestCase {
                        "observing a smaller value must not regress persisted lastClock")
     }
 
-    /// observe on an actor whose `current` is below DB high-water must adopt the
-    /// DB value, not leave `value()` reading the smaller external. Pre-fix the
-    /// rejected conditional UPDATE silently left `current = external < dbValue`,
-    /// so `value()` could under-report — fragile if any future caller bases a
-    /// decision on `value()` rather than re-reading the DB.
     func testPersistedLamportClockObserveAdoptsDBHighWaterAfterRejectedUpdate() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -154,9 +142,6 @@ final class RepoStateRecordTests: XCTestCase {
                        "observe must lift actor-local current to DB high-water when the conditional UPDATE is rejected")
     }
 
-    /// Symmetric to PersistedLamportClock: SeqAllocator.observeRemoteMax must lift
-    /// actor-local `current` to the DB high-water if the conditional UPDATE is
-    /// rejected, so future `value()` reads don't under-report.
     func testSeqAllocatorObserveRemoteMaxAdoptsDBHighWaterAfterRejectedUpdate() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -173,8 +158,6 @@ final class RepoStateRecordTests: XCTestCase {
                        "observeRemoteMax must lift actor-local current to DB high-water when the conditional UPDATE is rejected")
     }
 
-    /// Profile delete must cascade to `repo_state` — otherwise a recycled profileID
-    /// inherits stale lastSeq/lastClock from the previous owner.
     func testDeleteServerProfileCascadesToRepoState() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -186,8 +169,6 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertNil(reloaded, "repo_state row must be removed with its parent profile")
     }
 
-    /// `findRepoStateByProfile` prefers the migration-completed row over any
-    /// half-baked alternates so resume sessions grab the canonical repoID.
     func testFindRepoStateByProfilePrefersMigrationCompleted() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
 
@@ -210,11 +191,6 @@ final class RepoStateRecordTests: XCTestCase {
                        "completed row wins regardless of higher lastSeq on incomplete row")
     }
 
-    /// Peer-poisoned Lamport values (e.g. a hostile commit with `clock=UInt64.max`
-    /// or a snapshot filename with `lamport=ffffffffffffffff`) used to crash every
-    /// later writer via `fatalError` inside `tickRange`. `observe` now ignores
-    /// values above the safe ceiling and `tickRange` throws a typed error instead
-    /// of crashing.
     func testPersistedLamportClockObserveIgnoresValueAboveSafeCeiling() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -235,11 +211,6 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertEqual(range.high, 4)
     }
 
-    /// Even if a legitimate observe happens to land near the ceiling (paranoid
-    /// case — would take ~9e18 prior ticks), `tickRange` surfaces a typed error
-    /// instead of crashing. Planted value is the max non-poison high-water
-    /// (`maxAdoptableValue - 1`) so the actor loads it as-is rather than
-    /// resetting it during init's poison detection.
     func testPersistedLamportClockTickRangeAtCeilingThrowsRatherThanCrashing() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -265,8 +236,6 @@ final class RepoStateRecordTests: XCTestCase {
         }
     }
 
-    /// In-memory LamportClock mirrors the persisted clock's safe-ceiling behavior
-    /// so any test or alternate path using it has the same crash-resistance.
     func testLamportClockObserveIgnoresValueAboveSafeCeilingAndTickRangeThrows() async throws {
         let clock = LamportClock(initial: 0)
         await clock.observe(UInt64.max)
@@ -285,10 +254,6 @@ final class RepoStateRecordTests: XCTestCase {
         }
     }
 
-    /// Exact-ceiling values are also rejected by `observe` — the prior `<=`
-    /// guard let a peer's `clock == maxAdvanceableValue` get persisted, after
-    /// which every subsequent `tickRange` threw `advanceExhausted`. Strict-`<`
-    /// guarantees observed values always leave at least one tick of headroom.
     func testPersistedLamportClockObserveRejectsExactCeiling() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -320,20 +285,11 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertEqual(range.high, 3)
     }
 
-    /// Pre-fix installs may have a poisoned `repo_state.lastClock` row (e.g.
-    /// observed a remote `UInt64.max`-class clock and persisted it raw before
-    /// this round's `observe` guard landed). The next allocation must auto-
-    /// repair the row in the same write transaction so the writer can resume
-    /// instead of throwing `advanceExhausted` forever. Recovery resets the
-    /// in-memory + DB high-water to 0; a sanitized `observe` from the
-    /// materializer (applied upstream in normal startup) then pushes both
-    /// back up to a real high-water before the first tick.
     func testPersistedLamportClockTickRangeRepairsPoisonedDBHighWater() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
 
-        // Plant a poisoned DB value directly (simulates a pre-fix install).
         let poison = UInt64.max
         try databaseManager.write { db in
             try db.execute(
@@ -359,9 +315,6 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertEqual(recovered, 3)
     }
 
-    /// On a legit recovery path the sanitized observedClock from materialize
-    /// is applied via observe before the first tick — verify that flow works
-    /// even when the DB started poisoned.
     func testPersistedLamportClockPoisonRecoveryWithObserveRestoresHighWater() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -396,11 +349,6 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertEqual(next, 101)
     }
 
-    /// `maxObservableValue` is one below `maxAdvanceableValue` so the prior
-    /// "accepted but unadvanceable" choke point is gone: a peer planting
-    /// `maxAdvanceableValue - 1` (the OLD observe ceiling minus one) is now
-    /// rejected by observe, and an observed value up to `maxObservableValue - 1`
-    /// still leaves at least one tick of self-progression headroom.
     func testPersistedLamportClockObserveRejectsCeilingMinusOne() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -422,17 +370,6 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertEqual(val, 0)
     }
 
-    /// Codex Reviewer 1 (loop II-VII final convergence) — direct regression
-    /// for the dead-end at the highest-accepted observe value. Pre-fix,
-    /// observe accepted `maxAdoptableValue - 1` (the highest emittable AND
-    /// adoptable value) but `tickRange(count: 1)` then threw `advanceExhausted`
-    /// because its headroom guard used the same strict-`<` ceiling as
-    /// observe — adopting the highest tickable value left zero headroom.
-    /// The fix loosens tick to use the absolute `maxObservableValue` emit
-    /// ceiling (one above the adopt ceiling), so adopting the highest
-    /// observable value still has at least one tick of self-progression
-    /// headroom. Persisted poison detection follows the looser ceiling too,
-    /// so the resulting emit at `maxAdoptableValue` survives restart.
     func testPersistedLamportClockObserveAtBoundaryThenTickRangeSucceeds() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -468,10 +405,6 @@ final class RepoStateRecordTests: XCTestCase {
         }
     }
 
-    /// Observing `maxAdoptableValue - 2` (one below the highest adopt)
-    /// permits a tick that emits `maxAdoptableValue - 1` — still
-    /// peer-adoptable. Sanity check that the relaxed tick ceiling
-    /// doesn't change behavior strictly below the boundary.
     func testPersistedLamportClockObserveOneBelowBoundaryAllowsOneTick() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -488,11 +421,6 @@ final class RepoStateRecordTests: XCTestCase {
                        "tick result is still peer-adoptable (strictly below `maxAdoptableValue`)")
     }
 
-    /// `observe(maxAdoptableValue)` must be rejected — the value sits at
-    /// the adopt strict-`<` ceiling so accepting it would consume the
-    /// writer's last tick of headroom. The persisted clock stays at 0,
-    /// the actor-local mirror stays at 0, and the next `tickRange(1)`
-    /// emits 1.
     func testObserveRejectsValueAtAdoptCeiling() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -516,11 +444,6 @@ final class RepoStateRecordTests: XCTestCase {
                        "DB row reflects the new tick, never the unobservable peer value")
     }
 
-    /// A pre-fix install could have persisted `maxObservableValue` via the
-    /// old tickRange cap (which emitted up to that value). Init must now
-    /// treat it as poison and the builder repair path must sanitise the
-    /// row, otherwise the writer is permanently dead-ended (every later
-    /// tickRange would throw `advanceExhausted`).
     func testPersistedLamportClockInitTreatsMaxObservableValueAsPoison() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -548,11 +471,6 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertEqual(range.high, 1)
     }
 
-    /// An exact-ceiling poisoned DB row (Int64.max == maxAdvanceableValue)
-    /// stores as positive in SQLite, so the legacy `lastClock < ?` predicate
-    /// couldn't repair it on a sanitized observe — the row stayed poisoned
-    /// across restarts. persist now branches to an unconditional UPDATE on
-    /// the poisoned branch.
     func testPersistedLamportClockObserveRepairsExactCeilingDBPoison() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -577,11 +495,6 @@ final class RepoStateRecordTests: XCTestCase {
                        "DB row must be overwritten with the sanitized value — exact-ceiling poison no longer survives")
     }
 
-    /// When observedClock is 0 (e.g. the only peer ops were poisoned and
-    /// skipped), `observe(0)` is a no-op — but the poisoned DB row must
-    /// still be repaired before the runtime is handed out. observe now
-    /// triggers `repairPoisonedDBIfNeeded` on the no-op path while
-    /// `dbPoisonedAtInit` is set.
     func testPersistedLamportClockObserveZeroRepairsPoisonedDBRow() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
@@ -603,8 +516,6 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertEqual(recovered, 0, "no-op observe under poisoned-init flag must still repair the DB row")
     }
 
-    /// Direct cover for `repairPoisonedDBIfNeeded` — idempotent across
-    /// multiple calls and no-op when the row is already sane.
     func testPersistedLamportClockRepairPoisonedDBIsIdempotent() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)

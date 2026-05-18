@@ -173,7 +173,6 @@ final class HomeAlbumMatchingTests: XCTestCase {
                       "no surviving resources → no item emitted (same as phantom)")
     }
 
-    // MARK: - Helpers
 
     private func makeAsset(fp: Data) -> RemoteManifestAsset {
         RemoteManifestAsset(

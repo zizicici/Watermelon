@@ -1,11 +1,6 @@
 import Foundation
 
-/// Serializes ops with synchronous enqueue. The earlier `Task { await self.enqueue }`
-/// design had a wakeup race: between the continuation suspending and the enqueue Task
-/// running, `release` could see an empty queue and clear `inFlight`, leaking the
-/// waiter forever. `WaitHandle` lets us add to the queue inside the actor BEFORE
-/// suspending — release sees us reliably. The handle's own lock handles
-/// resume-before-wait when cancel/release races wait().
+/// Enqueues before suspension so release cannot miss a waiter.
 actor SerialOperationQueue {
     final class WaitHandle: @unchecked Sendable {
         private let lock = NSLock()
@@ -58,8 +53,7 @@ actor SerialOperationQueue {
             guard acquired else { throw CancellationError() }
         }
         do {
-            // Caller cancellation may have arrived between wait()-resume and here;
-            // body might not check cancellation itself, so we do it once at the door.
+            // Catch cancellation that arrives after queue wake-up but before body execution.
             try Task.checkCancellation()
             let result = try await body()
             release()
@@ -107,13 +101,7 @@ actor SerialOperationQueue {
     }
 }
 
-/// Wraps a `.serialOnly` client (SMB / SFTP) so concurrent callers can't violate
-/// the connection's serial contract.
-///
-/// **Do NOT wrap a data-upload client with this** — the wrapper has to drop
-/// `onProgress` on `upload` / `atomicCreate` because the closure isn't @Sendable
-/// and metadata paths don't need progress. A data client wrapped this way would
-/// silently lose its UI progress signal.
+/// Metadata-only wrapper; data uploads would lose non-Sendable progress callbacks.
 final class SerialOperationsClient: RemoteStorageClientProtocol, @unchecked Sendable {
     private let underlying: any RemoteStorageClientProtocol
     private let queue = SerialOperationQueue()

@@ -10,14 +10,7 @@ enum RepoLayout {
     static let livenessDirectory = "liveness"
     static let identityDirectory = "identity"
     static let migrationsDirectory = "migrations"
-    /// `formatVersion` is what new writers stamp into `version.json` going forward.
-    /// `currentSupportedFormatVersion` is the upper bound we accept on read.
-    ///
-    /// All V2-development additions are encoded as optional wire fields (asset
-    /// stamp triple, deletedKey stamp triple, `observedBasis` on tombstones) so
-    /// they're forward-compatible within v2: older readers ignore unknown fields
-    /// and degrade to pre-stamp behavior; writers always emit them. The format
-    /// version stays at 2 until a non-additive change forces a bump.
+    /// Optional V2 fields keep the wire format additive until a non-additive change forces a bump.
     static let formatVersion = 2
     static let currentSupportedFormatVersion = 2
     static let minAppVersionPlaceholder = "2.0.0"

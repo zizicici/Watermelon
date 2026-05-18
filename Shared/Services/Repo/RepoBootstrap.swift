@@ -3,9 +3,7 @@ import os.log
 
 private let bootstrapLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoBootstrap")
 
-/// Finalized identity lives at `.watermelon/repo-identity.json`.
-/// Before finalization, `IdentityClaimStore` elects lex-min `(created_at_ms, writerID)`.
-/// `repo.json` is a legacy/cache pointer.
+/// Finalized identity supersedes repo.json so wipe-and-reuse can converge.
 actor RepoBootstrap {
     enum BootstrapError: Error {
         case ioFailure(Error)

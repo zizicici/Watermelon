@@ -1,29 +1,9 @@
 import XCTest
 @testable import Watermelon
 
-/// Decision-table tests for `inspectRemoteFormat`. Each scenario stages a specific
-/// half-bootstrapped / half-migrated remote state and asserts the routing.
-///
-/// The bootstrap state machine has been the source of multiple data-loss / data-stuck
-/// bugs across review iterations (V1 mid-migration → fresh; V2 missing repo.json →
-/// per-session UUID; etc.). These tests lock in the recovery decisions so future
-/// refactors can't silently regress them.
 final class BootstrapStateMachineTests: XCTestCase {
     private let basePath = "/repo"
     private let format = RemoteFormatCompatibilityService()
-
-    // Decision table:
-    // | basePath dir? | .watermelon/ | repo.json | version.json | V1 manifests | → outcome
-    // |---|---|---|---|---|---|
-    // | absent (empty list) | -            | -          | -          | -          | → .fresh (basePath empty)
-    // | exists | absent       | -          | -          | -          | → .fresh
-    // | exists | absent       | -          | -          | present    | → .v1
-    // | exists | present      | absent     | absent     | absent     | → .fresh (idempotent re-bootstrap)
-    // | exists | present      | absent     | absent     | present    | → .v1 (interrupted V1 phase1)
-    // | exists | present      | present    | absent     | absent     | → .fresh (re-bootstrap completes version)
-    // | exists | present      | present    | absent     | present    | → .v1 (interrupted V1 phase2)
-    // | exists | present      | present    | present (v=2) | -       | → .v2(2)
-    // | exists | present      | present    | present (v=99) | -      | → .unsupported
 
     func testEmptyBasePath_returnsFresh() async throws {
         let (client, profile) = await makeFixture()
@@ -98,9 +78,6 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
-    /// Marker present + identity files (repo.json/version.json) gone but commits/
-    /// or snapshots/ still hold data = damaged V2. Treating it as fresh would
-    /// mint a new repoID and orphan all existing commits.
     func testWatermelonPresent_dataDirsHaveContent_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
         try await client.createDirectory(path: "\(basePath)/.watermelon")
@@ -127,7 +104,6 @@ final class BootstrapStateMachineTests: XCTestCase {
         XCTAssertEqual(outcome, .fresh)
     }
 
-    /// Marker with V1 data means phase3 crashed before migration cleanup completed.
     func testMigrationInProgressMarker_withV1Manifests_forcesV1() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
@@ -143,7 +119,6 @@ final class BootstrapStateMachineTests: XCTestCase {
                        "marker + V1 manifests after V2 sentinel → V2-with-V1-residue forces foreground migration")
     }
 
-    /// Marker without V1 data must not strand a healthy V2 repo in migration mode.
     func testStaleMigrationMarker_noV1Manifests_returnsV2() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
@@ -155,10 +130,6 @@ final class BootstrapStateMachineTests: XCTestCase {
         XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion), "stale marker without V1 manifests → V2")
     }
 
-    /// A damaged version.json (garbage bytes / boolean format_version) inside an
-    /// otherwise V2-shaped remote must surface as `damagedV2Repo`, not a raw
-    /// `VersionConflict.unreadable` or `BootstrapError.ioFailure` that ends up
-    /// wrapped opaquely in `userFacingStorageErrorMessage`.
     func testWatermelonPresent_versionJsonGarbage_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
@@ -215,9 +186,6 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
-    /// Hijacked marker (filename writerID-A, JSON writer_id=B) must not be adopted —
-    /// silently routing cleanup at the wrong writerID hits the wrong file path and
-    /// loops cleanup-only forever.
     func testHijackedMigrationMarker_isSkippedAndRoutesToV2() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
@@ -321,8 +289,6 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
-    /// Numeric integer 0 is not a defined phase; must surface as `.unknownPhase(raw: 0)`,
-    /// not be misclassified as a boolean by a too-broad Bool-bridge check.
     func testMigrationMarkerParse_rejectsZeroPhase() {
         let writerID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
         let bytes = Data(#"{"v":2,"writer_id":"\#(writerID)","phase":0}"#.utf8)
@@ -335,9 +301,6 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
-    /// Round-trip every defined phase through encode → parse. The previous Bool-bridge
-    /// guard silently rejected `phase:1` (NSNumber(1) bridges to Bool); this locks the
-    /// integer mapping for the production-shaped marker.
     func testMigrationMarkerEncodeParse_roundTripsAllPhases() throws {
         let writerID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
         for phase in [MigrationMarkerPhase.phase1, .phase2, .phase3] {
@@ -358,7 +321,6 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
-    /// Wrong-type fields must be skipped at the inspector boundary, not routed to cleanup.
     func testWrongTypePhaseMarker_isSkippedAndRoutesToV2() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
@@ -375,8 +337,6 @@ final class BootstrapStateMachineTests: XCTestCase {
                        "wrong-type phase must be skipped, never routed to cleanup")
     }
 
-    /// JSON booleans bridge `as? Int` as 1/0; without explicit rejection a `phase:true`
-    /// marker parses as phase1 and is adopted as cleanup residue.
     func testBooleanPhaseMarker_isSkippedAndRoutesToV2() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")

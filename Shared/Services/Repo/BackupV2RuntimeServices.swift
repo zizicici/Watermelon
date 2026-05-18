@@ -1,10 +1,6 @@
 import Foundation
 
-/// One-shot holder for the builder's cold-start materialize output — first read
-/// consumes, subsequent reads return nil so a stale snapshot can't be reused mid-run.
-/// `peek()` returns without consuming; caller consumes only after a successful use
-/// (e.g., syncIndex that may throw — eager consume would lose the value on the
-/// re-run path).
+/// Cold-start materialize output is one-shot so stale snapshots cannot be reused mid-run.
 actor InitialMaterializeOutputBox {
     private var value: RepoMaterializer.MaterializeOutput?
     init(_ value: RepoMaterializer.MaterializeOutput?) {

@@ -1,8 +1,6 @@
 import XCTest
 @testable import Watermelon
 
-/// End-to-end V2 flush: upsert into V2MonthSession, flush, verify produced commit /
-/// snapshot files and FlushDelta round-trip back through materialize.
 final class V2FlushTests: XCTestCase {
     private let basePath = "/repo"
     private let writerID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -156,7 +154,6 @@ final class V2FlushTests: XCTestCase {
         // Initial flush — asset committed
         _ = try await store.flushToRemote(ignoreCancellation: false)
 
-        // Now write a superseding asset that subset-replaces the old one → tombstone
         let newFP = TestFixtures.fingerprint(0xEE)
         let newAsset = RemoteManifestAsset(
             year: year, month: month,
@@ -191,8 +188,6 @@ final class V2FlushTests: XCTestCase {
                         "tombstone stamp must persist for cross-writer LWW comparison")
     }
 
-    /// Tombstone stamp must persist past snapshot baseline — LWW gate against
-    /// stale adds reads it.
     func testTombstone_coveredBySnapshot_carriesStampForLWW() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -243,10 +238,6 @@ final class V2FlushTests: XCTestCase {
         XCTAssertGreaterThan(stamp.clock, 0)
     }
 
-    /// Subset-replacement tombstones must carry observedBasis. Without it, a peer's
-    /// concurrent add of the same fp at clock > our basis would be silently
-    /// resurrected by replay; with it, the tombstone is observation-style and the
-    /// materializer's basis-comparison gate skips it.
     func testFlushV2_subsetReplacementTombstone_carriesObservedBasis() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -301,11 +292,6 @@ final class V2FlushTests: XCTestCase {
         XCTAssertNotNil(body.observedBasis, "subset-replacement tombstone must carry observedBasis")
     }
 
-    /// observedBasis must roll forward across flushes. With a session-constant
-    /// basis, our own first flush's addAsset (clock allocated AFTER load) would
-    /// look like "after-observation" to a tombstone written in a later flush,
-    /// so replay would suppress that tombstone. The basis captured at flush 2
-    /// must include flush 1's clocks.
     func testFlushV2_observedBasis_rollsForwardAcrossFlushes() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -364,10 +350,6 @@ final class V2FlushTests: XCTestCase {
                                     "basis perWriterMaxSeq must include flush 1's seq")
     }
 
-    /// upsertAsset must reject a link whose hash is in physicallyMissingHashes.
-    /// Otherwise flush would emit a commit body with an empty resources[] (the
-    /// link gets dropped at flush) and the snapshot covering that seq would
-    /// break `state == fold(covered)`.
     func testUpsertAsset_rejectsLinkToPhysicallyMissingHash() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -419,13 +401,6 @@ final class V2FlushTests: XCTestCase {
         }
     }
 
-    /// Snapshot is a projection of committed state — `state == fold(commits in covered)`.
-    /// Within one writer, all links to a given hash resolve to `findResourceByHash`'s
-    /// lex-min present path, so only that path appears in the commit body. An alternate
-    /// `upsertResource(pathB)` at the same hash that is never referenced by any
-    /// committed addAsset is orphan storage and must NOT land in the snapshot —
-    /// otherwise the snapshot's resource projection diverges from `fold(commits)` and
-    /// grows forever as failed-asset uploads accumulate.
     func testFlushV2SnapshotEmitsOnlyCommittedPathsPerHash() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -477,10 +452,6 @@ final class V2FlushTests: XCTestCase {
                      "orphan path (no commit body references it) must not be in snapshot — would break state == fold(commits)")
     }
 
-    /// Resources whose physical files are missing from the directory listing must be
-    /// dropped at session-load time. Otherwise `findResourceByHash` keeps returning the
-    /// stale path → `AssetProcessor.uploadResource` short-circuits as `hash_exists` and
-    /// `monthAlreadyFullyBackedUp` skips the whole month, leaving the gap unrepaired.
     func testReconcileDropsResourcesWhosePhysicalFileIsMissing() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -538,16 +509,6 @@ final class V2FlushTests: XCTestCase {
         )
     }
 
-    /// Snapshot is **faithful to the commit log** (post-Step-5 contract): even when
-    /// physical files are missing for some resources, the next snapshot must include
-    /// the asset row + link unchanged. This is the covered-range invariant —
-    /// `state == fold(commit ops in covered)`. Earlier rounds suppressed orphan
-    /// links/assets here, which broke the invariant: snapshot dropped state but
-    /// still claimed to cover the commits that produced it, so materializer
-    /// silently lost historical evidence forever.
-    ///
-    /// The session-view layer (`findResourceByHash`, `isAssetIncomplete`) is what
-    /// gates actionability now; the snapshot writer never filters.
     func testSnapshotPreservesAssetsEvenWhenPhysicalFilesMissing() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -637,12 +598,6 @@ final class V2FlushTests: XCTestCase {
                       "session view filters via physicallyMissingHashes — incomplete remains observable")
     }
 
-    /// `upsertResource` without a follow-up `upsertAsset` for that resource (e.g. an
-    /// asset's second resource upload permanently fails, so the asset never lands —
-    /// but the first resource's `recordUploadedResource` already ran) must NOT carry
-    /// the orphan resource into the snapshot. The snapshot baseline must stay equal
-    /// to `fold(commits in covered)`; commits never carry orphan resources, so
-    /// neither can the snapshot.
     func testFlushV2_orphanUpsertResourceWithoutUpsertAsset_isFilteredFromSnapshot() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -699,12 +654,6 @@ final class V2FlushTests: XCTestCase {
                      "orphan resource (upserted but never linked to a committed asset) must not be in snapshot — snapshot ≠ fold(commits)")
     }
 
-    /// Path-only committed tracking would let an in-session `upsertResource` overwrite
-    /// a previously-committed path with a different hash, and then the snapshot would
-    /// emit the new (uncommitted) content under that path — breaking
-    /// `state == fold(commits in covered)`. The committed row store is keyed by
-    /// (path, full row), so the snapshot emit ignores the live `resourcesByPath`
-    /// overwrite and preserves the historical committed row.
     func testFlushV2_committedPathOverwrittenByUpsert_snapshotRetainsCommittedHash() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -786,12 +735,6 @@ final class V2FlushTests: XCTestCase {
             "the full row (size, type, etc) must match the committed row, not the overwritten one")
     }
 
-    /// The seed of `committedResourceByPath` is faithful to `materializedState.resources`
-    /// (which is itself `fold(commits in covered)`). Earlier rounds gated on
-    /// "hash referenced by some link" to drop pre-fix orphans, but that gate dropped
-    /// legitimate post-tombstone orphan rows too (RepoMaterializer keeps
-    /// `state.resources[P]` after a tombstone removes the asset+links). Faithful
-    /// seeding is the only signal that preserves the covered-range invariant.
     func testV2MonthIndexes_seed_isFaithfulToMaterializedResources() throws {
         let tombstonedHash = TestFixtures.fingerprint(0x77)
         let livingHash = TestFixtures.fingerprint(0x88)
@@ -858,11 +801,6 @@ final class V2FlushTests: XCTestCase {
                         "the orphan row's content hash must round-trip exactly — drift would corrupt the snapshot baseline")
     }
 
-    /// A snapshot that "covers" both an addAsset commit AND a later tombstone commit
-    /// for the same asset must still emit the asset's resource row (RepoMaterializer
-    /// keeps `state.resources[P]` after a tombstone — the row is part of fold(covered)).
-    /// If we dropped the row, the next materialize would see a snapshot covering both
-    /// commits but missing the resource, violating `state == fold(commits in covered)`.
     func testFlushV2_postTombstoneOrphanResource_survivesAcrossFlushes() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -941,12 +879,6 @@ final class V2FlushTests: XCTestCase {
         XCTAssertEqual(monthState.resources[physicalPath]?.contentHash, hash)
     }
 
-    /// `recordCommit` must project committed snapshot rows from the addAsset BODY's
-    /// creationDateMs/backedUpAtMs (the same fields RepoMaterializer uses on replay).
-    /// Earlier this projection pulled from the live `RemoteManifestResource`, whose
-    /// `backedUpAtMs` is set at resource upload time (earlier than the asset's
-    /// `backedUpAtMs` set at AssetProcessor.process completion) — same commit replayed
-    /// later would yield a different row, breaking `snapshot == fold(covered)`.
     func testFlushV2_committedRowDates_matchAssetBodyNotResource() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -992,16 +924,6 @@ final class V2FlushTests: XCTestCase {
                        "resource row's backedUpAtMs must come from asset body, not the live resource — replay derives it from body")
     }
 
-    /// Pins the path-level resource LWW pipeline end-to-end through the production
-    /// flush path: V2MonthCommitFlusher → committedResourceClocks →
-    /// V2MonthIndexes.recordCommit → currentMaterializedState → RepoSnapshotBuilder
-    /// → wire snapshot → RepoMaterializer. The post-flush materialize must
-    /// produce a resource row whose stamp matches the commit body's op clock
-    /// and the flusher's allocated seq. If a future refactor drops
-    /// `committedResourceClocks[...] = clockCursor` in V2MonthCommitFlusher, the
-    /// SnapshotStampMaterializeTests fixture (which hand-builds the baseline
-    /// stamp) would still pass; this test catches that regression by going
-    /// through the real flush path.
     func testFlushV2_resourceRowStampPropagatesThroughProductionFlushPath() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -1056,10 +978,6 @@ final class V2FlushTests: XCTestCase {
         XCTAssertGreaterThan(resourceStamp.seq, 0)
     }
 
-    /// Re-upserting at the same physicalRemotePath with a different content hash must
-    /// not leave the old (oldHash → path) mapping dangling. A stale entry would make
-    /// `findResourceByHash(oldHash)` return the slot — now containing the new content —
-    /// and downstream callers would fetch wrong-content bytes.
     func testUpsertResource_repurposingPath_dropsOldHashMapping() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -1094,11 +1012,6 @@ final class V2FlushTests: XCTestCase {
         XCTAssertEqual(store.findResourceByHash(newHash)?.contentHash, newHash)
     }
 
-    /// Regression: V2MonthCommitFlusher's `alreadyExists` retry must re-tick Lamport
-    /// clocks and rebuild ops, not just re-allocate seq. Otherwise the retry publishes
-    /// commit bytes whose `(clock, writerID, seq)` ordering can land below a peer
-    /// commit at the same path even though this retry was wall-clock newer, leaving
-    /// stale metadata winning under LWW. Mirrors V1MigrationService's same retry rule.
     func testFlushV2_retryOnAlreadyExists_reTicksLamportClockForFreshOrdering() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -1162,7 +1075,6 @@ final class V2FlushTests: XCTestCase {
                                     "retry must re-tick Lamport so clockMin advances past the failed-attempt tick of 1")
     }
 
-    // MARK: - V2 services manual construction
 
     private func makeV2Services(client: InMemoryRemoteStorageClient) async throws -> BackupV2RuntimeServices {
         let profileID = try insertProfile()

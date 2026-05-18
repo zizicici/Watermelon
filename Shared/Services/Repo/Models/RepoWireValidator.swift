@@ -1,7 +1,6 @@
 import Foundation
 
-/// All commit/snapshot input is from a peer writer's bytes; "this can't happen"
-/// assumptions become security holes when the peer is malicious or corrupt.
+/// Peer-authored commit/snapshot bytes must be validated before materialization.
 enum WireValidationError: Error, Equatable {
     case wrongHashLength(field: String, actual: Int)
     case invalidHex(field: String)
@@ -26,8 +25,7 @@ enum RepoWireValidator {
         return data
     }
 
-    /// Optional date-millis field — present + non-null must be a non-negative integer.
-    /// Lenient `as? Int64 ?? Int.map(...)` would silently swallow a hostile peer's "abc"
+    /// Reject malformed date millis instead of silently treating hostile values as nil.
     /// as nil, letting epoch-0 sort artifacts through; this rejects malformed values
     /// while still accepting NSNull / missing-key as nil.
     static func validateOptionalDateMillis(_ raw: Any?, field: String) throws -> Int64? {

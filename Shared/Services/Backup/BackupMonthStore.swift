@@ -1,7 +1,5 @@
 import Foundation
 
-/// Shared interface for V1 (`MonthManifestStore`) and V2 (`V2MonthSession`) so the
-/// parallel executors don't branch on `v2Services != nil` per call site.
 protocol BackupMonthStore: AnyObject {
     var year: Int { get }
     var month: Int { get }
@@ -15,14 +13,12 @@ protocol BackupMonthStore: AnyObject {
     func containsAssetFingerprint(_ fingerprint: Data) -> Bool
     func isAssetIncomplete(_ fingerprint: Data) -> Bool
 
-    /// V2 multi-writer can publish the same hash under multiple paths; this returns
-    /// the lex-min one for determinism. Callers needing every path use the cache /
-    /// snapshot APIs directly.
+    /// Multi-path hashes resolve lex-min for deterministic legacy callers.
     func findResourceByHash(_ contentHash: Data) -> RemoteManifestResource?
     func findByFileName(_ logicalName: String) -> RemoteManifestResource?
 
     func existingFileNames() -> Set<String>
-    /// Cached folded-key set; called per upload, recomputing each time would be N² per month.
+    /// Cached folded-key set avoids N-squared upload preparation per month.
     func existingCollisionKeys() -> Set<String>
     func remoteFileSize(named logicalName: String) -> Int64?
 

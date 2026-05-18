@@ -1,10 +1,6 @@
 import XCTest
 @testable import Watermelon
 
-/// `RepoIdentitySources` consolidates the three identity-triangulation paths the
-/// builder/migration used to fragment across. Tests pin the precedence rules,
-/// damaged-V2 detection, mismatch semantics, and publish idempotence so future
-/// refactors can't silently drop a check.
 final class RepoIdentitySourcesTests: XCTestCase {
     private let basePath = "/repo"
     private var tempDBURL: URL!
@@ -24,7 +20,6 @@ final class RepoIdentitySourcesTests: XCTestCase {
         }
     }
 
-    // MARK: - collect
 
     func testCollect_storedOnly_suggestionIsStored() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -49,8 +44,6 @@ final class RepoIdentitySourcesTests: XCTestCase {
         XCTAssertEqual(sources.suggested, "stored-id")
     }
 
-    /// Files in `.watermelon/commits` that can't be parsed back to a repoID mean
-    /// V2 data exists but identity is unrecoverable — must fail loud, not mint fresh.
     func testCollect_unparseableV2CommitData_throwsDamagedV2Repo() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -78,8 +71,6 @@ final class RepoIdentitySourcesTests: XCTestCase {
         }
     }
 
-    /// Two commits carrying different repoIDs means the data dir was written by
-    /// two distinct repos — minting either would orphan the other. Must fail loud.
     func testCollect_multipleDistinctRepoIDsInV2Data_throwsDamagedV2Repo() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -126,11 +117,6 @@ final class RepoIdentitySourcesTests: XCTestCase {
         }
     }
 
-    /// Wiped-and-reused remote: profile previously backed up to repo A, the user
-    /// wiped the remote, and a later `.fresh` init created a row for repo B.
-    /// `collect` must pick the exact (profileID, remoteRepoID) row instead of the
-    /// stale higher-`lastSeq` row for repo A, otherwise the user gets stuck in a
-    /// false `repoIdentityMismatch` loop every run.
     func testCollect_wipedAndReusedRemote_prefersExactRowOverStalePerProfileFallback() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -165,11 +151,6 @@ final class RepoIdentitySourcesTests: XCTestCase {
         XCTAssertEqual(sources.suggested, "fresh-repo-B")
     }
 
-    /// Partial-die wipe-and-reuse: the stale per-profile fallback for repo A is the
-    /// only DB row, but our own writer's claim file at the current remote already
-    /// names repo B. `collect` must treat `stored` as nil so `lazyEnsureRepoState`
-    /// can write the missing (profile, B) row on the next call, rather than
-    /// throwing a false mismatch the user can't recover from without re-wiping.
     func testCollect_wipedAndReusedRemote_ownClaimPresent_recoversWithoutMismatch() async throws {
         let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
         let client = InMemoryRemoteStorageClient()
@@ -203,8 +184,6 @@ final class RepoIdentitySourcesTests: XCTestCase {
         XCTAssertEqual(sources.suggested, "fresh-repo-B")
     }
 
-    /// Same wipe-and-reuse setup but without our own claim — must still throw mismatch.
-    /// Guards against weakening the foreign-repo guard when narrowing the recovery rule.
     func testCollect_wipedAndReusedRemote_noOwnClaim_preservesMismatch() async throws {
         let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
         let client = InMemoryRemoteStorageClient()
@@ -237,8 +216,6 @@ final class RepoIdentitySourcesTests: XCTestCase {
         }
     }
 
-    /// Wipe-and-reuse setup with a foreign writer's claim only — must still throw
-    /// mismatch. The recovery rule must consult OUR claim file, not any claim.
     func testCollect_wipedAndReusedRemote_foreignClaimOnly_preservesMismatch() async throws {
         let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
         let foreignWriterID = "22222222-2222-2222-2222-bbbbbbbbbbbb"
@@ -273,11 +250,6 @@ final class RepoIdentitySourcesTests: XCTestCase {
         }
     }
 
-    /// Wipe-and-reuse setup where our claim points to a different repoID than the
-    /// canonical remote. Realistic shape: a peer's lex-min-earlier claim wins
-    /// canonical election (remote = "B"), but our writer's stale claim still says
-    /// "A". The recovery branch must reject this — only an own claim that matches
-    /// the canonical remote authorizes ignoring the stale per-profile fallback.
     func testCollect_wipedAndReusedRemote_ownClaimNamesWrongRepo_preservesMismatch() async throws {
         let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
         let peerWriterID = "00000000-0000-0000-0000-000000000001"  // lex-min < own → wins election
@@ -329,8 +301,6 @@ final class RepoIdentitySourcesTests: XCTestCase {
         await client.injectFile(path: RepoLayout.identityClaimPath(base: basePath, writerID: writerID), data: data)
     }
 
-    /// Stored DB repoID disagreeing with remote `repo.json` claim means the profile
-    /// was re-pointed at a foreign remote — must throw, not silently write commits.
     func testCollect_storedDisagreesWithRemote_throwsMismatch() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -356,10 +326,7 @@ final class RepoIdentitySourcesTests: XCTestCase {
         }
     }
 
-    // MARK: - publish
 
-    /// Once finalized, `ensureRepoJSON` reads the finalized id back — publish must
-    /// return that id rather than the caller's `suggested`.
     func testPublish_existingFinalization_returnsFinalizedID() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
@@ -376,9 +343,6 @@ final class RepoIdentitySourcesTests: XCTestCase {
         XCTAssertEqual(resolved, finalizedID, "publish must read finalized id, not adopt suggested")
     }
 
-    /// If `sources.stored` disagrees with the id `ensureRepoJSON` returns (e.g.,
-    /// remote pre-finalized to a different id), publish must throw rather than
-    /// silently bind to a stale local id.
     func testPublish_storedDisagreesWithResolvedAfterEnsureRepoJSON_throwsMismatch() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)

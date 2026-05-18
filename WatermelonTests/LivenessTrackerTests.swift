@@ -1,11 +1,6 @@
 import XCTest
 @testable import Watermelon
 
-/// `LivenessTracker.snapshotPeerStatuses` is the cleanup gate: classifies every
-/// peer's heartbeat as active / stale / unknown, and only when zero peers are
-/// unknown does the builder allow `OrphanMetadataCleanup.sweep` to run. These
-/// tests pin the boundary cases so a future refactor can't silently re-introduce
-/// "any error suppressed = peer dropped from active set = staging deleted."
 final class LivenessTrackerTests: XCTestCase {
     private let basePath = "/repo"
 
@@ -17,7 +12,6 @@ final class LivenessTrackerTests: XCTestCase {
     private let goneWriter = "44444444-4444-4444-4444-444444444444"
     private let flakyWriter = "55555555-5555-5555-5555-555555555555"
 
-    // MARK: - snapshotPeerStatuses
 
     func testSnapshotPeerStatuses_classifiesActiveAndStale() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -38,8 +32,6 @@ final class LivenessTrackerTests: XCTestCase {
         XCTAssertTrue(view.isComplete)
     }
 
-    /// Backend with `readAfterWriteGraceSeconds > 0` (e.g., R2/MinIO/WebDAV-behind-cache):
-    /// a 404 may be post-write visibility lag, not a truly absent peer. Must classify as unknown.
     func testSnapshotPeerStatuses_404WithGrace_yieldsUnknown_vanishedWithinGrace() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setReadAfterWriteGrace(30)
@@ -58,8 +50,6 @@ final class LivenessTrackerTests: XCTestCase {
                       "unknown peers must be in sweepProtectionSet so their staging files are preserved")
     }
 
-    /// Strong-consistency backend (`grace == 0`, default): a confirmed 404 means
-    /// the peer is truly gone and is omitted from all sets — no cleanup gate.
     func testSnapshotPeerStatuses_404WithoutGrace_omitsPeer() async throws {
         let client = InMemoryRemoteStorageClient()
         // Default readAfterWriteGraceSeconds = 0.
@@ -77,9 +67,6 @@ final class LivenessTrackerTests: XCTestCase {
         XCTAssertTrue(view.isComplete)
     }
 
-    /// A transport error that persists past the retry budget must classify as
-    /// `.unknown(.readFailed)`, not silently drop the peer. Otherwise sweep could
-    /// nuke an active peer's staging during a transient network blip.
     func testSnapshotPeerStatuses_persistentReadFailure_yieldsUnknown_readFailed() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -98,10 +85,6 @@ final class LivenessTrackerTests: XCTestCase {
         XCTAssertFalse(view.isComplete)
     }
 
-    /// JSON booleans bridge through `as? Int` (true→1), which would parse a corrupt
-    /// `{"ts": true}` heartbeat as ts=1ms and mark the peer ancient-stale — letting
-    /// sweep delete a live peer's staging. `LivenessTracker.strictInt64` rejects
-    /// CFBoolean before any numeric cast; the peer must land in unknown, blocking sweep.
     func testSnapshotPeerStatuses_booleanTimestamp_yieldsUnknown_blocksSweep() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -123,8 +106,6 @@ final class LivenessTrackerTests: XCTestCase {
         XCTAssertTrue(view.sweepProtectionSet.contains(phantomWriter))
     }
 
-    /// `client.list` errors propagate (no view at all) — caller must skip cleanup.
-    /// Prior `try?` behavior in the builder is preserved by this throw.
     func testSnapshotPeerStatuses_listFailure_propagates() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -140,7 +121,6 @@ final class LivenessTrackerTests: XCTestCase {
         }
     }
 
-    // MARK: - ActiveWritersView semantics
 
     func testActiveWritersView_isCompleteOnlyWhenNoUnknown() {
         let v1 = LivenessTracker.ActiveWritersView(activePeerIDs: ["a"], stalePeerIDs: ["b"], unknownPeerIDs: [])
@@ -162,7 +142,6 @@ final class LivenessTrackerTests: XCTestCase {
                        "stale peers' staging is fair game to sweep")
     }
 
-    // MARK: - isStale grace period
 
     func testIsStale_appliesBackendGracePeriod() {
         let now = Date()
@@ -175,7 +154,6 @@ final class LivenessTrackerTests: XCTestCase {
                        "grace must extend the stale boundary so eventual-consistency lag doesn't false-positive a live peer")
     }
 
-    // MARK: - Helpers
 
     private func injectHeartbeat(client: InMemoryRemoteStorageClient, writerID: String, ts: Int64) async {
         let path = RepoLayout.livenessFilePath(base: basePath, writerID: writerID)
@@ -184,9 +162,6 @@ final class LivenessTrackerTests: XCTestCase {
         await client.injectFile(path: path, data: data)
     }
 
-    /// Simulates the listing race we're testing against: peer's filename is in
-    /// `list` output, but its `download` 404s — either because the peer just
-    /// renewed and we caught the swap window, or because the listing was cached.
     private func injectListEntryWith404Download(client: InMemoryRemoteStorageClient, writerID: String) async {
         let path = RepoLayout.livenessFilePath(base: basePath, writerID: writerID)
         await client.injectFile(path: path, data: Data([0x01]))

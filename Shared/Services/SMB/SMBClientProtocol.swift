@@ -142,14 +142,9 @@ protocol RemoteStorageClientProtocol: Sendable {
     var moveIfAbsentGuarantee: CreateGuarantee { get }
     func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool
     var dataPathOverwriteRisk: DataPathOverwriteRisk { get }
-    /// `client.upload(localURL:remotePath:)` to an existing path is safe to use as
-    /// a liveness heartbeat renewal — the destination ends up with fresh bytes or
-    /// keeps the old, never with no file. Pairs with `supportsLivenessSafeOverwriteMove`;
-    /// derived `supportsLivenessSafeRenewal` is the OR of the two.
+    /// Existing-path upload is safe for heartbeat renewal only when peers never observe a missing file.
     var supportsLivenessSafeOverwriteUpload: Bool { get }
-    /// `client.move` to an existing destination atomically replaces it — peer never
-    /// observes the path as missing. Pairs with `supportsLivenessSafeOverwriteUpload`;
-    /// derived `supportsLivenessSafeRenewal` is the OR of the two.
+    /// Existing-destination move is safe for heartbeat renewal only when peers never observe a missing file.
     var supportsLivenessSafeOverwriteMove: Bool { get }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { get }
     var concurrencyMode: ClientConcurrencyMode { get }

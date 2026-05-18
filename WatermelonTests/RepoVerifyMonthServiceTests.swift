@@ -2,10 +2,6 @@ import CryptoKit
 import XCTest
 @testable import Watermelon
 
-/// `RepoVerifyMonthService` is the post-backup integrity sweep producing the 5
-/// `VerifyMonthReportKind` categories. Tests pin the diagnosis logic plus the
-/// multi-path OR-check (a hash counts as "present" if ANY of its known physical
-/// paths exists on remote).
 final class RepoVerifyMonthServiceTests: XCTestCase {
     private let basePath = "/repo"
     private let repoID = "repo-test-id"
@@ -14,9 +10,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
     private let runID = "run-001"
     private let month = LibraryMonthKey(year: 2026, month: 1)
 
-    /// Verify and the manifest's incomplete check must use the SAME metadata-only set.
-    /// Otherwise the same asset can be "complete" per backup but "cleanup candidate"
-    /// per verify → verify wrongly tombstones a healthy asset.
     func testMetadataOnlyRolesAreSharedAcrossBackupAndVerify() {
         // Both must reference ResourceTypeCode.metadataOnlyRoles (the canonical set).
         let canonical = ResourceTypeCode.metadataOnlyRoles
@@ -68,8 +61,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         XCTAssertTrue(item.allowsCleanup, "all-resources-gone is cleanup-eligible")
     }
 
-    /// Asset has only an adjustmentData (role=7) resource left → metadata-only,
-    /// eligible for cleanup tombstone.
     func testMetadataOnlyLeft_flagsCleanupEligible() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -116,9 +107,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         XCTAssertEqual(report.items.first?.kind, .metadataOnlyLeft)
     }
 
-    /// Multi-writer collision-rename can publish the same content under different
-    /// physical paths. The OR-check across `pathsByHash[hash]` must keep the asset
-    /// healthy if ANY path exists; first-wins would falsely flag missing.
     func testMultiPathSameHash_anyPathPresent_isHealthy() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -141,9 +129,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
                       "multi-path OR check: alternate present → asset healthy, no items")
     }
 
-    /// stored fp ≠ recomputed-from-links is a tampering / partial-commit signal that
-    /// presence-only checks would miss. verify must surface it explicitly so health UI
-    /// and `applyTombstones` can decide what to do (currently report-only, not auto-cleanup).
     func testFingerprintMismatch_whenStoredFpDoesNotMatchRecomputed() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -165,8 +150,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
                        "fingerprintMismatch is report-only — auto-tombstoning could destroy a recoverable asset")
     }
 
-    /// Surface list errors — silently treating "list failed" as "directory empty"
-    /// would tombstone every asset on a network blip / 401 / permission error.
     func testListErrorPropagates_doesNotTombstoneEverything() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -186,9 +169,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         }
     }
 
-    /// Commit log stores `Photo.HEIC`, server case-folds the filename to `photo.heic`
-    /// on disk. Exact path compare would false-tombstone; the collisionKey predicate
-    /// (matching V2MonthSession / probeMonthForMissing) keeps it healthy.
     func testCaseFoldedFilename_doesNotTombstone() async throws {
         // InMemoryRemoteStorageClient declares case-sensitive; using the same leaf on disk and in the commit forces exact-name match.
         let client = InMemoryRemoteStorageClient()
@@ -208,9 +188,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
                       "exact-name match — case-sensitive lookup at stored leaf finds the file")
     }
 
-    // MARK: - applyTombstones (Step 3: file-truth re-verify)
 
-    /// Candidate stays missing → tombstone IS written.
     func testApplyTombstones_allResourcesGoneCandidate_writesTombstoneWhenStillMissing() async throws {
         let scaffold = try makeScaffold()
         defer { scaffold.cleanup() }
@@ -235,9 +213,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         XCTAssertTrue(monthState.deletedAssetFingerprints.contains(fp), "tombstone must be written when file truly gone")
     }
 
-    /// Candidate healed BETWEEN verify and apply → tombstone NOT written.
-    /// The fix: re-verify uses directory listing, not commit-log hash set, so a
-    /// late-arriving file resolves the candidate's `.allResourcesGone` to `.healthy`.
     func testApplyTombstones_healedBetweenVerifyAndApply_doesNotWriteTombstone() async throws {
         let scaffold = try makeScaffold()
         defer { scaffold.cleanup() }
@@ -270,8 +245,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         XCTAssertNotNil(monthState.assets[fp])
     }
 
-    /// Hash had multiple physical paths (multi-writer collision-rename). Both gone
-    /// at verify; one reappears before apply → asset healthy via OR-check, no tombstone.
     func testApplyTombstones_multiPathHeal_skipsTombstoneWhenAnyPathReappears() async throws {
         let scaffold = try makeScaffold()
         defer { scaffold.cleanup() }
@@ -305,7 +278,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
                        "OR-check across paths: pathB present is sufficient to keep asset healthy")
     }
 
-    // MARK: - V2 services scaffolding (mirrors V2FlushTests)
 
     private struct ApplyTombstonesScaffold {
         let client: InMemoryRemoteStorageClient

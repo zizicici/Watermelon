@@ -1,13 +1,6 @@
 import XCTest
 @testable import Watermelon
 
-/// Single source of truth for V2 wire input validation. Every rule guards a
-/// specific bug class that materialized in production review:
-/// - Truncated hash → fingerprint collisions
-/// - opSeq > Int.max → materializer trap (DoS)
-/// - `..` segment → restore reads outside basePath
-/// - Negative integers → corrupted aggregations
-/// - Fractional NSNumber → silent truncation, off-by-one ordering
 final class RepoWireValidatorTests: XCTestCase {
     func testValidateHash_acceptsExact32Bytes() throws {
         let hex = String(repeating: "ab", count: 32)
@@ -63,7 +56,6 @@ final class RepoWireValidatorTests: XCTestCase {
         XCTAssertEqual(v, Int.max)
     }
 
-    /// Direct `Int(UInt64.max)` traps. validator must throw, not crash.
     func testValidateUInt64InIntRange_rejectsAboveIntMax() {
         let above: UInt64 = UInt64(Int.max) &+ 1
         XCTAssertThrowsError(try RepoWireValidator.validateUInt64InIntRange(above, field: "opSeq")) { err in
@@ -83,9 +75,6 @@ final class RepoWireValidatorTests: XCTestCase {
         }
     }
 
-    /// `uint64Value` of fractional NSNumber silently truncates 1.9 → 1, so a
-    /// malformed snapshot could shrink covered ranges and force commits inside
-    /// the original range to be replayed.
     func testRequireInt64_rejectsFractionalNSNumber() {
         let n = NSNumber(value: 1.9)
         XCTAssertThrowsError(try RepoWireValidator.requireInt64(n, field: "clockMin")) { err in
@@ -121,10 +110,6 @@ final class RepoWireValidatorTests: XCTestCase {
         }
     }
 
-    /// __NSCFBoolean satisfies `as? Int`, `as? Int64`, `as? UInt64`, `as? NSNumber`,
-    /// so without an explicit guard a JSON `true`/`false` becomes a silent `1`/`0`
-    /// in numeric fields like `clock`, `seq`, `perWriterMaxSeq`. CFBoolean rejection
-    /// must happen before any numeric cast.
     func testRequireUInt64_rejectsJSONBooleanTrueAsOne() throws {
         let data = "{\"v\":true}".data(using: .utf8)!
         let parsed = try JSONSerialization.jsonObject(with: data) as! [String: Any]
@@ -166,8 +151,6 @@ final class RepoWireValidatorTests: XCTestCase {
         }
     }
 
-    /// Sanity: legitimate `Int8(1)` (objCType 'c') must still pass — the
-    /// discriminator must use CFBooleanGetTypeID, not raw objCType.
     func testRequireInt64_acceptsInt8One() throws {
         let n = NSNumber(value: Int8(1))
         let v = try RepoWireValidator.requireInt64(n, field: "v")

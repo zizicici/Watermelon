@@ -11,7 +11,6 @@ final class IdentityClaimStoreTests: XCTestCase {
     private let otherWriter = "22222222-2222-2222-2222-222222222222"
     private let thirdWriter = "33333333-3333-3333-3333-333333333333"
 
-    // MARK: - Election
 
     func testCanonicalElection_emptyIdentityDirectory_returnsNilNoCorrupt() async throws {
         let (client, store) = await makeStore()
@@ -175,7 +174,6 @@ final class IdentityClaimStoreTests: XCTestCase {
         XCTAssertTrue(result.ignoredSelfCorrupt, "soft signal still surfaces alongside a valid peer claim")
     }
 
-    // MARK: - Heal
 
     func testHeal_zeroByteWithEmptyDownload_deletes() async throws {
         let (client, store) = await makeStore()
@@ -218,7 +216,6 @@ final class IdentityClaimStoreTests: XCTestCase {
         // no throw, nothing to assert beyond absence of a file
     }
 
-    // MARK: - Write own claim
 
     func testWriteOwn_noPriorClaim_writesValidPayload() async throws {
         let (client, store) = await makeStore()
@@ -283,7 +280,6 @@ final class IdentityClaimStoreTests: XCTestCase {
         XCTAssertEqual(dict?["repo_id"] as? String, "repo-A")
     }
 
-    // MARK: - VerifyOwn behavior (driven through writeOwnClaim)
 
     func testWriteOwn_bestEffortMatchingReadback_succeeds() async throws {
         let (client, store) = await makeStore()
@@ -397,7 +393,6 @@ final class IdentityClaimStoreTests: XCTestCase {
         }
     }
 
-    // MARK: - Stabilize fresh election
 
     func testStabilize_noPeerLands_returnsInitial() async throws {
         let (_, store) = await makeStore()
@@ -434,7 +429,6 @@ final class IdentityClaimStoreTests: XCTestCase {
         XCTAssertEqual(result, "peer-repo", "transient error mid-window must not abort")
     }
 
-    // MARK: - Helpers
 
     private func makeStore() async -> (InMemoryRemoteStorageClient, IdentityClaimStore) {
         let client = InMemoryRemoteStorageClient()

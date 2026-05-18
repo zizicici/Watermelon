@@ -1,16 +1,6 @@
 import XCTest
 @testable import Watermelon
 
-/// Bootstrap convergence tests. Two writers calling `ensureRepoJSON` must converge on
-/// the same canonical id rather than each silently keeping a local one (which would
-/// fork the repo by writing commits under different repoIDs that filter each other out).
-///
-/// In-memory client serializes through actor isolation, so true concurrency on a single
-/// fixture is impossible to reproduce deterministically — the convergence invariant
-/// only requires that whichever writer lost the race read back the winner's id, which
-/// is the sequential interleaving these tests cover. The trailing
-/// `testTrueConcurrentBootstrap_*` test launches a TaskGroup to at least exercise the
-/// awaiting path; deterministic outcome assertions are limited to "both agree".
 final class ConcurrentBootstrapRaceTests: XCTestCase {
     private let basePath = "/repo"
 
@@ -73,10 +63,6 @@ final class ConcurrentBootstrapRaceTests: XCTestCase {
         }
     }
 
-    /// Concurrent invocation through a TaskGroup. Actor isolation serializes the
-    /// in-memory client, so the two awaits still interleave deterministically — but
-    /// the test exercises the awaiting path and asserts the strong invariant: both
-    /// writers must agree on whichever id wins.
     func testTrueConcurrentBootstrap_bothWritersAgreeOnWinningID() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -92,9 +78,6 @@ final class ConcurrentBootstrapRaceTests: XCTestCase {
         XCTAssertTrue(a == "id-A" || a == "id-B", "winner must be one of the suggested ids")
     }
 
-    /// A later writer with an earlier wall-clock MUST NOT flip canonical.
-    /// "Identity is decided once" — new writers adopt the existing canonical,
-    /// they never re-elect with their own suggested repoID.
     func testLaterWriterEarlierClock_adoptsCanonicalNotFlips() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -113,8 +96,6 @@ final class ConcurrentBootstrapRaceTests: XCTestCase {
                        "B must adopt A's canonical; B's own repoID must be ignored")
     }
 
-    /// Writer-unique claims + lex-min canonical = no split-brain even on
-    /// `.overwritePossible` backends (SMB).
     func testBestEffortBackend_concurrentBootstrap_neverSplits() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

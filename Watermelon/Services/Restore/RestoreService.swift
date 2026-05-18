@@ -316,12 +316,7 @@ final class RestoreService {
         // additional paired video. Use (role, slot) to match the fingerprint contract.
         struct RoleSlotKey: Hashable { let role: Int; let slot: Int }
         var addedRoleSlots = Set<RoleSlotKey>()
-        // PHAssetCreationRequest.addResource consumes/owns the file URL it's handed.
-        // Two roles can share a contentHash (Live Photo where photo and fullSizePhoto
-        // happen to be byte-identical, or duplicate audio tracks); the per-hash download
-        // cache then hands the same URL to addResource twice, leaving the second add
-        // to race with whatever Photos did to the first one. Copy to a fresh tmp so each
-        // addResource call gets its own file.
+        // Copy shared temp files per role because PHAssetCreationRequest consumes each URL it receives.
         var seenURLs = Set<URL>()
 
         for entry in downloaded {

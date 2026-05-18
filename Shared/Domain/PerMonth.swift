@@ -1,18 +1,6 @@
 import Foundation
 
-/// Type-level guard against the flat-set bug class. The reviews surfaced this
-/// pattern three separate times: `[LibraryMonthKey: Set<Data>]` looks innocuous,
-/// but every time we wrote `byMonth[m]?.subtract(...)` on a missing month the
-/// optional-chain silently swallowed the operation, and every time we wrote
-/// `Set<Data>` flat we lost the per-month consistency boundary entirely.
-///
-/// `PerMonth<Value>` requires explicit per-month operations and forces flatten
-/// to be a documented decision rather than the default code-shape.
-///
-/// Asymmetry: subscript-set / `set(_:for:)` preserve empty values, while
-/// `subtract(_:from:)` / `remove(_:)` prune the key on empty. Consumers that
-/// distinguish "month known with no fingerprints" from "month absent" must use
-/// `contains(_:)` or check the subscript explicitly, not infer from emptiness.
+/// Prevents missing-month optional chaining from silently dropping per-month set mutations.
 struct PerMonth<Value: Sendable & Equatable>: Sendable, Equatable {
     private var byMonth: [LibraryMonthKey: Value]
 
@@ -64,35 +52,25 @@ struct PerMonth<Value: Sendable & Equatable>: Sendable, Equatable {
         byMonth[month] != nil
     }
 
-    /// Flatten to a single Set/Dictionary across all months. ONLY use when the
-    /// operation is genuinely month-agnostic (e.g. cross-month deduplication
-    /// logging) — flatten loses month-as-consistency-unit, which is exactly the
-    /// bug class this type was built to prevent. Document the reason at the
-    /// callsite.
+    /// Flatten only for month-agnostic work; it discards the month consistency boundary.
     func flattened<U>(combining: ([(LibraryMonthKey, Value)]) -> U) -> U {
         combining(byMonth.map { ($0.key, $0.value) })
     }
 
-    /// Underlying dictionary view. Avoid in production code; prefer subscript
-    /// + months. Provided for transitional API compat with consumers that still
-    /// expect `[LibraryMonthKey: Value]`.
+    /// Transitional escape hatch; production code should keep month operations explicit.
     var asDictionary: [LibraryMonthKey: Value] { byMonth }
 }
 
 extension PerMonth where Value == Set<Data> {
-    /// Insert into the per-month set, creating the entry if missing.
     mutating func insert(_ fingerprint: Data, for month: LibraryMonthKey) {
         byMonth[month, default: []].insert(fingerprint)
     }
 
-    /// Union into the per-month set, creating the entry if missing.
     mutating func formUnion(_ fingerprints: Set<Data>, for month: LibraryMonthKey) {
         guard !fingerprints.isEmpty else { return }
         byMonth[month, default: []].formUnion(fingerprints)
     }
 
-    /// Subtract from the per-month set; no-op when the month isn't tracked.
-    /// Prunes the entry on empty (struct-level asymmetry doc explains).
     mutating func subtract(_ fingerprints: Set<Data>, from month: LibraryMonthKey) {
         guard byMonth[month] != nil else { return }
         byMonth[month]?.subtract(fingerprints)
@@ -101,7 +79,6 @@ extension PerMonth where Value == Set<Data> {
         }
     }
 
-    /// Convenience: does this month's set contain the fingerprint?
     func contains(_ fingerprint: Data, in month: LibraryMonthKey) -> Bool {
         byMonth[month]?.contains(fingerprint) ?? false
     }

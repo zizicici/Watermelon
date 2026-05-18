@@ -95,7 +95,6 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         XCTAssertEqual(entries.count, 1, "non-staging snapshot files must survive sweep regardless of age")
     }
 
-    // MARK: - standardSweepDirectories parser pairing
 
     /// Each `SweepDirectory` carries a writer-extractor matched to that dir's filename
     /// shape. If a future refactor desyncs a parser from its directory (e.g. swaps
@@ -216,7 +215,6 @@ final class OrphanMetadataCleanupTests: XCTestCase {
                        "with no active writers, every old peer staging across all parser-backed dirs must sweep")
     }
 
-    // MARK: - sweepOwnLivenessStagings
 
     /// Own writerID is unconditionally inserted into `activeWriters` for the general
     /// sweep, so own-writer liveness stagings from prior-crash ticks are immortal

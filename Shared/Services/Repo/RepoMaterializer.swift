@@ -55,30 +55,13 @@ actor RepoMaterializer {
             let runIDPrefix: String
         }
         var snapshotsByMonth: [LibraryMonthKey: [SnapshotCandidate]] = [:]
-        // Months where ANY snapshot filename was rejected at the outer
-        // unworkable-lamport guard. If no other candidate gets accepted
-        // for these months, mark them for rebaseline so the next flush
-        // writes a fresh safe-lamport baseline rather than letting the
-        // unworkable file linger forever and force a full commit-log
-        // replay every session.
+        // Rebaseline months whose rejected snapshots would otherwise force replay every session.
         var filenameRejectedMonths: Set<LibraryMonthKey> = []
         for filename in snapshots {
             guard let parsed = RepoLayout.parseSnapshotFilename(filename) else { continue }
             if let filterMonth, parsed.month != filterMonth { continue }
             guard parsed.lamport < LamportClock.maxAdoptableValue else {
-                // A peer/corrupt snapshot whose filename lamport is at/above the
-                // safe-adoption ceiling cannot come from a legitimate writer
-                // (clock would have run out of headroom decades before reaching
-                // it) and would either dead-end our clock via observe or win
-                // baseline selection by pretending to be newest. `<
-                // maxAdoptableValue` keeps headroom for at least one tick
-                // after observe — without it a peer's snapshot at
-                // `maxObservableValue - 1` was accepted, observed, and the
-                // next `tickRange(1)` threw `advanceExhausted` with no path
-                // to recover short of manually removing the file. The month
-                // is tracked below so a fresh baseline gets emitted on the
-                // next flush, otherwise replay would keep re-skipping the
-                // same file every session.
+                // Reject boundary snapshot clocks so observe cannot consume the last local tick.
                 materializerLog.warning("skip snapshot with unworkable lamport in filename: \(filename, privacy: .public)")
                 filenameRejectedMonths.insert(parsed.month)
                 continue
@@ -139,16 +122,7 @@ actor RepoMaterializer {
                                     continue
                                 }
                             }
-                            // Row-stamp quarantine: a syntactically valid snapshot with a
-                            // safe-looking filename lamport can still smuggle a poisoned
-                            // OpStamp.clock into baseline state via asset/resource/
-                            // deletedKey rows. Once baked into `baselineStamps` /
-                            // `state.deletedAssetStamps`, an above-ceiling stamp would
-                            // dominate every legitimate replay through `opStampPrecedes`,
-                            // suppressing valid add/tombstone ops. A stamp.clock above
-                            // the candidate's own filename lamport is the same class of
-                            // violation: legit writers tick the filename at-or-after
-                            // every covered op's clock.
+                            // Quarantine row stamps too; a safe snapshot filename can still carry poisoned body clocks.
                             if Self.snapshotHasUnworkableRowStamp(file, filenameLamport: candidate.lamport) {
                                 materializerLog.warning("skip snapshot with poisoned row stamp: \(candidate.filename, privacy: .public)")
                                 continue
@@ -331,14 +305,7 @@ actor RepoMaterializer {
             monthCovered.add(writerID: header.writerID, seq: header.seq)
             coveredByMonth[entry.month] = monthCovered
         }
-        // observedClock / observedSeq must include snapshot lamports + covered-range
-        // highs; commits living entirely under a baseline aren't iterated above.
-        // Use the lamports of snapshots that PASSED quarantine — a corrupt /
-        // foreign / row-stamp-rejected candidate at a safe-looking filename
-        // lamport was excluded from materialised state, so trusting its
-        // filename here would persist headroom we haven't earned (a peer
-        // planting a `maxObservableValue - 1` filename with a corrupt body
-        // would otherwise exhaust the next tickRange).
+        // Include covered snapshot highs because commits under a baseline are not replayed here.
         for (_, lamport) in acceptedSnapshotLamportByMonth {
             observedClock = max(observedClock, lamport)
         }
@@ -482,12 +449,7 @@ actor RepoMaterializer {
         return String(components[0]) == expectedYear && String(components[1]) == expectedMonth
     }
 
-    /// True if any asset/resource/deletedKey row stamp would either consume the
-    /// last tick of clock headroom (`clock >= ceiling`) or violate the legitimate
-    /// snapshot invariant that the filename lamport tracks the maximum covered op
-    /// clock (`clock > filenameLamport`). Either way the snapshot must not become
-    /// the baseline; replay over a poisoned baseline stamp would silently suppress
-    /// later legitimate ops via LWW comparison.
+    /// Rejects stamps that could poison the LWW baseline or outrun the snapshot filename clock.
     private static func snapshotHasUnworkableRowStamp(_ file: SnapshotFile, filenameLamport: UInt64) -> Bool {
         for asset in file.assets {
             if let stamp = asset.stamp, Self.isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) {

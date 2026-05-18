@@ -1,19 +1,6 @@
 import Foundation
 @testable import Watermelon
 
-/// Single in-memory entry point for V2 repo test state. Every write goes through
-/// the real production writers (`CommitLogWriter`, `SnapshotWriter`) so the
-/// in-memory state mirrors what a real backup run would produce. This is the
-/// only sanctioned way for tests to construct repo state — direct mutation of
-/// `RemoteLibrarySnapshotCache` or `RepoCommittedView` is reserved for
-/// production code paths.
-///
-/// The contract this enforces:
-/// - Wire-format encoding/decoding gets exercised on every test setup, so a
-///   new `RepoWireValidator` rule that breaks the encoder is caught here, not
-///   silently bypassed by tests.
-/// - Cache state shape always reflects what `materialize` produces, so tests
-///   can't assert against artificial states that are unreachable in production.
 @MainActor
 struct RepoTestBuilder {
     let client: InMemoryRemoteStorageClient
@@ -22,7 +9,6 @@ struct RepoTestBuilder {
     let writerID: String
     let runID: String
 
-    /// Bootstrap a fresh V2 repo with default IDs and an empty commit log.
     static func freshRepo(
         basePath: String = "/repo",
         repoID: String = "repo-test-uuid",
@@ -48,7 +34,6 @@ struct RepoTestBuilder {
         )
     }
 
-    /// Write an addAsset commit through the real `CommitLogWriter`.
     @discardableResult
     func addAsset(
         month: LibraryMonthKey,
@@ -101,7 +86,6 @@ struct RepoTestBuilder {
         return self
     }
 
-    /// Write a tombstone commit through the real `CommitLogWriter`.
     @discardableResult
     func tombstoneAsset(
         month: LibraryMonthKey,
@@ -126,13 +110,11 @@ struct RepoTestBuilder {
         return self
     }
 
-    /// Run a real `RepoMaterializer.materialize()` — what production sees.
     func materialize() async throws -> RepoMaterializer.MaterializeOutput {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         return try await materializer.materialize(expectedRepoID: repoID)
     }
 
-    /// Run a real materialize for a single month.
     func materialize(month: LibraryMonthKey) async throws -> RepoMaterializer.MaterializeOutput {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         return try await materializer.materializeMonth(month, expectedRepoID: repoID)

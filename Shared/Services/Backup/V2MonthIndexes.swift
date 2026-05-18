@@ -1,15 +1,9 @@
 import Foundation
 
-/// In-memory month state cache for `V2MonthSession`. Owns the materialized
-/// projection of repo state plus pending op tracking; presence gating is the
-/// only filter — nothing is dropped from the snapshot-emit path.
-///
-/// Single-writer (the backup worker's serial queue per month) — no internal locking.
 final class V2MonthIndexes {
     let year: Int
     let month: Int
 
-    // Materialized state — keyed by physicalRemotePath so multi-path same-hash is natural.
     private var resourcesByPath: [String: RemoteManifestResource]
     private var assetsByFingerprint: [Data: RemoteManifestAsset]
     private var linksByFingerprint: [Data: [RemoteAssetResourceLink]]
@@ -19,11 +13,9 @@ final class V2MonthIndexes {
     private var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
     private var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
     private var collisionKeysCache: Set<String>?
-    /// Per-path presence; missing/inconclusive paths are excluded from find ops, hash-missing
-    /// is derived on demand for cache-wide consumers (Home / download / health / resume).
+    /// Missing/inconclusive paths are excluded from find ops, not snapshot emission.
     private var presenceMap: RemoteMonthPresenceMap
 
-    // Existing remote files from start-of-month directory listing (collision rename input).
     private var remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata]
     private var existingFileNameSet: Set<String>
 
@@ -32,15 +24,9 @@ final class V2MonthIndexes {
     private(set) var deletedAssetStamps: [Data: OpStamp]
     private(set) var legacyDeletedAssetFingerprints: Set<Data>
 
-    /// Resource rows projected from committed `addAsset` bodies, keyed by path.
-    /// Seeded unconditionally from `materializedState.resources` (which is itself
-    /// `fold(commits in covered)`) and updated by `recordCommit`. Snapshot emit
-    /// reads directly from here — never from the live `resourcesByPath` — so an
-    /// in-session `upsertResource` overwriting a committed path with a different
-    /// hash cannot leak the replacement bytes into the snapshot baseline.
+    /// Snapshot emission reads committed rows so live same-path overwrites cannot enter the covered baseline.
     private var committedResourceByPath: [String: SnapshotResourceRow]
 
-    // Pending V2 ops since last flush.
     private(set) var pendingV2AssetFingerprints: Set<Data> = []
     private(set) var pendingV2TombstoneFingerprints: Set<Data> = []
 
@@ -88,9 +74,7 @@ final class V2MonthIndexes {
                     presence = .listedSizeMatched
                 }
             } else if listedSizeMatches {
-                // Listing already confirmed name + size — same trust level as the overlay
-                // grants any resource it can't SHA-verify. Treating it as `.inconclusive` here
-                // breaks dedup and re-uploads everything when no overlay probe has run.
+                // Treat listed size matches as usable or no-probe startup re-uploads every resource.
                 presence = .listedSizeMatched
             } else {
                 presence = .missing
@@ -151,15 +135,9 @@ final class V2MonthIndexes {
         self.deletedAssetStamps = materializedState.deletedAssetStamps
         self.legacyDeletedAssetFingerprints = materializedState.deletedAssetFingerprints
             .subtracting(materializedState.deletedAssetStamps.keys)
-        // Faithful seed: every row from `materializedState.resources` is in
-        // `fold(commits in covered)` already, so preserving them on the next
-        // snapshot emit keeps `state == fold(covered)`. Tombstoned-asset orphan
-        // rows are part of fold(covered) (RepoMaterializer keeps them) and must
-        // survive forward.
+        // Seed committed rows faithfully so post-tombstone orphan resources survive covered snapshots.
         self.committedResourceByPath = materializedState.resources
     }
-
-    // MARK: - Read
 
     func containsAssetFingerprint(_ fingerprint: Data) -> Bool {
         assetsByFingerprint[fingerprint] != nil
@@ -235,13 +213,9 @@ final class V2MonthIndexes {
         presenceMap.fullyMissingHashes(pathsByHash: pathsByHash)
     }
 
-    // MARK: - Write
-
     @discardableResult
     func upsertResource(_ resource: RemoteManifestResource) throws -> RemoteManifestResource {
-        // If the same path is being repurposed to a different content hash, drop the
-        // stale (oldHash → path) entry first; otherwise findResourceByHash(oldHash)
-        // would still return this slot and serve up the new content under the wrong key.
+        // Drop the old hash mapping before repurposing a path, or lookups can return wrong bytes.
         if let existing = resourcesByPath[resource.physicalRemotePath],
            existing.contentHash != resource.contentHash {
             let oldHash = existing.contentHash
@@ -295,10 +269,7 @@ final class V2MonthIndexes {
         links: [RemoteAssetResourceLink],
         replacingSubsetFingerprints: Set<Data>
     ) throws {
-        // Validate every link's resourceHash has a matching resource on file
-        // AND its physical file is present — otherwise flush would emit a commit
-        // body with empty resources[] and the snapshot covering that seq would
-        // break `state == fold(covered)`.
+        // Reject links without present resources or flush would emit an asset body missing its resources.
         for link in links {
             guard anyPresentPath(forHash: link.resourceHash) != nil else {
                 throw NSError(
@@ -336,7 +307,6 @@ final class V2MonthIndexes {
         }
     }
 
-    // MARK: - Flush coordination
 
     /// Look up a resource by hash for commit-op construction. Throws if the resource has
     /// been lost between upsert and flush — dropping a link would emit a commit body with
@@ -369,16 +339,7 @@ final class V2MonthIndexes {
         linksByFingerprint[fp]
     }
 
-    /// Stamps committed rows so the snapshot baseline matches what a future replay would derive
-    /// (LWW gate). Clears pending sets — commit is durable, so a snapshot failure must not re-emit
-    /// the same ops in the next flush. `committedResources` carries the full snapshot row for
-    /// every path embedded in an `addAsset` body so the baseline survives a later same-path
-    /// `upsertResource` overwrite. Rows must be built by the flusher with the same field
-    /// projection RepoMaterializer uses on replay (asset body's creationDateMs/backedUpAtMs,
-    /// resource entry's physicalRemotePath/contentHash/fileSize/resourceType/crypto).
-    /// `committedResourceClocks` maps each committed path to the clock of the producing
-    /// addAsset op; this method stamps each row with `OpStamp(writerID, seq, clock)` so the
-    /// path-level LWW gate in `RepoMaterializer` can skip a stale cross-writer overwrite.
+    /// Stamps committed rows so snapshot baselines match replay and stale path overwrites lose LWW.
     func recordCommit(
         assetClocks: [Data: UInt64],
         tombstoneClocks: [Data: UInt64],
@@ -421,9 +382,7 @@ final class V2MonthIndexes {
         pendingV2TombstoneFingerprints.removeAll()
     }
 
-    /// Project our in-memory bookkeeping back into a `RepoMonthState` shape — the
-    /// fold-of-covered-commits truth that `RepoSnapshotBuilder` requires. No
-    /// listing-based filtering (that lives in the session-view layer).
+    /// Snapshot state must remain unfiltered so covered ranges equal replayed commits.
     func currentMaterializedState() -> RepoMonthState {
         var state = RepoMonthState.empty
         for (fp, asset) in assetsByFingerprint {
@@ -436,11 +395,7 @@ final class V2MonthIndexes {
                 stamp: asset.stamp
             )
         }
-        // Snapshot resources are read from the committed map directly, NOT from
-        // `resourcesByPath` — the live indexes may have been overwritten by an
-        // in-session `upsertResource` for a path that was previously committed at
-        // a different hash; using the committed row keeps the snapshot baseline
-        // equal to `fold(commits in covered)`.
+        // Use committed rows, not live resources, to keep snapshots equal to fold(commits in covered).
         for (path, row) in committedResourceByPath {
             state.resources[path] = row
         }

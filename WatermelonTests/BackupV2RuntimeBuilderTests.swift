@@ -1,10 +1,6 @@
 import XCTest
 @testable import Watermelon
 
-/// `BackupV2RuntimeBuilder.build` is the single entry point routing the 4 remote
-/// formats (.fresh / .v1 / .v2 / .unsupported) and ensuring repo identity is
-/// canonical before any commits land. Tests pin the routing so regressions can't
-/// silently bypass identity-mismatch detection or migration gates.
 final class BackupV2RuntimeBuilderTests: XCTestCase {
     private let basePath = "/repo"
     private var tempDBURL: URL!
@@ -52,12 +48,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         XCTAssertTrue(versionExists)
         await services.shutdown()
     }
-
-    // The old "V1 after migrationCompleted → throws repoFormatRegression" path was
-    // removed: lingering V1 manifests now trigger idempotent phase1+2+3 re-migration
-    // instead, because the same condition is hit by an older V1-only peer writing
-    // into a V2 repo. End-to-end coverage of the re-migration path lives in
-    // V1MigrationServiceTests (phase1 idempotency, phase3 scoped to its scan).
 
     func testV1Repo_allowMigrationFalse_throwsRequiresForegroundMigration() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -131,9 +121,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         await services.shutdown()
     }
 
-    /// User re-pointed the profile at a different remote; local DB still has the
-    /// old repo's id. Builder must throw rather than write commits under our local
-    /// id (foreign to remote).
     func testV2Repo_localIDDiffersFromRemote_throwsIdentityMismatch() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -161,11 +148,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
-    /// `.v2WithV1Manifests` arm: a V2-shaped repo with V1 manifest residue and a
-    /// malformed `.watermelon/repo.json` must surface as `damagedV2Repo` — same
-    /// actionable diagnosis as the `.v2` arm. Locks in the joint-case catch at
-    /// BackupV2RuntimeBuilder.swift:164-169 so a future refactor that drops the
-    /// catch (or narrows the joint case) is caught by tests.
     func testV2WithV1Manifests_corruptRepoJSON_throwsDamagedV2Repo() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
@@ -195,13 +177,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
-    /// `.fresh` arm: marker directory present, no version.json, no V1/V2 data,
-    /// but `.watermelon/repo.json` is malformed. Inspect classifies `.fresh`
-    /// (absent version.json + no V1/V2 data); `initializeFreshRepo →
-    /// ensureRepoJSON → loadRepoJSONStrict` then throws
-    /// `BootstrapError.ioFailure`. Pins parity with the `.v2` and
-    /// `.v2WithV1Manifests` arms so a future refactor that drops the catch is
-    /// caught by tests.
     func testFreshArm_corruptRepoJSON_throwsDamagedV2Repo() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
@@ -231,8 +206,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
-    /// V2 path runs ensureRepoJSON to repair a half-bootstrap state where
-    /// version.json exists but repo.json was lost.
     func testV2Repo_halfBootstrap_repoMissing_isHealedByEnsureRepoJSON() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
@@ -271,13 +244,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         await secondRun.shutdown()
     }
 
-    /// `.v2WithPendingMigrationCleanup` arm: V2-shaped repo with a stale migration
-    /// marker AND a malformed `.watermelon/repo.json`. RepoIdentitySources.collect
-    /// → bootstrap.loadRepoID → loadRepoJSONStrict throws `BootstrapError.ioFailure`.
-    /// The arm's catch must remap to `damagedV2Repo` so the user sees the actionable
-    /// compatibility diagnosis instead of the raw enum render. Pins parity with the
-    /// `.v2` / `.v2WithV1Manifests` / `.fresh` arms whose mappings already have
-    /// direct tests.
     func testV2WithPendingMigrationCleanup_corruptRepoJSON_throwsDamagedV2Repo() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
@@ -341,12 +307,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
-    /// Inspect-side malformed `version.json` (marker dir present) throws
-    /// `BackupCompatibilityError.damagedV2Repo` from `inspectRemoteFormat`
-    /// directly. The builder's wrap at `BackupV2RuntimeBuilder.swift:32-40`
-    /// must remap to `BackupV2RuntimeBuildError.damagedV2Repo` so caller
-    /// catch-arms (BackupRunPreparation / BackgroundBackupRunner) route
-    /// through their typed-error handlers instead of the generic catch.
     func testInspectSide_corruptVersionJSON_throwsDamagedV2Repo() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
@@ -374,11 +334,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
-    /// Regression: SeqAllocator must observe our writer's remote max only.
-    /// Pre-fix, builder took `observedSeqByWriter.values.max()`, which would
-    /// bump our local seq to a peer's high-water mark — wasting seq density
-    /// and producing non-contiguous commit filenames for our writer (the
-    /// `(writerID, seq)` path is per-writer, never shared).
     func testBuild_doesNotBumpAllocatorToForeignWriterSeq() async throws {
         let canonicalRepoID = "shared-repo-id"
         let foreignWriterID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
@@ -432,10 +387,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         await services.shutdown()
     }
 
-    /// The targeted self-sweep must run independent of `supportsLivenessSafeRenewal`.
-    /// On SMB/SFTP (renewal-unsafe) the general sweep is correctly skipped, but
-    /// liveness.start() still produces staging files on every non-local-volume backend,
-    /// so own crash residue would accumulate forever if the self-sweep were also gated.
     func testSelfLivenessSweep_runsEvenWhenRenewalUnsafe() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
@@ -473,12 +424,6 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
                        "self-sweep must reclaim aged own liveness staging even on renewal-unsafe backends (SMB/SFTP) — otherwise own crash residue is immortal")
     }
 
-    /// A pre-fix install can have `repo_state.lastClock == Int64.max` (the
-    /// exact-ceiling poison case where the legacy `lastClock < ?` predicate
-    /// couldn't repair the row). The builder must heal the row before handing
-    /// the runtime back: `PersistedLamportClock.init` resets the mirror, and
-    /// the unconditional `observe` + `repairPoisonedDBIfNeeded` calls in the
-    /// builder then push the sanitized value to disk.
     func testBuild_repairsPoisonedRepoStateRow() async throws {
         let canonicalRepoID = "poison-repair-repo"
         let client = InMemoryRemoteStorageClient()

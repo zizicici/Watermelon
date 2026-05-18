@@ -1,14 +1,6 @@
 import XCTest
 @testable import Watermelon
 
-/// Commit publication contract regardless of backend shape.
-/// - `.overwritePossible` (SMB exists+upload): writer must stage via the gate and
-///   surface same-`(writer, seq)` collisions as `.alreadyExists` instead of
-///   silently overwriting peer bytes.
-/// - `.exclusive` (S3 If-None-Match / POSIX O_EXCL): writer must SHA-verify a
-///   `.alreadyExists` outcome so an S3 single-part PUT phantom (bytes landed,
-///   response lost) is absorbed as success while mismatched peer bytes still
-///   surface as `.alreadyExists` for seq re-allocation.
 final class CommitLogWriterBestEffortTests: XCTestCase {
     private let basePath = "/repo"
     private let month = LibraryMonthKey(year: 2026, month: 1)
@@ -73,8 +65,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         XCTAssertEqual(afterWrite[path], peerBytes)
     }
 
-    /// Build a self-consistent commit jsonl outside of `CommitLogWriter.write` so we
-    /// can stage it as a "peer's bytes". Mirrors the writer's encoding.
     private static func encodeCommit(header: CommitHeader, ops: [CommitOp]) throws -> Data {
         var integrity = IntegrityAccumulator()
         var lines: [String] = []
@@ -92,16 +82,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         return Data((lines.joined(separator: "\n") + "\n").utf8)
     }
 
-    /// Guards against regression to a direct `client.atomicCreate(remotePath:)` publish.
-    /// On `.overwritePossible` backends (AMSMB2 `uploadItem(toPath:)`), `exists+upload`
-    /// TOCTOU would silently replace a peer's commit bytes with ours, and the writer's
-    /// self-SHA verify would report success because the remote bytes (ours) match our
-    /// local SHA — peer's seq lost from the commit log.
-    ///
-    /// With the fix, the writer routes overwrite-prone backends through
-    /// `MetadataCreateGate.createWithStagingFallback(.requireExclusiveMove)` so a
-    /// same-`(writer, seq)` collision surfaces as `.alreadyExists` and the flusher
-    /// re-allocates seq. Peer commit bytes at the final path must survive.
     func testOverwritePossibleBackend_silentlyOverwritingPeerCommit_surfacesAsAlreadyExists() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -142,11 +122,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
                        "peer commit bytes must survive — losing them silently drops backed-up ops from the commit log")
     }
 
-    /// Direct-shape coverage: if a future regression routes commit publish back through
-    /// `client.atomicCreate(remotePath:)` on an overwrite-prone backend, peer bytes get
-    /// silently replaced. This test arms the in-memory client's overwrite hook on the
-    /// final commit path and asserts the hook never fires — `CommitLogWriter.write` must
-    /// stage to a UUID side path, not write the final path directly.
     func testOverwritePossibleBackend_writerMustNotAtomicCreateAtFinalPath() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -171,11 +146,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
                       "writer must not invoke atomicCreate on the final commit path; staging hook should remain unfired")
     }
 
-    /// `.exclusive` backend (S3 If-None-Match): when prior bytes at the final path
-    /// match the bytes we're trying to write — e.g. S3 single-part PUT phantom where
-    /// the upload landed but the response was lost and the retry hits 412 — the
-    /// writer must absorb `.alreadyExists` rather than allocate a new seq + write a
-    /// duplicate commit row that LWW will reconcile to the same state.
     func testExclusiveBackend_alreadyExistsWithMatchingBytes_succeeds() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -202,10 +172,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         XCTAssertEqual(afterWrite[path], ourBytes)
     }
 
-    /// `.exclusive` backend, mismatched remote bytes (peer wrote a different commit
-    /// at the same `(writer, seq)` slot): writer must still throw `.alreadyExists`
-    /// so the flusher re-allocates seq. Pins that the matching-bytes shortcut does
-    /// not weaken the foreign-bytes guard.
     func testExclusiveBackend_alreadyExistsWithMismatchedBytes_throwsAlreadyExists() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -241,11 +207,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         XCTAssertEqual(afterWrite[path], peerBytes)
     }
 
-    /// `.exclusive` backend, `.alreadyExists` outcome, and `download` during the
-    /// SHA self-verify is cancelled (user stop / task cancel): the writer must
-    /// surface `CancellationError`, not wrap it as `WriteError.ioFailure`. Callers
-    /// up the stack treat cancellation specially (pause vs. abort) — wrapping it
-    /// makes the run look like a transport failure and produces the wrong UI.
     func testExclusiveBackend_alreadyExistsThenDownloadCancelled_propagatesCancellation() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -273,10 +234,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         }
     }
 
-    /// S3 / URLSession-backed clients surface task cancellation as
-    /// `NSURLErrorCancelled`, not literal `CancellationError`. `verifyCommitOnRemote`
-    /// must normalize that so user stop/cancellation is distinguishable from
-    /// `WriteError.ioFailure` up-stack (pause vs. abort UI).
     func testExclusiveBackend_alreadyExistsThenDownloadURLErrorCancelled_propagatesCancellation() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -304,11 +261,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         }
     }
 
-    /// `.exclusive` backend, cancellation during the primary `atomicCreate` call
-    /// itself (not during the SHA verify after `.alreadyExists`). S3 URLSession
-    /// surfaces task cancellation as raw `NSURLErrorCancelled`; without
-    /// normalization the writer would wrap it as `.ioFailure` and
-    /// `BackupParallelExecutor` would treat a user stop as a transport failure.
     func testExclusiveBackend_atomicCreateURLErrorCancelled_propagatesCancellation() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -334,11 +286,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         }
     }
 
-    /// Pins `CommitLogWriter.isCancellationError`'s recursion arm:
-    /// `RemoteStorageClientError.underlying(NSURLErrorCancelled)` must still
-    /// normalize to `CancellationError`. Models a future adapter that wraps
-    /// URLSession errors in `.underlying` — without the recursion arm the
-    /// cancellation would silently demote to `WriteError.ioFailure`.
     func testExclusiveBackend_alreadyExistsThenDownloadWrappedURLCancellation_propagatesCancellation() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -366,11 +313,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         }
     }
 
-    /// `.exclusive` + `.alreadyExists` + transient transport error on the SHA
-    /// verify download must collapse back to `.alreadyExists` so the flusher
-    /// re-allocates seq and retries. Before this fix, the verify download's
-    /// transient ioFailure aborted the flush and surfaced as a user-visible
-    /// failure — a regression compared to the pre-SHA-verify retry behaviour.
     func testExclusiveBackend_alreadyExistsThenVerifyTransientFailure_classifiesAsAlreadyExists() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -400,14 +342,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         }
     }
 
-    /// `.overwritePossible` backend (AMSMB2 production parity): user-stop fires
-    /// while the gate is running its staging-verify download. `URLSession` surfaces
-    /// task cancellation as `NSURLErrorCancelled`; without normalization inside
-    /// the gate's `verifyMatchesLocalWithRetries`, the retry loop swallows the
-    /// cancel-shape as `lastError`, hits the read-after-write deadline, then the
-    /// `MetadataCreateGate.Error.stagingVerificationFailed(underlying:)` wrap reaches
-    /// the writer as a generic gate error. The writer's `isMetadataGateCancellation`
-    /// is the second line of defence — this test pins both layers.
     func testOverwritePossibleBackend_gateStagingVerifyURLCancellation_propagatesCancellation() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -437,13 +371,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         }
     }
 
-    /// `.overwritePossible` backend + same-(writer, seq) collision: the gate's
-    /// `moveIfAbsent` returns `.alreadyExists`, and the gate's verify of the
-    /// occupied final path runs `client.download(remotePath:finalPath)`. If that
-    /// download fails with URLSession-shaped cancellation, the gate must surface
-    /// it as `CancellationError` rather than treating the verify as "inconclusive"
-    /// and returning `.alreadyExists` (which would silently demote a user stop to
-    /// a seq-collision retry up at the flusher).
     func testOverwritePossibleBackend_gateFinalVerifyURLCancellation_propagatesCancellation() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -481,11 +408,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         }
     }
 
-    /// Negative side of the gate-cancellation helper: a real
-    /// `MetadataCreateGate.Error.nonExclusiveFinalization` (the backend doesn't
-    /// support exclusive move and we required it) must NOT normalize to
-    /// `CancellationError` — it's a real configuration failure and should surface
-    /// as `WriteError.ioFailure` so the operator sees the actionable cause.
     func testOverwritePossibleBackend_nonExclusiveFinalization_surfacesAsIOFailure() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -510,12 +432,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         }
     }
 
-    /// `.exclusive` + `.alreadyExists` + PERMANENT (non-transient) failure on the
-    /// SHA-verify download (e.g. permission denied, AccessDenied, NoSuchKey).
-    /// Must surface as `WriteError.ioFailure` so the operator sees the actionable
-    /// cause — not get demoted to `.alreadyExists` (which the flusher would retry
-    /// up to 4 times and ultimately report as a seq collision rather than the
-    /// underlying permission/auth issue).
     func testExclusiveBackend_alreadyExistsThenVerifyPermanentFailure_surfacesAsIOFailure() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -544,10 +460,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         }
     }
 
-    /// Sibling positive case: a not-found during verify (the verify download says
-    /// the file isn't there, even though atomicCreate said `.alreadyExists`) is a
-    /// genuine anomaly — propagate as `.ioFailure` so the operator can investigate
-    /// instead of silently retrying with a fresh seq.
     func testExclusiveBackend_alreadyExistsThenVerifyNotFound_surfacesAsIOFailure() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -575,17 +487,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         }
     }
 
-    /// `.overwritePossible` backend, no peer at final path, gate's
-    /// post-success final-verify download fails TRANSIENTLY (the bytes ARE at the
-    /// destination — move succeeded — but readback was inconclusive). Gate must
-    /// surface `.bestEffortRetry`; writer's `.requireExclusiveMove` arm then runs
-    /// `verifyAfterAlreadyExists`, which collapses the same transient on its own
-    /// download into `WriteError.alreadyExists` so the flusher re-allocates seq.
-    /// Without the gate's transient classification at the outer post-success
-    /// verify, a recoverable transport hiccup would throw
-    /// `MetadataCreateGate.Error.finalVerificationFailed` → wrapped as
-    /// `WriteError.ioFailure`, turning a retryable backend blip into a fatal
-    /// finalization failure even though the bytes did land.
     func testOverwritePossibleBackend_outerFinalVerifyTransientFailure_demotesToBestEffortRetry() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -623,16 +524,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         XCTAssertNotNil(afterWrite[path], "moveIfAbsent succeeded — final path must contain bytes")
     }
 
-    /// `.overwritePossible` backend, no peer at the final path, gate's
-    /// post-success final-verify download fails PERMANENTLY (e.g. permission
-    /// denied / AccessDenied). The transient case is covered by
-    /// `testOverwritePossibleBackend_outerFinalVerifyTransientFailure_demotesToBestEffortRetry`;
-    /// the analogous-but-different `.alreadyExists` (peer-occupied) path's
-    /// permanent case is covered by
-    /// `testOverwritePossibleBackend_finalVerifyPermanentFailure_surfacesAsIOFailure`.
-    /// This pins the move-succeeded path's permanent branch (gate's
-    /// `.finalVerificationFailed` → writer's `.ioFailure`) so a regression that
-    /// widens the transient catch into a non-exhaustive default would surface.
     func testOverwritePossibleBackend_outerFinalVerifyPermanentFailure_surfacesAsIOFailure() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -681,13 +572,6 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         XCTAssertNotNil(afterWrite[path], "moveIfAbsent succeeded — final path must contain bytes")
     }
 
-    /// `.overwritePossible` backend + peer-occupied final path + PERMANENT failure
-    /// on the gate's post-move verify download (e.g. permission denied, AccessDenied,
-    /// NoSuchKey). Must surface as `WriteError.ioFailure` so the operator sees the
-    /// actionable cause; without classification the gate would swallow the permanent
-    /// error as "verify inconclusive" and return `.alreadyExists`, which the writer
-    /// would re-allocate seq for — burning retries before the next collision finally
-    /// hits the same wall and reports as a generic seq-exhaustion failure.
     func testOverwritePossibleBackend_finalVerifyPermanentFailure_surfacesAsIOFailure() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -725,21 +609,13 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         }
     }
 
-    // MARK: - isMetadataGateCancellation direct coverage
 
-    /// `MetadataCreateGate.Error.stagingVerificationFailed(underlying:
-    /// NSURLErrorCancelled)` must classify as cancellation so the writer surfaces it
-    /// as `CancellationError` rather than `WriteError.ioFailure`. Mirrors the
-    /// defense-in-depth path for any future regression that drops the gate's own
-    /// cancellation normalization.
     func testIsMetadataGateCancellation_stagingVerificationFailed_withURLErrorCancelled_isCancellation() {
         let underlying = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled, userInfo: nil)
         let gateError = MetadataCreateGate.Error.stagingVerificationFailed(remotePath: "/x", underlying: underlying)
         XCTAssertTrue(CommitLogWriter.isMetadataGateCancellation(gateError))
     }
 
-    /// Wrapped form: `RemoteStorageClientError.underlying(NSURLErrorCancelled)`
-    /// recurses through `isCancellationError` and must still classify as cancellation.
     func testIsMetadataGateCancellation_finalVerificationFailed_withWrappedURLCancellation_isCancellation() {
         let url = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled, userInfo: nil)
         let wrapped = RemoteStorageClientError.underlying(url)
@@ -747,35 +623,22 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         XCTAssertTrue(CommitLogWriter.isMetadataGateCancellation(gateError))
     }
 
-    /// `.nonExclusiveFinalization` is a real configuration failure — never a
-    /// cancellation. Pinning prevents a future widening of the helper that would
-    /// swallow this distinctive error.
     func testIsMetadataGateCancellation_nonExclusiveFinalization_isNotCancellation() {
         let gateError = MetadataCreateGate.Error.nonExclusiveFinalization(remotePath: "/x")
         XCTAssertFalse(CommitLogWriter.isMetadataGateCancellation(gateError))
     }
 
-    /// Non-cancellation underlying (permission denied) on a verification-failed
-    /// wrapper must NOT classify as cancellation; that would demote a real IO
-    /// failure to a user-stop signal.
     func testIsMetadataGateCancellation_stagingVerificationFailed_withPermissionDenied_isNotCancellation() {
         let underlying = NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError, userInfo: nil)
         let gateError = MetadataCreateGate.Error.stagingVerificationFailed(remotePath: "/x", underlying: underlying)
         XCTAssertFalse(CommitLogWriter.isMetadataGateCancellation(gateError))
     }
 
-    /// `nil` underlying (the gate threw because verify returned `false` cleanly, not
-    /// because it errored out) is not cancellation — the caller should treat it as a
-    /// content divergence, not a user stop.
     func testIsMetadataGateCancellation_finalVerificationFailed_nilUnderlying_isNotCancellation() {
         let gateError = MetadataCreateGate.Error.finalVerificationFailed(remotePath: "/x", underlying: nil)
         XCTAssertFalse(CommitLogWriter.isMetadataGateCancellation(gateError))
     }
 
-    /// Contract: verify-on-remote treats ANY mismatch as a race signal. Unparseable
-    /// remote bytes (truncated peer write, garbage at our seq slot) get the same
-    /// `.alreadyExists` classification as SHA mismatches — flush layer re-allocates
-    /// the seq and retries.
     func testBestEffortVerify_unparseableRemoteBytes_shouldClassifyAsAlreadyExists() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

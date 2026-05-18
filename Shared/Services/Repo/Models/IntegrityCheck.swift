@@ -1,8 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// Hash = `sha256(line1\nline2\n...\nlineN)` — NO trailing `\n`. Writers append a trailing
-/// `\n` for cleanliness; readers strip it before feeding `absorbLine`. Both sides must agree.
+/// Integrity excludes the file's trailing newline so reader and writer hashes match.
 struct IntegrityAccumulator {
     private var hasher = SHA256()
     private(set) var rowCount: Int = 0

@@ -1,12 +1,7 @@
 import Foundation
 import Citadel
 
-/// Cross-backend "path doesn't exist" detection. Each storage backend wraps
-/// not-found differently — Cocoa NSError for in-memory/local, HTTP 404 via
-/// `WebDAVClient.errorDomain` for WebDAV, Windows NTSTATUS strings via
-/// SMBErrorClassifier for SMB, SSH `noSuchFile` via Citadel's `SFTPError` for
-/// SFTP. Inspect / bootstrap / liveness paths must distinguish "absent" from
-/// "transport failure" without per-backend conditionals at every call site.
+/// Keeps inspect/bootstrap/liveness paths from treating transport failures as absence.
 func isStorageNotFoundError(_ error: Error) -> Bool {
     let nsError = error as NSError
     if nsError.domain == NSCocoaErrorDomain

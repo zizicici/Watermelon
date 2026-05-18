@@ -1,6 +1,6 @@
 import Foundation
 
-/// Single source of truth across verify / download / Home album matching / manifest health — keeps per-callsite predicates from drifting.
+/// Keeps verify, download, Home matching, and manifest health predicates from drifting.
 enum AssetIntegrityState: Sendable, Equatable {
     case healthy
     case partiallyMissing(missingHashes: [Data])
@@ -17,11 +17,7 @@ enum AssetIntegrityState: Sendable, Equatable {
         }
     }
 
-    /// Verify-driven cleanup may safely tombstone these — no recoverable content remains.
-    /// `partiallyMissing` and `fingerprintMismatch` are explicitly EXCLUDED: a partial
-    /// loss may be transient (network blip during init listing) and a mismatch may be
-    /// tampering rather than data loss; auto-tombstoning either would destroy a
-    /// recoverable asset.
+    /// Only fully missing assets are safe for automatic tombstone cleanup.
     var allowsCleanup: Bool {
         switch self {
         case .phantom, .fullyMissing, .metadataOnlyLeft: return true
@@ -35,9 +31,6 @@ enum AssetIntegrityState: Sendable, Equatable {
     }
 }
 
-/// Tuple shape the classifier reads. Both `RemoteAssetResourceLink` and
-/// `SnapshotAssetResourceRow` can project into this trivially — keeping the
-/// classifier independent of storage layer types.
 struct AssetIntegrityLink: Equatable {
     let role: Int
     let slot: Int
@@ -57,10 +50,7 @@ extension SnapshotAssetResourceRow {
 }
 
 enum RemoteAssetIntegrityClassifier {
-    /// Pure function — input is the asset's fingerprint, its links, and a predicate
-    /// for "is this resource hash actually backed by a file we can read". The predicate
-    /// is callsite-specific (snapshot cache view, listing-confirmed, etc) so the
-    /// classifier doesn't have to know about storage layout.
+    /// Callers supply file-presence truth so storage layout cannot skew classification.
     static func classify(
         assetFingerprint: Data,
         links: [AssetIntegrityLink],
@@ -80,12 +70,7 @@ enum RemoteAssetIntegrityClassifier {
             }
         }
 
-        // Priority order is load-bearing — pick the most actionable diagnosis:
-        // 1. fullyMissing wins over fingerprintMismatch: nothing left to act on,
-        //    cleanup is safe regardless of fp truth.
-        // 2. fingerprintMismatch wins over metadataOnly/partiallyMissing: when
-        //    resources DO exist, we can't trust the link set's role/slot mapping,
-        //    so restore could yield wrong content. Block until resolved.
+        // Priority order picks the diagnosis that is safest to act on.
         if presentRoles.isEmpty {
             return .fullyMissing
         }

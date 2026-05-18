@@ -9,7 +9,6 @@ final class V1ManifestMigrationPlannerTests: XCTestCase {
     private let year = 2025
     private let month = 6
 
-    // MARK: - Happy path
 
     func testPlan_emptyInput_returnsEmptyPlan() {
         let plan = V1ManifestMigrationPlanner.plan(assets: [], resources: [], links: [])
@@ -48,7 +47,6 @@ final class V1ManifestMigrationPlannerTests: XCTestCase {
         XCTAssertEqual(res?.crypto?.scheme, "none")
     }
 
-    // MARK: - Per-asset failure modes (skip reason strings are part of the on-remote schema)
 
     func testPlan_assetWithInvalidFingerprintLength_skippedAndReasonStringPinned() {
         let shortFP = Data(repeating: 0x11, count: 31)
@@ -95,7 +93,6 @@ final class V1ManifestMigrationPlannerTests: XCTestCase {
         XCTAssertEqual(plan.skippedFailures, ["asset \(fp.hexString) references invalid resource hash length 31"])
     }
 
-    // MARK: - Precedence and atomicity
 
     func testPlan_invalidBeforeMissingForSingleAsset() {
         let fp = Self.bytes(0xAB)
@@ -127,7 +124,6 @@ final class V1ManifestMigrationPlannerTests: XCTestCase {
         XCTAssertEqual(plan.skippedFailures, ["asset \(fp.hexString) references missing resource \(missingHash.hexString)"])
     }
 
-    // MARK: - Mixed valid + invalid in one batch
 
     func testPlan_mixed_oneValidOneInvalidAsset_keepsValidAndReportsInvalid() {
         let validFP = Self.bytes(0xAA)
@@ -149,7 +145,6 @@ final class V1ManifestMigrationPlannerTests: XCTestCase {
         XCTAssertEqual(plan.skippedFailures, ["asset has invalid fingerprint length 31"])
     }
 
-    // MARK: - logicalName precedence
 
     func testPlan_logicalName_emptyLinkFallsBackToResource() {
         let fp = Self.bytes(0xAA)
@@ -183,7 +178,6 @@ final class V1ManifestMigrationPlannerTests: XCTestCase {
         XCTAssertEqual(plan.migrable.first?.resources.first?.logicalName, "user-facing.heic")
     }
 
-    // MARK: - CommitResourceEntry field pass-through
 
     func testPlan_commitResourceEntryCarriesAllFields() {
         let fp = Self.bytes(0xAA)
@@ -212,7 +206,6 @@ final class V1ManifestMigrationPlannerTests: XCTestCase {
         XCTAssertEqual(res?.crypto?.payload, ["k": "v"])
     }
 
-    // MARK: - Hash length boundary: 31 / 32 / 33 bytes
 
     func testPlan_hashLength31IsInvalid_assetFingerprint() {
         let fp = Data(repeating: 0x55, count: 31)
@@ -259,7 +252,6 @@ final class V1ManifestMigrationPlannerTests: XCTestCase {
         XCTAssertEqual(plan.skippedFailures, ["asset \(fp.hexString) references missing resource \(linkHash.hexString)"])
     }
 
-    // MARK: - Fixtures
 
     private static func bytes(_ b: UInt8) -> Data {
         Data(repeating: b, count: 32)

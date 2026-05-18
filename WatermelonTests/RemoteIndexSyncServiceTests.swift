@@ -2,16 +2,10 @@ import CryptoKit
 import XCTest
 @testable import Watermelon
 
-/// Per-month uncommittedV2 tracking. Cross-month fingerprint sharing was a real
-/// data-loss path: writer A's flush success would silently mark writer B's pending
-/// fingerprint as committed, and the resume planner would skip B's asset.
 final class RemoteIndexSyncServiceTests: XCTestCase {
     private let monthA = LibraryMonthKey(year: 2025, month: 1)
     private let monthB = LibraryMonthKey(year: 2025, month: 2)
 
-    /// Seeds the cache so the asset is "complete" — phantom/incomplete assets are
-    /// excluded from committed-by-month, so each test that wants to observe a
-    /// committed fp must also publish its link + resource.
     private func seedCompleteAsset(
         in service: RemoteIndexSyncService,
         month: LibraryMonthKey,
@@ -95,16 +89,12 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         XCTAssertEqual(after[monthB], [fp2])
     }
 
-    /// markCommittedV2 with an empty set must be a no-op (no spurious month entry).
     func testMarkCommittedV2EmptySetNoOp() {
         let service = RemoteIndexSyncService()
         service.markCommittedV2(month: monthA, fingerprints: [])
         XCTAssertTrue(service.committedAssetFingerprintsByMonth().isEmpty)
     }
 
-    /// Resume planner shouldn't treat phantom/partially-missing assets as committed.
-    /// Cache that contains an asset row but no links → asset is unrestorable, so
-    /// the local PHAsset must NOT be deduped away.
     func testCommittedFingerprints_excludesPhantomAsset() {
         let service = RemoteIndexSyncService()
         let fp = TestFixtures.fingerprint(0x42)
@@ -118,8 +108,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                      "phantom asset (no links) must not appear as committed")
     }
 
-    /// Asset with a link to a resource that isn't in the cache (manual remote delete,
-    /// orphan) is incomplete — must NOT be committed.
     func testCommittedFingerprints_excludesAssetWithMissingResource() {
         let service = RemoteIndexSyncService()
         let hash = TestFixtures.fingerprint(0x55)
@@ -144,8 +132,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                      "asset with missing resource must not appear as committed")
     }
 
-    /// Resume planner mustn't treat partially-missing assets as healthy just
-    /// because the commit log keeps the row.
     func testCommittedFingerprints_subtractsPhysicallyMissingHash() {
         let service = RemoteIndexSyncService()
         let hash = TestFixtures.fingerprint(0x99)
@@ -184,10 +170,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                       "fresh upload must clear the overlay entry")
     }
 
-    /// Re-uploading the SAME bytes (cache.upsertResource sees identical row → no-op)
-    /// must still bump the cache revision when it clears a physically-missing entry.
-    /// Without the bump, Home incremental sync `state(since:)` skips the month and
-    /// keeps showing the asset as missing.
     func testApplyOptimisticUpsert_clearingOverlay_bumpsRevisionEvenWhenRowUnchanged() {
         let service = RemoteIndexSyncService()
         let hash = TestFixtures.fingerprint(0xA1)
@@ -212,7 +194,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                              "overlay clear must bump revision so partial-sync consumers re-fetch")
     }
 
-    /// Resume planner needs every month probed; unprobed != healthy.
     func testRefreshPhysicalPresenceOverlay_populatesAllCommittedMonths() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -254,9 +235,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                       "absent hash must be in missing overlay")
     }
 
-    /// Per-month best-effort: one failed probe logs + skips that month; other months
-    /// still get their overlay refreshed. Previous all-or-nothing throw was worse —
-    /// one transient blip wiped the whole sync's overlay refresh.
     func testRefreshPhysicalPresenceOverlay_perMonthBestEffort() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -293,8 +271,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                       "monthB probe succeeded → hashGood detected missing")
     }
 
-    /// damagedV2 must throw at sync entry; legacy isV2Repo would fall back to
-    /// V1 and show "no remote data".
     func testSyncIndex_damagedV2_throwsRatherThanFallingBackToV1() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -316,8 +292,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         }
     }
 
-    /// Future-format repo (peer-written `format_version: 99`) must not be read
-    /// by the current sync code — format gate is required at every entry point.
     func testSyncIndex_refusesUnsupportedFormat() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -336,11 +310,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         }
     }
 
-    /// Regression: budget-exhausted overlay probe must still yield a fresh handle when
-    /// the fail-closed policy folds every inconclusive hash into the missing set. The
-    /// prior gate read raw `inconclusiveHashes.isEmpty`, so any month with > 64 verified
-    /// files or > 32 MB of verified bytes left resume permanently stalled at
-    /// `prepareResumeHandle`'s `stalePhysicalPresenceOverlay` throw.
     func testSyncOverlayAndCaptureHandle_budgetExhausted_remainsFreshUnderFailClosedPolicy() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -381,11 +350,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        "freshness-aware accessor must publish the same missing set for the fresh month")
     }
 
-    /// Regression: fail-closed policy must still fold *all* budget-exhausted inconclusives
-    /// into missing when a partial fallback exists. Pre-fix the merge short-circuited on
-    /// `if let stale = fallback[month]`, so any current inconclusive hash not already in the
-    /// fallback stayed unresolved and the month was deterministically marked stale — leaving
-    /// resume blocked even though the inconclusives all sit outside the fallback set.
     func testSyncOverlayAndCaptureHandle_partialFallback_failClosedFoldsRemainingInconclusives() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -411,9 +375,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
             await client.injectFile(path: "\(basePath)/\(monthRel)/\(name)", data: bytes)
         }
 
-        // Seed a prior fallback that contains a hash unrelated to any current resource.
-        // Pre-fix this triggers the `if let stale = fallback[month]` branch and skips the
-        // fail-closed fold — every inconclusive hash outside the fallback stays unresolved.
         let foreignHash = Data(SHA256.hash(data: Data("foreign-hash-not-in-current-month".utf8)))
         service.markPhysicallyMissingV2(month: monthA, hashes: [foreignHash])
 
@@ -430,14 +391,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        "freshness-aware accessor must publish the same missing set under partial fallback")
     }
 
-    /// Regression: `.preserveFallback` (used by `refreshPhysicalPresenceOverlay` on
-    /// every regular sync) must mark a budget-exhausted month as NOT fresh even when
-    /// the prior fallback covers every inconclusive hash. The previous post-merge gate
-    /// was policy-blind and folded fallback-covered inconclusives as resolved, which
-    /// flipped `verifiedPhysicallyMissingHashes` from nil to the fallback set under
-    /// `.preserveFallback`. Downstream that turns prior overlay entries into
-    /// authoritative misses for `V2MonthSession.loadOrCreate`, forcing spurious
-    /// re-uploads after a peer restored a previously-missing file.
     func testRefreshPhysicalPresenceOverlay_preserveFallback_budgetExhaustedNotFreshEvenWhenCovered() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -478,11 +431,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                      ".preserveFallback must not advertise the fallback set as verified-missing for a budget-exhausted month")
     }
 
-    /// Regression: a month directory 404 while the manifest still names resources
-    /// there must be treated as a probe failure (inconclusive), not as authoritative
-    /// "every hash is missing". WebDAV directory-listing 404s can lag PUTs, so
-    /// publishing the full hash set as verified-missing would trigger spurious
-    /// repair uploads against bytes that are actually present.
     func testRefreshPhysicalPresenceOverlay_monthDirNotFound_preservesPriorFallbackInsteadOfAllMissing() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -528,14 +476,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                      "month-dir 404 must leave the month not-fresh so callers don't read the fallback as authoritative")
     }
 
-    /// Regression: a whole-month probe failure (transient list error) must NOT widen
-    /// the published overlay beyond the prior fallback under any policy. Loop 3
-    /// briefly wrote `allHashes` into `missingByMonth` under fail-closed for
-    /// symmetry with the `.success` arm; but the apply-overlay path writes those
-    /// hashes into `committedView` unconditionally on revision match, and Home
-    /// consumers read `physicallyMissingHashes` without the per-month freshness
-    /// gate — so a transport blip would hide real remote content from Home until
-    /// the next successful sync repaired the overlay.
     func testSyncOverlayAndCaptureHandle_failureArm_preservesFallbackInsteadOfAllMissing() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -578,16 +518,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        ".failure arm must NOT publish every hash as missing under fail-closed (Home consumers bypass freshness gate)")
     }
 
-    /// Regression for the cross-policy gap: `syncOverlayAndCaptureHandle` uses
-    /// `.failClosedWhenMissingFallback`, where the `.success` arm previously
-    /// folded EVERY inconclusive (including probe-failure-only) into missing and
-    /// marked the month fresh. For a 404 month directory that turns into
-    /// all-`.inconclusive(.probeFailure)` presence from the probe, that produced
-    /// a fresh handle advertising every manifest hash as verified-missing —
-    /// `BackupParallelExecutor` would then read those as authoritative and
-    /// re-upload healthy bytes.
-    /// `.verifyBudgetExhausted` is the only inconclusive reason fail-closed
-    /// folds; `.probeFailure` must keep the month stale.
     func testSyncOverlayAndCaptureHandle_monthDirNotFound_keepsHandleStaleAndPreservesFallback() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -631,17 +561,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        "month-dir 404 must NOT publish every manifest hash as physicallyMissing")
     }
 
-    /// Regression for the fallback-covers-all-probe-failures gap: when the
-    /// prior fallback covers EVERY inconclusive (probe-failure) hash, the
-    /// fail-closed `.success` arm previously folded all of them into
-    /// `resolvedInconclusives` via the fallback-intersection branch, so
-    /// `inconclusiveHashes.subtracting(resolvedInconclusives)` was empty and
-    /// the month was marked fresh. The handle then advertised the entire
-    /// fallback set as verified-missing — converting a pure transient 404
-    /// into authoritative absence and triggering spurious repair uploads.
-    /// Only `.verifyBudgetExhausted` covered hashes are permitted to count
-    /// as resolved for freshness; `.probeFailure` must keep the month stale
-    /// even when fully covered by fallback.
     func testSyncOverlayAndCaptureHandle_monthDirNotFound_fallbackCoversAll_keepsHandleStale() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -668,9 +587,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
             )
             writer.appendResource(resource)
         }
-        // Seed prior overlay covering EVERY hash — this is the dangerous case:
-        // pre-fix, fallback-intersection resolves all .probeFailure inconclusives
-        // and the freshness gate flips to fresh.
         service.markPhysicallyMissingV2(month: monthA, hashes: allHashes)
 
         let handle = try await service.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
@@ -685,9 +601,6 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        "prior fallback must still be preserved in the missing set so replace-semantics don't drop it")
     }
 
-    /// V1 verifyMonth must refuse a V2 repo. If a V2 repo lost some metadata and
-    /// inspection misclassified it as V1, calling verifyMonth would write V1
-    /// manifest state into the shared committedView and pollute the V2 cache.
     func testVerifyMonth_v1Path_refusesWhenVersionJSONExists() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()

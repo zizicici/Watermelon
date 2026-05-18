@@ -156,7 +156,6 @@ final class RestoreServiceFallbackTests: XCTestCase {
         }
     }
 
-    // MARK: - Helpers
 
     private func makeInstance(
         primary: String,

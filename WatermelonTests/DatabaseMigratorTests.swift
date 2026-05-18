@@ -20,7 +20,6 @@ final class DatabaseMigratorTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
-    // MARK: - v2: ns → ms timestamp conversion
 
     /// Production data path: a real ns timestamp in `local_assets.modificationDateNs`
     /// must end up at the same wall-clock instant in `modificationDateMs`.
@@ -134,7 +133,6 @@ final class DatabaseMigratorTests: XCTestCase {
                        "v2 must rename the column; both names coexisting would mean the rename failed silently")
     }
 
-    // MARK: - v3: server_profiles.writerID and repo_state
 
     /// Existing v2 profiles must survive v3: the new writerID column must be NULL
     /// (defaulting to NOT NULL would crash on first read of pre-v3 rows).
@@ -196,7 +194,6 @@ final class DatabaseMigratorTests: XCTestCase {
         }
     }
 
-    // MARK: - v1 SMB partial unique index
 
     /// The unique index is `WHERE storageType = 'smb'` on purpose: the same (host,
     /// port, share, basePath, user, domain) tuple may legitimately exist for SMB
@@ -275,7 +272,6 @@ final class DatabaseMigratorTests: XCTestCase {
         XCTAssertEqual(count, 2)
     }
 
-    // MARK: - Migration idempotency / reopen safety
 
     /// Re-opening the same DB file must be a no-op for already-applied migrations.
     /// Catches future migrations that don't gate on schema state (e.g. forgetting
@@ -326,7 +322,6 @@ final class DatabaseMigratorTests: XCTestCase {
         XCTAssertEqual(names1, names2, "two fresh DBs migrated through makeMigrator() must end up with identical schemas")
     }
 
-    // MARK: - Helpers
 
     private func insertSMBProfile(dbm: DatabaseManager, name: String, domain: String?) throws {
         try dbm.write { db in

@@ -6,11 +6,6 @@ private let identityClaimStoreLog = Logger(
     category: "IdentityClaimStore"
 )
 
-/// Owns `.watermelon/identity/<writerID>.json`: claim listing/parse, lex-min
-/// election, zero-byte self-claim heal, classification of an existing self-claim,
-/// own-claim write + post-write byte verification, and fresh-election stabilization.
-/// Errors are thrown as `RepoBootstrap.BootstrapError.ioFailure(NSError(domain: "RepoBootstrap", code: ...))`
-/// so external callers and tests observe the same shape as before the extraction.
 nonisolated struct IdentityClaim: Sendable {
     let repoID: String
     let writerID: String
@@ -39,19 +34,15 @@ nonisolated struct IdentityClaimStore: Sendable {
         self.basePath = basePath
     }
 
-    // MARK: - Election
 
-    /// Fail-closed: any read failure or unparseable claim throws. A single
-    /// transient blip or one corrupt claim must NOT silently flip canonical
-    /// to a stale repo.json or a different writer.
+    /// Fail-closed so unreadable identity cannot elect a stale repo pointer.
     func canonicalElection(ignoringCorruptSelfClaimFor selfWriterID: String? = nil) async throws -> ClaimElectionResult {
         let dir = RepoLayout.identityDirectoryPath(base: basePath)
         let entries: [RemoteStorageEntry]
         do {
             entries = try await client.list(path: dir)
         } catch {
-            // "Directory doesn't exist" = no claims yet (legitimate pre-claims
-            // state). Anything else is unreadable identity → propagate.
+            // Missing identity directory is legitimate pre-claim state.
             if isStorageNotFoundError(error) { return ClaimElectionResult(repoID: nil, ignoredSelfCorrupt: false) }
             throw error
         }
@@ -144,7 +135,6 @@ nonisolated struct IdentityClaimStore: Sendable {
         return IdentityClaim(repoID: landedRepoID, writerID: landedWriterID, createdAtMs: landedTs)
     }
 
-    // MARK: - Heal
 
     /// Only 0-byte (atomicCreate half-failed) is safe to clear; any other content might be canonical.
     func healZeroByteSelfClaim(writerID: String) async throws {
@@ -161,7 +151,6 @@ nonisolated struct IdentityClaimStore: Sendable {
         try await client.delete(path: claimPath)
     }
 
-    // MARK: - Classification
 
     func classifyExistingClaim(claimPath: String, writerID: String, suggestedRepoID: String) async throws -> ExistingClaimClassification {
         let temp = FileManager.default.temporaryDirectory
@@ -184,7 +173,6 @@ nonisolated struct IdentityClaimStore: Sendable {
         return .ours
     }
 
-    // MARK: - Write own claim
 
     func writeOwnClaim(repoID: String, writerID: String, createdAtMs: Int64) async throws {
         let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
@@ -208,7 +196,6 @@ nonisolated struct IdentityClaimStore: Sendable {
         try await verifyOwnClaim(repoID: repoID, writerID: writerID, createdAtMs: createdAtMs, claimPath: claimPath, atomicResult: result)
     }
 
-    // MARK: - Stabilize fresh election
 
     func stabilizeFreshElection(
         initial: String,
@@ -239,7 +226,6 @@ nonisolated struct IdentityClaimStore: Sendable {
         return try await canonicalRepoID() ?? initial
     }
 
-    // MARK: - Internals
 
     private enum ClaimFetchResult: Sendable {
         case claim(IdentityClaim)

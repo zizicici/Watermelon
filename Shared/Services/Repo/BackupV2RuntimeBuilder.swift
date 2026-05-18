@@ -234,15 +234,7 @@ enum BackupV2RuntimeBuilder {
         )
         var sweepTask: Task<Void, Never>? = nil
         if runMaintenanceTasks {
-            // Own writerID is always in activeWriters during the general sweep, so
-            // own-writer liveness stagings from prior-crash ticks would never be
-            // reclaimed there. Run a self-only sweep before liveness.start() — no
-            // in-flight tick exists yet, so any own staging is by definition stranded.
-            // Intentionally NOT gated on supportsLivenessSafeRenewal: liveness.start()
-            // produces staging files on every non-local-volume backend, so SMB/SFTP
-            // (renewal-unsafe) would otherwise accumulate own crash residue forever.
-            // Sweep targets only our writerID's prefix and applies the 1h age guard,
-            // so it can't touch a concurrent FG/BG instance's in-flight tick.
+            // Self-only sweep runs before liveness starts because the general sweep protects our writerID.
             _ = await OrphanMetadataCleanup.sweepOwnLivenessStagings(
                 client: metadataClient,
                 basePath: profile.basePath,

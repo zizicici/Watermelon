@@ -325,12 +325,7 @@ enum ResourceTypeCode {
         code == video || code == fullSizeVideo || code == pairedVideo || code == fullSizePairedVideo || code == adjustmentBasePairedVideo || code == adjustmentBaseVideo
     }
 
-    /// Roles whose presence alone doesn't make an asset restorable. Edit-history
-    /// resources (`adjustmentData` + `adjustmentBase*`) carry the pre-edit photo/video
-    /// or the edit instructions; without a primary photo/video resource, restore can't
-    /// reconstruct a viewable asset. Verify treats an asset whose remaining roles are
-    /// all in this set as a cleanup candidate; backup treats them the same way when
-    /// deciding whether a partial-loss asset still has user-facing value.
+    /// Metadata-only edit resources are not restorable without a primary photo/video resource.
     static let metadataOnlyRoles: Set<Int> = [
         adjustmentData,
         adjustmentBasePhoto,

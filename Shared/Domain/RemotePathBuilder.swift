@@ -2,9 +2,7 @@ import Foundation
 
 // `nonisolated` keeps these helpers isolation-neutral — WatermelonMac uses default-MainActor isolation, otherwise actor callers cross actors.
 nonisolated enum RemotePathBuilder {
-    /// Path-traversal segments that must never appear in a relative path coming from a
-    /// commit/snapshot or a peer writer. A `..` segment lets a corrupt repo escape its
-    /// basePath via `download(remotePath:..)` on backends that resolve `..` server-side.
+    /// Rejects peer-supplied traversal that could escape the configured base path.
     enum PathValidationError: Error, Equatable {
         case containsParentTraversal(String)
     }
@@ -13,10 +11,7 @@ nonisolated enum RemotePathBuilder {
         value.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
-    /// Returns nil if the path is safe; an error otherwise. A safe relative path has no
-    /// `..` segments. Absolute paths (leading `/`) are tolerated because callers re-base
-    /// onto basePath via `absolutePath(basePath:remoteRelativePath:)`, which already
-    /// ignores the leading slash. Empty is fine (caller treats as basePath).
+    /// Absolute inputs are tolerated because callers rebase through absolutePath(basePath:remoteRelativePath:).
     static func validateRelativePath(_ remoteRelativePath: String) -> PathValidationError? {
         let trimmed = normalizeRelativePath(remoteRelativePath)
         guard !trimmed.isEmpty else { return nil }

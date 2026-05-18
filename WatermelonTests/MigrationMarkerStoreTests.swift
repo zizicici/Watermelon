@@ -6,7 +6,6 @@ final class MigrationMarkerStoreTests: XCTestCase {
     private let validWriterID = "11111111-1111-1111-1111-111111111111"
     private let otherWriterID = "22222222-2222-2222-2222-222222222222"
 
-    // MARK: - writePhase: canonical phase1 fast path
 
     func testWritePhase1_freshWrite_usesCanonicalPath() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -105,7 +104,6 @@ final class MigrationMarkerStoreTests: XCTestCase {
         )
     }
 
-    // MARK: - existsFor / deleteAll on malformed markers
 
     func testExistsFor_returnsTrueForMalformedCanonicalMarker() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -192,7 +190,6 @@ final class MigrationMarkerStoreTests: XCTestCase {
         XCTAssertTrue(theirsExists, "deleteAll must scope to requested writer")
     }
 
-    // MARK: - currentPhase / startedAt tolerant parse
 
     func testCurrentPhase_fallsBackToPhase1WhenCanonicalBytesUnparseable() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -280,7 +277,6 @@ final class MigrationMarkerStoreTests: XCTestCase {
         XCTAssertEqual(phase, .phase1, "tolerant parser must swallow CancellationError and fall back to sawMarker → phase1")
     }
 
-    // MARK: - parseEntries inspection policy
 
     func testParseEntries_skipsParseFailuresAndReturnsValidOnly() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -375,7 +371,6 @@ final class MigrationMarkerStoreTests: XCTestCase {
         }
     }
 
-    // MARK: - existsAny
 
     func testExistsAny_falseWhenDirectoryMissing() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -405,7 +400,6 @@ final class MigrationMarkerStoreTests: XCTestCase {
         XCTAssertTrue(any)
     }
 
-    // MARK: - NSError shapes
 
     func testWritePhase_unique4AttemptsExhausted_throws43() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -485,7 +479,6 @@ final class MigrationMarkerStoreTests: XCTestCase {
         }
     }
 
-    // MARK: - Helpers
 
     private func injectValidMarker(
         _ client: InMemoryRemoteStorageClient,

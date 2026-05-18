@@ -1,15 +1,9 @@
 import XCTest
 @testable import Watermelon
 
-/// Locks down the invariants `RepoBootstrap.initializeFreshRepo` and
-/// `RemoteFormatCompatibilityService.inspectRemoteFormat` depend on:
-/// canonical writer keys, fail-closed strict read, `VersionConflict` mapping,
-/// and the pre-check + staged-create + post-write verify ordering for
-/// `writeIfAbsent`.
 final class VersionManifestStoreTests: XCTestCase {
     private let basePath = "/repo"
 
-    // MARK: - Round-trip
 
     func testWriteIfAbsent_thenLoad_roundTripsAllFields() async throws {
         let (client, store) = await makeStore()
@@ -50,7 +44,6 @@ final class VersionManifestStoreTests: XCTestCase {
                        "writer and test fixture must agree on `version.json` key set")
     }
 
-    // MARK: - Strict load
 
     func testLoad_absent_returnsAbsent() async throws {
         let (_, store) = await makeStore()
@@ -127,9 +120,6 @@ final class VersionManifestStoreTests: XCTestCase {
         }
     }
 
-    /// CFBoolean defense for `created_at_ms`: NSNumber-bridged true would
-    /// successfully `as? Int64`-cast to 1, anchoring a future reader at 1 ms
-    /// unless the strict parser rejects it before the cast.
     func testLoad_createdAtMsBoolean_returnsNilCreatedAtMs() async throws {
         let (client, store) = await makeStore()
         let dict: [String: Any] = [
@@ -149,7 +139,6 @@ final class VersionManifestStoreTests: XCTestCase {
                      "strictInt64 must reject CFBoolean — must NOT bridge to Int64=1")
     }
 
-    // MARK: - Compatibility verification
 
     func testVerifyCompatible_higherFormat_throwsHigherFormatVersion() async throws {
         let (client, store) = await makeStore()
@@ -197,7 +186,6 @@ final class VersionManifestStoreTests: XCTestCase {
         try VersionManifestStore.classify(remoteFormat: RepoLayout.formatVersion, minAppVersion: nil)
     }
 
-    // MARK: - writeIfAbsent guards
 
     func testWriteIfAbsent_existingCompatibleManifest_isNoOpVerified() async throws {
         let (client, store) = await makeStore()
@@ -242,7 +230,6 @@ final class VersionManifestStoreTests: XCTestCase {
         }
     }
 
-    // MARK: - Helpers
 
     private func makeStore() async -> (InMemoryRemoteStorageClient, VersionManifestStore) {
         let client = InMemoryRemoteStorageClient()
