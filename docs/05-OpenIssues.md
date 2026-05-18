@@ -1,11 +1,10 @@
 # 当前风险点 / 技术债（按当前实现）
 
-## 1. 自动化测试只覆盖了纯逻辑层
+## 1. 自动化测试仍缺真实端到端覆盖
 
-1. `WatermelonTests` 已覆盖 Home 端的引擎（`HomeLocalIndexEngine` / `HomeRemoteIndexEngine`）、`HomeDataProcessingWorker`、`HomeRefreshScheduler`、`HomeScopeController` / `HomeScopeNormalizer`、`HomeSelectionController`、`HomeSectionBuilder`、`HomeHeaderSummaryFormatter`、`RemoteFileNaming` 等纯逻辑单元。
-2. `HomeExecutionCoordinator`、`BackupCoordinator`、`BackupParallelExecutor`、`AssetProcessor`、`RestoreService`、连接切换 / 暂停恢复 / sync 月份内联下载 / 外接存储拔出等真正涉及相册或远端的链路 **仍然没有自动化覆盖**。
-3. macOS target 和 `BackgroundBackupRunner` 也都不在测试范围内。
-4. 这些链路依旧依赖真机手工回归。
+1. `WatermelonTests` 已覆盖 Home 端纯逻辑、RemoteFileNaming、S3/SFTP 形状、Repo V2 materialize / flush / bootstrap / migration、RemoteIndexSyncService、RepoVerifyMonthService、storage capability matrix、RestoreService fallback、RestoredAssetFingerprintVerifier 等。
+2. 仍缺的是跨真实 PhotoKit + 真实远端的端到端链路：`HomeExecutionCoordinator`、`BackupCoordinator`、`BackupParallelExecutor`、`AssetProcessor` 组合后的连接切换 / 暂停恢复 / sync 月份内联下载 / 外接存储拔出等。
+3. macOS target 和 `BackgroundBackupRunner` 的真实调度路径也仍主要依赖手工或系统集成回归。
 
 ## 2. iCloud-only 资源仍有重复 I/O 成本
 
@@ -27,7 +26,7 @@
 V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1→V2 migration 流程，详见 `docs/06-RepoV2.md`）。Stage 1 设计目标：把强杀窗口从「月级 flush」缩小到「10-asset batch」，**不消除**。
 
 1. V1 路径（cutover 前）：manifest 在「月份完成」与「任务收尾」时 flush；强杀前一批未 flush 元数据丢失（月级窗口）。
-2. V2 路径（cutover 后）：前台与后台均每 10 个成功上传 flush 一次 commit + snapshot；强杀最多丢未 commit 的 batch（最多 9 个 asset 元数据；物理文件已上传成 orphan）。
+2. V2 路径（cutover 后）：前台与后台均每 10 个非 failed 结果 flush 一次 commit + snapshot；强杀最多丢未 commit 的 batch（最多 9 个 asset 元数据；物理文件已上传成 orphan）。
 3. 真消除强杀窗口：留 Stage 2 — per-asset commit 或本地 `resource_intents` pending state。
 
 ## 5. 首页状态机复杂度依然不低
@@ -63,11 +62,11 @@ V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1
 4. 目前没有根据带宽、远端 RTT、失败率动态调节 worker 数
 5. SFTP 多 worker = 多 SSH 会话；V2 cutover 后每个 profile 还会额外开一条专用的 metadata SSH 连接（`BackupV2RuntimeServices.metadataClient`，commit/snapshot/liveness 写入用），因此实际并发连接数 = `worker_count + 1`。遇 sshd `MaxStartups` / `MaxSessions` 紧配置需要回落到 1，目前没有自动探测
 
-## 8. 下载取消粒度仍是 item 级
+## 8. 下载恢复进度仍未持久化到 resource 级
 
-1. `RestoreService.restoreItems(...)` 在 item 循环边界检查取消。
-2. 一个 item 内部若包含多资源（如 Live Photo），中断时仍可能丢掉该 item 的部分临时进度。
-3. 不过成功完成的 item 会立即写回 hash 索引，所以下次能跳过整 item。
+1. `RestoreService.restoreItems(...)` 会在 item、resource 与 hash 读取循环中检查取消。
+2. 但一个 item 内部若包含多资源（如 Live Photo），中断时仍没有持久化 resource 级恢复进度，可能丢掉该 item 的部分临时进度。
+3. 成功保存到相册后，`DownloadWorkflowHelper` 会通过 `RestoredAssetFingerprintVerifier` 重建并验证 durable fingerprint binding；只有验证成功的 item 才能被后续 reconcile 当作已恢复。
 
 ## 9. macOS Target 的定位仍偏窄
 
@@ -94,7 +93,7 @@ V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1
 
 V2 cutover 后,`MonthManifestStore` 的 V2 路径在 Iter 7 已迁出到 `V2MonthSession`(in-memory,无 sqlite)。但「optimistic-cache + deferred V2 commit」的复杂度仍在:
 
-- 每 10 个成功上传才 flush 一次 commit + snapshot(`BackupV2Constants.batchFlushInterval`)
+- 每 10 个非 failed 结果才 flush 一次 commit + snapshot(`BackupV2Constants.batchFlushInterval`)
 - AssetProcessor 把刚 upsert 的 fingerprint 标记为 `markUncommittedV2`,resume planner 用 `committedAssetFingerprints()` 减去这部分
 - `flushToRemote` 返回 `FlushDelta`,callers 调 `markCommittedV2(asset ∪ tombstone)` 把已 commit 的从 uncommitted 集合清掉
 - 这套机制天生 race-prone,review 第 3-6 轮发现的 bug 大部分集中在「漏 mark / 漏清 / 漏 union 」这条链上(R1.4 / R1.5 / 5R.8 / 6R.8)
@@ -109,8 +108,8 @@ V2 cutover 后,`MonthManifestStore` 的 V2 路径在 Iter 7 已迁出到 `V2Mont
 2. `CommitLogWriter` 写 `(writerID, seq)` 最终路径用 atomicCreate + post-verify。同一 writer 的并发 run 仍可能两次都通过 verify，后写的覆盖前者；写入路径写 writer-unique 物理文件（`~widN`）也只能压低概率，因为同 writer 在同一秒选到的候选名仍可能相同。真修需要 no-overwrite primitive 或 run-unique（runID + attempt counter）终态文件名 + 一致的 manifest 引用。当前作为残留技术债保留。
 3. `RepoBootstrap.ensureRepoJSON` 已从单次 500ms 等待改为 read-stability loop（最长 ~1.5s）；首次写入仍无法用 no-overwrite 原语保证全局唯一 canonical，losing-claim 的 ts 仍留在 claims 目录，未来 winning claim 损坏后 lex-min 可能翻转 canonical。需要 protocol-level 修改（immutable seed / losing-claim adoption），不在本轮范围。
 4. `RemoteFileNaming.preferredRemoteFileName` 已通过 `clampLeafToByteBudget` 把最终文件名（含 `~widN` / `-N` / UUID 后缀和扩展名）压回 255 UTF-8 byte 内；输入超长 sanitized stem 会被按 UTF-8 边界截断再加后缀。极端碰撞导致 UUID escape 时仍由同一预算闸控制。
-5. Physical-presence overlay 仅按 leaf-name 比对，未对照 manifest 的 fileSize；listing 返回的 entry size 与 commit 内 `fileSize` 不一致会被纳入 missing 集合，下次 sync 会真修。被 truncate 但 size 完全没变的损坏（如同尺寸覆盖）仍只能通过深度 verify 抓出。
-6. `BackupMonthFinalizationResult.failed` 仍只携带 `String`，`BackupParallelExecutor` 把它包成通用 NSError 再抛给 `BackupSessionController`；session controller 因此无法区分 inline-download 阶段是 connection-unavailable 还是其它错误。改为携带 typed error / classification 需要同步改 Home `DownloadMonthResult`、`HomeExecutionCoordinator.applyDownloadResult`、Async bridge、BSC 的 reducer，本轮范围太大，暂作残留。前台 connection-unavailable 在 upload 阶段已 abort，仅 inline-download fan-out 阶段会缺分类。
+5. Physical-presence overlay / probe 会先按 leaf-name 找候选，再要求 listing size 等于 manifest `fileSize`；size 不一致会被纳入 missing 集合，下次 sync 会真修。被 truncate 但 size 完全没变的损坏（如同尺寸覆盖）仍只能通过深度 verify 抓出。
+6. `BackupMonthFinalizationResult.failed` 已携带 `underlyingError`，但后续层对 inline-download underlying error 的分类仍有限；如果要让 `BackupSessionController` 对 connection-unavailable / verify failure / user cancellation 做完全一致的 UI 分类，还需要把 Home `DownloadMonthResult`、Async bridge、BSC reducer 的错误分类协议继续收敛。
 
 ## 14. 建议优先级
 

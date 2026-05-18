@@ -76,10 +76,10 @@
 
 1. 校验或申请相册权限
 2. 创建并连接远端 client
-3. 保证 `basePath` 存在
-4. `RemoteFormatCompatibilityService.verify(...)` 校验远端格式（不同版本之间的兼容性）
-5. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest，写入 `RemoteLibrarySnapshotCache`
-6. 当 `digest.totalEntryCount` 不大于 `120_000` 时构建 `MonthSeedLookup`（仅在 manifest 缺失而需要 seed 时使用）
+3. `BackupV2RuntimeBuilder.build(...)` 确保 `basePath`，并用 `inspectRemoteFormat` 路由 fresh / V1 / V2 / unsupported
+4. fresh 仓库 bootstrap V2 identity（claims / finalization / `repo.json` read-cache）+ `version.json`；V1 仓库在前台同步迁移；V2 仓库建立 `BackupV2RuntimeServices`
+5. V2 路径额外打开专用 metadata client，并把 cold-start materialize 输出缓存到 `initialMaterializeOutput`
+6. `RemoteIndexSyncService.syncIndex(...)` 写入 `RemoteLibrarySnapshotCache`：V2 走 materialize（可消费预热结果），V1 继续扫 per-month manifest
 7. 读取待处理资产
    - `full`：全图库，按创建时间升序
    - `retry / scoped`：按指定 ID 获取，再排序
@@ -88,7 +88,7 @@
 10. 按 “预计字节数 → 数量 → 月份键” 顺序构建 `MonthPlan / MonthWorkItem`
 11. 决定 worker 数与连接池大小
 
-如果 `RemoteIndexSyncService.syncIndex` 抛出非 “连接不可用” 类错误，会被降级成 warning 日志，让备份继续，但跳过 `MonthSeedLookup`。
+如果 `RemoteIndexSyncService.syncIndex` 抛出非 “连接不可用” 类错误：当前 fresh / V1-migrated / V2 路径都会带 `BackupV2RuntimeServices` 并 fail-closed；没有 V2 runtime 的旧 fallback 才会降级为 warning 并继续执行。
 
 ### worker 数
 
@@ -101,7 +101,7 @@
 5. 最终还会再按月份数裁剪
 6. SFTP 的每个 worker 都会起一条独立的 SSH 连接 + SFTP subsystem。多 worker = 多 TCP/握手，受服务端 `MaxStartups` / `MaxSessions` 限制；遇到紧配置的 sshd 需要回落到 worker = 1
 
-连接池大小 `connectionPoolSize` 由 `BackupMonthScheduler.resolveConnectionPoolSize(...)` 推导，并保留 worker 数 + 1 左右的余量给 manifest flush 等带外操作。
+连接池大小 `connectionPoolSize` 由 `BackupMonthScheduler.resolveConnectionPoolSize(...)` 推导：SMB / WebDAV / S3 / SFTP 默认裁到 `min(workerCount, 2)`，用户手动覆盖 worker 时给到 `workerCount`；externalVolume 始终给 `workerCount`。
 
 ## 5. 并行执行面
 
@@ -112,13 +112,14 @@
 3. 用 `MonthWorkQueue`（actor，定义在 `Watermelon/Services/Backup/BackupMonthScheduler.swift`）动态分发月份
 4. 每个 worker：
    - 领取一个月份
-   - `MonthManifestStore.loadOrCreate(...)` 装载或基于 seed 初始化月级 manifest
+   - V2：`V2MonthSession.loadOrCreate(...)` materialize 单月、列真实月份目录，并构建 in-memory indexes
+   - V1：`MonthManifestStore.loadOrCreate(...)` 装载 legacy sqlite manifest
    - 以 `500` 个 asset 为一批处理
    - 批量读取本地 hash cache
    - 逐 asset 调 `AssetProcessor.process(...)`
-5. 月份结束后 `flushToRemote(...)`
-6. flush 成功后发出 `.monthChanged(.completed)`
-7. 若提供了 `onMonthUploaded`，则在该月份 flush 完成后执行月级收尾
+5. 每处理 10 个非 failed 结果，就对当前 `BackupMonthStore` 调一次 batch `flushToRemote(...)`；月末仍兜底 flush
+6. V2 flush 的 `FlushDelta` 会清理 `RemoteIndexSyncService` 的 uncommitted fingerprints；snapshot 写失败但 commit 已落盘时也会记录已 durable 的 fingerprints
+7. 最终 flush 成功后若提供了 `onMonthUploaded`，会先执行月级收尾；收尾 `.success` 才发出 `.monthChanged(.completed)`，`.downloadIncomplete` 会发出对应状态，`.failed` 走 fatal failure
 
 ## 6. 单 asset 处理
 
@@ -215,17 +216,17 @@
 1. 上传阶段：发送 stop intent，并等待运行中的备份链路自行收束
 2. 下载阶段：取消下载 task，然后退出执行态
 
-## 11. manifest flush 语义
+## 11. metadata flush 语义
 
-1. `MonthManifestStore` 本地 sqlite 改动先落本地临时文件
-2. 月份结束时 `flushToRemote(...)`
-3. 如果远端存储已不可用：
-   - 记录日志
-   - 跳过 flush
-   - 将错误向上抛出
-4. `loadSeeded(...)` 会额外列出真实远端目录，避免“文件已存在但 manifest 未记账”造成的重名冲突
+V2 当前主路径：
 
-`MonthManifestStore` 实现拆为三段（均位于 `Shared/Services/Backup/`）：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。
+1. `V2MonthSession` 在内存里维护当月 resources / assets / links / tombstones
+2. `flushToRemote(...)` 先通过 `V2MonthCommitFlusher` 写 commit jsonl，再通过 `V2MonthSnapshotFlusher` 写 snapshot jsonl
+3. 每 10 个非 failed asset 触发一次 batch flush，月末或 pause/connection-loss 收束时再兜底 flush
+4. commit 已落盘但 snapshot 写失败时，错误会携带 `committedAssets / committedTombstones`，调用方必须先清理对应 uncommitted fingerprints 再继续传播错误
+5. `V2MonthSession.loadOrCreate(...)` 会列出真实月份目录，避免“文件已存在但 V2 metadata 未 flush”的 orphan 造成重名冲突
+
+V1 兼容路径仍由 `MonthManifestStore` 维护 sqlite manifest：本地 sqlite 改动先落临时文件，月末 `flushToRemote(...)` 上传 `.watermelon_manifest.sqlite`。`MonthManifestStore` 实现拆为三段：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。
 
 ## 11.5 远端资源 presence 语义（统一类型）
 
@@ -238,7 +239,7 @@
 
 每月的 presence map 用 `RemoteMonthPresenceMap`（path-keyed value type）：
 
-- `V2MonthSession` 持有 1 份；`findByFileName` / `anyPresentPath` 通过 `isMissing(_:)` 过滤；`upsertResource` 写新字节后 `clear(path:)` 让重新查找能命中
+- `V2MonthIndexes` / `V2MonthSession` 持有 path-keyed map；`findByFileName` / `anyPresentPath` 通过 `isUsableCandidate(_:)` 接受 size-matched 或 hash-verified 候选；`upsertResource` 写新字节后把路径标成 `.hashVerified`
 - `RemoteIndexSyncService` 的 overlay probe 输出按 hash 聚合（`[Data: RemoteResourcePresence]`）；`OverlayMonthProbe` 的 `missingHashes` / `inconclusiveHashes` 都是从这份 map derived，每月 freshness 由调用方按 policy（`.preserveFallback` / `.failClosedWhenMissingFallback`）在 probe 输出之外判定
 - `RepoVerifyMonthService` 的 `PresenceSnapshot` 也用同一份 map；`hasInconclusiveResource(in:)` 判定 verify 是否完整
 
@@ -252,7 +253,7 @@
 `RemoteMaintenanceController`（`Watermelon/Services/Backup/`）是 “验证远端” 入口：
 
 1. 通过 `BackupCoordinator.verifyAllMonths(...)` 检查所有月份的 manifest 与实际远端文件一致性
-2. 暴露 `isVerifying / progress / errors` 给 More 页 / 诊断页
+2. 暴露 `isVerifying / progress / lastError` 给 More 页 / 诊断页
 3. 校验运行期间会通过 `Notification.Name` 把 Home 的 `isMaintenanceBlocked` 拉为 `true`，从而让 `isSelectable` 与 `startExecution` 都被阻塞
 
 它不参与执行链路，但与执行链路互斥。
@@ -262,7 +263,7 @@
 1. 本地索引离线预检查 worker：`2`
 2. iCloud recovery 预检查 worker：`1`
 3. Home 侧远端同步节流：`2s`
-4. month seed 内存阈值：`120_000` 条目
+4. V2 batch flush 间隔：`10` 个非 failed asset（`BackupV2Constants.batchFlushInterval`）
 5. 并行执行的 PHAsset 批大小：`500`
 6. 小文件碰撞校验阈值：`5 * 1024 * 1024`（`smallFileThresholdBytes`）
 7. 上传最大重试次数：`3`（`client.shouldLimitUploadRetries(for:)` 命中时降为 `2`）

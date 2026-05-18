@@ -33,23 +33,25 @@
 5. `photoLibraryService` (`PhotoLibraryService`)
 6. `hashIndexRepository` (`ContentHashIndexRepository`)
 7. `localHashIndexBuildService` (`LocalHashIndexBuildService`)
-8. `localIndexChangePublisher` (`LocalIndexChangePublisher`)
-9. `localIndexBuildCoordinator` (`LocalIndexBuildCoordinator`)
-10. `backupCoordinator` (`BackupCoordinator`)
-11. `restoreService` (`RestoreService`)
-12. `appRuntimeFlags` (`AppRuntimeFlags`)
-13. `remoteMaintenanceController` (`RemoteMaintenanceController`)
-14. `profileReachabilityService` (`ProfileReachabilityService`)
+8. `restoredAssetFingerprintVerifier` (`RestoredAssetFingerprintVerifier`)
+9. `localIndexChangePublisher` (`LocalIndexChangePublisher`)
+10. `localIndexBuildCoordinator` (`LocalIndexBuildCoordinator`)
+11. `backupCoordinator` (`BackupCoordinator`)
+12. `restoreService` (`RestoreService`)
+13. `appRuntimeFlags` (`AppRuntimeFlags`)
+14. `remoteMaintenanceController` (`RemoteMaintenanceController`)
+15. `profileReachabilityService` (`ProfileReachabilityService`)
 
 说明：
 
 1. `AppSession` 保存当前激活 profile 和会话内密码。SMB / WebDAV / S3 需要密码（S3 把 secret access key 落 Keychain）；SFTP 把 `SFTPCredentialBlob`（password 或 PEM + 可选 passphrase）的 JSON 落 Keychain，并在 `connectionParams` 里钉住主机指纹（`StorageProfile.supportsPasswordPrompt = false` —— 单字段密码弹窗装不下，凭证缺失只能进编辑页重填）；外接存储不需要。
 2. `LocalHashIndexBuildService` 直接被 `HomeExecutionCoordinator` 用作执行前预检查工具。
-3. `LocalIndexBuildCoordinator` 封装更多页 / 索引 UI 触发的非执行态索引构建，并叠加权限检查与进度通知。
-4. `LocalIndexChangePublisher` 把索引相关变更广播给 Home / 索引页，避免轮询。
-5. `RemoteMaintenanceController` 负责用户主动触发的远端月份校验任务；它在校验期间会把 Home 的 `isSelectable` 拉为 `false`。
-6. `ProfileReachabilityService` 在后台周期性探测已保存 profile（SMB / SFTP 走 TCP、WebDAV / S3 走 HTTP HEAD、外接存储走 security-scoped bookmark resolve），结果以 `unknown / reachable / unreachable` 形式暴露给 Home，供右侧菜单标记 “离线”。`DependencyContainer` 在初始化时立刻 `start()` 它，并保留 NWPathMonitor 与前台进入通知触发的 force-sweep 能力。
-7. `DependencyContainer.makeForBackgroundTask()` 会构造一份独立的依赖给 `BackgroundBackupRunner` 使用。
+3. `RestoredAssetFingerprintVerifier` 被 `DownloadWorkflowHelper` 用于下载后重建并验证本地 durable fingerprint binding，避免只因写入相册成功就把 item 视为可去重。
+4. `LocalIndexBuildCoordinator` 封装更多页 / 索引 UI 触发的非执行态索引构建，并叠加权限检查与进度通知。
+5. `LocalIndexChangePublisher` 把索引相关变更广播给 Home / 索引页，避免轮询。
+6. `RemoteMaintenanceController` 负责用户主动触发的远端月份校验任务；它在校验期间会把 Home 的 `isSelectable` 拉为 `false`。
+7. `ProfileReachabilityService` 在后台周期性探测已保存 profile（SMB / SFTP 走 TCP、WebDAV / S3 走 HTTP HEAD、外接存储走 security-scoped bookmark resolve），结果以 `unknown / reachable / unreachable` 形式暴露给 Home，供右侧菜单标记 “离线”。`DependencyContainer` 在初始化时立刻 `start()` 它，并保留 NWPathMonitor 与前台进入通知触发的 force-sweep 能力。
+8. `DependencyContainer.makeForBackgroundTask()` 会构造一份独立的依赖给 `BackgroundBackupRunner` 使用。
 
 ## 3. Home 模块
 
@@ -199,16 +201,14 @@
 
 1. 请求/校验相册权限
 2. 创建并连接远端 client
-3. 保证 `basePath` 存在
-4. `RemoteFormatCompatibilityService.verify(...)` 检查远端布局是否兼容
-5. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest，写入 `RemoteLibrarySnapshotCache`
+3. `BackupV2RuntimeBuilder.build(...)` 通过 `RemoteFormatCompatibilityService.inspectRemoteFormat(...)` 路由 fresh / V1 / V2 / unsupported；前台允许 V1→V2 迁移，后台不允许
+4. V2 路径建立专用 metadata client，并把 cold-start materialize 结果放进 `BackupV2RuntimeServices.initialMaterializeOutput`
+5. `RemoteIndexSyncService.syncIndex(...)` 同步远端快照：V2 走 materialize（可消费预热结果），V1 继续扫 per-month manifest
 6. 按 `full / scoped / retry` 加载资产并分组到 `monthAssetIDsByMonth`
 7. 从本地 hash 索引读取每个 asset 的 `totalFileSizeBytes`，估算每月体积
 8. 按 “预计字节数 → 数量 → 月份键” 顺序构建 `MonthPlan / MonthWorkItem`
 9. 决定 worker 数
 10. 决定连接池大小
-
-`MonthSeedLookup` 优化（快照较小时）现在由并行执行阶段在装载 manifest 时按需构造，准备阶段不再统一前置。
 
 ### `BackupParallelExecutor`
 
@@ -216,11 +216,11 @@
 
 1. 创建 `StorageClientPool`，并用预连接 client 预热
 2. 用 `MonthWorkQueue`（定义在 `BackupMonthScheduler.swift` 中的 actor）动态分发月份
-3. 每个 worker 逐月 `MonthManifestStore.loadOrCreate(...)`
+3. 每个 worker 逐月打开月份状态：V2 用 `V2MonthSession.loadOrCreate(...)`，V1 用 `MonthManifestStore.loadOrCreate(...)`
 4. 分批读取 PHAsset（每批 500）
 5. 调 `AssetProcessor.process(...)` 执行单 asset 上传
-6. 月份结束后 flush manifest
-7. flush 完成后执行 `onMonthUploaded` 月级收尾
+6. 每 10 个非 failed asset result 对当前 `BackupMonthStore` 做一次 batch flush；月末仍兜底 flush
+7. V2 flush 通过 `FlushDelta` 清理 `RemoteIndexSyncService` 的 uncommitted fingerprints；最终 flush 后先执行 `onMonthUploaded` 月级收尾，再按结果进入 `completed` / `downloadIncomplete` / fatal failure
 
 ### `AssetProcessor`（`AssetProcessor.swift` + `+Naming` + `+Upload`）
 
@@ -232,31 +232,32 @@
 4. 检查 hash 已存在 / 文件名碰撞
 5. 上传远端资源（最大重试 3 次）
 6. 写本地 hash 索引
-7. 写月 manifest
+7. 写 `BackupMonthStore`（V2 session 或 V1 manifest store）
 8. 增量更新共享远端快照缓存
 
-### `MonthManifestStore`（`Shared/Services/Backup/`）
+### `BackupMonthStore` / `V2MonthSession` / `MonthManifestStore`（`Shared/Services/Backup/`）
 
-文件：`MonthManifestStore.swift` + `+Loading.swift` + `+Schema.swift`
+文件：`BackupMonthStore.swift`、`V2MonthSession.swift`、`V2MonthIndexes.swift`、`V2MonthCommitFlusher.swift`、`V2MonthSnapshotFlusher.swift`、`MonthManifestStore.swift` + `+Loading.swift` + `+Schema.swift`
 
 职责：
 
-1. 管理月级 sqlite：`resources / assets / asset_resources`
-2. 支持直接下载现有 manifest 或从 snapshot seed 初始化
-3. 记录真实远端目录文件集合，检测“文件已上传但 manifest 未 flush”的孤儿文件
-4. 通过临时文件 + move 原子刷新远端 manifest
+1. `BackupMonthStore` 是上传路径的统一协议，供 `AssetProcessor` 同时写 V2 session 与 V1 manifest store
+2. `V2MonthSession` 是当前 V2 写入路径：单月 materialize + 真实目录 listing → in-memory indexes → commit jsonl + snapshot jsonl flush
+3. `MonthManifestStore` 是 V1 兼容路径：管理月级 sqlite `resources / assets / asset_resources`，支持旧仓库读取、迁移与 V1 verify
+4. 两条路径都会把真实远端目录文件集合叠加进月份状态，避免“文件已上传但 metadata 未 flush”的 orphan 造成重名冲突
 
 ### `RemoteIndexSyncService` / `RemoteLibrarySnapshotCache`（`Shared/Services/Backup/`）
 
-1. `RemoteIndexSyncService` 扫描远端 `YYYY/MM/.watermelon_manifest.sqlite` 摘要、对比上次 digest、找出 changed/removed months、仅重新下载变化月份的 manifest，并写入 `RemoteLibrarySnapshotCache`
-2. `RemoteLibrarySnapshotCache` 维护内存态完整快照与 `revision`，向 Home 暴露 `currentState(since:)` / `monthRawData(for:)` 等接口
+1. `RemoteIndexSyncService` 先 inspect 远端格式：V2 走 `RepoMaterializer.materialize(expectedRepoID:)`，V1 扫描 `YYYY/MM/.watermelon_manifest.sqlite` 摘要并按 changed/removed months 增量下载
+2. V2 同步还会刷新 physical-presence overlay，并把 `uncommittedV2` fingerprints 从 Home-facing snapshot 中扣掉，避免 pause/resume 把未 durable 的 asset 当成已完成
+3. `RemoteLibrarySnapshotCache` 维护内存态完整快照与 `revision`，向 Home 暴露 `currentState(since:)` / `monthRawData(for:)` 等接口
 
 ### `RemoteMaintenanceController`（`Watermelon/Services/Backup/`）
 
 用户主动触发的远端月份校验控制器：
 
 1. 通过 `BackupCoordinator.verifyAllMonths(...)` 跑跨月校验
-2. 维护 `isVerifying / progress / errors`
+2. 维护 `isVerifying / progress / lastError`
 3. 校验运行时通过通知让 Home 把 `isSelectable` 关掉，避免与执行态冲突
 
 ### 其他执行辅助
@@ -324,9 +325,11 @@
 
 ### 本地持久化
 
-1. `DatabaseManager` 使用 GRDB；目前注册了两条迁移：
+1. `DatabaseManager` 使用 GRDB；目前注册了四条迁移：
    - `v1_initial`：建 `server_profiles / sync_state / local_assets / local_asset_resources`
    - `v2_ms_timestamps`：把 `local_assets.modificationDateNs` 重命名为 `modificationDateMs` 并把已有值除以 1_000_000
+   - `v3_repo_state`：新增 `server_profiles.writerID` 与 `repo_state(profileID, repoID, writerID, lastClock, lastSeq, migrationCompleted)`
+   - `v4_selection_version`：新增 `local_assets.selectionVersion / resourceSignature`，用于 hash cache 资源选择规则失效判断
 
 本地主要表：
 
@@ -334,11 +337,12 @@
 2. `sync_state`
 3. `local_assets`
 4. `local_asset_resources`
+5. `repo_state`
 
 ### 远端持久化
 
-1. 每个月一个 `.watermelon_manifest.sqlite`
-2. `MonthManifestStore` 迁移名：`month_manifest_v1_initial`
+1. V2 主路径：`.watermelon/version.json`、identity / repo metadata、`commits/`、`snapshots/`、`liveness/`、`migrations/`
+2. V1 兼容路径：每个月一个 `.watermelon_manifest.sqlite`，`MonthManifestStore` 迁移名 `month_manifest_v1_initial`
 
 ### 会话态
 
@@ -367,15 +371,16 @@
 
 1. `通用` → 系统语言入口
 2. `远端存储` → `管理存储`
-3. `备份` → `上传并发` / `允许访问 iCloud 原件` / `后台备份`（Pro）
-4. `画中画进度` → `画中画进度`（Pro），开启后再露出 `画中画提示音`
-5. `诊断` → `执行日志历史`（DEBUG 构建额外露出 `Test Crash`）
+3. `备份` → `上传并发` / `允许访问 iCloud 原件`
+4. `后台备份` → 后台备份入口（Pro）与后台节点计数入口
+5. `画中画进度` → `画中画进度`（Pro），开启后再露出 `画中画提示音`
+6. `诊断` → `执行日志历史`（DEBUG 构建额外露出 `Test Crash`）
 
 再叠加 MoreKit 自带的 `membership / contact / appjun / about` 段落。
 
 ## 10. 自动化测试
 
-`WatermelonTests/` 覆盖纯逻辑单元：
+`WatermelonTests/` 覆盖 Home 纯逻辑、Repo/V2 元数据、存储能力和部分 restore/download 边界：
 
 1. `EngineTests` / `RemoteIndexEngineTests` — 本地 / 远端索引引擎
 2. `WorkerTests` — `HomeDataProcessingWorker`
@@ -389,9 +394,12 @@
 10. `S3ClientTests` — S3 client 的 request 构造（multipart 分片、key 编码、retry 分类）
 11. `SFTPCredentialBlobTests` — `SFTPCredentialBlob` 与 `SFTPConnectionParams` 的 JSON round-trip
 12. `SFTPErrorClassifierTests` — `SFTPErrorClassifier.isConnectionUnavailable` 表驱动覆盖（Citadel / NIO 类型未链接到测试 target，POSIX domain 与本地错误类型为主）
-13. `TestSupport.swift` — 共享 fixture（确定性日期、样例记录）
+13. `RepoMaterializerRoundTripTests` / `V2FlushTests` / `BackupV2RuntimeBuilderTests` / `BootstrapStateMachineTests` — V2 repo materialize、batch flush、bootstrap / migration 状态机
+14. `RepoVerifyMonthServiceTests` / `RemoteIndexSyncServiceTests` / `RemoteResourcePresenceTests` / `StorageCapabilityMatrixTests` — verify、remote index、presence overlay、backend capability contract
+15. `RestoreServiceFallbackTests` / `RestoredAssetFingerprintVerifierTests` — 下载 fallback 与 durable fingerprint 校验
+16. `TestSupport.swift` — 共享 fixture（确定性日期、样例记录）
 
-未覆盖：`HomeExecutionCoordinator`、`BackupCoordinator`、`RestoreService`、`ProfileReachabilityService` 等需要相册 / 远端 / 网络的链路，仍以真机回归为主。
+仍主要依赖真机回归：`HomeExecutionCoordinator` 到真实 PhotoKit / 真实远端的端到端执行、连接切换、暂停恢复、sync 月份内联下载、外接存储拔出、`ProfileReachabilityService` 网络探测。
 
 ## 11. macOS Target（`WatermelonMac/`）
 
