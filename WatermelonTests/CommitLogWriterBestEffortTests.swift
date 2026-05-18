@@ -623,6 +623,64 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         XCTAssertNotNil(afterWrite[path], "moveIfAbsent succeeded — final path must contain bytes")
     }
 
+    /// `.overwritePossible` backend, no peer at the final path, gate's
+    /// post-success final-verify download fails PERMANENTLY (e.g. permission
+    /// denied / AccessDenied). The transient case is covered by
+    /// `testOverwritePossibleBackend_outerFinalVerifyTransientFailure_demotesToBestEffortRetry`;
+    /// the analogous-but-different `.alreadyExists` (peer-occupied) path's
+    /// permanent case is covered by
+    /// `testOverwritePossibleBackend_finalVerifyPermanentFailure_surfacesAsIOFailure`.
+    /// This pins the move-succeeded path's permanent branch (gate's
+    /// `.finalVerificationFailed` → writer's `.ioFailure`) so a regression that
+    /// widens the transient catch into a non-exhaustive default would surface.
+    func testOverwritePossibleBackend_outerFinalVerifyPermanentFailure_surfacesAsIOFailure() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        await client.setAtomicCreateMode(.bestEffort)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerID, seq: 1)
+        // Final path NOT pre-occupied — moveIfAbsent returns .created. Permission
+        // denied is NOT transient, so the gate must throw .finalVerificationFailed
+        // (not demote to .bestEffortRetry).
+        await client.injectPersistentDownloadError(.permission, for: path)
+
+        do {
+            _ = try await writer.write(
+                header: makeHeader(seq: 1, clock: 1),
+                ops: [sampleOp(opSeq: 0, clock: 1)],
+                month: month, respectTaskCancellation: false
+            )
+            XCTFail("expected .ioFailure — permanent outer-verify failure must NOT demote to .alreadyExists or .bestEffortRetry")
+        } catch CommitLogWriter.WriteError.ioFailure(let underlying) {
+            // The gate's outer post-move classification must throw
+            // .finalVerificationFailed for this remote path so the actionable
+            // cause survives the writer's .ioFailure wrap. A bare
+            // RemoteStorageClientError underlying would mean the gate widened
+            // its transient catch into a default and the writer's
+            // verifyAfterAlreadyExists surfaced the persistent permission
+            // error — same outer WriteError, wrong production path.
+            guard case MetadataCreateGate.Error.finalVerificationFailed(let failedPath, let cause) = underlying else {
+                XCTFail("expected MetadataCreateGate.Error.finalVerificationFailed, got \(underlying)")
+                return
+            }
+            XCTAssertEqual(failedPath, path, "finalVerificationFailed must name the final commit path")
+            XCTAssertNotNil(cause, "permanent permission denial must be preserved as the underlying cause")
+        } catch CommitLogWriter.WriteError.alreadyExists {
+            XCTFail("permanent outer-verify failure must NOT silently demote to .alreadyExists")
+        } catch is CancellationError {
+            XCTFail("permission denial must NOT normalize to CancellationError")
+        } catch {
+            XCTFail("expected .ioFailure, got \(error)")
+        }
+
+        // Bytes are at the final path — moveIfAbsent succeeded before verify
+        // failed. The failure is purely a readback/permission issue.
+        let afterWrite = await client.snapshotFiles()
+        XCTAssertNotNil(afterWrite[path], "moveIfAbsent succeeded — final path must contain bytes")
+    }
+
     /// `.overwritePossible` backend + peer-occupied final path + PERMANENT failure
     /// on the gate's post-move verify download (e.g. permission denied, AccessDenied,
     /// NoSuchKey). Must surface as `WriteError.ioFailure` so the operator sees the

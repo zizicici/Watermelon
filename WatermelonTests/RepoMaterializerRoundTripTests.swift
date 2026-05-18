@@ -464,6 +464,1012 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                      "snapshot whose filename writer disagrees with header must be skipped")
     }
 
+    /// Peer/corrupt metadata with `clock` near `UInt64.max` (whether in a commit
+    /// op or a snapshot filename's lamport) used to crash every later writer by
+    /// poisoning `observedClock` into `tickRange`'s overflow `fatalError`. The
+    /// materializer must now skip-and-log those rows so `observedClock` stays
+    /// within `LamportClock.maxAdvanceableValue`.
+    func testPoisonedSnapshotLamportIsSkipped_observedClockStaysBounded() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xA1)
+
+        // Legit baseline snapshot at lamport=10.
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: covered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: "run-good",
+            respectTaskCancellation: false
+        )
+
+        // Plant a peer-style snapshot filename with poisoned lamport just below
+        // UInt64.max. We don't bother writing valid body bytes — even an empty
+        // stub at this filename used to elevate observedClock and force a crash.
+        let poisonedPath = RepoLayout.snapshotFilePath(
+            base: basePath,
+            month: month,
+            lamport: UInt64.max - 1,
+            writerID: writerB,
+            runID: "deadbeef"
+        )
+        await client.injectFile(path: poisonedPath, contents: "{}")
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThanOrEqual(
+            output.state.observedClock,
+            LamportClock.maxAdvanceableValue,
+            "poisoned filename lamport must not advance observedClock past the safe ceiling"
+        )
+        XCTAssertNotNil(
+            output.state.months[month]?.assets[goodFP],
+            "legit baseline must still load; only the poisoned snapshot is skipped"
+        )
+    }
+
+    func testPoisonedCommitOpClockIsSkipped_observedClockStaysBounded() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xA2)
+        let poisonedFP = Self.fingerprint(0xA3)
+
+        // A legit commit so we have a real observedClock baseline.
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 5, clockMax: 5),
+            ops: [CommitOp(opSeq: 0, clock: 5, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        // Peer-like commit whose op claims clock=UInt64.max - 1 (the header has
+        // matching clockMin/clockMax so the body decodes cleanly). Without the
+        // materializer guard, this would set observedClock above the safe
+        // ceiling and crash the next writer.
+        let poisonedClock = UInt64.max - 1
+        _ = try await writer.write(
+            header: TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerB, seq: 1, runID: runID,
+                month: month, clockMin: poisonedClock, clockMax: poisonedClock
+            ),
+            ops: [CommitOp(opSeq: 0, clock: poisonedClock, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: poisonedFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThanOrEqual(
+            output.state.observedClock,
+            LamportClock.maxAdvanceableValue,
+            "poisoned op clock must not advance observedClock past the safe ceiling"
+        )
+        XCTAssertNotNil(
+            output.state.months[month]?.assets[goodFP],
+            "legit commit must still apply"
+        )
+        XCTAssertNil(
+            output.state.months[month]?.assets[poisonedFP],
+            "poisoned-clock op must be skipped at replay"
+        )
+    }
+
+    /// Exact-ceiling values are also poison: a peer planting `lamport ==
+    /// maxAdvanceableValue` would otherwise satisfy the prior `<= ceiling`
+    /// guard, get persisted by `observe`, then every later writer's
+    /// `tickRange` would throw `advanceExhausted` because there's no
+    /// headroom left. Strict-`<` keeps a future tick safe.
+    func testExactCeilingSnapshotLamportIsSkipped() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xC1)
+
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: covered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: "run-good",
+            respectTaskCancellation: false
+        )
+
+        let poisonedPath = RepoLayout.snapshotFilePath(
+            base: basePath,
+            month: month,
+            lamport: LamportClock.maxAdvanceableValue,
+            writerID: writerB,
+            runID: "deadbeef"
+        )
+        await client.injectFile(path: poisonedPath, contents: "{}")
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThan(
+            output.state.observedClock,
+            LamportClock.maxAdvanceableValue,
+            "exact-ceiling filename lamport must not advance observedClock to the ceiling"
+        )
+        XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
+    }
+
+    /// Exact-ceiling commit op clock is also poison (see snapshot test above).
+    func testExactCeilingCommitOpClockIsSkipped() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xC2)
+        let poisonedFP = Self.fingerprint(0xC3)
+
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 5, clockMax: 5),
+            ops: [CommitOp(opSeq: 0, clock: 5, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let ceiling = LamportClock.maxAdvanceableValue
+        _ = try await writer.write(
+            header: TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerB, seq: 1, runID: runID,
+                month: month, clockMin: ceiling, clockMax: ceiling
+            ),
+            ops: [CommitOp(opSeq: 0, clock: ceiling, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: poisonedFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThan(
+            output.state.observedClock,
+            LamportClock.maxAdvanceableValue,
+            "exact-ceiling op clock must not advance observedClock to the ceiling"
+        )
+        XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
+        XCTAssertNil(output.state.months[month]?.assets[poisonedFP])
+    }
+
+    /// A snapshot whose filename lamport is safe but whose asset/resource/
+    /// deletedKey row carries an above-ceiling `OpStamp.clock` would otherwise
+    /// smuggle the poisoned stamp into baseline state. Once there, every legit
+    /// replay loses LWW comparisons against it. The materializer must reject
+    /// the snapshot at the boundary.
+    func testSnapshotWithPoisonedRowStampClockIsSkipped() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xD1)
+        let poisonedFP = Self.fingerprint(0xD2)
+
+        var goodCovered = CoveredRanges()
+        goodCovered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: goodCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 5)
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: "run-good",
+            respectTaskCancellation: false
+        )
+
+        var poisonCovered = CoveredRanges()
+        poisonCovered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB,
+                repoID: repoID,
+                covered: poisonCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: poisonedFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerB, seq: 1, clock: UInt64.max - 1)
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 12,
+            runID: "run-poison",
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThan(
+            output.state.observedClock,
+            LamportClock.maxAdvanceableValue,
+            "row stamp at/above ceiling must not advance observedClock past the safe ceiling"
+        )
+        XCTAssertNotNil(
+            output.state.months[month]?.assets[goodFP],
+            "legit snapshot (with sub-ceiling stamp) must still load as baseline"
+        )
+        XCTAssertNil(
+            output.state.months[month]?.assets[poisonedFP],
+            "snapshot with poisoned row stamp must be skipped — its peer asset must not enter baseline"
+        )
+    }
+
+    /// A snapshot whose row stamp clock is below the ceiling but ABOVE the
+    /// snapshot's own filename lamport violates the legitimate-writer invariant
+    /// (filename lamport tracks the max covered op clock). The materializer
+    /// must reject it: trusting such a stamp would let the peer dominate LWW
+    /// using a "future" clock the filename doesn't admit.
+    func testSnapshotWithRowStampAboveFilenameLamportIsSkipped() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xE1)
+        let poisonedFP = Self.fingerprint(0xE2)
+
+        var goodCovered = CoveredRanges()
+        goodCovered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: goodCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 4)
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 8,
+            runID: "run-good",
+            respectTaskCancellation: false
+        )
+
+        // Peer snapshot at filename lamport 9 but with a row stamp clock at 5000
+        // — well below ceiling, but far above 9. Legitimate writers would tick
+        // the filename at-or-after every row's clock.
+        var poisonCovered = CoveredRanges()
+        poisonCovered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB,
+                repoID: repoID,
+                covered: poisonCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: poisonedFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerB, seq: 1, clock: 5000)
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 9,
+            runID: "run-future",
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertNotNil(
+            output.state.months[month]?.assets[goodFP],
+            "legit baseline must still load"
+        )
+        XCTAssertNil(
+            output.state.months[month]?.assets[poisonedFP],
+            "peer snapshot whose row stamp.clock > filename lamport must be skipped"
+        )
+    }
+
+    /// A peer plants a snapshot whose filename lamport is the safe-looking
+    /// boundary `maxAdoptableValue - 1` (one below the outer-guard rejection
+    /// threshold so the candidate enters baseline selection) but whose body
+    /// is corrupt. Baseline selection skips the candidate (read fails), so
+    /// it doesn't enter materialised state — but the filename lamport must
+    /// NOT advance `observedClock` either, or the writer would persist a
+    /// dead-end value and the next `tickRange(1)` would throw `advanceExhausted`.
+    func testCorruptSnapshotAtMaxAdoptableMinusOneDoesNotPoisonObservedClock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xC1)
+
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: covered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: "run-good",
+            respectTaskCancellation: false
+        )
+
+        // Plant a syntactically valid filename at the boundary lamport with a
+        // body the snapshot reader cannot decode — falls through the candidate
+        // loop with .integrityMismatch/.decodeFailure.
+        let highLamport = LamportClock.maxAdoptableValue - 1
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath,
+            month: month,
+            lamport: highLamport,
+            writerID: writerB,
+            runID: "deadbeef"
+        )
+        await client.injectFile(path: corruptPath, contents: "not-a-snapshot-body")
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThan(
+            output.state.observedClock,
+            LamportClock.maxAdoptableValue - 1,
+            "corrupt snapshot at the highest-accepted lamport must not advance observedClock to that value"
+        )
+        XCTAssertEqual(
+            output.state.observedClock,
+            10,
+            "observedClock should reflect only the accepted (good) baseline lamport"
+        )
+        XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
+        // Subsequent tickRange must still allocate — the failure mode this test
+        // guards against is `advanceExhausted` after observe(observedClock).
+        let lamport = LamportClock(initial: output.state.observedClock)
+        let range = try await lamport.tickRange(count: 1)
+        XCTAssertEqual(range.high, 11)
+        XCTAssertLessThan(range.high, LamportClock.maxAdoptableValue)
+    }
+
+    /// A peer plants a snapshot whose filename lamport is `maxAdoptableValue - 1`
+    /// (one below the outer-guard rejection threshold) and whose body parses
+    /// but carries an above-ceiling row-stamp clock — the existing row-stamp
+    /// quarantine skips it from baseline. The filename-only observedClock
+    /// sweep must NOT independently advance the clock to the boundary; the
+    /// writer would otherwise immediately exhaust its allocation.
+    func testRowStampRejectedSnapshotAtMaxAdoptableMinusOneDoesNotPoisonObservedClock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xC2)
+        let poisonedFP = Self.fingerprint(0xC3)
+
+        var goodCovered = CoveredRanges()
+        goodCovered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: goodCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 5)
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: "run-good",
+            respectTaskCancellation: false
+        )
+
+        // Boundary filename lamport, but row stamp at the ceiling so the
+        // row-stamp quarantine rejects the candidate even after read succeeds.
+        let highLamport = LamportClock.maxAdoptableValue - 1
+        var poisonCovered = CoveredRanges()
+        poisonCovered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB,
+                repoID: repoID,
+                covered: poisonCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: poisonedFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerB, seq: 1, clock: LamportClock.maxAdoptableValue)
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: highLamport,
+            runID: "run-poison",
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThan(
+            output.state.observedClock,
+            LamportClock.maxAdoptableValue - 1,
+            "row-stamp-rejected snapshot at the highest-accepted lamport must not advance observedClock to that value"
+        )
+        XCTAssertEqual(
+            output.state.observedClock,
+            10,
+            "observedClock should reflect only the accepted (good) baseline lamport"
+        )
+        XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
+        XCTAssertNil(output.state.months[month]?.assets[poisonedFP])
+        let lamport = LamportClock(initial: output.state.observedClock)
+        let range = try await lamport.tickRange(count: 1)
+        XCTAssertEqual(range.high, 11)
+        XCTAssertLessThan(range.high, LamportClock.maxAdoptableValue)
+    }
+
+    /// Foreign-repo snapshot variant: header.repoID mismatches `expectedRepoID`,
+    /// so the candidate is skipped before its body is trusted. Its filename
+    /// lamport at `maxAdoptableValue - 1` must not leak into observedClock.
+    func testForeignRepoSnapshotAtMaxAdoptableMinusOneDoesNotPoisonObservedClock() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xC4)
+        let foreignFP = Self.fingerprint(0xC5)
+
+        var goodCovered = CoveredRanges()
+        goodCovered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: goodCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: "run-good",
+            respectTaskCancellation: false
+        )
+
+        let highLamport = LamportClock.maxAdoptableValue - 1
+        var foreignCovered = CoveredRanges()
+        foreignCovered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB,
+                repoID: "other-repo-id",
+                covered: foreignCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: foreignFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: highLamport,
+            runID: "run-foreign",
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThan(
+            output.state.observedClock,
+            LamportClock.maxAdoptableValue - 1,
+            "foreign-repo snapshot at the highest-accepted lamport must not advance observedClock"
+        )
+        XCTAssertEqual(output.state.observedClock, 10)
+        XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
+        XCTAssertNil(output.state.months[month]?.assets[foreignFP])
+    }
+
+    /// The boundary value `maxObservableValue` (one below the absolute emit
+    /// cap) is the new effective rejection threshold for observe + materializer
+    /// guards. A peer planting a snapshot at exactly this lamport must be
+    /// quarantined the same as the exact-ceiling case — otherwise it would be
+    /// accepted, persisted, and immediately exhaust the next allocation.
+    func testMaxObservableValueSnapshotLamportIsSkipped() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xF1)
+
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: covered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: "run-good",
+            respectTaskCancellation: false
+        )
+
+        let poisonedPath = RepoLayout.snapshotFilePath(
+            base: basePath,
+            month: month,
+            lamport: LamportClock.maxObservableValue,
+            writerID: writerB,
+            runID: "deadbeef"
+        )
+        await client.injectFile(path: poisonedPath, contents: "{}")
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThan(
+            output.state.observedClock,
+            LamportClock.maxObservableValue,
+            "maxObservableValue filename lamport must not advance observedClock to the new ceiling"
+        )
+        XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
+    }
+
+    /// Codex Reviewer 1 (loop II-VII postfix5 high): a syntactically valid peer
+    /// snapshot named at `maxAdoptableValue` (one above the safe-adoption
+    /// ceiling) used to be accepted by the outer filename guard, observed
+    /// into the persisted clock, and dead-end the next `tickRange(count: 1)`.
+    /// The tightened guard rejects this value so it never reaches
+    /// `observedClock`; `tickRange` succeeds afterward.
+    func testValidSnapshotAtMaxAdoptableValueDoesNotDeadEndTickRange() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xD1)
+        let boundaryFP = Self.fingerprint(0xD2)
+
+        var goodCovered = CoveredRanges()
+        goodCovered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: goodCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: "run-good",
+            respectTaskCancellation: false
+        )
+
+        // Real, valid snapshot at the new rejection boundary. Pre-fix this
+        // would have been accepted and dead-ended every subsequent tick.
+        var boundaryCovered = CoveredRanges()
+        boundaryCovered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB,
+                repoID: repoID,
+                covered: boundaryCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: boundaryFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: LamportClock.maxAdoptableValue,
+            runID: "run-boundary",
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThan(
+            output.state.observedClock,
+            LamportClock.maxAdoptableValue,
+            "valid snapshot at maxAdoptableValue must NOT advance observedClock — would dead-end the next tickRange"
+        )
+        XCTAssertEqual(
+            output.state.observedClock,
+            10,
+            "observedClock should reflect only the accepted (good) baseline"
+        )
+        XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
+        XCTAssertNil(output.state.months[month]?.assets[boundaryFP])
+        // The dead-end vector: observe(observedClock) into a persisted clock,
+        // then attempt one tick. The fix ensures this succeeds.
+        let lamport = LamportClock(initial: 0)
+        await lamport.observe(output.state.observedClock)
+        let range = try await lamport.tickRange(count: 1)
+        XCTAssertEqual(range.high, 11)
+    }
+
+    /// Same as the snapshot test above but for an op clock at the boundary.
+    func testValidCommitOpAtMaxAdoptableValueDoesNotDeadEndTickRange() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xD3)
+        let boundaryFP = Self.fingerprint(0xD4)
+
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 5, clockMax: 5),
+            ops: [CommitOp(opSeq: 0, clock: 5, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let boundary = LamportClock.maxAdoptableValue
+        _ = try await writer.write(
+            header: TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerB, seq: 1, runID: runID,
+                month: month, clockMin: boundary, clockMax: boundary
+            ),
+            ops: [CommitOp(opSeq: 0, clock: boundary, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: boundaryFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThan(
+            output.state.observedClock,
+            LamportClock.maxAdoptableValue,
+            "op clock at maxAdoptableValue must NOT advance observedClock — would dead-end the next tickRange"
+        )
+        XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
+        XCTAssertNil(output.state.months[month]?.assets[boundaryFP])
+        let lamport = LamportClock(initial: 0)
+        await lamport.observe(output.state.observedClock)
+        let range = try await lamport.tickRange(count: 1)
+        XCTAssertEqual(range.high, max(6, output.state.observedClock + 1))
+    }
+
+    /// Codex Reviewer 2 (loop II-VII postfix5 low): a month whose only
+    /// snapshot filename is filename-quarantined (parseable but lamport
+    /// >= maxAdoptableValue) never enters the task group, so the
+    /// pre-fix logic never flagged it for `corruptedSnapshotMonths`.
+    /// Result: every materialize re-skipped the unworkable file and
+    /// replayed the full uncovered commit log. The fix tracks these
+    /// months and forces a fresh baseline on the next flush.
+    func testFilenameRejectedSnapshotForcesMonthRebaseline() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+
+        // No usable baseline. Only thing on disk is an above-ceiling snapshot
+        // filename — pre-fix this month was silently absent from
+        // `corruptedSnapshotMonths` so `V2MonthSession.loadOrCreate` would not
+        // trigger `requestSnapshotRebaseline()`.
+        let poisonedPath = RepoLayout.snapshotFilePath(
+            base: basePath,
+            month: month,
+            lamport: LamportClock.maxAdoptableValue,
+            writerID: writerB,
+            runID: "deadbeef"
+        )
+        await client.injectFile(path: poisonedPath, contents: "{}")
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertTrue(
+            output.corruptedSnapshotMonths.contains(month),
+            "month with only filename-quarantined snapshot must be flagged so the next flush rebaselines"
+        )
+        // Also exercise the mixed case: a good baseline at lamport=10 plus a
+        // filename-quarantined snapshot — the good baseline is accepted so no
+        // rebaseline needed.
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: covered
+            ),
+            assets: [],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: "run-good",
+            respectTaskCancellation: false
+        )
+
+        let materializer2 = RepoMaterializer(client: client, basePath: basePath)
+        let output2 = try await materializer2.materialize(expectedRepoID: repoID)
+        XCTAssertFalse(
+            output2.corruptedSnapshotMonths.contains(month),
+            "month with usable baseline plus a filename-quarantined snapshot does not need rebaseline"
+        )
+    }
+
+    /// Direct regression for codex-reviewer-1 (loop II-VII final convergence
+    /// HIGH): a syntactically valid peer snapshot at filename lamport
+    /// `maxAdoptableValue - 1` (the highest accepted by the outer guard)
+    /// used to advance `observedClock` to that value, after which the
+    /// next `tickRange(1)` threw `advanceExhausted` because tick's
+    /// headroom guard shared the same strict-`<` ceiling. The fix
+    /// loosens tick to use `maxObservableValue` so the writer can still
+    /// emit one more tick at `maxAdoptableValue`.
+    func testValidSnapshotAtAdoptCeilingMinusOneAllowsNextTick() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xE1)
+        let boundaryFP = Self.fingerprint(0xE2)
+
+        var goodCovered = CoveredRanges()
+        goodCovered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: goodCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 10,
+            runID: "run-good",
+            respectTaskCancellation: false
+        )
+
+        // Valid snapshot at the highest-adopted filename lamport. Pre-fix
+        // tick headroom this would dead-end the next `tickRange(1)`.
+        let boundaryLamport = LamportClock.maxAdoptableValue - 1
+        var boundaryCovered = CoveredRanges()
+        boundaryCovered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB,
+                repoID: repoID,
+                covered: boundaryCovered
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: boundaryFP, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: boundaryLamport,
+            runID: "run-boundary",
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertEqual(
+            output.state.observedClock,
+            boundaryLamport,
+            "valid snapshot at the highest adopt-ceiling lamport must advance observedClock so peer ordering is preserved"
+        )
+        XCTAssertNotNil(output.state.months[month]?.assets[boundaryFP])
+
+        // The original failure vector: observe(observedClock) into a
+        // persisted clock, then attempt one tick. Under the loosened tick
+        // ceiling this succeeds and emits the writer's boundary value
+        // (`maxAdoptableValue`, one above the adopt ceiling).
+        let lamport = LamportClock(initial: 0)
+        await lamport.observe(output.state.observedClock)
+        let range = try await lamport.tickRange(count: 1)
+        XCTAssertEqual(
+            range.high,
+            LamportClock.maxAdoptableValue,
+            "tick from the highest-adopted value must emit `maxAdoptableValue` — the writer's last legitimate boundary tick"
+        )
+    }
+
+    /// Same as the snapshot test above but for an op clock at the
+    /// adopt-ceiling-minus-one boundary.
+    func testValidCommitOpAtAdoptCeilingMinusOneAllowsNextTick() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xE3)
+        let boundaryFP = Self.fingerprint(0xE4)
+
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 5, clockMax: 5),
+            ops: [CommitOp(opSeq: 0, clock: 5, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let boundaryClock = LamportClock.maxAdoptableValue - 1
+        _ = try await writer.write(
+            header: TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerB, seq: 1, runID: runID,
+                month: month, clockMin: boundaryClock, clockMax: boundaryClock
+            ),
+            ops: [CommitOp(opSeq: 0, clock: boundaryClock, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: boundaryFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertEqual(
+            output.state.observedClock,
+            boundaryClock,
+            "valid op clock at the highest adopt-ceiling boundary must advance observedClock"
+        )
+        XCTAssertNotNil(output.state.months[month]?.assets[boundaryFP])
+
+        let lamport = LamportClock(initial: 0)
+        await lamport.observe(output.state.observedClock)
+        let range = try await lamport.tickRange(count: 1)
+        XCTAssertEqual(
+            range.high,
+            LamportClock.maxAdoptableValue,
+            "tick after observing the boundary op clock must emit `maxAdoptableValue` (the writer's boundary tick) without throwing"
+        )
+    }
+
+    func testMaxObservableValueCommitOpClockIsSkipped() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0xF2)
+        let poisonedFP = Self.fingerprint(0xF3)
+
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 5, clockMax: 5),
+            ops: [CommitOp(opSeq: 0, clock: 5, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let observable = LamportClock.maxObservableValue
+        _ = try await writer.write(
+            header: TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerB, seq: 1, runID: runID,
+                month: month, clockMin: observable, clockMax: observable
+            ),
+            ops: [CommitOp(opSeq: 0, clock: observable, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: poisonedFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertLessThan(
+            output.state.observedClock,
+            LamportClock.maxObservableValue,
+            "maxObservableValue op clock must not advance observedClock to the new ceiling"
+        )
+        XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
+        XCTAssertNil(output.state.months[month]?.assets[poisonedFP])
+    }
+
     private func makeHeader(
         seq: UInt64,
         clockMin: UInt64,

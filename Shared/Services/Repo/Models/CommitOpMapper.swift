@@ -47,7 +47,9 @@ enum CommitOpMapper {
                     "lamportWatermark": basis.lamportWatermark
                 ]
                 if !basis.perWriterMaxSeq.isEmpty {
-                    basisDict["perWriterMaxSeq"] = basis.perWriterMaxSeq.mapValues { Int64(bitPattern: $0) }
+                    // Direct UInt64; Int64(bitPattern:) flipped values > Int64.max to
+                    // negatives which the decoder rejected on round-trip.
+                    basisDict["perWriterMaxSeq"] = basis.perWriterMaxSeq
                 }
                 dict["observedBasis"] = basisDict
             }
@@ -94,7 +96,7 @@ enum CommitOpMapper {
     }
 
     private static func decodeHeader(_ dict: [String: Any]) throws -> CommitHeader {
-        let version = (dict["v"] as? Int) ?? 0
+        let version = try requireInt(dict, "v")
         if version != CommitHeader.currentVersion {
             throw CommitWireError.unsupportedVersion(version)
         }
@@ -175,14 +177,7 @@ enum CommitOpMapper {
 
     private static func decodeEnd(_ dict: [String: Any]) throws -> (sha256: String, rowCount: Int) {
         let sha = try requireString(dict, "sha256")
-        let count: Int
-        if let n = dict["rowCount"] as? Int {
-            count = n
-        } else if let n = dict["rowCount"] as? Int64 {
-            count = Int(n)
-        } else {
-            throw CommitWireError.missingField("rowCount")
-        }
+        let count = try requireInt(dict, "rowCount")
         return (sha, count)
     }
 

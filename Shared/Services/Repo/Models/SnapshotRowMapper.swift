@@ -122,7 +122,7 @@ enum SnapshotRowMapper {
     }
 
     private static func decodeHeader(_ dict: [String: Any]) throws -> SnapshotHeader {
-        let version = (dict["v"] as? Int) ?? 0
+        let version = try mapValidation { try RepoWireValidator.requireInt(dict["v"], field: "v") }
         if version != SnapshotHeader.currentVersion {
             throw SnapshotWireError.unsupportedVersion(version)
         }
@@ -176,20 +176,10 @@ enum SnapshotRowMapper {
     }
 
     private static func uint64FromJSON(_ value: Any) -> UInt64? {
-        if let n = value as? UInt64 { return n }
-        if let n = value as? Int64, n >= 0 { return UInt64(n) }
-        if let n = value as? Int, n >= 0 { return UInt64(n) }
-        if let n = value as? NSNumber {
-            // Must be non-negative AND integral. `uint64Value` wraps negatives to ~UInt64.max
-            // and truncates fractionals (1.9 → 1) — both silently change covered-range
-            // semantics. Stringify-roundtrip catches both: only true integers match.
-            let candidate = n.uint64Value
-            if n.int64Value >= 0 && n.stringValue == String(candidate) {
-                return candidate
-            }
-            return nil
-        }
-        return nil
+        // Route through the shared validator so JSON `true`/`false` (which bridges
+        // to `as? Int` / `as? UInt64` / `as? NSNumber` as 1/0) cannot smuggle in a
+        // covered range that silently shadows real commits.
+        return try? RepoWireValidator.requireUInt64(value, field: "covered")
     }
 
     private static func innerObject(_ dict: [String: Any]) throws -> [String: Any] {

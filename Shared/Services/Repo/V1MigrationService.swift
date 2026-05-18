@@ -122,7 +122,14 @@ actor V1MigrationService {
             let skippedAssetFailures = plan.skippedFailures
             if !migrableAssets.isEmpty {
                 if existingV2Output == nil {
-                    existingV2Output = try await materializer.materialize(expectedRepoID: repoID)
+                    let output = try await materializer.materialize(expectedRepoID: repoID)
+                    // Local DB high-water can lag remote when a peer already commits at this writerID
+                    // (e.g. fresh install pulling existing repo): allocator would collide on same-writer
+                    // seq, clock would emit values LWW-stale vs. existing V2 state.
+                    let remoteSeqMax = output.observedSeqByWriter[writerID] ?? 0
+                    try await allocator.observeRemoteMax(remoteSeqMax)
+                    try await clock.observe(output.state.observedClock)
+                    existingV2Output = output
                 }
                 let existingFingerprints: Set<Data>
                 if let existingAssets = existingV2Output?.state.months[monthKey]?.assets {

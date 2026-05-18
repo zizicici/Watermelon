@@ -126,6 +126,7 @@ enum RepoWireValidator {
     }
 
     static func requireInt(_ raw: Any?, field: String) throws -> Int {
+        if isBooleanNSNumber(raw) { throw WireValidationError.missingField(field) }
         if let n = raw as? Int { return n }
         if let n = raw as? Int64 { return Int(n) }
         if let n = raw as? NSNumber {
@@ -138,6 +139,7 @@ enum RepoWireValidator {
     }
 
     static func requireInt64(_ raw: Any?, field: String) throws -> Int64 {
+        if isBooleanNSNumber(raw) { throw WireValidationError.missingField(field) }
         if let n = raw as? Int64 { return n }
         if let n = raw as? Int { return Int64(n) }
         if let n = raw as? NSNumber {
@@ -152,6 +154,7 @@ enum RepoWireValidator {
     /// Must be non-negative AND integral — `uint64Value` wraps negatives to ~UInt64.max
     /// and truncates fractionals (1.9 → 1), both of which silently change semantics.
     static func requireUInt64(_ raw: Any?, field: String) throws -> UInt64 {
+        if isBooleanNSNumber(raw) { throw WireValidationError.missingField(field) }
         if let n = raw as? UInt64 { return n }
         if let n = raw as? Int64, n >= 0 { return UInt64(n) }
         if let n = raw as? Int, n >= 0 { return UInt64(n) }
@@ -162,5 +165,15 @@ enum RepoWireValidator {
             }
         }
         throw WireValidationError.missingField(field)
+    }
+
+    /// `__NSCFBoolean` bridges to `Bool`, `Int`, `Int64`, `UInt64`, and `NSNumber` —
+    /// so a JSON `true`/`false` would slip past every numeric cast and silently
+    /// become `1`/`0` for fields like `clock`, `seq`, or `perWriterMaxSeq`.
+    /// `CFBooleanGetTypeID` is the reliable discriminator: `objCType == 'c'` also
+    /// matches a legitimate `Int8`, but only true bool NSNumbers carry that type ID.
+    private static func isBooleanNSNumber(_ raw: Any?) -> Bool {
+        guard let raw = raw else { return false }
+        return CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID()
     }
 }

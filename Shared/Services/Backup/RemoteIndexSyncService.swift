@@ -36,6 +36,20 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             }
             return result
         }
+
+        /// Hashes whose inconclusive presence carries a specific reason. Used to
+        /// keep `.probeFailure` (transient transport/404) separate from
+        /// `.verifyBudgetExhausted` (resource caps), since fail-closed policy
+        /// treats them differently.
+        func inconclusiveHashes(reason needle: RemoteResourcePresence.InconclusiveReason) -> Set<Data> {
+            var result: Set<Data> = []
+            for (hash, presence) in presenceByHash {
+                if case .inconclusive(let r) = presence, r == needle {
+                    result.insert(hash)
+                }
+            }
+            return result
+        }
     }
 
     private struct OverlayProbeResult: Sendable {
@@ -1004,25 +1018,45 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                     if !probe.inconclusiveHashes.isEmpty {
                         if let stale = fallback[month] {
                             let cover = stale.intersection(probe.inconclusiveHashes)
+                            // Preserve prior evidence: every fallback-covered inconclusive
+                            // stays in `missing` so replace-semantics in
+                            // markPhysicallyMissing don't drop a prior-confirmed missing
+                            // hash. But for the fail-closed freshness gate, only
+                            // budget-exhausted-covered hashes count as resolved.
+                            // Probe-failure (transient 404 / transport) hashes carry NO
+                            // signal even when covered by fallback — counting them as
+                            // resolved would mark the month fresh and republish the
+                            // fallback set as verified-missing on pure transport noise.
                             missing.formUnion(cover)
-                            resolvedInconclusives.formUnion(cover)
+                            let budgetExhaustedCover = cover.intersection(
+                                probe.inconclusiveHashes(reason: .verifyBudgetExhausted)
+                            )
+                            resolvedInconclusives.formUnion(budgetExhaustedCover)
                         }
-                        // Under fail-closed policy, any inconclusive hash not covered by
-                        // a fallback entry must still be folded into missing — otherwise a
-                        // partial fallback short-circuits the policy and leaves the month
-                        // stale forever for budget-exhausted hashes outside the fallback.
+                        // Under fail-closed, fold ONLY budget-exhausted inconclusives into
+                        // missing. We attempted the probe and ran out of cap — treating those
+                        // as missing under fail-closed is the policy contract (over-mark
+                        // beats miss-real-gap for resume). Probe-failure inconclusives carry
+                        // NO signal (transient 404 / transport) — folding them publishes a
+                        // transport blip as authoritative absence and triggers needless
+                        // re-uploads. They stay inconclusive and keep the month stale.
                         if case .failClosedWhenMissingFallback = staleFallbackPolicy {
-                            let unresolved = probe.inconclusiveHashes.subtracting(resolvedInconclusives)
+                            let budgetExhausted = probe.inconclusiveHashes(reason: .verifyBudgetExhausted)
+                            let unresolved = budgetExhausted.subtracting(resolvedInconclusives)
                             missing.formUnion(unresolved)
                             resolvedInconclusives.formUnion(unresolved)
                         }
                     }
-                    // Freshness is policy-aware. Fail-closed folds every inconclusive into
-                    // missing, so post-merge coverage is the right gate (resume can proceed).
-                    // Preserve-fallback only intersects with prior state — fallback entries
-                    // are prior evidence, not current proof, so any inconclusive must stale
-                    // the month to keep `verifiedPhysicallyMissingHashes` returning nil and
-                    // avoid spurious re-uploads after a peer restored a previously-missing file.
+                    // Freshness is policy-aware.
+                    // Fail-closed: month fresh once every inconclusive has been folded into
+                    //   missing (via fallback intersection or budget-exhausted fold).
+                    //   Remaining probe-failure inconclusives keep the month stale so
+                    //   `verifiedPhysicallyMissingHashes` returns nil and the resume handle's
+                    //   `overlayFreshness` is `.stale`.
+                    // Preserve-fallback: any inconclusive (regardless of fallback cover)
+                    //   stales the month — fallback entries are prior evidence, not current
+                    //   proof, so the worker must wait for a clean probe before treating the
+                    //   overlay as authoritative.
                     let monthFresh: Bool
                     switch staleFallbackPolicy {
                     case .failClosedWhenMissingFallback:
@@ -1088,9 +1122,15 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             entries = try await client.list(path: monthAbs)
         } catch {
             if isStorageNotFoundError(error) {
+                // A 404 on the month directory while the manifest still names resources
+                // there is a probe failure, not authoritative absence: WebDAV/S3
+                // directory-listing 404s can lag PUTs (visibility/eventual consistency).
+                // Treating it as `.missing` would publish a transient 404 as verified
+                // absence and trigger unnecessary repair uploads. With no manifest
+                // resources, there's nothing to inflate either way.
                 var presence: [Data: RemoteResourcePresence] = [:]
                 for resource in resources {
-                    presence[resource.contentHash] = .missing
+                    presence[resource.contentHash] = .inconclusive(.probeFailure)
                 }
                 return OverlayMonthProbe(month: month, presenceByHash: presence)
             }

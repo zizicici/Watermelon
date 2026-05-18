@@ -120,4 +120,57 @@ final class RepoWireValidatorTests: XCTestCase {
             }
         }
     }
+
+    /// __NSCFBoolean satisfies `as? Int`, `as? Int64`, `as? UInt64`, `as? NSNumber`,
+    /// so without an explicit guard a JSON `true`/`false` becomes a silent `1`/`0`
+    /// in numeric fields like `clock`, `seq`, `perWriterMaxSeq`. CFBoolean rejection
+    /// must happen before any numeric cast.
+    func testRequireUInt64_rejectsJSONBooleanTrueAsOne() throws {
+        let data = "{\"v\":true}".data(using: .utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertThrowsError(try RepoWireValidator.requireUInt64(parsed["v"], field: "v")) { err in
+            guard case WireValidationError.missingField(let field) = err else {
+                XCTFail("expected missingField, got \(err)"); return
+            }
+            XCTAssertEqual(field, "v")
+        }
+    }
+
+    func testRequireUInt64_rejectsJSONBooleanFalseAsZero() throws {
+        let data = "{\"v\":false}".data(using: .utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertThrowsError(try RepoWireValidator.requireUInt64(parsed["v"], field: "v")) { err in
+            guard case WireValidationError.missingField = err else {
+                XCTFail("expected missingField, got \(err)"); return
+            }
+        }
+    }
+
+    func testRequireInt64_rejectsJSONBoolean() throws {
+        let data = "{\"v\":true}".data(using: .utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertThrowsError(try RepoWireValidator.requireInt64(parsed["v"], field: "v")) { err in
+            guard case WireValidationError.missingField = err else {
+                XCTFail("expected missingField, got \(err)"); return
+            }
+        }
+    }
+
+    func testRequireInt_rejectsJSONBoolean() throws {
+        let data = "{\"v\":false}".data(using: .utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertThrowsError(try RepoWireValidator.requireInt(parsed["v"], field: "v")) { err in
+            guard case WireValidationError.missingField = err else {
+                XCTFail("expected missingField, got \(err)"); return
+            }
+        }
+    }
+
+    /// Sanity: legitimate `Int8(1)` (objCType 'c') must still pass — the
+    /// discriminator must use CFBooleanGetTypeID, not raw objCType.
+    func testRequireInt64_acceptsInt8One() throws {
+        let n = NSNumber(value: Int8(1))
+        let v = try RepoWireValidator.requireInt64(n, field: "v")
+        XCTAssertEqual(v, 1)
+    }
 }

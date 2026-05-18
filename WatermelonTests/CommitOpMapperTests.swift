@@ -119,6 +119,29 @@ final class CommitOpMapperTests: XCTestCase {
         }
     }
 
+    /// JSON `v:true` bridges through `as? Int` as 1, the current version. The decoder
+    /// must reject it rather than silently accepting a boolean as a valid v1 header.
+    func testHeaderRejectsBooleanVersion() {
+        let raw = #"{"t":"header","v":true,"repoID":"r","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
+        XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
+            guard case CommitWireError.missingField = err else {
+                XCTFail("expected .missingField (boolean rejection), got \(err)"); return
+            }
+        }
+    }
+
+    /// JSON `rowCount:true` bridges through `as? Int` as 1; for a header-only
+    /// commit (rowCount=1) the malformed end row could otherwise pass integrity.
+    /// The decoder must reject it.
+    func testEndRowRejectsBooleanRowCount() {
+        let raw = #"{"t":"end","sha256":"deadbeef","rowCount":true}"#
+        XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
+            guard case CommitWireError.missingField = err else {
+                XCTFail("expected .missingField (boolean rejection), got \(err)"); return
+            }
+        }
+    }
+
     /// Fractional NSNumber must not be silently truncated to integer — `clockMin: 1.9`
     /// landing as 1 changes commit ordering vs the writer's intent. Stringify-roundtrip
     /// in `requireUInt64` rejects it.
@@ -208,5 +231,36 @@ final class CommitOpMapperTests: XCTestCase {
             XCTFail("expected addAsset op"); return
         }
         XCTAssertEqual(parsedBody.resources.first?.crypto, crypto)
+    }
+
+    /// Pins the encode→decode contract for tombstone basis seq values above Int64.max.
+    /// The prior encoder used Int64(bitPattern:) which flipped that range to negatives
+    /// and the decoder rejected them; direct UInt64 encoding + NSNumber 'Q' bridging
+    /// must round-trip identically.
+    func testTombstoneBasis_perWriterMaxSeq_aboveInt64Max_roundTrips() throws {
+        let highSeq = UInt64(Int64.max) + 1
+        let basis = TombstoneObservationBasis(
+            perWriterMaxSeq: ["writer-high": highSeq, "writer-max": UInt64.max, "writer-low": 7],
+            lamportWatermark: UInt64(Int64.max) + 42
+        )
+        let body = CommitTombstoneBody(
+            assetFingerprint: Data(repeating: 0xBE, count: 32),
+            reason: .verifyFailed,
+            observedBasis: basis
+        )
+        let op = CommitOp(opSeq: 0, clock: UInt64(Int64.max) + 99, body: .tombstoneAsset(body))
+        let line = try CommitOpMapper.encodeOpLine(op)
+        let decoded = try CommitOpMapper.decodeLine(line)
+        guard case .op(let parsed) = decoded,
+              case .tombstoneAsset(let parsedBody) = parsed.body,
+              let parsedBasis = parsedBody.observedBasis else {
+            XCTFail("expected tombstone with basis, got \(decoded)")
+            return
+        }
+        XCTAssertEqual(parsedBasis.perWriterMaxSeq["writer-high"], highSeq)
+        XCTAssertEqual(parsedBasis.perWriterMaxSeq["writer-max"], UInt64.max)
+        XCTAssertEqual(parsedBasis.perWriterMaxSeq["writer-low"], 7)
+        XCTAssertEqual(parsedBasis.lamportWatermark, basis.lamportWatermark)
+        XCTAssertEqual(parsed.clock, op.clock)
     }
 }

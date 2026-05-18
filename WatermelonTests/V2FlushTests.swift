@@ -1094,6 +1094,74 @@ final class V2FlushTests: XCTestCase {
         XCTAssertEqual(store.findResourceByHash(newHash)?.contentHash, newHash)
     }
 
+    /// Regression: V2MonthCommitFlusher's `alreadyExists` retry must re-tick Lamport
+    /// clocks and rebuild ops, not just re-allocate seq. Otherwise the retry publishes
+    /// commit bytes whose `(clock, writerID, seq)` ordering can land below a peer
+    /// commit at the same path even though this retry was wall-clock newer, leaving
+    /// stale metadata winning under LWW. Mirrors V1MigrationService's same retry rule.
+    func testFlushV2_retryOnAlreadyExists_reTicksLamportClockForFreshOrdering() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        // Default moveIfAbsent guarantee = .exclusive so the gate's staging path
+        // surfaces destination collisions as .alreadyExists (matching production SMB/SFTP).
+        let v2 = try await makeV2Services(client: client)
+
+        // Pre-occupy seq=1 with arbitrary bytes — the gate's exclusive moveIfAbsent
+        // will refuse to overwrite, throwing .alreadyExists.
+        let preExistingCommitPath = RepoLayout.commitFilePath(
+            base: basePath, month: monthKey, writerID: writerID, seq: 1
+        )
+        await client.injectFile(path: preExistingCommitPath, data: Data("pre-existing".utf8))
+
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        let asset = RemoteManifestAsset(
+            year: year, month: month,
+            assetFingerprint: TestFixtures.fingerprint(0xFE),
+            creationDateMs: 1_700_000_000_000,
+            backedUpAtMs: 1_700_000_001_000,
+            resourceCount: 1, totalFileSizeBytes: 100
+        )
+        let hash = TestFixtures.fingerprint(0xFD)
+        let resource = RemoteManifestResource(
+            year: year, month: month,
+            physicalRemotePath: "2026/01/retry-photo.jpg",
+            contentHash: hash, fileSize: 100,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let link = RemoteAssetResourceLink(
+            year: year, month: month,
+            assetFingerprint: asset.assetFingerprint,
+            resourceHash: hash, role: ResourceTypeCode.photo, slot: 0,
+            logicalName: "retry-photo.jpg"
+        )
+        _ = try store.upsertResource(resource)
+        try store.upsertAsset(asset, links: [link])
+
+        let delta = try await store.flushToRemote()
+        XCTAssertTrue(delta.didFlush)
+        XCTAssertEqual(delta.committedV2AssetFingerprints, [asset.assetFingerprint])
+
+        // The successful commit lands at seq=2 (seq=1 was pre-occupied).
+        let seq2Path = RepoLayout.commitFilePath(
+            base: basePath, month: monthKey, writerID: writerID, seq: 2
+        )
+        let seq2Exists = await client.hasFile(seq2Path)
+        XCTAssertTrue(seq2Exists, "retry must succeed at seq=2 after seq=1 collision")
+
+        // Parse the successful commit's header to verify clock advanced past the
+        // first attempt's tick. Without re-tick, clockMin would stay at 1 even though
+        // seq advanced to 2; with re-tick, clockMin is 2 (or higher).
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("retry-commit-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        try await client.download(remotePath: seq2Path, localURL: tempURL)
+        let parsed = try CommitLogReader.parse(localURL: tempURL)
+        XCTAssertGreaterThanOrEqual(parsed.header.clockMin, 2,
+                                    "retry must re-tick Lamport so clockMin advances past the failed-attempt tick of 1")
+    }
+
     // MARK: - V2 services manual construction
 
     private func makeV2Services(client: InMemoryRemoteStorageClient) async throws -> BackupV2RuntimeServices {

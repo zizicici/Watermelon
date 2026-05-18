@@ -473,6 +473,56 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
                        "self-sweep must reclaim aged own liveness staging even on renewal-unsafe backends (SMB/SFTP) — otherwise own crash residue is immortal")
     }
 
+    /// A pre-fix install can have `repo_state.lastClock == Int64.max` (the
+    /// exact-ceiling poison case where the legacy `lastClock < ?` predicate
+    /// couldn't repair the row). The builder must heal the row before handing
+    /// the runtime back: `PersistedLamportClock.init` resets the mirror, and
+    /// the unconditional `observe` + `repairPoisonedDBIfNeeded` calls in the
+    /// builder then push the sanitized value to disk.
+    func testBuild_repairsPoisonedRepoStateRow() async throws {
+        let canonicalRepoID = "poison-repair-repo"
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: canonicalRepoID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+        let identity = RepoIdentity(database: databaseManager)
+        let ourWriterID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        _ = try await identity.lazyEnsureRepoState(profileID: profile.id!, repoID: canonicalRepoID, writerID: ourWriterID)
+
+        // Plant exact-ceiling poison into repo_state (the case the legacy
+        // `WHERE lastClock < ?` predicate cannot rewrite).
+        let poison = LamportClock.maxAdvanceableValue
+        try databaseManager.write { db in
+            try db.execute(
+                sql: "UPDATE \(RepoStateRecord.databaseTableName) SET lastClock = ? WHERE profileID = ? AND repoID = ?",
+                arguments: [Int64(bitPattern: poison), profile.id!, canonicalRepoID]
+            )
+        }
+
+        let services = try await BackupV2RuntimeBuilder.build(
+            client: client,
+            metadataClient: metadataClient,
+            profile: profile,
+            databaseManager: databaseManager,
+            allowMigration: false
+        )
+        defer { Task { await services.shutdown() } }
+
+        let reloaded = try await identity.loadRepoState(profileID: profile.id!, repoID: canonicalRepoID)
+        let recovered = reloaded.map { UInt64(bitPattern: $0.lastClock) }
+        XCTAssertNotNil(recovered)
+        XCTAssertLessThan(recovered!, LamportClock.maxAdvanceableValue,
+                          "builder must heal poisoned repo_state.lastClock before returning the runtime — otherwise a session with no tick activity leaves the poison in place forever")
+        let lamportValue = await services.lamport.value()
+        XCTAssertLessThan(lamportValue, LamportClock.maxObservableValue,
+                          "actor-local mirror must also reflect a sane value after builder recovery")
+    }
+
     private func insertProfile() throws -> ServerProfileRecord {
         let id = try TestFixtures.insertServerProfile(in: databaseManager, basePath: basePath, storageType: .webdav)
         return TestFixtures.makeServerProfile(id: id, storageType: .webdav, basePath: basePath)

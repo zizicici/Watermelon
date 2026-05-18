@@ -478,6 +478,56 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                      ".preserveFallback must not advertise the fallback set as verified-missing for a budget-exhausted month")
     }
 
+    /// Regression: a month directory 404 while the manifest still names resources
+    /// there must be treated as a probe failure (inconclusive), not as authoritative
+    /// "every hash is missing". WebDAV directory-listing 404s can lag PUTs, so
+    /// publishing the full hash set as verified-missing would trigger spurious
+    /// repair uploads against bytes that are actually present.
+    func testRefreshPhysicalPresenceOverlay_monthDirNotFound_preservesPriorFallbackInsteadOfAllMissing() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+
+        let service = RemoteIndexSyncService()
+        let writer = service.makeOptimisticAssetWriter()
+        var allHashes: Set<Data> = []
+        for index in 0..<3 {
+            let bytes = Data("month-dir-404-\(index)".utf8)
+            let hash = Data(SHA256.hash(data: bytes))
+            allHashes.insert(hash)
+            let name = "f\(index).jpg"
+            let resource = RemoteManifestResource(
+                year: monthA.year, month: monthA.month,
+                physicalRemotePath: "\(monthRel)/\(name)",
+                contentHash: hash, fileSize: Int64(bytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: 0
+            )
+            writer.appendResource(resource)
+        }
+
+        // Prior overlay had one hash flagged missing (fallback). The month directory
+        // is NOT created on remote, so the probe's `list(monthAbs)` throws not-found.
+        let priorMissing = Set([allHashes.first!])
+        service.markPhysicallyMissingV2(month: monthA, hashes: priorMissing)
+
+        _ = try await service.refreshPhysicalPresenceOverlay(
+            client: client,
+            basePath: basePath,
+            fallback: [monthA: priorMissing]
+        )
+
+        let published = service.physicallyMissingHashesForTest(month: monthA)
+        XCTAssertEqual(published, priorMissing,
+                       "month-dir 404 must preserve prior fallback; widening to allHashes would publish a transient 404 as verified absence")
+        XCTAssertFalse(published == allHashes,
+                       "month-dir 404 must NOT publish every manifest hash as physicallyMissing")
+        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        XCTAssertNil(verified,
+                     "month-dir 404 must leave the month not-fresh so callers don't read the fallback as authoritative")
+    }
+
     /// Regression: a whole-month probe failure (transient list error) must NOT widen
     /// the published overlay beyond the prior fallback under any policy. Loop 3
     /// briefly wrote `allHashes` into `missingByMonth` under fail-closed for
@@ -526,6 +576,113 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        ".failure arm must preserve the prior fallback subset, not widen to every manifest hash")
         XCTAssertFalse(published == allHashes,
                        ".failure arm must NOT publish every hash as missing under fail-closed (Home consumers bypass freshness gate)")
+    }
+
+    /// Regression for the cross-policy gap: `syncOverlayAndCaptureHandle` uses
+    /// `.failClosedWhenMissingFallback`, where the `.success` arm previously
+    /// folded EVERY inconclusive (including probe-failure-only) into missing and
+    /// marked the month fresh. For a 404 month directory that turns into
+    /// all-`.inconclusive(.probeFailure)` presence from the probe, that produced
+    /// a fresh handle advertising every manifest hash as verified-missing —
+    /// `BackupParallelExecutor` would then read those as authoritative and
+    /// re-upload healthy bytes.
+    /// `.verifyBudgetExhausted` is the only inconclusive reason fail-closed
+    /// folds; `.probeFailure` must keep the month stale.
+    func testSyncOverlayAndCaptureHandle_monthDirNotFound_keepsHandleStaleAndPreservesFallback() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+        // Intentionally do NOT create the month directory. `list(monthAbs)`
+        // throws not-found, which `probeMonthForMissing` maps to
+        // `.inconclusive(.probeFailure)` for every manifest resource.
+
+        let service = RemoteIndexSyncService()
+        let writer = service.makeOptimisticAssetWriter()
+        var allHashes: Set<Data> = []
+        for index in 0..<3 {
+            let bytes = Data("syncoverlay-404-\(index)".utf8)
+            let hash = Data(SHA256.hash(data: bytes))
+            allHashes.insert(hash)
+            let name = "f\(index).jpg"
+            let resource = RemoteManifestResource(
+                year: monthA.year, month: monthA.month,
+                physicalRemotePath: "\(monthRel)/\(name)",
+                contentHash: hash, fileSize: Int64(bytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: 0
+            )
+            writer.appendResource(resource)
+        }
+        let priorMissing = Set([allHashes.first!])
+        service.markPhysicallyMissingV2(month: monthA, hashes: priorMissing)
+
+        let handle = try await service.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
+
+        XCTAssertEqual(handle.overlayFreshness, .stale,
+                       "month-dir 404 must yield a stale handle — probe-failure inconclusives carry no signal")
+        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        XCTAssertNil(verified,
+                     "month-dir 404 must NOT publish a fresh overlay for the affected month under fail-closed")
+        let published = service.physicallyMissingHashesForTest(month: monthA)
+        XCTAssertEqual(published, priorMissing,
+                       "month-dir 404 must preserve the prior fallback subset; widening to allHashes under fail-closed would publish a transient 404 as verified absence")
+        XCTAssertFalse(published == allHashes,
+                       "month-dir 404 must NOT publish every manifest hash as physicallyMissing")
+    }
+
+    /// Regression for the fallback-covers-all-probe-failures gap: when the
+    /// prior fallback covers EVERY inconclusive (probe-failure) hash, the
+    /// fail-closed `.success` arm previously folded all of them into
+    /// `resolvedInconclusives` via the fallback-intersection branch, so
+    /// `inconclusiveHashes.subtracting(resolvedInconclusives)` was empty and
+    /// the month was marked fresh. The handle then advertised the entire
+    /// fallback set as verified-missing — converting a pure transient 404
+    /// into authoritative absence and triggering spurious repair uploads.
+    /// Only `.verifyBudgetExhausted` covered hashes are permitted to count
+    /// as resolved for freshness; `.probeFailure` must keep the month stale
+    /// even when fully covered by fallback.
+    func testSyncOverlayAndCaptureHandle_monthDirNotFound_fallbackCoversAll_keepsHandleStale() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+        // Intentionally do NOT create the month directory — list(monthAbs)
+        // throws not-found and probeMonthForMissing maps every manifest
+        // resource to .inconclusive(.probeFailure).
+
+        let service = RemoteIndexSyncService()
+        let writer = service.makeOptimisticAssetWriter()
+        var allHashes: Set<Data> = []
+        for index in 0..<3 {
+            let bytes = Data("syncoverlay-404-allcovered-\(index)".utf8)
+            let hash = Data(SHA256.hash(data: bytes))
+            allHashes.insert(hash)
+            let name = "f\(index).jpg"
+            let resource = RemoteManifestResource(
+                year: monthA.year, month: monthA.month,
+                physicalRemotePath: "\(monthRel)/\(name)",
+                contentHash: hash, fileSize: Int64(bytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: 0
+            )
+            writer.appendResource(resource)
+        }
+        // Seed prior overlay covering EVERY hash — this is the dangerous case:
+        // pre-fix, fallback-intersection resolves all .probeFailure inconclusives
+        // and the freshness gate flips to fresh.
+        service.markPhysicallyMissingV2(month: monthA, hashes: allHashes)
+
+        let handle = try await service.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
+
+        XCTAssertEqual(handle.overlayFreshness, .stale,
+                       "fallback covering all probe-failure hashes must NOT flip the month to fresh — .probeFailure carries no current signal")
+        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        XCTAssertNil(verified,
+                     "all-probe-failure inconclusives must keep verifiedPhysicallyMissingHashes nil even when fully covered by fallback")
+        let published = service.physicallyMissingHashesForTest(month: monthA)
+        XCTAssertEqual(published, allHashes,
+                       "prior fallback must still be preserved in the missing set so replace-semantics don't drop it")
     }
 
     /// V1 verifyMonth must refuse a V2 repo. If a V2 repo lost some metadata and

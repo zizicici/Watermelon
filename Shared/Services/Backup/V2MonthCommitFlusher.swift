@@ -35,16 +35,13 @@ struct V2MonthCommitFlusher {
             perWriterMaxSeq[writer] = ranges.map(\.high).max() ?? 0
         }
 
-        let lamportWatermark = max(observedClockAtLoad, await services.lamport.value())
-        let observedBasis = TombstoneObservationBasis(
-            perWriterMaxSeq: perWriterMaxSeq,
-            lamportWatermark: lamportWatermark
-        )
-        let clockRange = try await services.lamport.tickRange(count: opCount)
-        var clockCursor = clockRange.low
-        var ops: [CommitOp] = []
-        ops.reserveCapacity(opCount)
-        var opSeq = 0
+        // Retry must re-tick Lamport clocks and rebuild ops: a retry that reused the
+        // original clocks would publish under-clocked rows whose LWW ordering against
+        // higher-clock peer commits leaves stale metadata winning at the same path.
+        // Mirrors V1MigrationService's same-shape retry rule.
+        let maxRetries = 4
+        var lastSeq: UInt64 = 0
+        var attempt = 0
         var committedAddAssetClocks: [Data: UInt64] = [:]
         var committedTombstoneClocks: [Data: UInt64] = [:]
         // Rows are built with the same field projection RepoMaterializer uses on replay
@@ -55,61 +52,71 @@ struct V2MonthCommitFlusher {
         // Per-path clock — recordCommit needs it to stamp the row with the producing op's
         // (writerID, seq, clock). seq is unknown until allocator runs, so we defer stamping.
         var committedResourceClocks: [String: UInt64] = [:]
+        while true {
+            let lamportWatermark = max(observedClockAtLoad, await services.lamport.value())
+            let observedBasis = TombstoneObservationBasis(
+                perWriterMaxSeq: perWriterMaxSeq,
+                lamportWatermark: lamportWatermark
+            )
+            let clockRange = try await services.lamport.tickRange(count: opCount)
+            var clockCursor = clockRange.low
+            var ops: [CommitOp] = []
+            ops.reserveCapacity(opCount)
+            var opSeq = 0
+            committedAddAssetClocks = [:]
+            committedTombstoneClocks = [:]
+            committedResources = [:]
+            committedResourceClocks = [:]
 
-        for fp in pending.assets {
-            guard let asset = indexes.asset(forFingerprint: fp),
-                  let links = indexes.links(forFingerprint: fp) else { continue }
-            var resources: [CommitResourceEntry] = []
-            resources.reserveCapacity(links.count)
-            for link in links {
-                let resource = try indexes.resourceForCommitOp(hash: link.resourceHash)
-                resources.append(CommitResourceEntry(
-                    physicalRemotePath: resource.physicalRemotePath,
-                    logicalName: link.logicalName.isEmpty ? resource.logicalName : link.logicalName,
-                    contentHash: link.resourceHash,
-                    fileSize: resource.fileSize,
-                    resourceType: resource.resourceType,
-                    role: link.role,
-                    slot: link.slot,
-                    crypto: resource.crypto
-                ))
-                committedResources[resource.physicalRemotePath] = SnapshotResourceRow(
-                    physicalRemotePath: resource.physicalRemotePath,
-                    contentHash: link.resourceHash,
-                    fileSize: resource.fileSize,
-                    resourceType: resource.resourceType,
+            for fp in pending.assets {
+                guard let asset = indexes.asset(forFingerprint: fp),
+                      let links = indexes.links(forFingerprint: fp) else { continue }
+                var resources: [CommitResourceEntry] = []
+                resources.reserveCapacity(links.count)
+                for link in links {
+                    let resource = try indexes.resourceForCommitOp(hash: link.resourceHash)
+                    resources.append(CommitResourceEntry(
+                        physicalRemotePath: resource.physicalRemotePath,
+                        logicalName: link.logicalName.isEmpty ? resource.logicalName : link.logicalName,
+                        contentHash: link.resourceHash,
+                        fileSize: resource.fileSize,
+                        resourceType: resource.resourceType,
+                        role: link.role,
+                        slot: link.slot,
+                        crypto: resource.crypto
+                    ))
+                    committedResources[resource.physicalRemotePath] = SnapshotResourceRow(
+                        physicalRemotePath: resource.physicalRemotePath,
+                        contentHash: link.resourceHash,
+                        fileSize: resource.fileSize,
+                        resourceType: resource.resourceType,
+                        creationDateMs: asset.creationDateMs,
+                        backedUpAtMs: asset.backedUpAtMs,
+                        crypto: resource.crypto
+                    )
+                    committedResourceClocks[resource.physicalRemotePath] = clockCursor
+                }
+                ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .addAsset(CommitAddAssetBody(
+                    assetFingerprint: fp,
                     creationDateMs: asset.creationDateMs,
                     backedUpAtMs: asset.backedUpAtMs,
-                    crypto: resource.crypto
-                )
-                committedResourceClocks[resource.physicalRemotePath] = clockCursor
+                    resources: resources
+                ))))
+                committedAddAssetClocks[fp] = clockCursor
+                opSeq += 1
+                if opSeq < opCount { clockCursor += 1 }
             }
-            ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .addAsset(CommitAddAssetBody(
-                assetFingerprint: fp,
-                creationDateMs: asset.creationDateMs,
-                backedUpAtMs: asset.backedUpAtMs,
-                resources: resources
-            ))))
-            committedAddAssetClocks[fp] = clockCursor
-            opSeq += 1
-            if opSeq < opCount { clockCursor += 1 }
-        }
-        for fp in pending.tombstones {
-            ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: fp,
-                reason: .manifestOrphan,
-                observedBasis: observedBasis
-            ))))
-            committedTombstoneClocks[fp] = clockCursor
-            opSeq += 1
-            if opSeq < opCount { clockCursor += 1 }
-        }
+            for fp in pending.tombstones {
+                ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .tombstoneAsset(CommitTombstoneBody(
+                    assetFingerprint: fp,
+                    reason: .manifestOrphan,
+                    observedBasis: observedBasis
+                ))))
+                committedTombstoneClocks[fp] = clockCursor
+                opSeq += 1
+                if opSeq < opCount { clockCursor += 1 }
+            }
 
-        // Retry on alreadyExists — local seq drift can produce a colliding filename.
-        let maxRetries = 4
-        var lastSeq: UInt64 = 0
-        var attempt = 0
-        while true {
             let seq = try await services.seqAllocator.allocate()
             lastSeq = seq
             let header = CommitHeader(

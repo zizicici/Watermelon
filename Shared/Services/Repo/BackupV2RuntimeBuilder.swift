@@ -214,9 +214,16 @@ enum BackupV2RuntimeBuilder {
         if remoteSeqMax > initialSeq {
             try await allocator.observeRemoteMax(remoteSeqMax)
         }
-        if output.state.observedClock > initialClock {
-            try await lamport.observe(output.state.observedClock)
-        }
+        // Always observe: comparing the sanitized `output.state.observedClock`
+        // against a raw `initialClock` would skip recovery when the persisted
+        // row was poisoned (raw poison is numerically larger than any safe
+        // remote). The actor short-circuits when `external <= current`, and
+        // its persist path now overwrites a poisoned DB row.
+        try await lamport.observe(output.state.observedClock)
+        // Belt-and-suspenders for the case where observe was a no-op (e.g.
+        // observedClock == 0 because no peer ops survived sanitisation): the
+        // DB row would otherwise stay poisoned until the next tickRange.
+        try await lamport.repairPoisonedDBIfNeeded()
         let initialMaterialize: RepoMaterializer.MaterializeOutput? = output
 
         let liveness = LivenessTracker(

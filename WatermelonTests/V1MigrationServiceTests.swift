@@ -524,6 +524,108 @@ final class V1MigrationServiceTests: XCTestCase {
                       "phase1 cancellation must NOT quarantine the V1 manifest — next run must still see it")
     }
 
+    /// Regression: when an existing V2 repo already contains commits by this
+    /// writerID with higher seq/clock than the local DB high-water (fresh local
+    /// install paired with a populated remote, or peer-restored DB), V1
+    /// migration must observe both before allocating. Otherwise:
+    /// - SeqAllocator returns seq=1..4 that collide with the existing commits
+    ///   and the migration aborts after the retry budget.
+    /// - LamportClock ticks from 0 → migrated rows get clocks below the
+    ///   observed remote, so path-level LWW classifies them as stale relative
+    ///   to existing V2 state.
+    func testPhase1_observesRemoteSeqAndClockBeforeAllocating_avoidsCollision() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let repoID = "test-repo-id"
+        let preExistingMonth = LibraryMonthKey(year: 2024, month: 12)
+
+        // Plant pre-existing V2 commits at seq=1..4 with clock high-water=200.
+        // Without observe-before-allocate, V1 migration burns its 4-attempt
+        // retry budget on collisions at seq=1..4.
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        for seq in UInt64(1)...UInt64(4) {
+            let assetFP = TestFixtures.fingerprint(UInt8(0x10 + seq))
+            let contentHash = TestFixtures.fingerprint(UInt8(0x20 + seq))
+            let monthRel = String(format: "%04d/%02d", preExistingMonth.year, preExistingMonth.month)
+            let leaf = String(format: "pre-%llu.jpg", seq)
+            let path = "\(monthRel)/\(leaf)"
+            let body = CommitAddAssetBody(
+                assetFingerprint: assetFP,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resources: [
+                    CommitResourceEntry(
+                        physicalRemotePath: path,
+                        logicalName: leaf,
+                        contentHash: contentHash,
+                        fileSize: 100,
+                        resourceType: ResourceTypeCode.photo,
+                        role: ResourceTypeCode.photo,
+                        slot: 0,
+                        crypto: nil
+                    )
+                ]
+            )
+            let clock = 50 + seq * 10
+            let header = TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerID, seq: seq, runID: "preexist",
+                month: preExistingMonth,
+                clockMin: clock, clockMax: clock
+            )
+            _ = try await commitWriter.write(
+                header: header,
+                ops: [CommitOp(opSeq: 0, clock: clock, body: .addAsset(body))],
+                month: preExistingMonth, respectTaskCancellation: false
+            )
+            await client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0, count: 100))
+        }
+        let highestPreExistingClock: UInt64 = 50 + 4 * 10
+
+        // V1 manifest in a different month with a different asset FP, so the
+        // existing-V2 fingerprint filter doesn't drop it.
+        let assetFP = TestFixtures.fingerprint(0xAB)
+        let contentHash = TestFixtures.fingerprint(0xCD)
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: assetFP,
+            resourceHash: contentHash,
+            logicalName: "IMG_observe.HEIC"
+        )
+        let migrationMonth = LibraryMonthKey(year: 2025, month: 6)
+        let manifestPath = String(
+            format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)",
+            migrationMonth.year, migrationMonth.month
+        )
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        // Local DB starts at seq=0/clock=0 (fresh install state). The migration
+        // must observe remote seq=4/clock=highestPreExistingClock first.
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: writerID, basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: writerID)
+
+        let service = makeService(client: client, profileID: profileID)
+        let processed = try await service.runPhase1(
+            profileID: profileID, repoID: repoID, writerID: writerID, runID: "run-observe"
+        )
+        XCTAssertEqual(processed, 1)
+
+        // Materialize and find the migration commit (it's the only one for migrationMonth).
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let migMonthState = try XCTUnwrap(output.state.months[migrationMonth])
+        let migAsset = try XCTUnwrap(migMonthState.assets[assetFP], "migration must publish the V1 asset into V2")
+        let stamp = try XCTUnwrap(migAsset.stamp)
+        XCTAssertGreaterThan(stamp.seq, 4,
+                             "allocator must observe remote high-water seq=4 before allocating; got \(stamp.seq)")
+        XCTAssertGreaterThan(stamp.clock, highestPreExistingClock,
+                             "lamport must observe remote clock=\(highestPreExistingClock) before ticking; got \(stamp.clock)")
+    }
+
     // MARK: - Helpers
 
     private func injectMigrationMarker(client: InMemoryRemoteStorageClient, writerID: String, phase: Int) async throws {

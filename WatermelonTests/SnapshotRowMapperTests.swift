@@ -139,6 +139,53 @@ final class SnapshotRowMapperTests: XCTestCase {
         }
     }
 
+    /// JSON `true`/`false` bridges through `as? UInt64` (and the NSNumber roundtrip)
+    /// as 1/0. A malformed `covered` value of `[[true,true]]` would otherwise be
+    /// accepted as the range `[1,1]` and silently mark writer-A seq 1 as covered,
+    /// causing the materializer to skip a commit whose effects aren't in the snapshot.
+    func testHeaderRejectsBooleanCoveredValue_true() {
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"r","covered":{"writer-A":[[true,true]]}}"#
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
+            guard case SnapshotWireError.malformed = err else {
+                XCTFail("expected .malformed, got \(err)"); return
+            }
+        }
+    }
+
+    func testHeaderRejectsBooleanCoveredValue_false() {
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"r","covered":{"writer-A":[[false,false]]}}"#
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
+            guard case SnapshotWireError.malformed = err else {
+                XCTFail("expected .malformed, got \(err)"); return
+            }
+        }
+    }
+
+    /// JSON `true` for the header `v` field also bridges to Int as 1, the current
+    /// version. The decoder must reject it rather than silently accepting a v=true
+    /// header as a valid v1 row.
+    func testHeaderRejectsBooleanVersion() {
+        let raw = #"{"t":"header","v":true,"scope":"month:2026-05","writerID":"w","repoID":"r","covered":{}}"#
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
+            // CFBoolean rejection lands as missingField via mapValidation.
+            guard case SnapshotWireError.missingField = err else {
+                XCTFail("expected .missingField (boolean rejection), got \(err)"); return
+            }
+        }
+    }
+
+    /// Legitimate high UInt64 covered ranges (> Int64.max) must still parse — the
+    /// validator's NSNumber roundtrip covers the full UInt64 range.
+    func testHeaderAcceptsHighUInt64CoveredValue() throws {
+        let high = UInt64(Int64.max) + 1
+        let raw = "{\"t\":\"header\",\"v\":1,\"scope\":\"month:2026-05\",\"writerID\":\"w\",\"repoID\":\"r\",\"covered\":{\"writer-A\":[[\(high),\(high)]]}}"
+        let row = try SnapshotRowMapper.decodeLine(raw)
+        guard case .header(let parsed) = row else { XCTFail("expected header"); return }
+        let ranges = parsed.covered.rangesByWriter["writer-A"]
+        XCTAssertEqual(ranges?.first?.low, high)
+        XCTAssertEqual(ranges?.first?.high, high)
+    }
+
     func testDeletedKeyRoundTrip() throws {
         let row = SnapshotDeletedKeyRow(keyType: .asset, keyValue: String(repeating: "ab", count: 32))
         let line = try SnapshotRowMapper.encodeDeletedKeyLine(row)
