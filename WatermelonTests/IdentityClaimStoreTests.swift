@@ -121,6 +121,28 @@ final class IdentityClaimStoreTests: XCTestCase {
         XCTAssertTrue(result.ignoredSelfCorrupt, "self boolean timestamp must surface as soft self-corrupt")
     }
 
+    func testNegativeTimestampRejectedForElectionAndSelfRepair() async throws {
+        let (foreignClient, foreignStore) = await makeStore()
+        await injectClaim(foreignClient, writerID: otherWriter, repoID: "hijack", createdAtMs: -1)
+        do {
+            _ = try await foreignStore.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
+            XCTFail("expected throw on negative timestamp claim")
+        } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
+            XCTAssertEqual(error.domain, "RepoBootstrap")
+            XCTAssertEqual(error.code, 9)
+        }
+
+        let (selfClient, selfStore) = await makeStore()
+        await injectClaim(selfClient, writerID: selfWriter, repoID: "repo-A", createdAtMs: -1)
+        let existing = try await selfStore.readOwnClaim(writerID: selfWriter)
+        XCTAssertNil(existing)
+
+        try await selfStore.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 123)
+        let repairedClaim = try await selfStore.readOwnClaim(writerID: selfWriter)
+        let repaired = try XCTUnwrap(repairedClaim)
+        XCTAssertEqual(repaired.createdAtMs, 123)
+    }
+
     func testCanonicalElection_filenameMismatchedPayloadWriterID_throws() async throws {
         let (client, store) = await makeStore()
         // Filename writerID-A but payload writer_id=B (forged-timestamp defense).
@@ -438,6 +460,15 @@ final class IdentityClaimStoreTests: XCTestCase {
     }
 
     private func injectValidClaim(
+        _ client: InMemoryRemoteStorageClient,
+        writerID: String,
+        repoID: String,
+        createdAtMs: Int64
+    ) async {
+        await injectClaim(client, writerID: writerID, repoID: repoID, createdAtMs: createdAtMs)
+    }
+
+    private func injectClaim(
         _ client: InMemoryRemoteStorageClient,
         writerID: String,
         repoID: String,

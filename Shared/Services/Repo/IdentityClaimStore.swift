@@ -163,7 +163,8 @@ nonisolated struct IdentityClaimStore: Sendable {
         guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let landedWriterID = dict["writer_id"] as? String,
               landedWriterID == writerID,
-              let landedRepoID = dict["repo_id"] as? String, !landedRepoID.isEmpty else {
+              let landedRepoID = dict["repo_id"] as? String, !landedRepoID.isEmpty,
+              Self.strictInt64(dict["created_at_ms"]) != nil else {
             identityClaimStoreLog.warning("claim at \(claimPath, privacy: .public) corrupt or carries a foreign writerID — reclaiming")
             return .corrupt
         }
@@ -353,8 +354,8 @@ nonisolated struct IdentityClaimStore: Sendable {
     private static func strictInt64(_ raw: Any?) -> Int64? {
         guard let raw else { return nil }
         if CFGetTypeID(raw as CFTypeRef) == CFBooleanGetTypeID() { return nil }
-        if let v = raw as? Int64 { return v }
-        if let v = raw as? Int { return Int64(v) }
+        if let v = raw as? Int64, v >= 0 { return v }
+        if let v = raw as? Int, v >= 0 { return Int64(v) }
         return nil
     }
 

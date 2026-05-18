@@ -2,6 +2,18 @@
 
 V1（per-month manifest sqlite）→ V2（commit log + snapshot）格式重构。完整设计见 `~/.claude/plans/wobbly-launching-stroustrup.md`。
 
+## Boundary Invariants
+
+- Required wire numeric fields reject missing, boolean, fractional, negative-for-unsigned, and overflow values through their owning decoder/store. Optional wire numeric fields may be absent per the owning schema; malformed present values must not coerce into a valid number (boolean/fractional/overflow must surface as absent or rejected, never as 0/1/truncated).
+- Bootstrap and migration advisory timestamps (`VersionManifest.created_at_ms`, `MigrationMarker.started_at_ms` / `last_step_at_ms`) are optional metadata, not repo identity, seq, clock, or materialization authority fields.
+- Snapshot materialization is idempotent for unchanged remote metadata.
+- Snapshot baseline plus uncovered commits must materialize to the same state as replaying all valid commits from genesis for the same repo; equality includes assets, resources, asset-resource links, deleted keys/stamps, observed seq by writer, and observed clock.
+- Presence/freshness handles fail closed: transport/probe uncertainty cannot be published as fresh authoritative absence.
+- Identity source resolution converges only when authoritative sources agree; own current claim can repair wipe-and-reuse missing DB exact row, foreign claim cannot.
+- Metadata create outcome `verifiedAgainstLocalContent == true` means remote bytes matched the local payload during the gate's verification window.
+- `MonthManifestStore.loadSeeded(...)` must surface V1 seeded-manifest orphans by listing the actual remote directory; this is retained for current app behavior, not V2 materializer semantics.
+- Concurrent state allocation must not produce duplicate same-writer seq values or emit clocks below accepted remote observation.
+
 ## 现状
 
 V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
