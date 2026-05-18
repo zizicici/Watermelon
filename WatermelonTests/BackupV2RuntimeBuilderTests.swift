@@ -885,4 +885,113 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         )
         XCTAssertFalse(result, "fresh remote with no local binding should return false")
     }
+
+    func testVerifyMonth_nilBinding_materializedRepoID_freshRemote_throwsDamagedV2Repo() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-a")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+        let profile = try insertProfile()
+        // No repo_state — nil-binding profile
+
+        let remoteIndexService = RemoteIndexSyncService()
+        _ = try await remoteIndexService.syncIndex(client: client, profile: profile, localRepoID: nil)
+        let storedID = await remoteIndexService.materializedRepoID()
+        XCTAssertEqual(storedID, "repo-a", "precondition: materializedRepoID should be set")
+
+        // Wipe V2 structure so inspection returns .fresh
+        try await client.delete(path: "\(basePath)/.watermelon")
+        try await client.delete(path: "\(basePath)/version.json")
+
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+        do {
+            _ = try await service.verifyMonth(
+                client: client,
+                basePath: basePath,
+                month: LibraryMonthKey(year: 2026, month: 5),
+                profile: profile
+            )
+            XCTFail("expected damagedV2Repo — nil-binding profile with cached materializedRepoID must reject fresh remote")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testVerifyMonth_nilBinding_materializedRepoID_v1Remote_throwsRequiresForegroundMigration() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-a")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+        let profile = try insertProfile()
+        // No repo_state — nil-binding profile
+
+        let remoteIndexService = RemoteIndexSyncService()
+        _ = try await remoteIndexService.syncIndex(client: client, profile: profile, localRepoID: nil)
+
+        // Wipe V2 structure and seed V1 manifest so inspection returns .v1
+        try await client.delete(path: "\(basePath)/.watermelon")
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2026, month: 5)
+
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+        do {
+            _ = try await service.verifyMonth(
+                client: client,
+                basePath: basePath,
+                month: LibraryMonthKey(year: 2026, month: 5),
+                profile: profile
+            )
+            XCTFail("expected requiresForegroundMigration — nil-binding profile with cached materializedRepoID must reject V1 remote")
+        } catch BackupCompatibilityError.requiresForegroundMigration {
+            // expected
+        }
+    }
+
+    // MARK: - verifyMonth V2 always signals refresh
+
+    func testVerifyMonth_v2Repo_alwaysReturnsTrue() async throws {
+        let repoID = "repo-always-refresh"
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+
+        let profile = try insertProfile()
+        let remoteIndexService = RemoteIndexSyncService()
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+
+        let needsRefresh = try await service.verifyMonth(
+            client: client, basePath: basePath,
+            month: LibraryMonthKey(year: 2026, month: 5),
+            profile: profile
+        )
+        XCTAssertTrue(needsRefresh, "V2 verify must always signal refresh so Home re-projects the committed view")
+    }
 }

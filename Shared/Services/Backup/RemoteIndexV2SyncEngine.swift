@@ -11,6 +11,12 @@ struct RemoteIndexV2SyncEngine: Sendable {
             if let localRepoID, let outputRepoID = preMaterialized.repoID, localRepoID != outputRepoID {
                 throw BackupCompatibilityError.repoIdentityMismatch
             }
+            if let localRepoID {
+                let liveRepoID = try await loadExpectedRepoIDReadOnly(client: client, basePath: basePath)
+                if localRepoID != liveRepoID {
+                    throw BackupCompatibilityError.repoIdentityMismatch
+                }
+            }
             return preMaterialized
         }
         let expectedRepoID = try await loadExpectedRepoIDReadOnly(client: client, basePath: basePath)

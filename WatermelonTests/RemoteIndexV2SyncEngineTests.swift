@@ -130,6 +130,25 @@ final class RemoteIndexV2SyncEngineTests: XCTestCase {
         )
     }
 
+    func testMaterializePreMaterialized_remoteSwapped_throwsIdentityMismatch() async throws {
+        let builderA = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "repo-a")
+        let preMaterializedA = try await builderA.materialize()
+        // Simulate remote swap: overwrite repo.json with repo-b
+        try await TestFixtures.injectRepoJSON(builderA.client, basePath: basePath, repoID: "repo-b")
+
+        do {
+            _ = try await RemoteIndexV2SyncEngine().materialize(
+                client: builderA.client,
+                basePath: basePath,
+                preMaterialized: preMaterializedA,
+                localRepoID: "repo-a"
+            )
+            XCTFail("expected repoIdentityMismatch after remote swap")
+        } catch BackupCompatibilityError.repoIdentityMismatch {
+            // expected
+        }
+    }
+
     func testMaterializePreMaterialized_nilLocalRepoID_skipsGuard() async throws {
         let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "repo-a")
         let preMaterialized = try await builder.materialize()

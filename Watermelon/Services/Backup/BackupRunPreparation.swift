@@ -273,17 +273,23 @@ struct BackupRunPreparationService: Sendable {
                 default:
                     break
                 }
+            } else if await remoteIndexService.materializedRepoID() != nil {
+                switch inspection {
+                case .fresh:
+                    throw BackupCompatibilityError.damagedV2Repo
+                case .v1:
+                    throw BackupCompatibilityError.requiresForegroundMigration
+                default:
+                    break
+                }
             }
         }
         switch inspection {
         case .unsupported(let minAppVersion):
             throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
-        case .v2:
-            let report = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
-            return report.didMutateRemote || !report.reportOnly.isEmpty
-        case .v2WithPendingMigrationCleanup:
-            let report = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
-            return report.didMutateRemote || !report.reportOnly.isEmpty
+        case .v2, .v2WithPendingMigrationCleanup:
+            _ = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
+            return true
         case .v2WithV1Manifests:
             throw BackupCompatibilityError.requiresForegroundMigration
         case .v1:
@@ -365,6 +371,12 @@ struct BackupRunPreparationService: Sendable {
             if let localState, localState.repoID != expectedRepoID {
                 throw BackupCompatibilityError.repoIdentityMismatch
             }
+            if localState == nil {
+                let cachedRepoID = await remoteIndexService.materializedRepoID()
+                if let cachedRepoID, cachedRepoID != expectedRepoID {
+                    throw BackupCompatibilityError.repoIdentityMismatch
+                }
+            }
         }
         let verifier = RepoVerifyMonthService(client: metadataClient, basePath: basePath, expectedRepoID: expectedRepoID)
         var report = try await verifier.verify(month: month)
@@ -413,12 +425,14 @@ struct BackupRunPreparationService: Sendable {
                         links: remainingLinks
                     )
                 }
-                _ = try await remoteIndexService.syncIndex(client: client, profile: profile)
+                _ = try await remoteIndexService.syncIndex(client: client, profile: profile, expectV2: true, localRepoID: expectedRepoID)
                 await v2.shutdown()
             } catch {
                 await v2.shutdown()
                 throw error
             }
+        } else if let profile {
+            _ = try await remoteIndexService.syncIndex(client: client, profile: profile, expectV2: true, localRepoID: expectedRepoID)
         }
         return report
     }

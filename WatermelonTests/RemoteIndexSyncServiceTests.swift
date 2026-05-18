@@ -836,6 +836,47 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         }
     }
 
+    func testSyncIndex_nilLocalRepoID_v2Repo_storesMaterializedRepoID() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.createDirectory(path: basePath)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-a")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+
+        let cachedID = await service.materializedRepoID()
+        XCTAssertEqual(cachedID, "repo-a")
+    }
+
+    func testMaterializedRepoID_clearedOnProfileSwitch() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.createDirectory(path: basePath)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-a")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+        let storedID = await service.materializedRepoID()
+        XCTAssertEqual(storedID, "repo-a")
+
+        await service.resetForProfileSwitch()
+        let clearedID = await service.materializedRepoID()
+        XCTAssertNil(clearedID)
+    }
+
     private func seedV1Manifest(
         client: InMemoryRemoteStorageClient,
         basePath: String,

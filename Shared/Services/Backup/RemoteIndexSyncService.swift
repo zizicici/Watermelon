@@ -116,12 +116,14 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         private var activeRemoteProfileKey: String?
         private var remoteManifestDigests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
         private var lastInspectedFormatIsV2: Bool?
+        private var materializedRepoID: String?
 
         func ensureRemoteContext(profileKey: String) -> Bool {
             guard activeRemoteProfileKey != profileKey else { return false }
             activeRemoteProfileKey = profileKey
             remoteManifestDigests.removeAll()
             lastInspectedFormatIsV2 = nil
+            materializedRepoID = nil
             return true
         }
 
@@ -141,10 +143,19 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             lastInspectedFormatIsV2
         }
 
+        func setMaterializedRepoID(_ id: String?) {
+            materializedRepoID = id
+        }
+
+        func getMaterializedRepoID() -> String? {
+            materializedRepoID
+        }
+
         func reset() {
             activeRemoteProfileKey = nil
             remoteManifestDigests.removeAll()
             lastInspectedFormatIsV2 = nil
+            materializedRepoID = nil
         }
     }
 
@@ -409,6 +420,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             preMaterialized: preMaterialized,
             localRepoID: localRepoID
         )
+        await state.setMaterializedRepoID(output.repoID)
         let priorOverlay = loadMaterializedCommittedView(output)
         do {
             _ = try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
@@ -624,6 +636,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     func currentRepoIsV2() async -> Bool? {
         await state.isV2Repo()
+    }
+
+    func materializedRepoID() async -> String? {
+        await state.getMaterializedRepoID()
     }
 
     func markIsV2() async {

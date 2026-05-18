@@ -711,10 +711,10 @@ final class HomeExecutionCoordinator {
                 underlyingError: compatError
             ))
         } catch {
-            appendWarningLog(String.localizedStringWithFormat(
-                String(localized: "manifest.log.reconcileFailed"),
-                month.displayText,
-                context.profile.userFacingStorageErrorMessage(error)
+            if Task.isCancelled { return .cancelled }
+            return .failed(DownloadMonthFailure(
+                message: context.profile.userFacingStorageErrorMessage(error),
+                underlyingError: error
             ))
         }
         if Task.isCancelled { return .cancelled }
