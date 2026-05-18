@@ -233,6 +233,47 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         assertMaterializedEqual(first, second)
     }
 
+    func testMaterializerFanoutHonorsSerialOnlyWrapping() async throws {
+        let inner = try await makeConnectedClient()
+        let snapshotWriter = SnapshotWriter(client: inner, basePath: basePath)
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: .empty
+            ),
+            assets: [],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 1,
+            runID: "serial-snapshot",
+            respectTaskCancellation: false
+        )
+        for seq in UInt64(1)...UInt64(4) {
+            try await writeCommit(
+                client: inner,
+                writerID: writerA,
+                seq: seq,
+                clock: seq,
+                fingerprintByte: UInt8(0x40 + Int(seq))
+            )
+        }
+        let serialOnly = SerialOnlyOperationProbeClient(inner: inner)
+
+        let output = try await RepoMaterializer(client: serialOnly, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertEqual(output.observedSeqByWriter[writerA], 4)
+        XCTAssertEqual(serialOnly.listCount(), 2)
+        XCTAssertEqual(serialOnly.metadataCount(), 0)
+        XCTAssertEqual(serialOnly.downloadCount(), 5)
+        XCTAssertEqual(serialOnly.maxConcurrentDownloads(), 1)
+        XCTAssertEqual(serialOnly.maxConcurrentOperations(), 1)
+    }
+
     func testSnapshotBaselinePlusUncoveredCommitsMatchesGenesisReplay() async throws {
         let snapshotClient = try await makeConnectedClient()
         let genesisClient = try await makeConnectedClient()
@@ -896,5 +937,175 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try Data(contents.utf8).write(to: url)
         return url
+    }
+}
+
+private final class SerialOnlyOperationProbeClient: RemoteStorageClientProtocol, @unchecked Sendable {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+
+    private let inner: InMemoryRemoteStorageClient
+    private let lock = NSLock()
+    private var activeOperations = 0
+    private var maxOperations = 0
+    private var activeDownloads = 0
+    private var maxDownloads = 0
+    private var totalLists = 0
+    private var totalMetadata = 0
+    private var totalDownloads = 0
+
+    init(inner: InMemoryRemoteStorageClient) {
+        self.inner = inner
+    }
+
+    func listCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return totalLists
+    }
+
+    func metadataCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return totalMetadata
+    }
+
+    func downloadCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return totalDownloads
+    }
+
+    func maxConcurrentDownloads() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return maxDownloads
+    }
+
+    func maxConcurrentOperations() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return maxOperations
+    }
+
+    func connect() async throws {
+        try await inner.connect()
+    }
+
+    func disconnect() async {
+        await inner.disconnect()
+    }
+
+    func storageCapacity() async throws -> RemoteStorageCapacity? {
+        try await inner.storageCapacity()
+    }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        recordOperationStart()
+        recordList()
+        defer { recordOperationEnd() }
+        try await Task.sleep(nanoseconds: 5_000_000)
+        return try await inner.list(path: path)
+    }
+
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        recordOperationStart()
+        recordMetadata()
+        defer { recordOperationEnd() }
+        try await Task.sleep(nanoseconds: 5_000_000)
+        return try await inner.metadata(path: path)
+    }
+
+    func upload(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws {
+        try await inner.upload(
+            localURL: localURL,
+            remotePath: remotePath,
+            respectTaskCancellation: respectTaskCancellation,
+            onProgress: onProgress
+        )
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        .exclusive
+    }
+
+    func setModificationDate(_ date: Date, forPath path: String) async throws {
+        try await inner.setModificationDate(date, forPath: path)
+    }
+
+    func download(remotePath: String, localURL: URL) async throws {
+        recordOperationStart()
+        recordDownloadStart()
+        defer {
+            recordDownloadEnd()
+            recordOperationEnd()
+        }
+        try await Task.sleep(nanoseconds: 5_000_000)
+        try await inner.download(remotePath: remotePath, localURL: localURL)
+    }
+
+    func exists(path: String) async throws -> Bool {
+        try await inner.exists(path: path)
+    }
+
+    func delete(path: String) async throws {
+        try await inner.delete(path: path)
+    }
+
+    func createDirectory(path: String) async throws {
+        try await inner.createDirectory(path: path)
+    }
+
+    func move(from sourcePath: String, to destinationPath: String) async throws {
+        try await inner.move(from: sourcePath, to: destinationPath)
+    }
+
+    func copy(from sourcePath: String, to destinationPath: String) async throws {
+        try await inner.copy(from: sourcePath, to: destinationPath)
+    }
+
+    private func recordDownloadStart() {
+        lock.lock()
+        totalDownloads += 1
+        activeDownloads += 1
+        maxDownloads = max(maxDownloads, activeDownloads)
+        lock.unlock()
+    }
+
+    private func recordList() {
+        lock.lock()
+        totalLists += 1
+        lock.unlock()
+    }
+
+    private func recordMetadata() {
+        lock.lock()
+        totalMetadata += 1
+        lock.unlock()
+    }
+
+    private func recordDownloadEnd() {
+        lock.lock()
+        activeDownloads -= 1
+        lock.unlock()
+    }
+
+    private func recordOperationStart() {
+        lock.lock()
+        activeOperations += 1
+        maxOperations = max(maxOperations, activeOperations)
+        lock.unlock()
+    }
+
+    private func recordOperationEnd() {
+        lock.lock()
+        activeOperations -= 1
+        lock.unlock()
     }
 }

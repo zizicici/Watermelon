@@ -122,6 +122,60 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertFalse(monthState.deletedAssetFingerprints.contains(fp))
     }
 
+    func testReplayTieBreaksByWriterSeqAndOpSeq() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let writerFP = Self.fingerprint(0xD1)
+        let seqFP = Self.fingerprint(0xD2)
+        let opSeqFP = Self.fingerprint(0xD3)
+
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 10, clockMax: 10, writerID: writerA),
+            ops: [
+                CommitOp(opSeq: 0, clock: 10, body: .addAsset(CommitAddAssetBody(
+                    assetFingerprint: writerFP, creationDateMs: nil, backedUpAtMs: 1, resources: []))),
+                CommitOp(opSeq: 1, clock: 10, body: .addAsset(CommitAddAssetBody(
+                    assetFingerprint: seqFP, creationDateMs: nil, backedUpAtMs: 11, resources: [])))
+            ],
+            month: month,
+            respectTaskCancellation: false
+        )
+        _ = try await writer.write(
+            header: makeHeader(seq: 2, clockMin: 10, clockMax: 10, writerID: writerA),
+            ops: [CommitOp(opSeq: 0, clock: 10, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: seqFP, creationDateMs: nil, backedUpAtMs: 12, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+        _ = try await writer.write(
+            header: makeHeader(seq: 3, clockMin: 10, clockMax: 10, writerID: writerA),
+            ops: [
+                CommitOp(opSeq: 0, clock: 10, body: .addAsset(CommitAddAssetBody(
+                    assetFingerprint: opSeqFP, creationDateMs: nil, backedUpAtMs: 21, resources: []))),
+                CommitOp(opSeq: 1, clock: 10, body: .addAsset(CommitAddAssetBody(
+                    assetFingerprint: opSeqFP, creationDateMs: nil, backedUpAtMs: 22, resources: [])))
+            ],
+            month: month,
+            respectTaskCancellation: false
+        )
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 10, clockMax: 10, writerID: writerB),
+            ops: [CommitOp(opSeq: 0, clock: 10, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: writerFP, creationDateMs: nil, backedUpAtMs: 2, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+
+        XCTAssertEqual(monthState.assets[writerFP]?.backedUpAtMs, 2)
+        XCTAssertEqual(monthState.assets[seqFP]?.backedUpAtMs, 12)
+        XCTAssertEqual(monthState.assets[opSeqFP]?.backedUpAtMs, 22)
+    }
+
     func testForeignRepoCommitsFilteredOut() async throws {
         // Real cross-writer scenario: a foreign writerID writing under a foreign repoID
         // (e.g. user re-pointed profile at a different bucket, or a peer writing the
@@ -159,6 +213,217 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertEqual(output.observedSeqByWriter[writerA], 1)
         XCTAssertEqual(output.observedSeqByWriter[writerB], 5,
                        "foreign writerID's seq must still be tracked from filename")
+        XCTAssertFalse((output.coveredByMonth[month] ?? .empty).contains(writerID: writerB, seq: 5))
+    }
+
+    func testUnparseableMetadataFilenamesAreIgnoredByMaterializer() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = Self.fingerprint(0x02)
+
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 1, clockMax: 1),
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+        await client.injectFile(
+            path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory, RepoLayout.commitsDirectory, "junk-commit.jsonl"]),
+            contents: "not a commit"
+        )
+        await client.injectFile(
+            path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory, RepoLayout.snapshotsDirectory, "junk-snapshot.jsonl"]),
+            contents: "not a snapshot"
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNotNil(output.state.months[month]?.assets[fp])
+        XCTAssertEqual(output.observedSeqByWriter[writerA], 1)
+        XCTAssertEqual(output.state.observedClock, 1)
+        XCTAssertTrue(output.corruptedSnapshotMonths.isEmpty)
+    }
+
+    func testLegacyUnstampedSnapshotRejectedWhenExpectedRepoIDProvided() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let legacyFP = Self.fingerprint(0x03)
+
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: "",
+                covered: .empty
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: legacyFP,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 0,
+                totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 5,
+            runID: "legacy",
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNil(output.state.months[month]?.assets[legacyFP])
+        XCTAssertEqual(output.state.observedClock, 0)
+        XCTAssertTrue(output.corruptedSnapshotMonths.contains(month))
+    }
+
+    func testSnapshotRowLevelSkipsKeepUsableRows() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let assetFP = Self.fingerprint(0x04)
+        let goodHash = Self.fingerprint(0x05)
+        let badHash = Self.fingerprint(0x06)
+        let deletedFP = Self.fingerprint(0x07)
+
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: .empty
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: assetFP,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 2,
+                totalFileSizeBytes: 2,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)
+            )],
+            resources: [
+                SnapshotResourceRow(
+                    physicalRemotePath: "2026/01/good.jpg",
+                    contentHash: goodHash,
+                    fileSize: 1,
+                    resourceType: ResourceTypeCode.photo,
+                    creationDateMs: nil,
+                    backedUpAtMs: 1,
+                    crypto: nil,
+                    stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)
+                ),
+                SnapshotResourceRow(
+                    physicalRemotePath: "2026/02/wrong-month.jpg",
+                    contentHash: badHash,
+                    fileSize: 1,
+                    resourceType: ResourceTypeCode.photo,
+                    creationDateMs: nil,
+                    backedUpAtMs: 1,
+                    crypto: nil,
+                    stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)
+                )
+            ],
+            assetResources: [
+                SnapshotAssetResourceRow(
+                    assetFingerprint: assetFP,
+                    role: ResourceTypeCode.photo,
+                    slot: 0,
+                    resourceHash: goodHash,
+                    logicalName: "good.jpg"
+                )
+            ],
+            deletedKeys: [
+                SnapshotDeletedKeyRow(keyType: .asset, keyValue: deletedFP.hexString, stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)),
+                SnapshotDeletedKeyRow(keyType: .resource, keyValue: "resource-key")
+            ],
+            month: month,
+            lamport: 3,
+            runID: "rows",
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let state = try XCTUnwrap(output.state.months[month])
+
+        XCTAssertNotNil(state.assets[assetFP])
+        XCTAssertEqual(state.assets[assetFP]?.resourceCount, 2)
+        XCTAssertEqual(state.resources["2026/01/good.jpg"]?.contentHash, goodHash)
+        XCTAssertNil(state.resources["2026/02/wrong-month.jpg"])
+        XCTAssertEqual(state.assetResources[AssetResourceKey(assetFingerprint: assetFP, role: ResourceTypeCode.photo, slot: 0)]?.resourceHash, goodHash)
+        XCTAssertTrue(state.deletedAssetFingerprints.contains(deletedFP))
+        XCTAssertEqual(state.deletedAssetFingerprints.count, 1)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+    }
+
+    func testSnapshotMalformedAssetDeletedKeyCandidateFallsBack() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0x08)
+        let badFP = Self.fingerprint(0x09)
+
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: .empty
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: goodFP,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 0,
+                totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 2,
+            runID: "good-deleted-key",
+            respectTaskCancellation: false
+        )
+
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB,
+                repoID: repoID,
+                covered: .empty
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: badFP,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 0,
+                totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [SnapshotDeletedKeyRow(keyType: .asset, keyValue: "not-a-hex")],
+            month: month,
+            lamport: 5,
+            runID: "bad-deleted-key",
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let state = try XCTUnwrap(output.state.months[month])
+
+        XCTAssertNotNil(state.assets[goodFP])
+        XCTAssertNil(state.assets[badFP])
+        XCTAssertEqual(output.state.observedClock, 2)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
     }
 
     func testForeignRepoSnapshotAtTopFallsBackToNextCandidate() async throws {
@@ -229,6 +494,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let monthState = try XCTUnwrap(output.state.months[month])
         XCTAssertNotNil(monthState.assets[ourFP], "should fall back to our-repo snapshot")
         XCTAssertNil(monthState.assets[Self.fingerprint(0xEE)], "foreign snapshot's asset must not be loaded")
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
     }
 
     func testCorruptSnapshotAtTopFallsBackToNextCandidate() async throws {
@@ -288,6 +554,64 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[month])
         XCTAssertNotNil(monthState.assets[ourFP], "should fall back to good snapshot at lower lamport")
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+    }
+
+    func testCorruptOnlySnapshotFlagsMonthForRebaseline() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        let corruptPath = RepoLayout.snapshotFilePath(
+            base: basePath,
+            month: month,
+            lamport: 5,
+            writerID: writerA,
+            runID: "corrupt"
+        )
+        await client.injectFile(path: corruptPath, contents: "not-a-snapshot-body")
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertTrue(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertEqual(output.state.months[month], .empty)
+        XCTAssertEqual(output.state.observedClock, 0)
+    }
+
+    func testForeignOnlySnapshotFlagsMonthForRebaseline() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let foreignFP = Self.fingerprint(0x21)
+
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB,
+                repoID: "foreign-repo-id",
+                covered: .empty
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: foreignFP,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 0,
+                totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 5,
+            runID: "foreign",
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertTrue(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertNil(output.state.months[month]?.assets[foreignFP])
+        XCTAssertEqual(output.state.observedClock, 0)
     }
 
     func testCoveredRangesSuppressAlreadyBakedCommits() async throws {
@@ -387,6 +711,23 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             7,
             "observedSeqByWriter must advance from filename even when commit body is corrupt"
         )
+        XCTAssertNil(output.state.months[month]?.assets[Self.fingerprint(0x50)])
+        XCTAssertFalse((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 7))
+        XCTAssertEqual(output.state.observedClock, 0)
+    }
+
+    func testCorruptMaxCommitFilenameAdvancesSeqButNotCoveredOrState() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let corruptPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: UInt64.max)
+        await client.injectFile(path: corruptPath, contents: "corrupt filename-only high-water\n")
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertEqual(output.observedSeqByWriter[writerA], UInt64.max)
+        XCTAssertNil(output.state.months[month]?.assets[Self.fingerprint(0x51)])
+        XCTAssertFalse((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: UInt64.max))
+        XCTAssertEqual(output.state.observedClock, 0)
     }
 
     func testCommitWithFilenameMismatchingHeader_isSkipped() async throws {
@@ -412,6 +753,78 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let output = try await materializer.materialize(expectedRepoID: repoID)
         XCTAssertNil(output.state.months[month]?.assets[fp],
                      "filename-vs-header mismatch must be skipped, not replayed under wrong seq")
+        XCTAssertEqual(output.observedSeqByWriter[writerA], 99)
+        XCTAssertFalse((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 99))
+    }
+
+    func testAddAssetWithResourceOutsideMonthSkipsWholeOpButCoversFile() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = Self.fingerprint(0x71)
+
+        _ = try await writer.write(
+            header: makeHeader(seq: 8, clockMin: 8, clockMax: 8),
+            ops: [CommitOp(opSeq: 0, clock: 8, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resources: [CommitResourceEntry(
+                    physicalRemotePath: "2026/02/wrong-month.jpg",
+                    logicalName: "wrong-month.jpg",
+                    contentHash: Self.fingerprint(0x72),
+                    fileSize: 1,
+                    resourceType: ResourceTypeCode.photo,
+                    role: ResourceTypeCode.photo,
+                    slot: 0,
+                    crypto: nil
+                )]
+            )))],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNil(output.state.months[month]?.assets[fp])
+        XCTAssertTrue((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 8))
+        XCTAssertEqual(output.observedSeqByWriter[writerA], 8)
+        XCTAssertEqual(output.state.observedClock, 8)
+    }
+
+    func testAcceptedCommitWithRejectedOpStillContributesCoveredSeq() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let goodFP = Self.fingerprint(0x73)
+        let poisonedFP = Self.fingerprint(0x74)
+
+        _ = try await writer.write(
+            header: makeHeader(seq: 9, clockMin: 9, clockMax: LamportClock.maxAdoptableValue),
+            ops: [
+                CommitOp(opSeq: 0, clock: 9, body: .addAsset(CommitAddAssetBody(
+                    assetFingerprint: goodFP,
+                    creationDateMs: nil,
+                    backedUpAtMs: 1,
+                    resources: []
+                ))),
+                CommitOp(opSeq: 1, clock: LamportClock.maxAdoptableValue, body: .addAsset(CommitAddAssetBody(
+                    assetFingerprint: poisonedFP,
+                    creationDateMs: nil,
+                    backedUpAtMs: 1,
+                    resources: []
+                )))
+            ],
+            month: month,
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
+        XCTAssertNil(output.state.months[month]?.assets[poisonedFP])
+        XCTAssertTrue((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 9))
+        XCTAssertEqual(output.state.observedClock, 9)
     }
 
     func testSnapshotWithFilenameMismatchingHeader_isSkipped() async throws {
