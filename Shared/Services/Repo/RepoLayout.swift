@@ -8,6 +8,7 @@ enum RepoLayout {
     static let snapshotsDirectory = "snapshots"
     static let commitsDirectory = "commits"
     static let livenessDirectory = "liveness"
+    static let retentionDirectory = "retention"
     static let identityDirectory = "identity"
     static let migrationsDirectory = "migrations"
     /// Optional V2 fields keep the wire format additive until a non-additive change forces a bump.
@@ -37,6 +38,14 @@ enum RepoLayout {
 
     static func livenessDirectoryPath(base: String) -> String {
         normalize(joining: [base, watermelonDirectory, livenessDirectory])
+    }
+
+    static func retentionDirectoryPath(base: String) -> String {
+        normalize(joining: [base, watermelonDirectory, retentionDirectory])
+    }
+
+    static func retentionManifestPath(base: String, ref: RetentionManifestRef) -> String {
+        normalize(joining: [base, watermelonDirectory, retentionDirectory, RetentionManifestStore.filename(for: ref)])
     }
 
     static func livenessFilePath(base: String, writerID: String) -> String {
