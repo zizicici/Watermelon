@@ -223,7 +223,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         XCTAssertEqual(result.afterReport?.protectedUnparseableFilenameCount, 0)
     }
 
-    func testNoRuntimeCallSiteOrRetentionReferenceInCheckpointService() throws {
+    func testCheckpointServiceHasNoInlineRetentionOrDeletePrimitive() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -235,7 +235,12 @@ final class RepoCheckpointServiceTests: XCTestCase {
 
         let sourceFiles = try FileManager.default.subpathsOfDirectory(atPath: root.path)
             .filter { $0.hasSuffix(".swift") }
-            .filter { !$0.hasSuffix("RepoCheckpointService.swift") && !$0.hasSuffix("RepoCheckpointServiceTests.swift") }
+            .filter { path in
+                !path.hasSuffix("RepoCheckpointService.swift")
+                    && !path.hasSuffix("RepoCheckpointServiceTests.swift")
+                    && !path.hasSuffix("RepoCheckpointBarrierHook.swift")
+                    && !path.hasSuffix("RepoCheckpointBarrierHookTests.swift")
+            }
         for path in sourceFiles {
             let text = try String(contentsOf: root.appendingPathComponent(path))
             XCTAssertFalse(text.contains("RepoCheckpointService"), "unexpected runtime reference in \(path)")

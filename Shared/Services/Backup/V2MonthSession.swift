@@ -307,11 +307,37 @@ final class V2MonthSession: BackupMonthStore {
             )
         }
 
+        let didFlush = commitResult != nil || wroteSnapshot
+        if services.retentionRuntimeMode.checkpointBarrierHook,
+           !ignoreCancellation,
+           didFlush,
+           !dirty {
+            try await runCheckpointBarrierHook(services: services)
+        }
+
         return MonthManifestStore.FlushDelta(
-            didFlush: commitResult != nil || wroteSnapshot,
+            didFlush: didFlush,
             committedV2AssetFingerprints: commitResult?.committedAssets ?? [],
             committedV2TombstoneFingerprints: commitResult?.committedTombstones ?? []
         )
+    }
+
+    private func runCheckpointBarrierHook(services: BackupV2RuntimeServices) async throws {
+        do {
+            _ = try await RepoCheckpointBarrierHook(
+                services: services,
+                month: LibraryMonthKey(year: year, month: month)
+            ).run()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) {
+                throw CancellationError()
+            }
+            let message = "V2 checkpoint barrier maintenance failed for \(monthRelativePath): \(String(describing: error))"
+            stepLogger?(message)
+            v2SessionLog.notice("\(message, privacy: .public)")
+        }
     }
 
     private func commitPendingAssetToRemoteLocked(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta {

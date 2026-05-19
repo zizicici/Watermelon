@@ -1,8 +1,39 @@
 import Foundation
 
 struct RepoRetentionRuntimeMode: Sendable, Equatable {
-    var barrierAwareSessionRefresh: Bool
+    let barrierAwareSessionRefresh: Bool
+    let checkpointBarrierHook: Bool
+    let compactionPolicy: RepoCompactionPolicy
 
-    static let disabled = RepoRetentionRuntimeMode(barrierAwareSessionRefresh: false)
-    static let barrierAwareSessionRefreshOnly = RepoRetentionRuntimeMode(barrierAwareSessionRefresh: true)
+    private init(
+        barrierAwareSessionRefresh: Bool,
+        checkpointBarrierHook: Bool,
+        compactionPolicy: RepoCompactionPolicy
+    ) {
+        self.barrierAwareSessionRefresh = barrierAwareSessionRefresh
+        self.checkpointBarrierHook = checkpointBarrierHook
+        self.compactionPolicy = compactionPolicy
+    }
+
+    static let disabled = RepoRetentionRuntimeMode(
+        barrierAwareSessionRefresh: false,
+        checkpointBarrierHook: false,
+        compactionPolicy: .default
+    )
+
+    static let barrierAwareSessionRefreshOnly = RepoRetentionRuntimeMode(
+        barrierAwareSessionRefresh: true,
+        checkpointBarrierHook: false,
+        compactionPolicy: .default
+    )
+
+    static func checkpointBarrierHookOnly(
+        policy: RepoCompactionPolicy = .default
+    ) -> RepoRetentionRuntimeMode {
+        RepoRetentionRuntimeMode(
+            barrierAwareSessionRefresh: true,
+            checkpointBarrierHook: true,
+            compactionPolicy: policy
+        )
+    }
 }

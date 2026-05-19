@@ -164,6 +164,7 @@ final class RetentionManifestRemoteStoreTests: XCTestCase {
             .filter { $0.hasSuffix(".swift") }
         let allowed = Set([
             "Shared/Services/Backup/V2RetentionBarrierRefresh.swift",
+            "Shared/Services/Repo/RepoCheckpointBarrierHook.swift",
             "Shared/Services/Repo/RetentionManifestRemoteStore.swift",
             "Shared/Services/Repo/RepoRetentionBarrierService.swift",
             "WatermelonTests/RetentionManifestRemoteStoreTests.swift",
