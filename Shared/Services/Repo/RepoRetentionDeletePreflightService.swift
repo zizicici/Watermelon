@@ -77,6 +77,8 @@ struct RepoRetentionDeleteCandidate: Equatable, Sendable {
     let writerID: String
     let seq: UInt64
     let size: Int64
+    let sha256Hex: String
+    let rowCount: Int
 }
 
 struct RepoRetentionDeleteCandidateScanResult: Equatable, Sendable {
@@ -654,7 +656,9 @@ private struct RepoRetentionDeleteCandidateScanner: Sendable {
                 month: parsed.month,
                 writerID: parsed.writerID,
                 seq: parsed.seq,
-                size: entry.size
+                size: entry.size,
+                sha256Hex: commit.sha256Hex.lowercased(),
+                rowCount: commit.rowCount
             ))
         }
 

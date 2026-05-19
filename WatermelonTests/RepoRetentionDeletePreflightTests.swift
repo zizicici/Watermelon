@@ -33,6 +33,7 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
         XCTAssertEqual(plan.commitFiles.map(\.path), (1...3).map {
             RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: UInt64($0))
         })
+        XCTAssertTrue(plan.commitFiles.allSatisfy { !$0.sha256Hex.isEmpty && $0.rowCount > 0 })
         XCTAssertEqual(plan.protectedSummary.outOfPrefixCommitFileCount, 1)
         XCTAssertEqual(plan.protectedSummary.targetMonthUnparseableFilenameCount, 1)
         XCTAssertEqual(plan.protectedSummary.crossMonthCommitFileCount, 1)
@@ -800,9 +801,12 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
             XCTAssertFalse(text.contains("RepoRetentionDeletePreflightMode"), "preflight mode unexpectedly wired in \(path)")
         }
 
-        let servicePath = root.appendingPathComponent("Shared/Services/Repo/RepoRetentionDeletePreflightService.swift").path
+        let allowedPaths = Set([
+            root.appendingPathComponent("Shared/Services/Repo/RepoRetentionDeletePreflightService.swift").path,
+            root.appendingPathComponent("Shared/Services/Repo/RepoRetentionDeleteExecutor.swift").path
+        ])
         let productionFiles = try swiftSources(root: root, under: "Shared") + swiftSources(root: root, under: "Watermelon")
-        let callSites = try productionFiles.filter { $0.path != servicePath }.compactMap { url -> String? in
+        let callSites = try productionFiles.filter { !allowedPaths.contains($0.path) }.compactMap { url -> String? in
             let text = try String(contentsOf: url, encoding: .utf8)
             return text.contains("RepoRetentionDeletePreflightService")
                 ? relativePath(root: root, url: url)
