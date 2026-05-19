@@ -44,7 +44,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 
 ### 本地数据库
 
-- `v3_repo_state` migration
+- `v3_repo_local_state` migration
 - 新表 `repo_state(profileID, repoID, writerID, lastClock, lastSeq, migrationCompleted)`
 - `server_profiles.writerID TEXT`
 - `RepoStateRecord` GRDB record

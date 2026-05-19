@@ -6,8 +6,7 @@
 
 1. `v1_initial`
 2. `v2_ms_timestamps`
-3. `v3_repo_state`
-4. `v4_selection_version`
+3. `v3_repo_local_state`
 
 ### `server_profiles`
 
@@ -34,7 +33,7 @@ CREATE UNIQUE INDEX idx_server_profiles_unique_smb
 ON server_profiles(host, port, shareName, basePath, username, IFNULL(domain, ''))
 WHERE storageType = 'smb';
 
--- v3_repo_state
+-- v3_repo_local_state
 ALTER TABLE server_profiles ADD COLUMN writerID TEXT;
 ```
 
@@ -48,7 +47,7 @@ ALTER TABLE server_profiles ADD COLUMN writerID TEXT;
 
 ### `repo_state`
 
-`v3_repo_state` 新增。它把 profile 与远端 repo identity 绑定，并持久化本 writer 的 Lamport clock / commit seq 高水位。
+`v3_repo_local_state` 新增。它把 profile 与远端 repo identity 绑定，并持久化本 writer 的 Lamport clock / commit seq 高水位。
 
 ```sql
 CREATE TABLE repo_state (
@@ -107,7 +106,7 @@ CREATE INDEX idx_local_assets_has_fingerprint
 ON local_assets(assetLocalIdentifier)
 WHERE assetFingerprint IS NOT NULL;
 
--- v4_selection_version
+-- v3_repo_local_state
 ALTER TABLE local_assets ADD COLUMN selectionVersion INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE local_assets ADD COLUMN resourceSignature BLOB;
 ```

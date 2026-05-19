@@ -86,7 +86,7 @@ final class DatabaseManager: @unchecked Sendable {
             )
         }
 
-        migrator.registerMigration("v3_repo_state") { db in
+        migrator.registerMigration("v3_repo_local_state") { db in
             try db.execute(sql: "ALTER TABLE \(ServerProfileRecord.databaseTableName) ADD COLUMN writerID TEXT")
 
             try db.create(table: RepoStateRecord.databaseTableName) { table in
@@ -98,10 +98,8 @@ final class DatabaseManager: @unchecked Sendable {
                 table.column("migrationCompleted", .integer).notNull().defaults(to: 0)
                 table.primaryKey(["profileID", "repoID"])
             }
-        }
 
-        // Default 0 forces a re-hash on next index build before the skip predicate trusts the row.
-        migrator.registerMigration("v4_selection_version") { db in
+            // Default 0 forces a re-hash on next index build before the skip predicate trusts the row.
             try db.execute(sql: "ALTER TABLE local_assets ADD COLUMN selectionVersion INTEGER NOT NULL DEFAULT 0")
             try db.execute(sql: "ALTER TABLE local_assets ADD COLUMN resourceSignature BLOB")
         }

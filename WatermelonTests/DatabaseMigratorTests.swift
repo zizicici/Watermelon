@@ -4,8 +4,8 @@ import GRDB
 
 /// Each test pins a specific promise the migration code makes:
 /// - v2 ns→ms: rename + divide; NULL preserved; 0 preserved
-/// - v3 writerID: nullable for existing rows (NOT NULL would crash legacy data)
-/// - v3 repo_state: composite PK on (profileID, repoID)
+/// - v3 repo local state: writerID nullable for existing rows (NOT NULL would crash legacy data)
+/// - v3 repo local state: composite PK on (profileID, repoID)
 /// - v1 SMB unique: partial on storageType='smb'; IFNULL(domain,'') collapses NULL/""
 /// - Re-open idempotency: re-running migrator preserves data and indexes
 final class DatabaseMigratorTests: XCTestCase {
@@ -136,7 +136,7 @@ final class DatabaseMigratorTests: XCTestCase {
 
     /// Existing v2 profiles must survive v3: the new writerID column must be NULL
     /// (defaulting to NOT NULL would crash on first read of pre-v3 rows).
-    func testV3_writerIDColumnIsNullableForExistingProfiles() throws {
+    func testV3RepoLocalState_writerIDColumnIsNullableForExistingV2Profiles() throws {
         let url = tempDir.appendingPathComponent("db.sqlite")
         let queue = try DatabaseQueue(path: url.path)
         var migrator = DatabaseMigrator()
@@ -156,12 +156,8 @@ final class DatabaseMigratorTests: XCTestCase {
             )
         }
 
-        // Now apply v3.
-        var v3Migrator = DatabaseMigrator()
-        registerProductionMigrationsUpToV1(into: &v3Migrator)
-        registerProductionV2(into: &v3Migrator)
-        registerProductionV3(into: &v3Migrator)
-        try v3Migrator.migrate(queue)
+        let productionMigrator = DatabaseManager.makeMigrator()
+        try productionMigrator.migrate(queue)
 
         let writerID = try queue.read { db in
             try Row.fetchOne(db, sql: "SELECT writerID FROM server_profiles WHERE name = 'legacy'")
@@ -169,9 +165,14 @@ final class DatabaseMigratorTests: XCTestCase {
         XCTAssertNotNil(writerID, "row exists")
         XCTAssertNil(writerID?["writerID"] as String?,
                      "writerID must be NULL for pre-v3 profiles; NOT NULL default would crash legacy data")
+
+        let appliedIdentifiers = try queue.read { db in
+            try productionMigrator.appliedIdentifiers(db)
+        }
+        XCTAssertEqual(appliedIdentifiers, Set(["v1_initial", "v2_ms_timestamps", "v3_repo_local_state"]))
     }
 
-    func testV3_repoState_compositePrimaryKey_uniquePerProfileRepoPair() throws {
+    func testV3RepoLocalState_repoState_compositePrimaryKey_uniquePerProfileRepoPair() throws {
         let url = tempDir.appendingPathComponent("db.sqlite")
         let dbm = try DatabaseManager(databaseURL: url)
 
@@ -193,7 +194,6 @@ final class DatabaseMigratorTests: XCTestCase {
                            "duplicate composite key must produce a constraint error")
         }
     }
-
 
     /// The unique index is `WHERE storageType = 'smb'` on purpose: the same (host,
     /// port, share, basePath, user, domain) tuple may legitimately exist for SMB
@@ -322,6 +322,17 @@ final class DatabaseMigratorTests: XCTestCase {
         XCTAssertEqual(names1, names2, "two fresh DBs migrated through makeMigrator() must end up with identical schemas")
     }
 
+    func testFreshDatabase_recordsV3RepoLocalState() throws {
+        let url = tempDir.appendingPathComponent("db.sqlite")
+        let dbm = try DatabaseManager(databaseURL: url)
+        let migrator = DatabaseManager.makeMigrator()
+
+        let appliedIdentifiers = try dbm.read { db in
+            try migrator.appliedIdentifiers(db)
+        }
+        XCTAssertEqual(appliedIdentifiers, Set(["v1_initial", "v2_ms_timestamps", "v3_repo_local_state"]))
+    }
+
 
     private func insertSMBProfile(dbm: DatabaseManager, name: String, domain: String?) throws {
         try dbm.write { db in
@@ -414,20 +425,4 @@ final class DatabaseMigratorTests: XCTestCase {
         }
     }
 
-    private func registerProductionV3(into migrator: inout DatabaseMigrator) {
-        migrator.registerMigration("v3_repo_state") { db in
-            try db.execute(sql: "ALTER TABLE server_profiles ADD COLUMN writerID TEXT")
-            try db.execute(sql: """
-            CREATE TABLE repo_state (
-              profileID INTEGER NOT NULL,
-              repoID TEXT NOT NULL,
-              writerID TEXT NOT NULL,
-              lastClock INTEGER NOT NULL DEFAULT 0,
-              lastSeq INTEGER NOT NULL DEFAULT 0,
-              migrationCompleted INTEGER NOT NULL DEFAULT 0,
-              PRIMARY KEY (profileID, repoID)
-            )
-            """)
-        }
-    }
 }
