@@ -14,12 +14,21 @@ actor RepoMaterializer {
         self.commitReader = CommitLogReader(client: effective, basePath: basePath)
     }
 
+    struct AcceptedSnapshotBaselineInfo: Sendable, Equatable {
+        let filename: String
+        let month: LibraryMonthKey
+        let lamport: UInt64
+        let writerID: String
+        let runIDPrefix: String
+        let covered: CoveredRanges
+    }
+
     struct MaterializeOutput: Sendable {
         let state: RepoSnapshotState
         let observedSeqByWriter: [String: UInt64]
-        /// Ops baked into `state.months[month]`. Skipped (corrupt) seqs excluded so the
-        /// next snapshot writer doesn't blanket-cover commits whose effects aren't in state.
+        /// Final fold coverage after accepted snapshot baseline plus replayed commits.
         let coveredByMonth: [LibraryMonthKey: CoveredRanges]
+        let acceptedSnapshotBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaselineInfo]
         /// Months where every snapshot candidate was corrupt — commit replay rebuilt state
         /// from empty. Caller can flip these months' next flush to emit a fresh baseline
         /// even when `dirty == false`, preventing O(commit log) replay every materialize.
@@ -115,6 +124,7 @@ actor RepoMaterializer {
             state: state,
             observedSeqByWriter: observedSeqByWriter,
             coveredByMonth: commitTrust.coveredByMonth,
+            acceptedSnapshotBaselinesByMonth: snapshotTrust.acceptedBaselinesByMonth.mapValues(\.info),
             corruptedSnapshotMonths: corruptedSnapshotMonths,
             repoID: expectedRepoID
         )
@@ -140,6 +150,7 @@ private struct AcceptedSnapshotBaseline: Sendable {
     let state: RepoMonthState
     let covered: CoveredRanges
     let baselineStamps: [Data: OpStamp]
+    let info: RepoMaterializer.AcceptedSnapshotBaselineInfo
     let lamport: UInt64
 }
 
@@ -195,7 +206,7 @@ private struct SnapshotTrustPipeline {
                                 materializerLog.warning("skip snapshot with poisoned row stamp: \(candidate.filename, privacy: .public)")
                                 continue
                             }
-                            return SnapshotTaskResult(month: month, baseline: Self.makeBaseline(file: file, month: month, lamport: candidate.lamport))
+                            return SnapshotTaskResult(month: month, baseline: Self.makeBaseline(file: file, reference: candidate))
                         } catch let error as SnapshotReader.ReadError {
                             switch error {
                             case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
@@ -242,7 +253,8 @@ private struct SnapshotTrustPipeline {
             && CommitHeader.parseMonthScope(file.header.scope) == reference.month
     }
 
-    private static func makeBaseline(file: SnapshotFile, month: LibraryMonthKey, lamport: UInt64) -> AcceptedSnapshotBaseline {
+    private static func makeBaseline(file: SnapshotFile, reference: MaterializerSnapshotReference) -> AcceptedSnapshotBaseline {
+        let month = reference.month
         var state = RepoMonthState.empty
         var baselineStamps: [Data: OpStamp] = [:]
         for asset in file.assets {
@@ -289,7 +301,15 @@ private struct SnapshotTrustPipeline {
             state: state,
             covered: file.header.covered,
             baselineStamps: baselineStamps,
-            lamport: lamport
+            info: RepoMaterializer.AcceptedSnapshotBaselineInfo(
+                filename: reference.filename,
+                month: reference.month,
+                lamport: reference.lamport,
+                writerID: reference.writerID,
+                runIDPrefix: reference.runIDPrefix,
+                covered: file.header.covered
+            ),
+            lamport: reference.lamport
         )
     }
 }

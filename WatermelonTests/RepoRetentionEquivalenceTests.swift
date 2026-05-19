@@ -151,6 +151,7 @@ final class RepoRetentionEquivalenceTests: XCTestCase {
             state: RepoSnapshotState(months: [month: monthState], observedClock: observedClock),
             observedSeqByWriter: observedSeq ?? [Self.writerA: 5],
             coveredByMonth: [month: covered ?? self.covered([(1, 5)])],
+            acceptedSnapshotBaselinesByMonth: [:],
             corruptedSnapshotMonths: [],
             repoID: repoID
         )
@@ -168,6 +169,7 @@ final class RepoRetentionEquivalenceTests: XCTestCase {
             state: RepoSnapshotState(months: months, observedClock: observedClock ?? output.state.observedClock),
             observedSeqByWriter: observedSeq ?? output.observedSeqByWriter,
             coveredByMonth: output.coveredByMonth,
+            acceptedSnapshotBaselinesByMonth: output.acceptedSnapshotBaselinesByMonth,
             corruptedSnapshotMonths: output.corruptedSnapshotMonths,
             repoID: output.repoID
         )
