@@ -584,12 +584,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
     }
 
-    fileprivate func _optimisticUpsertAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]?) {
-        optimisticMutationLock.withLock {
-            committedView.applyOptimisticUpsert(asset: asset, links: links)
-        }
-    }
-
     fileprivate func _appendOptimisticAsset(
         _ asset: RemoteManifestAsset,
         links: [RemoteAssetResourceLink]?

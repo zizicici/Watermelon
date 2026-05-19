@@ -38,6 +38,7 @@ enum RepoStateAuthority {
 
     static func decodePersistedSeq(_ stored: Int64) -> RepoCounterSanitization {
         guard stored >= 0 else {
+            repoStateAuthorityLog.warning("repaired negative persisted seq to 0 stored=\(stored, privacy: .public)")
             return .repaired(0)
         }
         return .accepted(UInt64(stored))
@@ -46,6 +47,7 @@ enum RepoStateAuthority {
     static func decodePersistedClock(_ stored: Int64) -> RepoCounterSanitization {
         let decoded = UInt64(bitPattern: stored)
         guard decoded < LamportClock.maxObservableValue else {
+            repoStateAuthorityLog.warning("repaired overflowed persisted clock decoded=\(decoded, privacy: .public)")
             return .repaired(decoded)
         }
         return .accepted(decoded)

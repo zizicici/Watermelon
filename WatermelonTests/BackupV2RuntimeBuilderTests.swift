@@ -802,6 +802,46 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         XCTAssertTrue(report.reportOnly.isEmpty)
     }
 
+    func testVerifyMonthV2_nilBinding_cachedRepoIDMismatch_throwsIdentityMismatch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-a")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+        let profile = try insertProfile()
+        // No repo_state — nil-binding profile
+
+        let remoteIndexService = RemoteIndexSyncService()
+        _ = try await remoteIndexService.syncIndex(client: client, profile: profile, localRepoID: nil)
+        let cachedID = await remoteIndexService.materializedRepoID()
+        XCTAssertEqual(cachedID, "repo-a", "precondition: materializedRepoID should be set")
+
+        // Swap remote repo.json to a different repo ID (simulates peer swap or corruption)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-b")
+
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+        do {
+            _ = try await service.verifyMonthV2(
+                client: client,
+                basePath: basePath,
+                month: LibraryMonthKey(year: 2026, month: 5),
+                profile: profile
+            )
+            XCTFail("expected repoIdentityMismatch — nil-binding with cached materializedRepoID must reject swapped remote")
+        } catch BackupCompatibilityError.repoIdentityMismatch {
+            // expected
+        }
+    }
+
     // MARK: - verifyMonth identity guard (non-V2 remote with local V2 binding)
 
     func testVerifyMonth_localV2Binding_freshRemote_throwsDamagedV2Repo() async throws {
