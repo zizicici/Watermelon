@@ -36,4 +36,12 @@ struct RepoRetentionRuntimeMode: Sendable, Equatable {
             compactionPolicy: policy
         )
     }
+
+    var retentionPeerCapability: RetentionPeerCapability? {
+        guard barrierAwareSessionRefresh else { return nil }
+        return RetentionPeerCapability(
+            barrierAwareSessionRefresh: true,
+            checkpointBarrierHook: checkpointBarrierHook
+        )
+    }
 }

@@ -173,7 +173,8 @@ enum BackupV2RuntimeBuilder {
             client: metadataClient,
             basePath: profile.basePath,
             writerID: writerID,
-            isLocalVolume: profile.resolvedStorageType == .externalVolume
+            isLocalVolume: profile.resolvedStorageType == .externalVolume,
+            retentionCapability: retentionRuntimeMode.retentionPeerCapability
         )
         var sweepTask: Task<Void, Never>? = nil
         if runMaintenanceTasks {
