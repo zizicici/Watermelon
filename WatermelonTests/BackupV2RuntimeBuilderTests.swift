@@ -662,6 +662,62 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
                        "self-sweep must reclaim aged own liveness staging even on renewal-unsafe backends (SMB/SFTP) — otherwise own crash residue is immortal")
     }
 
+    func testRetentionCapabilityHeartbeatRequiresSafeRenewal() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        let services = try await BackupV2RuntimeBuilder.build(
+            client: client,
+            metadataClient: metadataClient,
+            profile: profile,
+            databaseManager: databaseManager,
+            allowMigration: false,
+            retentionRuntimeMode: .barrierAwareSessionRefreshOnly
+        )
+        defer { Task { await services.shutdown() } }
+
+        let body = try await waitForHeartbeat(client: metadataClient, writerID: services.writerID)
+        let heartbeat = try LivenessHeartbeat.decode(body)
+        XCTAssertEqual(
+            heartbeat.retention,
+            RetentionPeerCapability(barrierAwareSessionRefresh: true, checkpointBarrierHook: false)
+        )
+    }
+
+    func testRetentionCapabilityHeartbeatWithheldWhenRenewalUnsafe() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        metadataClient.setSupportsLivenessSafeOverwriteMove(false)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        let services = try await BackupV2RuntimeBuilder.build(
+            client: client,
+            metadataClient: metadataClient,
+            profile: profile,
+            databaseManager: databaseManager,
+            allowMigration: false,
+            retentionRuntimeMode: .checkpointBarrierHookOnly(policy: .default)
+        )
+        defer { Task { await services.shutdown() } }
+
+        let body = try await waitForHeartbeat(client: metadataClient, writerID: services.writerID)
+        let heartbeat = try LivenessHeartbeat.decode(body)
+        let text = String(decoding: body, as: UTF8.self)
+        XCTAssertNil(heartbeat.retention)
+        XCTAssertFalse(text.contains("retention"))
+    }
+
     func testBuild_repairsPoisonedRepoStateRow() async throws {
         let canonicalRepoID = "poison-repair-repo"
         let client = InMemoryRemoteStorageClient()
@@ -709,6 +765,21 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     private func insertProfile() throws -> ServerProfileRecord {
         let id = try TestFixtures.insertServerProfile(in: databaseManager, basePath: basePath, storageType: .webdav)
         return TestFixtures.makeServerProfile(id: id, storageType: .webdav, basePath: basePath)
+    }
+
+    private func waitForHeartbeat(
+        client: InMemoryRemoteStorageClient,
+        writerID: String
+    ) async throws -> Data {
+        let path = RepoLayout.livenessFilePath(base: basePath, writerID: writerID)
+        for _ in 0..<40 {
+            if let body = await client.snapshotFiles()[path] {
+                return body
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTFail("heartbeat was not written")
+        return Data()
     }
 
     // MARK: - verifyMonthV2 identity guard
