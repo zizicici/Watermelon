@@ -1374,6 +1374,7 @@ final class V2FlushTests: XCTestCase {
             commitWriter: commitWriter,
             snapshotWriter: snapshotWriter,
             liveness: liveness,
+            retentionRuntimeMode: .disabled,
             metadataClient: client,
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),

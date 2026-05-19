@@ -163,6 +163,7 @@ final class RetentionManifestRemoteStoreTests: XCTestCase {
         let sourceFiles = try FileManager.default.subpathsOfDirectory(atPath: root.path)
             .filter { $0.hasSuffix(".swift") }
         let allowed = Set([
+            "Shared/Services/Backup/V2RetentionBarrierRefresh.swift",
             "Shared/Services/Repo/RetentionManifestRemoteStore.swift",
             "Shared/Services/Repo/RepoRetentionBarrierService.swift",
             "WatermelonTests/RetentionManifestRemoteStoreTests.swift",

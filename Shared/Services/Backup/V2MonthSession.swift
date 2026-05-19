@@ -335,6 +335,27 @@ final class V2MonthSession: BackupMonthStore {
     ) async throws -> V2MonthCommitFlusher.Result? {
         if !ignoreCancellation { try Task.checkCancellation() }
         let monthKey = LibraryMonthKey(year: year, month: month)
+        let barrierAwareBasis: V2MonthCommitFlusher.Basis?
+        if services.retentionRuntimeMode.barrierAwareSessionRefresh, indexes.hasUncommittedOps {
+            let localLamportBeforeBarrierObserve = await services.lamport.value()
+            let tombstoneBasis = makeTombstoneObservationBasis(
+                sessionWrittenCovered: snapshotFlusher.sessionWrittenCovered,
+                localLamportBeforeBarrierObserve: localLamportBeforeBarrierObserve
+            )
+            if let refresh = try await V2RetentionBarrierRefresh(
+                services: services,
+                monthKey: monthKey
+            ).commitRefresh(ignoreCancellation: ignoreCancellation) {
+                barrierAwareBasis = V2MonthCommitFlusher.Basis(
+                    clockFloor: refresh.clockFloor,
+                    tombstoneObservationBasis: tombstoneBasis
+                )
+            } else {
+                barrierAwareBasis = nil
+            }
+        } else {
+            barrierAwareBasis = nil
+        }
         let commitFlusher = V2MonthCommitFlusher(
             services: services,
             monthKey: monthKey,
@@ -344,6 +365,7 @@ final class V2MonthSession: BackupMonthStore {
         )
         guard let result = try await commitFlusher.flushPending(
             sessionWrittenCovered: snapshotFlusher.sessionWrittenCovered,
+            barrierAwareBasis: barrierAwareBasis,
             ignoreCancellation: ignoreCancellation
         ) else {
             return nil
@@ -351,6 +373,21 @@ final class V2MonthSession: BackupMonthStore {
         snapshotFlusher.recordCommitted(seq: result.lastSeq)
         dirty = true
         return result
+    }
+
+    private func makeTombstoneObservationBasis(
+        sessionWrittenCovered: CoveredRanges,
+        localLamportBeforeBarrierObserve: UInt64
+    ) -> TombstoneObservationBasis {
+        let priorCovered = materializedCovered.merging(sessionWrittenCovered)
+        var perWriterMaxSeq: [String: UInt64] = [:]
+        for (writer, ranges) in priorCovered.rangesByWriter {
+            perWriterMaxSeq[writer] = ranges.map(\.high).max() ?? 0
+        }
+        return TombstoneObservationBasis(
+            perWriterMaxSeq: perWriterMaxSeq,
+            lamportWatermark: max(observedClockAtLoad, localLamportBeforeBarrierObserve)
+        )
     }
 
     private func beginFlush() -> Bool {

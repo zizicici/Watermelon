@@ -42,16 +42,38 @@ final class V2MonthSnapshotFlusher {
 
     func flushSnapshotIfPending(ignoreCancellation: Bool) async throws -> Bool {
         guard hasPendingSnapshotWork else { return false }
-        try await writeSnapshot(ignoreCancellation: ignoreCancellation)
+        let barrierSource: BarrierAwareSnapshotRefreshResult?
+        if services.retentionRuntimeMode.barrierAwareSessionRefresh {
+            barrierSource = try await V2RetentionBarrierRefresh(
+                services: services,
+                monthKey: monthKey
+            ).snapshotRefresh(
+                sessionWrittenCovered: sessionWrittenCovered,
+                ignoreCancellation: ignoreCancellation
+            )
+        } else {
+            barrierSource = nil
+        }
+        try await writeSnapshot(barrierSource: barrierSource, ignoreCancellation: ignoreCancellation)
         pendingSnapshotWork = false
         pendingRebaselineOnly = false
         return true
     }
 
-    private func writeSnapshot(ignoreCancellation: Bool) async throws {
-        // Snapshot state must stay unfiltered to preserve covered-range replay.
-        let snapshotState = indexes.currentMaterializedState()
-        let covered = materializedCovered.merging(sessionWrittenCovered)
+    private func writeSnapshot(
+        barrierSource: BarrierAwareSnapshotRefreshResult?,
+        ignoreCancellation: Bool
+    ) async throws {
+        let snapshotState: RepoMonthState
+        let covered: CoveredRanges
+        if let barrierSource {
+            snapshotState = barrierSource.state
+            covered = barrierSource.covered
+        } else {
+            // Snapshot state must stay unfiltered to preserve covered-range replay.
+            snapshotState = indexes.currentMaterializedState()
+            covered = materializedCovered.merging(sessionWrittenCovered)
+        }
         let header = SnapshotHeader(
             version: SnapshotHeader.currentVersion,
             scope: CommitHeader.monthScope(monthKey),

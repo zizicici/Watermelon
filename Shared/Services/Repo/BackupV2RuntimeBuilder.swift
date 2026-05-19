@@ -21,7 +21,8 @@ enum BackupV2RuntimeBuilder {
         allowMigration: Bool,
         onMigrationStart: (() async -> Void)? = nil,
         onMigrationComplete: ((Int) async -> Void)? = nil,
-        onBootstrap: (() async -> Void)? = nil
+        onBootstrap: (() async -> Void)? = nil,
+        retentionRuntimeMode: RepoRetentionRuntimeMode = .disabled
     ) async throws -> BackupV2RuntimeServices {
         guard let profileID = profile.id else {
             throw BackupV2RuntimeBuildError.profileMissingID
@@ -220,6 +221,7 @@ enum BackupV2RuntimeBuilder {
             commitWriter: commitWriter,
             snapshotWriter: snapshotWriter,
             liveness: liveness,
+            retentionRuntimeMode: retentionRuntimeMode,
             metadataClient: metadataClient,
             ownsMetadataClient: ownsMetadataClient,
             initialMaterializeOutput: InitialMaterializeOutputBox(initialMaterialize),

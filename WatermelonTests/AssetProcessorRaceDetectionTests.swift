@@ -455,6 +455,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
             commitWriter: CommitLogWriter(client: client, basePath: basePath),
             snapshotWriter: SnapshotWriter(client: client, basePath: basePath),
             liveness: LivenessTracker(client: client, basePath: basePath, writerID: writerID, isLocalVolume: true),
+            retentionRuntimeMode: .disabled,
             metadataClient: client,
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),

@@ -323,7 +323,9 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
             basePath: basePath, database: scaffold.database, identity: identity,
             seqAllocator: allocator, lamport: lamport,
             commitWriter: commitWriter, snapshotWriter: snapshotWriter,
-            liveness: liveness, metadataClient: scaffold.client,
+            liveness: liveness,
+            retentionRuntimeMode: .disabled,
+            metadataClient: scaffold.client,
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),
             sweepTask: nil

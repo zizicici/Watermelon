@@ -13,8 +13,14 @@ struct V2MonthCommitFlusher {
         let committedTombstones: Set<Data>
     }
 
+    struct Basis: Sendable, Equatable {
+        let clockFloor: UInt64
+        let tombstoneObservationBasis: TombstoneObservationBasis
+    }
+
     func flushPending(
         sessionWrittenCovered: CoveredRanges,
+        barrierAwareBasis: Basis? = nil,
         ignoreCancellation: Bool
     ) async throws -> Result? {
         let pending = indexes.snapshotPending()
@@ -39,11 +45,17 @@ struct V2MonthCommitFlusher {
         // Defer row stamps until seq allocation completes.
         var committedResourceClocks: [String: UInt64] = [:]
         while true {
-            let lamportWatermark = max(observedClockAtLoad, await services.lamport.value())
-            let observedBasis = TombstoneObservationBasis(
-                perWriterMaxSeq: perWriterMaxSeq,
-                lamportWatermark: lamportWatermark
-            )
+            let observedBasis: TombstoneObservationBasis
+            if let barrierAwareBasis {
+                try await services.lamport.observe(barrierAwareBasis.clockFloor)
+                observedBasis = barrierAwareBasis.tombstoneObservationBasis
+            } else {
+                let lamportWatermark = max(observedClockAtLoad, await services.lamport.value())
+                observedBasis = TombstoneObservationBasis(
+                    perWriterMaxSeq: perWriterMaxSeq,
+                    lamportWatermark: lamportWatermark
+                )
+            }
             let clockRange = try await services.lamport.tickRange(count: opCount)
             var clockCursor = clockRange.low
             var ops: [CommitOp] = []
