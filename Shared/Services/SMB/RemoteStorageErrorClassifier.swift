@@ -1,36 +1,61 @@
 import Foundation
 import Citadel
 
-/// Keeps inspect/bootstrap/liveness paths from treating transport failures as absence.
-func isStorageNotFoundError(_ error: Error) -> Bool {
-    let nsError = error as NSError
-    if nsError.domain == NSCocoaErrorDomain
-        && (nsError.code == NSFileReadNoSuchFileError || nsError.code == NSFileNoSuchFileError) {
-        return true
-    }
-    if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorFileDoesNotExist {
-        return true
-    }
-    if nsError.domain == "WebDAVClient" && nsError.code == 404 {
-        return true
-    }
-    if nsError.domain == S3ErrorClassifier.errorDomain {
-        if nsError.code == 404 { return true }
-        if let serverCode = nsError.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String,
-           serverCode == "NoSuchKey" || serverCode == "NotFound" {
+// Shared notFound recognition must not collapse cancellation into absence.
+nonisolated enum RemoteStorageErrorClassifier {
+    static func isNotFound(_ error: Error) -> Bool {
+        if isCancellation(error) { return false }
+        if case RemoteStorageClientError.underlying(let underlying) = error {
+            return isNotFound(underlying)
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain
+            && (nsError.code == NSFileReadNoSuchFileError || nsError.code == NSFileNoSuchFileError) {
             return true
         }
+        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorFileDoesNotExist {
+            return true
+        }
+        if nsError.domain == "WebDAVClient" && nsError.code == 404 {
+            return true
+        }
+        if nsError.domain == S3ErrorClassifier.errorDomain {
+            if nsError.code == 404 { return true }
+            if let serverCode = nsError.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String,
+               serverCode == "NoSuchKey" || serverCode == "NotFound" {
+                return true
+            }
+        }
+        if SMBErrorClassifier.isNotFound(error) {
+            return true
+        }
+        if let sftpError = error as? SFTPError,
+           case .errorStatus(let status) = sftpError,
+           status.errorCode == .noSuchFile {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isNotFound(underlying)
+        }
+        return false
     }
-    if SMBErrorClassifier.isNotFound(error) {
-        return true
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if case RemoteStorageClientError.underlying(let underlying) = error {
+            return isCancellation(underlying)
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isCancellation(underlying)
+        }
+        return false
     }
-    if let sftpError = error as? SFTPError,
-       case .errorStatus(let status) = sftpError,
-       status.errorCode == .noSuchFile {
-        return true
-    }
-    if case RemoteStorageClientError.underlying(let underlying) = error {
-        return isStorageNotFoundError(underlying)
-    }
-    return false
+}
+
+func isStorageNotFoundError(_ error: Error) -> Bool {
+    RemoteStorageErrorClassifier.isNotFound(error)
 }

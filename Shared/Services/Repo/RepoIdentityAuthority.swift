@@ -131,7 +131,7 @@ struct RepoIdentityAuthority: Sendable {
             } catch is CommitLogReader.ReadError {
                 continue
             } catch {
-                if isStorageNotFoundError(error) { continue }
+                if RemoteStorageErrorClassifier.isNotFound(error) { continue }
                 throw error
             }
         }
@@ -146,7 +146,7 @@ struct RepoIdentityAuthority: Sendable {
             } catch is SnapshotReader.ReadError {
                 continue
             } catch {
-                if isStorageNotFoundError(error) { continue }
+                if RemoteStorageErrorClassifier.isNotFound(error) { continue }
                 throw error
             }
         }

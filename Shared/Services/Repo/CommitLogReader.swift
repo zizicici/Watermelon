@@ -6,6 +6,7 @@ actor CommitLogReader {
         case missingEnd
         case integrityMismatch(IntegrityResult)
         case decodeFailure(Error)
+        case notFound(filename: String)
     }
 
     private let client: any RemoteStorageClientProtocol
@@ -40,14 +41,24 @@ actor CommitLogReader {
 
     func read(filename: String) async throws -> CommitFile {
         let remotePath = RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory, RepoLayout.commitsDirectory, filename])
-        return try await read(remotePath: remotePath)
+        return try await read(remotePath: remotePath, filename: filename)
     }
 
     func read(remotePath: String) async throws -> CommitFile {
+        try await read(remotePath: remotePath, filename: (remotePath as NSString).lastPathComponent)
+    }
+
+    private func read(remotePath: String, filename: String) async throws -> CommitFile {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("commit-fetch-\(UUID().uuidString).jsonl")
         defer { try? FileManager.default.removeItem(at: temp) }
-        try await client.download(remotePath: remotePath, localURL: temp)
+        do {
+            try await client.download(remotePath: remotePath, localURL: temp)
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            if RemoteStorageErrorClassifier.isNotFound(error) { throw ReadError.notFound(filename: filename) }
+            throw error
+        }
         return try Self.parse(localURL: temp)
     }
 

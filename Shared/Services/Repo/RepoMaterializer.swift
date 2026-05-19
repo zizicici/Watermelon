@@ -36,6 +36,12 @@ actor RepoMaterializer {
         let repoID: String?
     }
 
+    enum MetadataReadRaceError: Error, Equatable {
+        case requiredCommitVanished(filename: String, month: LibraryMonthKey, writerID: String, seq: UInt64)
+        case snapshotVanishedWithoutRecovery(filename: String, month: LibraryMonthKey, lamport: UInt64, writerID: String, runIDPrefix: String)
+        case metadataChangedAgainAfterRetry
+    }
+
     func materialize(expectedRepoID: String? = nil) async throws -> MaterializeOutput {
         try await materialize(filterMonth: nil, expectedRepoID: expectedRepoID)
     }
@@ -45,6 +51,74 @@ actor RepoMaterializer {
     }
 
     private func materialize(filterMonth: LibraryMonthKey?, expectedRepoID: String?) async throws -> MaterializeOutput {
+        do {
+            return try await materializeOnce(filterMonth: filterMonth, expectedRepoID: expectedRepoID)
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            guard let race = error as? InternalMetadataReadRace else { throw error }
+            do {
+                let retry = try await materializeOnce(filterMonth: filterMonth, expectedRepoID: expectedRepoID)
+                try validateRetry(retry, recovers: race)
+                return retry
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                if error is InternalMetadataReadRace {
+                    throw MetadataReadRaceError.metadataChangedAgainAfterRetry
+                }
+                throw error
+            }
+        }
+    }
+
+    private func validateRetry(_ output: MaterializeOutput, recovers race: InternalMetadataReadRace) throws {
+        switch race {
+        case .requiredCommitVanished(let filename, let month, let writerID, let seq):
+            let covered = output.coveredByMonth[month] ?? .empty
+            guard covered.contains(writerID: writerID, seq: seq),
+                  (output.observedSeqByWriter[writerID] ?? 0) >= seq else {
+                throw MetadataReadRaceError.requiredCommitVanished(
+                    filename: filename,
+                    month: month,
+                    writerID: writerID,
+                    seq: seq
+                )
+            }
+        case .snapshotVanished(let filename, let month, let lamport, let writerID, let runIDPrefix):
+            // Unit 5 invariant: unreadable accepted snapshot candidates cannot downgrade.
+            guard let baseline = output.acceptedSnapshotBaselinesByMonth[month],
+                  Self.snapshotReferenceIsSameOrNewer(
+                    lamport: baseline.lamport,
+                    writerID: baseline.writerID,
+                    runIDPrefix: baseline.runIDPrefix,
+                    thanLamport: lamport,
+                    writerID: writerID,
+                    runIDPrefix: runIDPrefix
+                  ) else {
+                throw MetadataReadRaceError.snapshotVanishedWithoutRecovery(
+                    filename: filename,
+                    month: month,
+                    lamport: lamport,
+                    writerID: writerID,
+                    runIDPrefix: runIDPrefix
+                )
+            }
+        }
+    }
+
+    private static func snapshotReferenceIsSameOrNewer(
+        lamport: UInt64,
+        writerID: String,
+        runIDPrefix: String,
+        thanLamport otherLamport: UInt64,
+        writerID otherWriterID: String,
+        runIDPrefix otherRunIDPrefix: String
+    ) -> Bool {
+        if lamport != otherLamport { return lamport > otherLamport }
+        if writerID != otherWriterID { return writerID > otherWriterID }
+        return runIDPrefix >= otherRunIDPrefix
+    }
+
+    private func materializeOnce(filterMonth: LibraryMonthKey?, expectedRepoID: String?) async throws -> MaterializeOutput {
         async let snapshotFilenames = snapshotReader.listSnapshotFilenames()
         async let commitFilenames = commitReader.listCommitFilenames()
         let snapshots = try await snapshotFilenames
@@ -131,6 +205,11 @@ actor RepoMaterializer {
     }
 }
 
+private enum InternalMetadataReadRace: Error {
+    case requiredCommitVanished(filename: String, month: LibraryMonthKey, writerID: String, seq: UInt64)
+    case snapshotVanished(filename: String, month: LibraryMonthKey, lamport: UInt64, writerID: String, runIDPrefix: String)
+}
+
 private struct MaterializerSnapshotReference: Sendable {
     let month: LibraryMonthKey
     let filename: String
@@ -212,6 +291,14 @@ private struct SnapshotTrustPipeline {
                             case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
                                 materializerLog.warning("skip corrupt snapshot \(candidate.filename, privacy: .public): \(String(describing: error), privacy: .public)")
                                 continue
+                            case .notFound:
+                                throw InternalMetadataReadRace.snapshotVanished(
+                                    filename: candidate.filename,
+                                    month: candidate.month,
+                                    lamport: candidate.lamport,
+                                    writerID: candidate.writerID,
+                                    runIDPrefix: candidate.runIDPrefix
+                                )
                             }
                         }
                     }
@@ -406,6 +493,13 @@ private struct CommitTrustPipeline {
                         case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
                             materializerLog.warning("skip corrupt commit \(reference.filename, privacy: .public): \(String(describing: error), privacy: .public)")
                             return nil
+                        case .notFound:
+                            throw InternalMetadataReadRace.requiredCommitVanished(
+                                filename: reference.filename,
+                                month: reference.month,
+                                writerID: reference.writerID,
+                                seq: reference.seq
+                            )
                         }
                     }
                 }
