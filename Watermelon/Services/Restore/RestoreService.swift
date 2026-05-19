@@ -143,44 +143,49 @@ final class RestoreService {
         var downloaded: [(RemoteAssetResourceInstance, URL)] = []
         downloaded.reserveCapacity(group.instances.count)
 
-        for instance in group.instances {
-            try Task.checkCancellation()
-            // Empty hash = legacy entry; can't safely dedup by hash key (all empty hashes
-            // collide), so each instance gets its own download.
-            if !instance.resourceHash.isEmpty, let cachedURL = downloadedURLsByHash[instance.resourceHash] {
-                downloaded.append((instance, cachedURL))
-                continue
-            }
+        do {
+            for instance in group.instances {
+                try Task.checkCancellation()
+                // Empty hash = legacy entry; can't safely dedup by hash key (all empty hashes
+                // collide), so each instance gets its own download.
+                if !instance.resourceHash.isEmpty, let cachedURL = downloadedURLsByHash[instance.resourceHash] {
+                    downloaded.append((instance, cachedURL))
+                    continue
+                }
 
-            // V2 logicalName comes from a peer's commit; sanitize so "../etc/foo" can't
-            // escape the tmp dir via appendPathComponent.
-            let safeFileName = RemotePathBuilder.sanitizeFilename(instance.fileName)
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "restore_\(UUID().uuidString)_\(safeFileName)"
-            )
-            try? FileManager.default.removeItem(at: tempURL)
-
-            do {
-                try await Self.downloadWithFallback(
-                    instance: instance,
-                    profile: profile,
-                    storageClient: storageClient,
-                    localURL: tempURL
+                // V2 logicalName comes from a peer's commit; sanitize so "../etc/foo" can't
+                // escape the tmp dir via appendPathComponent.
+                let safeFileName = RemotePathBuilder.sanitizeFilename(instance.fileName)
+                let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "restore_\(UUID().uuidString)_\(safeFileName)"
                 )
-            } catch {
-                // The per-instance cleanup loop below only iterates `downloaded`, so an
-                // aborted entry leaks until iOS purges tmp unless we remove it here.
                 try? FileManager.default.removeItem(at: tempURL)
-                throw error
-            }
 
-            let fileSize = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? -1
-            let fileExists = FileManager.default.fileExists(atPath: tempURL.path)
-            print("[RestoreService]   downloaded: \(instance.fileName) → \(tempURL.lastPathComponent), exists=\(fileExists), localSize=\(fileSize), expectedSize=\(instance.fileSize)")
-            if !instance.resourceHash.isEmpty {
-                downloadedURLsByHash[instance.resourceHash] = tempURL
+                do {
+                    try await Self.downloadWithFallback(
+                        instance: instance,
+                        profile: profile,
+                        storageClient: storageClient,
+                        localURL: tempURL
+                    )
+                } catch {
+                    try? FileManager.default.removeItem(at: tempURL)
+                    throw error
+                }
+
+                let fileSize = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? -1
+                let fileExists = FileManager.default.fileExists(atPath: tempURL.path)
+                print("[RestoreService]   downloaded: \(instance.fileName) → \(tempURL.lastPathComponent), exists=\(fileExists), localSize=\(fileSize), expectedSize=\(instance.fileSize)")
+                if !instance.resourceHash.isEmpty {
+                    downloadedURLsByHash[instance.resourceHash] = tempURL
+                }
+                downloaded.append((instance, tempURL))
             }
-            downloaded.append((instance, tempURL))
+        } catch {
+            for (_, url) in downloaded {
+                try? FileManager.default.removeItem(at: url)
+            }
+            throw error
         }
 
         // `cleanupURLs` is initialized BEFORE any throwing call below and the
@@ -319,27 +324,40 @@ final class RestoreService {
         // Copy shared temp files per role because PHAssetCreationRequest consumes each URL it receives.
         var seenURLs = Set<URL>()
 
-        for entry in downloaded {
-            let instance = entry.0
-            guard instance.resourceType != nil else { continue }
-            let key = RoleSlotKey(role: instance.role, slot: instance.slot)
-            if !addedRoleSlots.insert(key).inserted {
-                print("[RestoreService]   duplicate (role,slot) skipped: role=\(instance.role), slot=\(instance.slot), file=\(instance.fileName)")
-                continue
+        var pendingCopyURL: URL?
+        do {
+            for entry in downloaded {
+                let instance = entry.0
+                guard instance.resourceType != nil else { continue }
+                let key = RoleSlotKey(role: instance.role, slot: instance.slot)
+                if !addedRoleSlots.insert(key).inserted {
+                    print("[RestoreService]   duplicate (role,slot) skipped: role=\(instance.role), slot=\(instance.slot), file=\(instance.fileName)")
+                    continue
+                }
+                let url = entry.1
+                if seenURLs.insert(url).inserted {
+                    accepted.append(entry)
+                } else {
+                    let safeName = RemotePathBuilder.sanitizeFilename(instance.fileName)
+                    let copyURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+                        "restore_\(UUID().uuidString)_\(safeName)"
+                    )
+                    try? FileManager.default.removeItem(at: copyURL)
+                    pendingCopyURL = copyURL
+                    try FileManager.default.copyItem(at: url, to: copyURL)
+                    pendingCopyURL = nil
+                    extraTmpURLs.append(copyURL)
+                    accepted.append((instance, copyURL))
+                }
             }
-            let url = entry.1
-            if seenURLs.insert(url).inserted {
-                accepted.append(entry)
-            } else {
-                let safeName = RemotePathBuilder.sanitizeFilename(instance.fileName)
-                let copyURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-                    "restore_\(UUID().uuidString)_\(safeName)"
-                )
-                try? FileManager.default.removeItem(at: copyURL)
-                try FileManager.default.copyItem(at: url, to: copyURL)
-                extraTmpURLs.append(copyURL)
-                accepted.append((instance, copyURL))
+        } catch {
+            for url in extraTmpURLs {
+                try? FileManager.default.removeItem(at: url)
             }
+            if let pending = pendingCopyURL {
+                try? FileManager.default.removeItem(at: pending)
+            }
+            throw error
         }
 
         return (accepted, extraTmpURLs)
