@@ -528,8 +528,8 @@ struct BackupRunPreparationService: Sendable {
         try await raw.connect()
         // serialOnly backends must serialize concurrent metadata writes.
         let metadataClient = wrapIfSerial(raw)
-        do {
-            return try await BackupV2RuntimeBuilder.build(
+        return try await withBackupV2RuntimeBuildErrorMapping(metadataClient: metadataClient) {
+            try await BackupV2RuntimeBuilder.build(
                 client: client,
                 metadataClient: metadataClient,
                 profile: profile,
@@ -546,33 +546,42 @@ struct BackupRunPreparationService: Sendable {
                     eventStream.emitLog(String(localized: "backup.repo.bootstrapped"), level: .info)
                 }
             )
-        } catch BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) {
-            await metadataClient.disconnectSafely()
-            throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
-        } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
-            await metadataClient.disconnectSafely()
-            throw BackupCompatibilityError.repoIdentityMismatch
-        } catch BackupV2RuntimeBuildError.requiresForegroundMigration {
-            await metadataClient.disconnectSafely()
-            throw BackupCompatibilityError.requiresForegroundMigration
-        } catch BackupV2RuntimeBuildError.repoFormatRegression {
-            await metadataClient.disconnectSafely()
-            throw BackupCompatibilityError.repoFormatRegression
-        } catch BackupV2RuntimeBuildError.damagedV2Repo {
-            await metadataClient.disconnectSafely()
-            throw BackupCompatibilityError.damagedV2Repo
-        } catch BackupV2RuntimeBuildError.profileMissingID {
-            await metadataClient.disconnectSafely()
-            // Fail-closed: V1 fallback would write V1 manifests over a V2 repo.
-            throw NSError(
-                domain: "BackupRunPreparation",
-                code: -90,
-                userInfo: [NSLocalizedDescriptionKey: "profile missing id — cannot prepare V2 runtime"]
-            )
-        } catch {
-            await metadataClient.disconnectSafely()
-            throw error
         }
     }
 
+}
+
+func withBackupV2RuntimeBuildErrorMapping<T>(
+    metadataClient: any RemoteStorageClientProtocol,
+    build: () async throws -> T
+) async throws -> T {
+    do {
+        return try await build()
+    } catch BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) {
+        await metadataClient.disconnectSafely()
+        throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
+    } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
+        await metadataClient.disconnectSafely()
+        throw BackupCompatibilityError.repoIdentityMismatch
+    } catch BackupV2RuntimeBuildError.requiresForegroundMigration {
+        await metadataClient.disconnectSafely()
+        throw BackupCompatibilityError.requiresForegroundMigration
+    } catch BackupV2RuntimeBuildError.repoFormatRegression {
+        await metadataClient.disconnectSafely()
+        throw BackupCompatibilityError.repoFormatRegression
+    } catch BackupV2RuntimeBuildError.damagedV2Repo {
+        await metadataClient.disconnectSafely()
+        throw BackupCompatibilityError.damagedV2Repo
+    } catch BackupV2RuntimeBuildError.profileMissingID {
+        await metadataClient.disconnectSafely()
+        // Fail-closed: V1 fallback would write V1 manifests over a V2 repo.
+        throw NSError(
+            domain: "BackupRunPreparation",
+            code: -90,
+            userInfo: [NSLocalizedDescriptionKey: "profile missing id — cannot prepare V2 runtime"]
+        )
+    } catch {
+        await metadataClient.disconnectSafely()
+        throw error
+    }
 }
