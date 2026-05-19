@@ -64,6 +64,27 @@ enum MetadataCreateGate {
         respectTaskCancellation: Bool,
         finalizationPolicy: FinalizationPolicy = .allowBestEffort
     ) async throws -> CreateOutcome {
+        if !respectTaskCancellation {
+            return try await Task { @Sendable () throws -> CreateOutcome in
+                try await Self._stagingFallbackOutcomeBody(
+                    client: client, localURL: localURL, remotePath: remotePath,
+                    respectTaskCancellation: false, finalizationPolicy: finalizationPolicy
+                )
+            }.value
+        }
+        return try await _stagingFallbackOutcomeBody(
+            client: client, localURL: localURL, remotePath: remotePath,
+            respectTaskCancellation: respectTaskCancellation, finalizationPolicy: finalizationPolicy
+        )
+    }
+
+    private static func _stagingFallbackOutcomeBody(
+        client: any RemoteStorageClientProtocol,
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        finalizationPolicy: FinalizationPolicy = .allowBestEffort
+    ) async throws -> CreateOutcome {
         let size = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? Int64) ?? 0
         let guarantee = client.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
         switch guarantee {

@@ -170,7 +170,7 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         XCTAssertEqual(lhs, rhs)
     }
 
-    func testNoDeletionOrRuntimeWiringInUnit8Scope() throws {
+    func testDeletionDefaultsDisabledAndNoProductionEnablement() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -180,18 +180,21 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         XCTAssertFalse(gateSource.contains("300"))
         XCTAssertFalse(gateSource.contains("300000"))
 
-        let forbiddenSymbols = [
-            "DeletePlan",
-            "DeleteExecutor",
-            "deletePreflight",
-            "RetentionDeletePlan"
-        ]
+        // commitPrefixDeletionEnabled must only appear in the executor definition and test code.
         for path in try FileManager.default.subpathsOfDirectory(atPath: root.path)
-        where path.hasSuffix(".swift") && !path.hasPrefix("WatermelonTests/") {
+        where path.hasSuffix(".swift") && !path.hasPrefix("WatermelonTests/") && path != "Shared/Services/Repo/RepoRetentionDeleteExecutor.swift" {
             let text = try source(root, path)
-            for symbol in forbiddenSymbols {
-                XCTAssertFalse(text.contains(symbol), "\(symbol) unexpectedly present in \(path)")
-            }
+            XCTAssertFalse(text.contains("commitPrefixDeletionEnabled"), "commitPrefixDeletionEnabled unexpectedly present in \(path)")
+        }
+
+        // Production callers of BackupV2RuntimeBuilder.build() must not pass retentionRuntimeMode.
+        let productionBuildCallers = [
+            "Watermelon/Services/Backup/BackupRunPreparation.swift",
+            "Watermelon/Services/Backup/BackgroundBackupRunner.swift"
+        ]
+        for path in productionBuildCallers {
+            let text = try source(root, path)
+            XCTAssertFalse(text.contains("retentionRuntimeMode:"), "retentionRuntimeMode unexpectedly passed in \(path)")
         }
 
         for path in [

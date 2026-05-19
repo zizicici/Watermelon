@@ -254,6 +254,72 @@ final class MetadataWriteCancellationTests: XCTestCase {
         ]
     }
 
+    // MARK: - SerialOperationQueue cancellation contract
+
+    func testSerialOperationQueue_run_throwsFromCancelledTask() async throws {
+        let queue = SerialOperationQueue()
+        let task = Task {
+            try? await Task.sleep(for: .milliseconds(1))
+            return try await queue.run { 42 }
+        }
+        task.cancel()
+        switch await task.result {
+        case .success:
+            XCTFail("queue.run should throw CancellationError from cancelled task")
+        case .failure(let error):
+            XCTAssertTrue(error is CancellationError, "expected CancellationError, got \(error)")
+        }
+    }
+
+    func testSerialOperationQueue_runIgnoringCancellation_completesFromCancelledTask() async throws {
+        actor Box { var value = false; func set(_ v: Bool) { value = v } }
+        let box = Box()
+        let queue = SerialOperationQueue()
+        let task = Task {
+            try? await Task.sleep(for: .milliseconds(1))
+            return try await queue.runIgnoringCancellation {
+                await box.set(true)
+                return 42
+            }
+        }
+        task.cancel()
+        switch await task.result {
+        case .success(let value):
+            XCTAssertEqual(value, 42)
+            let didRun = await box.value
+            XCTAssertTrue(didRun, "runIgnoringCancellation body must execute from cancelled task")
+        case .failure(let error):
+            XCTFail("runIgnoringCancellation should not throw from cancelled task, got \(error)")
+        }
+    }
+
+    func testGateStagingPath_respectTaskCancellationFalse_completesUnderCancellationWithSerialClient() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        inner.setMoveIfAbsentGuarantee(.exclusive)
+        let client = SerialOperationsClient(inner)
+
+        let payload = try makeTempFile("staging-under-cancel")
+        defer { try? FileManager.default.removeItem(at: payload) }
+
+        let task = Task {
+            try? await Task.sleep(for: .milliseconds(1))
+            return try await MetadataCreateGate.createWithStagingFallbackOutcome(
+                client: client,
+                localURL: payload,
+                remotePath: "/repo/test.json",
+                respectTaskCancellation: false
+            )
+        }
+        task.cancel()
+        switch await task.result {
+        case .success(let outcome):
+            XCTAssertEqual(outcome.result, .created)
+        case .failure(let error):
+            XCTFail("gate staging path with respectTaskCancellation: false should complete under cancellation, got \(error)")
+        }
+    }
+
     private func assertThrowsCancellation(
         _ body: () async throws -> Void,
         file: StaticString = #filePath,

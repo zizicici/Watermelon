@@ -74,6 +74,21 @@ actor SerialOperationQueue {
         return result
     }
 
+    func runIgnoringCancellation<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
+        let handle = acquireOrEnqueue()
+        if let handle {
+            _ = await handle.wait()
+        }
+        do {
+            let result = try await body()
+            release()
+            return result
+        } catch {
+            release()
+            throw error
+        }
+    }
+
     private func acquireOrEnqueue() -> WaitHandle? {
         if !inFlight {
             inFlight = true
@@ -152,12 +167,22 @@ final class SerialOperationsClient: RemoteStorageClientProtocol, @unchecked Send
         // Wrapping a data-upload client is a programming error — progress would vanish.
         // Loud in debug, silent + dropped in release (matching the prior behavior).
         assert(onProgress == nil, "SerialOperationsClient is metadata-only; data-upload clients must not be wrapped (progress would silently disappear)")
+        if !respectTaskCancellation {
+            return try await queue.runIgnoringCancellation {
+                try await self.underlying.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: false, onProgress: nil)
+            }
+        }
         try await queue.run {
             try await self.underlying.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: nil)
         }
     }
     func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
         assert(onProgress == nil, "SerialOperationsClient is metadata-only; data-upload clients must not be wrapped (progress would silently disappear)")
+        if !respectTaskCancellation {
+            return try await queue.runIgnoringCancellation {
+                try await self.underlying.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: false, onProgress: nil)
+            }
+        }
         return try await queue.run {
             try await self.underlying.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: nil)
         }

@@ -231,6 +231,23 @@ struct RepoRetentionDeletePreflightService: Sendable {
             return .blocked(blockers: blockers, report: report)
         }
 
+        // Authoritative identity check against repo.json, not the materializer echo.
+        do {
+            switch try await RepoBootstrap(client: client, basePath: basePath).loadRepoIDStrict() {
+            case .absent:
+                return .blocked(blockers: [.repoIdentityMismatch(expected: repoID, observed: "(absent)")], report: report)
+            case .found(let remoteID):
+                let canonical = canonicalRepoID(remoteID)
+                report.remoteRepoID = canonical
+                guard canonical == repoID else {
+                    return .blocked(blockers: [.repoIdentityMismatch(expected: repoID, observed: canonical)], report: report)
+                }
+            }
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            return .blocked(blockers: [.materializerReadFailed], report: report)
+        }
+
         let materialized: RepoMaterializer.MaterializeOutput
         do {
             materialized = try await RepoMaterializer(client: client, basePath: basePath)
@@ -241,12 +258,6 @@ struct RepoRetentionDeletePreflightService: Sendable {
                 return .blocked(blockers: [.materializerReadRace], report: report)
             }
             return .blocked(blockers: [.materializerReadFailed], report: report)
-        }
-        if let materializedRepoID = materialized.repoID.map(canonicalRepoID), materializedRepoID != repoID {
-            report.remoteRepoID = materializedRepoID
-            return .blocked(blockers: [
-                .repoIdentityMismatch(expected: repoID, observed: materializedRepoID)
-            ], report: report)
         }
 
         guard let acceptedSnapshot = materialized.acceptedSnapshotBaselinesByMonth[month] else {

@@ -300,6 +300,23 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
         }
     }
 
+    func testAuthoritativeRepoIdentityMismatch_blocksAfterValidBarriers() async throws {
+        let client = try await makeReadyClient()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: foreignRepoID, writerID: writerA)
+
+        let result = try await service(client: client).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+
+        XCTAssertTrue(blockers(in: result).contains(.repoIdentityMismatch(
+            expected: repoID,
+            observed: foreignRepoID
+        )))
+    }
+
     func testUnknownLegacyAndSelfOnlyPeerViewSemantics() async throws {
         let unknown = try await makeReadyClient()
         var result = try await service(

@@ -47,7 +47,8 @@ struct BackupV2RuntimeServices: Sendable {
         // Race clean shutdown vs deadline: SMB/SFTP socket hangs don't honor Swift cancellation.
         let latch = ShutdownLatch()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            Task { [liveness, sweepTask, metadataClient, ownsMetadataClient] in
+            var cleanupTask: Task<Void, Never>?
+            cleanupTask = Task { [liveness, sweepTask, metadataClient, ownsMetadataClient] in
                 await liveness.stopAndWait()
                 sweepTask?.cancel()
                 _ = await sweepTask?.value
@@ -56,8 +57,9 @@ struct BackupV2RuntimeServices: Sendable {
                 }
                 await latch.resumeOnce(cont)
             }
-            Task {
+            Task { [cleanupTask] in
                 try? await Task.sleep(for: .seconds(BackupV2RuntimeServices.shutdownTimeoutSeconds))
+                cleanupTask?.cancel()
                 await latch.resumeOnce(cont)
             }
         }
