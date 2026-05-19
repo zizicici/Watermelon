@@ -302,4 +302,34 @@ struct RetentionBarrierSet: Equatable, Sendable {
         }
         return RetentionBarrierSet(unsuperseded: retained, unionCovered: union)
     }
+
+    var composedLivenessGate: RetentionLivenessGate {
+        unsuperseded.reduce(RetentionLivenessGate(
+            requiredCompleteView: false,
+            requiredNoActiveNonSelfWriters: false,
+            legacyClientGraceMs: 0
+        )) { partial, manifest in
+            RetentionLivenessGate(
+                requiredCompleteView: partial.requiredCompleteView || manifest.livenessGate.requiredCompleteView,
+                requiredNoActiveNonSelfWriters: partial.requiredNoActiveNonSelfWriters || manifest.livenessGate.requiredNoActiveNonSelfWriters,
+                legacyClientGraceMs: max(partial.legacyClientGraceMs, manifest.livenessGate.legacyClientGraceMs)
+            )
+        }
+    }
+
+    func authorizedDeletePrefixByWriter(policy: RepoCompactionPolicy) -> [String: UInt64] {
+        let coveredPrefix = policy.conservativeDeletePrefixByWriter(covered: unionCovered)
+        var manifestPrefix: [String: UInt64] = [:]
+        for manifest in unsuperseded {
+            for (writerID, prefix) in manifest.deletePrefixByWriter {
+                manifestPrefix[writerID] = max(manifestPrefix[writerID] ?? 0, prefix)
+            }
+        }
+        var result: [String: UInt64] = [:]
+        for (writerID, covered) in coveredPrefix {
+            guard let authorized = manifestPrefix[writerID] else { continue }
+            result[writerID] = min(covered, authorized)
+        }
+        return result
+    }
 }

@@ -251,6 +251,40 @@ final class RetentionManifestTests: XCTestCase {
         XCTAssertEqual(set.unionCovered, covered([writerA: [(1, 20)], writerB: [(1, 10)]]))
     }
 
+    func testBarrierSetComposesLivenessGateAndAuthorizedDeletePrefix() {
+        let relaxed = makeManifest(
+            lamport: 1,
+            covered: covered([writerA: [(1, 10)]]),
+            deletePrefix: [writerA: 7],
+            livenessGate: RetentionLivenessGate(
+                requiredCompleteView: false,
+                requiredNoActiveNonSelfWriters: true,
+                legacyClientGraceMs: 10
+            )
+        )
+        let stricter = makeManifest(
+            lamport: 2,
+            covered: covered([writerB: [(1, 5)]]),
+            deletePrefix: [writerB: 5],
+            livenessGate: RetentionLivenessGate(
+                requiredCompleteView: true,
+                requiredNoActiveNonSelfWriters: false,
+                legacyClientGraceMs: 20
+            )
+        )
+        let set = RetentionBarrierSet.unsuperseded(manifests: [relaxed, stricter])
+
+        XCTAssertEqual(set.composedLivenessGate, RetentionLivenessGate(
+            requiredCompleteView: true,
+            requiredNoActiveNonSelfWriters: true,
+            legacyClientGraceMs: 20
+        ))
+        XCTAssertEqual(set.authorizedDeletePrefixByWriter(policy: .default), [
+            writerA: 7,
+            writerB: 5
+        ])
+    }
+
     private func assertDecodeRejects(mutating block: (inout [String: Any]) -> Void) throws {
         var json = try manifestJSON(makeManifest())
         block(&json)
@@ -271,7 +305,8 @@ final class RetentionManifestTests: XCTestCase {
         lamport: UInt64 = 42,
         createdByWriterID: String? = nil,
         covered: CoveredRanges? = nil,
-        deletePrefix: [String: UInt64]? = nil
+        deletePrefix: [String: UInt64]? = nil,
+        livenessGate: RetentionLivenessGate? = nil
     ) -> RetentionManifest {
         let coveredRanges = covered ?? self.covered([writerA: [(1, 5), (10, 12)]])
         let writerID = createdByWriterID ?? writerA
@@ -299,7 +334,7 @@ final class RetentionManifestTests: XCTestCase {
                 keepTombstones: true,
                 snapshotKeepCount: 2
             ),
-            livenessGate: RetentionLivenessGate(
+            livenessGate: livenessGate ?? RetentionLivenessGate(
                 requiredCompleteView: true,
                 requiredNoActiveNonSelfWriters: true,
                 legacyClientGraceMs: 604_800_000
