@@ -52,8 +52,13 @@ final class BackgroundBackupRunner {
         guard BackgroundBackupSetting.getValue() == .enable else { return true }
         guard await isWiFiAvailable() else { return true }
 
-        guard let profiles = try? databaseManager.fetchBackgroundBackupEnabledProfiles(),
-              !profiles.isEmpty else { return true }
+        let profiles: [ServerProfileRecord]
+        do {
+            profiles = try databaseManager.fetchBackgroundBackupEnabledProfiles()
+        } catch {
+            return false
+        }
+        guard !profiles.isEmpty else { return true }
 
         guard let cutoff = Calendar.current.date(
             byAdding: .month,
@@ -92,6 +97,7 @@ final class BackgroundBackupRunner {
 
         await writer.appendLog(String(localized: "backup.auto.log.sessionEnd"), level: .info)
         await writer.finalize()
+        if Task.isCancelled { return false }
         return !anyProfileFailed
     }
 
@@ -233,6 +239,15 @@ final class BackgroundBackupRunner {
             await client.disconnectSafely()
             return .cancelled
         } catch {
+            if RemoteWriteClassifier.isTransientVerifyFailure(error) {
+                await writer.appendLog(
+                    String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                    level: .error
+                )
+                await metadataClient.disconnectSafely()
+                await client.disconnectSafely()
+                return .failed
+            }
             // Don't degrade to V1 — a V1 manifest into a V2 repo creates dual-format divergence.
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),

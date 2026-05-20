@@ -49,6 +49,14 @@ final class V2MonthSession: BackupMonthStore {
                     case .alreadyExists, .encodingFailed:
                         break
                     }
+                case let gate as MetadataCreateGate.Error:
+                    switch gate {
+                    case .stagingVerificationFailed(_, let underlying),
+                         .finalVerificationFailed(_, let underlying):
+                        if let underlying { pending.append(underlying) }
+                    case .nonExclusiveFinalization:
+                        break
+                    }
                 case let storage as RemoteStorageClientError:
                     switch storage {
                     case .underlying(let inner):
@@ -465,6 +473,14 @@ extension ServerProfileRecord {
                 case .ioFailure(let underlying):
                     pending.append(underlying)
                 case .alreadyExists, .encodingFailed:
+                    break
+                }
+            case let gate as MetadataCreateGate.Error:
+                switch gate {
+                case .stagingVerificationFailed(_, let underlying),
+                     .finalVerificationFailed(_, let underlying):
+                    if let underlying { pending.append(underlying) }
+                case .nonExclusiveFinalization:
                     break
                 }
             case let storage as RemoteStorageClientError:

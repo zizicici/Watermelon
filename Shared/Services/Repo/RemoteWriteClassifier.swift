@@ -48,6 +48,16 @@ nonisolated enum RemoteWriteClassifier {
     static func classifyVerifyFailure(_ error: Error) -> RemoteVerifyFailureKind {
         if isCancellation(error) { return .cancelled }
         if isStorageNotFoundError(error) { return .permanent }
+        if let gateError = error as? MetadataCreateGate.Error {
+            switch gateError {
+            case .stagingVerificationFailed(_, let underlying),
+                 .finalVerificationFailed(_, let underlying):
+                guard let underlying else { return .permanent }
+                return classifyVerifyFailure(underlying)
+            case .nonExclusiveFinalization:
+                return .permanent
+            }
+        }
         if let storage = error as? RemoteStorageClientError {
             switch storage {
             case .notConnected, .unavailable:

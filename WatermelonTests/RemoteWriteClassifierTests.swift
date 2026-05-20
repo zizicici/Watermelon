@@ -73,4 +73,30 @@ final class RemoteWriteClassifierTests: XCTestCase {
         }
         XCTAssertTrue(RemoteWriteClassifier.isCancellation(error))
     }
+
+    func testClassifyVerifyFailure_unwrapsMetadataCreateGateError() {
+        let transientUnderlying = NSError(domain: WebDAVClient.errorDomain, code: 503)
+        let stagingError = MetadataCreateGate.Error.stagingVerificationFailed(
+            remotePath: "/test.json",
+            underlying: transientUnderlying
+        )
+        XCTAssertEqual(RemoteWriteClassifier.classifyVerifyFailure(stagingError), .transient)
+
+        let finalError = MetadataCreateGate.Error.finalVerificationFailed(
+            remotePath: "/test.json",
+            underlying: RemoteStorageClientError.notConnected
+        )
+        XCTAssertEqual(RemoteWriteClassifier.classifyVerifyFailure(finalError), .transient)
+    }
+
+    func testClassifyVerifyFailure_metadataCreateGatePermanentWithoutUnderlying() {
+        let noUnderlying = MetadataCreateGate.Error.stagingVerificationFailed(
+            remotePath: "/test.json",
+            underlying: nil
+        )
+        XCTAssertEqual(RemoteWriteClassifier.classifyVerifyFailure(noUnderlying), .permanent)
+
+        let nonExclusive = MetadataCreateGate.Error.nonExclusiveFinalization(remotePath: "/test.json")
+        XCTAssertEqual(RemoteWriteClassifier.classifyVerifyFailure(nonExclusive), .permanent)
+    }
 }

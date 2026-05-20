@@ -1515,4 +1515,134 @@ final class V2FlushTests: XCTestCase {
             "classifier must not treat alreadyExists as a connection error"
         )
     }
+
+    func testClassifierUnwrapsMetadataCreateGateStagingVerificationFailed() throws {
+        let profileID = try insertProfile()
+        let profile = try databaseManager.read { try ServerProfileRecord.fetchOne($0, key: profileID)! }
+        let connectionError = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorNotConnectedToInternet
+        )
+        let gateError = MetadataCreateGate.Error.stagingVerificationFailed(
+            remotePath: "/test.json",
+            underlying: connectionError
+        )
+        XCTAssertTrue(
+            profile.isConnectionUnavailableErrorIncludingFlushUnderlying(gateError),
+            "classifier must unwrap MetadataCreateGate.Error.stagingVerificationFailed to find the underlying connection error"
+        )
+    }
+
+    func testClassifierUnwrapsMetadataCreateGateFinalVerificationFailed() throws {
+        let profileID = try insertProfile()
+        let profile = try databaseManager.read { try ServerProfileRecord.fetchOne($0, key: profileID)! }
+        let connectionError = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorNotConnectedToInternet
+        )
+        let gateError = MetadataCreateGate.Error.finalVerificationFailed(
+            remotePath: "/test.json",
+            underlying: connectionError
+        )
+        XCTAssertTrue(
+            profile.isConnectionUnavailableErrorIncludingFlushUnderlying(gateError),
+            "classifier must unwrap MetadataCreateGate.Error.finalVerificationFailed to find the underlying connection error"
+        )
+    }
+
+    func testClassifierSkipsMetadataCreateGateNilUnderlying() throws {
+        let profileID = try insertProfile()
+        let profile = try databaseManager.read { try ServerProfileRecord.fetchOne($0, key: profileID)! }
+        let gateError = MetadataCreateGate.Error.stagingVerificationFailed(
+            remotePath: "/test.json",
+            underlying: nil
+        )
+        XCTAssertFalse(
+            profile.isConnectionUnavailableErrorIncludingFlushUnderlying(gateError),
+            "byte-mismatch gate error (nil underlying) must not be classified as connection-unavailable"
+        )
+    }
+
+    func testClassifierSkipsMetadataCreateGateNonExclusiveFinalization() throws {
+        let profileID = try insertProfile()
+        let profile = try databaseManager.read { try ServerProfileRecord.fetchOne($0, key: profileID)! }
+        let gateError = MetadataCreateGate.Error.nonExclusiveFinalization(remotePath: "/test.json")
+        XCTAssertFalse(
+            profile.isConnectionUnavailableErrorIncludingFlushUnderlying(gateError),
+            "nonExclusiveFinalization must not be classified as connection-unavailable"
+        )
+    }
+
+    func testClassifierUnwrapsMetadataCreateGateThroughCommitLogWriterChain() throws {
+        let profileID = try insertProfile()
+        let profile = try databaseManager.read { try ServerProfileRecord.fetchOne($0, key: profileID)! }
+        let connectionError = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorNotConnectedToInternet
+        )
+        let gateError = MetadataCreateGate.Error.stagingVerificationFailed(
+            remotePath: "/test.json",
+            underlying: connectionError
+        )
+        let wrapped = CommitLogWriter.WriteError.ioFailure(gateError)
+        XCTAssertTrue(
+            profile.isConnectionUnavailableErrorIncludingFlushUnderlying(wrapped),
+            "classifier must unwrap through CommitLogWriter.WriteError → MetadataCreateGate.Error → connection error"
+        )
+    }
+
+    // MARK: - FlushError.cancellationCause through MetadataCreateGate.Error
+
+    func testFlushErrorCancellationCauseUnwrapsMetadataCreateGateError_staging() {
+        let gate = MetadataCreateGate.Error.stagingVerificationFailed(
+            remotePath: "/snapshot.jsonl",
+            underlying: CancellationError()
+        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
+            committedAssets: [],
+            committedTombstones: [],
+            underlying: SnapshotWriter.WriteError.finalizationFailed(gate)
+        )
+        XCTAssertNotNil(wrapped.cancellationCause,
+                        "cancellation BFS must unwrap FlushError → WriteError.finalizationFailed → MetadataCreateGate.Error.stagingVerificationFailed → CancellationError")
+    }
+
+    func testFlushErrorCancellationCauseUnwrapsMetadataCreateGateError_final() {
+        let gate = MetadataCreateGate.Error.finalVerificationFailed(
+            remotePath: "/commit.jsonl",
+            underlying: CancellationError()
+        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
+            committedAssets: [Data("fp".utf8)],
+            committedTombstones: [],
+            underlying: SnapshotWriter.WriteError.ioFailure(gate)
+        )
+        XCTAssertNotNil(wrapped.cancellationCause,
+                        "cancellation BFS must unwrap FlushError → WriteError.ioFailure → MetadataCreateGate.Error.finalVerificationFailed → CancellationError")
+    }
+
+    func testFlushErrorCancellationCause_nilUnderlyingGateIsNotCancellation() {
+        let gate = MetadataCreateGate.Error.stagingVerificationFailed(
+            remotePath: "/snapshot.jsonl",
+            underlying: nil
+        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
+            committedAssets: [],
+            committedTombstones: [],
+            underlying: SnapshotWriter.WriteError.finalizationFailed(gate)
+        )
+        XCTAssertNil(wrapped.cancellationCause,
+                     "nil-underlying gate error (byte mismatch) must not be cancellation")
+    }
+
+    func testFlushErrorCancellationCause_nonExclusiveFinalizationIsNotCancellation() {
+        let gate = MetadataCreateGate.Error.nonExclusiveFinalization(remotePath: "/snapshot.jsonl")
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
+            committedAssets: [],
+            committedTombstones: [],
+            underlying: SnapshotWriter.WriteError.finalizationFailed(gate)
+        )
+        XCTAssertNil(wrapped.cancellationCause,
+                     "nonExclusiveFinalization must not be cancellation")
+    }
 }
