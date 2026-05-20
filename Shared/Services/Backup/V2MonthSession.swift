@@ -107,6 +107,7 @@ final class V2MonthSession: BackupMonthStore {
         observedClockAtLoad: UInt64,
         remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata],
         verifiedMissingHashes: Set<Data>? = nil,
+        overlayIsAuthoritative: Bool = false,
         stepLogger: MonthManifestStepLogger? = nil
     ) {
         self.client = client
@@ -117,7 +118,7 @@ final class V2MonthSession: BackupMonthStore {
         self.materializedCovered = materializedCovered
         self.stepLogger = stepLogger
         self.observedClockAtLoad = observedClockAtLoad
-        self.physicallyMissingHashesAreAuthoritative = verifiedMissingHashes != nil
+        self.physicallyMissingHashesAreAuthoritative = overlayIsAuthoritative
         let indexes = V2MonthIndexes(
             year: year,
             month: month,
@@ -142,6 +143,7 @@ final class V2MonthSession: BackupMonthStore {
         month: Int,
         v2Services: BackupV2RuntimeServices,
         verifiedMissingHashes: Set<Data>? = nil,
+        overlayIsAuthoritative: Bool = false,
         stepLogger: MonthManifestStepLogger? = nil
     ) async throws -> V2MonthSession {
         let monthKey = LibraryMonthKey(year: year, month: month)
@@ -191,6 +193,7 @@ final class V2MonthSession: BackupMonthStore {
             observedClockAtLoad: output.state.observedClock,
             remoteFilesByName: remoteFilesByName,
             verifiedMissingHashes: verifiedMissingHashes,
+            overlayIsAuthoritative: overlayIsAuthoritative,
             stepLogger: stepLogger
         )
         if output.corruptedSnapshotMonths.contains(monthKey),

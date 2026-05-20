@@ -209,14 +209,16 @@ struct BackupParallelExecutor: Sendable {
                 let monthStore: any BackupMonthStore
                 do {
                     if let v2Services {
-                        let verifiedMissingHashes = await remoteIndexService.verifiedPhysicallyMissingHashes(for: monthKey)
+                        let freshHashes = await remoteIndexService.verifiedPhysicallyMissingHashes(for: monthKey)
+                        let failClosedHashes = freshHashes ?? remoteIndexService.physicallyMissingHashes(for: monthKey)
                         monthStore = try await V2MonthSession.loadOrCreate(
                             client: client,
                             basePath: profile.basePath,
                             year: monthKey.year,
                             month: monthKey.month,
                             v2Services: v2Services,
-                            verifiedMissingHashes: verifiedMissingHashes,
+                            verifiedMissingHashes: failClosedHashes.isEmpty ? nil : failClosedHashes,
+                            overlayIsAuthoritative: freshHashes != nil,
                             stepLogger: { message in
                                 eventStream.emitLog(message, level: .error)
                             }
