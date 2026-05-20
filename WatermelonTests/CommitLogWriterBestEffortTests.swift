@@ -5,7 +5,7 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
     private let basePath = "/repo"
     private let month = LibraryMonthKey(year: 2026, month: 1)
     private let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
-    private let repoID = "test-repo"
+    private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
     func testBestEffortVerify_succeedsWhenBytesMatch() async throws {
         let client = InMemoryRemoteStorageClient()

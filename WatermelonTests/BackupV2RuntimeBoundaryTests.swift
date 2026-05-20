@@ -72,7 +72,7 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
             await services.shutdown()
             return
         }
-        let swappedRepoID = "repo-swapped"
+        let swappedRepoID = "99999999-9999-9999-9999-999999999999"
         await fixture.client.injectFile(
             path: RepoLayout.identityFinalizationFilePath(base: basePath),
             data: try RepoIdentityFinalizationWire(

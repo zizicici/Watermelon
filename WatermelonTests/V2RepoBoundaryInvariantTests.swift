@@ -5,7 +5,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
     private let basePath = "/repo"
     private let writerA = "11111111-1111-1111-1111-aaaaaaaaaaaa"
     private let writerB = "22222222-2222-2222-2222-bbbbbbbbbbbb"
-    private let repoID = "repo-v2-boundary"
+    private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let month = LibraryMonthKey(year: 2026, month: 5)
 
     func testVersionManifestRequiredFormatRejectsMalformedValues() async throws {
@@ -104,7 +104,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         for value in malformedCreatedAtValues {
             let client = try await makeConnectedClient()
             let store = IdentityClaimStore(client: client, basePath: basePath)
-            await injectIdentityClaim(client, writerID: writerB, repoID: "repo-B", createdAtMsJSON: value)
+            await injectIdentityClaim(client, writerID: writerB, repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee", createdAtMsJSON: value)
             do {
                 _ = try await store.canonicalElection(ignoringCorruptSelfClaimFor: writerA)
                 XCTFail("expected corrupt foreign claim for \(String(describing: value))")
@@ -115,7 +115,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         for value in malformedCreatedAtValues {
             let client = try await makeConnectedClient()
             let store = IdentityClaimStore(client: client, basePath: basePath)
-            await injectIdentityClaim(client, writerID: writerA, repoID: "repo-A", createdAtMsJSON: value)
+            await injectIdentityClaim(client, writerID: writerA, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", createdAtMsJSON: value)
             let claim = try await store.readOwnClaim(writerID: writerA)
             XCTAssertNil(claim, "readOwnClaim must not accept \(String(describing: value)) as a timestamp")
         }
@@ -123,8 +123,8 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         for value in malformedCreatedAtValues {
             let client = try await makeConnectedClient()
             let store = IdentityClaimStore(client: client, basePath: basePath)
-            await injectIdentityClaim(client, writerID: writerA, repoID: "repo-A", createdAtMsJSON: value)
-            try await store.writeOwnClaim(repoID: "repo-A", writerID: writerA, createdAtMs: 123)
+            await injectIdentityClaim(client, writerID: writerA, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", createdAtMsJSON: value)
+            try await store.writeOwnClaim(repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: writerA, createdAtMs: 123)
             let repaired = try await store.readOwnClaim(writerID: writerA)
             let claim = try XCTUnwrap(repaired)
             XCTAssertEqual(claim.createdAtMs, 123, "writeOwnClaim must repair \(String(describing: value)) instead of preserving it")
@@ -137,13 +137,13 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
             let path = RepoLayout.identityClaimPath(base: basePath, writerID: writerA)
             var fields: [String: String] = [
                 "v": "1",
-                "repo_id": #""repo-A""#,
+                "repo_id": #""aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee""#,
                 "writer_id": #""\#(writerA)""#
             ]
             if let value { fields["created_at_ms"] = value }
             await client.stageBestEffortRace(at: path, with: Data(json(fields).utf8))
             do {
-                try await store.writeOwnClaim(repoID: "repo-A", writerID: writerA, createdAtMs: 123)
+                try await store.writeOwnClaim(repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: writerA, createdAtMs: 123)
                 XCTFail("expected malformed ambiguous write readback for \(String(describing: value))")
             } catch RepoBootstrap.BootstrapError.ioFailure {
             }
@@ -154,8 +154,8 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         let headerInvalids: [String: [String?]] = [
             "v": [nil, "true", "1.5", "-1", "9223372036854775808"],
             "seq": [nil, "true", "1.5", "-1", "18446744073709551616"],
-            "clockMin": [nil, "true", "1.5", "-1", "18446744073709551616"],
-            "clockMax": [nil, "true", "1.5", "-1", "18446744073709551616"]
+            "clockMin": [nil, "true", "1.5", "-1", "18446744073709551616", "0"],
+            "clockMax": [nil, "true", "1.5", "-1", "18446744073709551616", "0"]
         ]
         for (field, values) in headerInvalids {
             for value in values {
@@ -165,7 +165,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
 
         let opInvalids: [String: [String?]] = [
             "opSeq": [nil, "true", "1.5", "-1", "9223372036854775808"],
-            "clock": [nil, "true", "1.5", "-1", "18446744073709551616"]
+            "clock": [nil, "true", "1.5", "-1", "18446744073709551616", "0"]
         ]
         for (field, values) in opInvalids {
             for value in values {
@@ -189,7 +189,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
             XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(snapshotHeaderJSON(coveredLow: value, coveredHigh: "1")))
             XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(snapshotHeaderJSON(coveredLow: "1", coveredHigh: value)))
         }
-        for value in [nil, "true", "1.5", "-1", "18446744073709551616"] {
+        for value in [nil, "true", "1.5", "-1", "18446744073709551616", "0"] {
             XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(snapshotAssetJSON(lastSeq: value, lastClock: "1")))
             XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(snapshotAssetJSON(lastSeq: "1", lastClock: value)))
             XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(snapshotResourceJSON(fileSize: "1", lastSeq: value, lastClock: "1")))
@@ -214,11 +214,32 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
             UInt64.max
         )
 
-        for seq in ["", "zzzz", "1.5", "-1", "10000000000000000"] {
+        for seq in ["", "zzzz", "1.5", "-1", "10000000000000000", "0000000000000000"] {
             XCTAssertNil(RepoLayout.parseCommitFilename("2026-05--\(writerA)--\(seq).jsonl"))
         }
-        for lamport in ["", "zzzz", "1.5", "-1", "10000000000000000"] {
+        for lamport in ["", "zzzz", "1.5", "-1", "10000000000000000", "0000000000000000"] {
             XCTAssertNil(RepoLayout.parseSnapshotFilename("2026-05--\(lamport)--\(writerA)--run001.jsonl"))
+        }
+    }
+
+    func testRetentionManifestStoreFilenameRejectsZeroLamport() {
+        let validRef = RetentionManifestRef(
+            month: month, lamport: 1, writerID: writerA, runIDPrefix: "aabbcc"
+        )
+        XCTAssertNotNil(RetentionManifestStore.parseFilename(RetentionManifestStore.filename(for: validRef)))
+
+        let zeroRef = RetentionManifestRef(
+            month: month, lamport: 0, writerID: writerA, runIDPrefix: "aabbcc"
+        )
+        XCTAssertNil(RetentionManifestStore.parseFilename(RetentionManifestStore.filename(for: zeroRef)))
+    }
+
+    func testRetentionManifestDecodingRejectsZeroBarrierLamport() throws {
+        let json = retentionManifestBarrierLamportJSON(barrierLamport: "0000000000000000")
+        do {
+            _ = try RetentionManifestStore.decode(Data(json.utf8))
+            XCTFail("expected barrier_lamport 0 to be rejected")
+        } catch RetentionManifestError.malformed("barrier_lamport") {
         }
     }
 
@@ -464,12 +485,12 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
     func testIdentitySourceResolutionOnlyOwnClaimRepairsWipeReuseMismatch() async throws {
         do {
             let client = try await makeConnectedClient()
-            try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "fresh-repo")
-            await injectIdentityClaim(client, writerID: writerA, repoID: "fresh-repo", createdAtMsJSON: "0")
+            try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
+            await injectIdentityClaim(client, writerID: writerA, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff", createdAtMsJSON: "0")
             try await withTemporaryDatabase { database in
                 let identity = RepoIdentity(database: database)
                 let profileID = try TestFixtures.insertServerProfile(in: database, writerID: writerA, basePath: basePath, storageType: .webdav)
-                try insertRepoState(database, profileID: profileID, repoID: "stale-repo", writerID: writerA)
+                try insertRepoState(database, profileID: profileID, repoID: "aaaaaaaa-cccc-dddd-eeee-ffffffffffff", writerID: writerA)
 
                 let sources = try await RepoIdentitySources.collect(
                     profileID: profileID,
@@ -481,19 +502,19 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
                 )
 
                 XCTAssertNil(sources.stored)
-                XCTAssertEqual(sources.remote, "fresh-repo")
-                XCTAssertEqual(sources.suggested, "fresh-repo")
+                XCTAssertEqual(sources.remote, "cccccccc-cccc-dddd-eeee-ffffffffffff")
+                XCTAssertEqual(sources.suggested, "cccccccc-cccc-dddd-eeee-ffffffffffff")
             }
         }
 
         do {
             let client = try await makeConnectedClient()
-            try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "fresh-repo")
-            await injectIdentityClaim(client, writerID: writerB, repoID: "fresh-repo", createdAtMsJSON: "0")
+            try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
+            await injectIdentityClaim(client, writerID: writerB, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff", createdAtMsJSON: "0")
             try await withTemporaryDatabase { database in
                 let identity = RepoIdentity(database: database)
                 let profileID = try TestFixtures.insertServerProfile(in: database, writerID: writerA, basePath: basePath, storageType: .webdav)
-                try insertRepoState(database, profileID: profileID, repoID: "stale-repo", writerID: writerA)
+                try insertRepoState(database, profileID: profileID, repoID: "aaaaaaaa-cccc-dddd-eeee-ffffffffffff", writerID: writerA)
 
                 do {
                     _ = try await RepoIdentitySources.collect(
@@ -506,8 +527,8 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
                     )
                     XCTFail("expected foreign claim to preserve mismatch")
                 } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) {
-                    XCTAssertEqual(stored, "stale-repo")
-                    XCTAssertEqual(observed, "fresh-repo")
+                    XCTAssertEqual(stored, "aaaaaaaa-cccc-dddd-eeee-ffffffffffff")
+                    XCTAssertEqual(observed, "cccccccc-cccc-dddd-eeee-ffffffffffff")
                 }
             }
         }
@@ -815,7 +836,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         var fields: [String: String] = [
             "t": #""header""#,
             "v": "1",
-            "repoID": #""r""#,
+            "repoID": #""aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee""#,
             "writerID": #""w""#,
             "seq": "1",
             "runID": #""run""#,
@@ -864,7 +885,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
             "t": #""header""#,
             "scope": #""month:2026-05""#,
             "writerID": #""w""#,
-            "repoID": #""r""#
+            "repoID": #""aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee""#
         ]
         if let version { fields["v"] = version }
         if let coveredLow, let coveredHigh {
@@ -887,7 +908,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         if let resourceCount { row["resourceCount"] = resourceCount }
         if let totalFileSizeBytes { row["totalFileSizeBytes"] = totalFileSizeBytes }
         if lastSeq != nil || lastClock != nil {
-            row["lastWriterID"] = #""w""#
+            row["lastWriterID"] = #""\#(writerA)""#
             if let lastSeq { row["lastSeq"] = lastSeq }
             if let lastClock { row["lastClock"] = lastClock }
         }
@@ -909,7 +930,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         ]
         if let fileSize { row["fileSize"] = fileSize }
         if lastSeq != nil || lastClock != nil {
-            row["lastWriterID"] = #""w""#
+            row["lastWriterID"] = #""\#(writerA)""#
             if let lastSeq { row["lastSeq"] = lastSeq }
             if let lastClock { row["lastClock"] = lastClock }
         }
@@ -922,7 +943,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
             "keyValue": #""\#(TestFixtures.fingerprint(0xAE).hexString)""#
         ]
         if lastSeq != nil || lastClock != nil {
-            row["lastWriterID"] = #""w""#
+            row["lastWriterID"] = #""\#(writerA)""#
             if let lastSeq { row["lastSeq"] = lastSeq }
             if let lastClock { row["lastClock"] = lastClock }
         }
@@ -937,6 +958,25 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try Data(contents.utf8).write(to: url)
         return url
+    }
+
+    private func retentionManifestBarrierLamportJSON(barrierLamport: String) -> String {
+        json([
+            "version": "1",
+            "repo_id": #""aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee""#,
+            "month": #""2026-05""#,
+            "created_by_writer_id": #""\#(writerA)""#,
+            "run_id": #""33333333-3333-3333-3333-333333333333""#,
+            "created_at_ms": "1000",
+            "barrier_lamport": #""\#(barrierLamport)""#,
+            "checkpoint_snapshot": #""placeholder""#,
+            "checkpoint_sha256": #""\#(String(repeating: "a", count: 64))""#,
+            "covered_ranges": #"{}"#,
+            "delete_prefix_by_writer": "{}",
+            "observed_seq_high_by_writer": "{}",
+            "policy": #"{"keep_uncovered_commits":true,"keep_corrupt_or_untrusted_commits":true,"keep_tombstones":true,"snapshot_keep_count":2}"#,
+            "liveness_gate": #"{"required_complete_view":true,"required_no_active_non_self_writers":true,"legacy_client_grace_ms":60000}"#
+        ])
     }
 }
 

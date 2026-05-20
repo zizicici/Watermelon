@@ -46,7 +46,7 @@ final class BootstrapStateMachineTests: XCTestCase {
     func testWatermelonPresent_repoPresent_versionAbsent_returnsFreshOrV1() async throws {
         // .watermelon/repo.json written but version.json failed
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 
         // Without V1 manifests → idempotent re-bootstrap
         var outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
@@ -60,7 +60,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testWatermelonPresent_repoPresent_versionMatches_returnsV2() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
         XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion))
@@ -68,7 +68,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testWatermelonPresent_versionHigher_returnsUnsupported() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
         let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
         if case .unsupported(let minApp) = outcome {
@@ -80,7 +80,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testFutureVersion_doesNotListMigrationDirectory() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "future-id")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
         await client.injectListError(.transport, for: RepoLayout.migrationsDirectoryPath(base: basePath))
 
@@ -90,7 +90,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testFormatVersionBelowTwo_doesNotParseMarkersOrDetectV1Manifests() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "legacy-format")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 1, minAppVersion: "1.0.0")
         let writerID = "12121212-1212-1212-1212-121212121212"
         try await injectMigrationMarker(client: client, writerID: writerID, phase: 3)
@@ -130,7 +130,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testMigrationInProgressMarker_withV1Manifests_forcesV1() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         // Plant a migration marker.
         let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: "A")
@@ -145,7 +145,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testStaleMigrationMarker_noV1Manifests_returnsV2() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: "A")
         await client.injectFile(path: markerPath, contents: #"{"v":1,"writer_id":"A","started_at_ms":0}"#)
@@ -156,7 +156,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testPhase1ResidueMarker_noV1Manifests_routesToCleanup() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let writerID = "23232323-2323-2323-2323-232323232323"
         try await injectMigrationMarker(client: client, writerID: writerID, phase: 1)
@@ -170,7 +170,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testSupportedVersion_phaseAndWriterSort_selectsHighestPhaseLowestWriterID() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let phase2WriterID = "11111111-1111-1111-1111-111111111111"
         let phase3LowWriterID = "22222222-2222-2222-2222-222222222222"
@@ -188,7 +188,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testSupportedVersion_markerDownloadFailureWithV1Manifests_propagatesMarkerError() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let writerID = "45454545-4545-4545-4545-454545454545"
         try await injectMigrationMarker(client: client, writerID: writerID, phase: 3)
@@ -221,7 +221,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testWatermelonPresent_versionJsonGarbage_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         await client.injectFile(path: RepoLayout.versionFilePath(base: basePath), contents: "{not-json")
         do {
             _ = try await format.inspectRemoteFormat(client: client, profile: profile)
@@ -233,7 +233,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testWatermelonPresent_versionJsonBooleanFormatVersion_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         let body: [String: Any] = [
             "format_version": true,
             "min_app_version": "2.0.0"
@@ -250,7 +250,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testWatermelonPresent_versionJsonIsDirectory_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         // Directory squatting on the version.json path — code 18 in VersionManifestStore.
         try await client.createDirectory(path: RepoLayout.versionFilePath(base: basePath) + "/child")
         do {
@@ -285,7 +285,7 @@ final class BootstrapStateMachineTests: XCTestCase {
         line: UInt = #line
     ) async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         await inject(client, RepoLayout.versionFilePath(base: basePath))
 
@@ -301,7 +301,7 @@ final class BootstrapStateMachineTests: XCTestCase {
     func testTransientListErrorPropagates() async throws {
         // version.json transient errors should NOT be misclassified as unsupported.
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "abcd")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         await client.injectDownloadError(.transport, for: RepoLayout.versionFilePath(base: basePath))
         do {
@@ -314,7 +314,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testHijackedMigrationMarker_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let filenameWriterID = "11111111-1111-1111-1111-111111111111"
         let hijackJSONWriterID = "22222222-2222-2222-2222-222222222222"
@@ -452,7 +452,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testWrongTypePhaseMarker_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let writerID = "99999999-9999-9999-9999-999999999999"
         let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
@@ -471,7 +471,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testBooleanPhaseMarker_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let writerID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
         let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
@@ -509,7 +509,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testDirectoryShapedMigrationMarker_withVersionJson_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         // Create a directory at the canonical migration marker path.
         let writerID = "12121212-1212-1212-1212-121212121212"
@@ -526,7 +526,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testDirectoryShapedPhaseSuffixedMigrationMarker_withVersionJson_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let writerID = "12121212-1212-1212-1212-121212121212"
         let markerPath = RepoLayout.migrationPhaseMarkerPath(
@@ -547,7 +547,7 @@ final class BootstrapStateMachineTests: XCTestCase {
 
     func testDirectoryShapedMigrationMarker_alongsideValidMarker_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         // Valid phase-3 file marker for writer B.
         let fileWriterID = "55555555-5555-5555-5555-555555555555"
@@ -641,6 +641,46 @@ final class BootstrapStateMachineTests: XCTestCase {
         do {
             _ = try await format.inspectRemoteFormat(client: client, profile: profile)
             XCTFail("directory-shaped migration marker with no V2 data and no V1 manifests should throw damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    /// A malformed marker file alongside V2 data + V1 manifests must fail damaged.
+    func testMalformedMarker_versionAbsent_withV2DataAndV1Manifests_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
+        await client.injectFile(path: "\(RepoLayout.commitsDirectoryPath(base: basePath))/leftover.jsonl", contents: "data")
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        let writerID = "c3c3c3c3-c3c3-c3c3-c3c3-c3c3c3c3c3c3"
+        // Write a marker file with malformed body (not valid JSON for MigrationMarkerWire)
+        await client.injectFile(
+            path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID),
+            contents: "not valid marker json"
+        )
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("malformed marker with V2 data + V1 manifests should throw damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    /// A malformed marker file without V2 data must still fail damaged.
+    func testMalformedMarker_versionAbsent_noV2Data_noV1Manifests_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        let writerID = "d4d4d4d4-d4d4-d4d4-d4d4-d4d4d4d4d4d4"
+        await client.injectFile(
+            path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID),
+            contents: "not valid marker json"
+        )
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("malformed marker with no V2 data and no V1 manifests should throw damagedV2Repo")
         } catch BackupCompatibilityError.damagedV2Repo {
             // expected
         }

@@ -143,6 +143,27 @@ final class LivenessTrackerTests: XCTestCase {
         XCTAssertTrue(view.sweepProtectionSet.contains(phantomWriter))
     }
 
+    func testSnapshotPeerStatuses_negativeTimestamp_yieldsUnknown() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: RepoLayout.livenessDirectoryPath(base: basePath))
+
+        let path = RepoLayout.livenessFilePath(base: basePath, writerID: phantomWriter)
+        let body: [String: Any] = ["ts": -1]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        await client.injectFile(path: path, data: data)
+
+        let tracker = LivenessTracker(client: client, basePath: basePath, writerID: selfWriter, isLocalVolume: false)
+        let view = try await tracker.snapshotPeerStatuses()
+
+        XCTAssertEqual(view.unknownPeerIDs, [phantomWriter])
+        XCTAssertTrue(view.activePeerIDs.isEmpty)
+        XCTAssertTrue(view.stalePeerIDs.isEmpty,
+                      "negative ts must NOT classify as stale and unblock cleanup")
+        XCTAssertFalse(view.isComplete)
+        XCTAssertTrue(view.sweepProtectionSet.contains(phantomWriter))
+    }
+
     func testSnapshotPeerStatuses_listFailure_propagates() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

@@ -71,17 +71,18 @@ final class RepoMetadataWireSchemaTests: XCTestCase {
     }
 
     func testIdentityClaimWire_acceptsMissingVersionAndRejectsBadPresentVersion() throws {
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         let legacy = try JSONSerialization.data(withJSONObject: [
-            "repo_id": "repo",
+            "repo_id": repoID.uppercased(),
             "created_at_ms": 1,
             "writer_id": "writer"
         ])
         let parsed = try IdentityClaimWire(data: legacy)
-        XCTAssertEqual(parsed.repoID, "repo")
+        XCTAssertEqual(parsed.repoID, repoID)
 
         let unsupported = try JSONSerialization.data(withJSONObject: [
             "v": 999,
-            "repo_id": "repo",
+            "repo_id": repoID,
             "created_at_ms": 1,
             "writer_id": "writer"
         ])
@@ -89,22 +90,25 @@ final class RepoMetadataWireSchemaTests: XCTestCase {
 
         let malformed = try JSONSerialization.data(withJSONObject: [
             "v": true,
-            "repo_id": "repo",
+            "repo_id": repoID,
             "created_at_ms": 1,
             "writer_id": "writer"
         ])
         XCTAssertThrowsError(try IdentityClaimWire(data: malformed))
+        XCTAssertThrowsError(try IdentityClaimWire(data: Data(#"{"repo_id":"repo","created_at_ms":1,"writer_id":"writer"}"#.utf8)))
     }
 
     func testRepoIdentityFinalizationAndCacheWireRequireRepoIDOnlyForAuthority() throws {
-        let final = try RepoIdentityFinalizationWire(data: Data(#"{"repo_id":"repo"}"#.utf8))
-        XCTAssertEqual(final.repoID, "repo")
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        let final = try RepoIdentityFinalizationWire(data: Data(#"{"repo_id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"}"#.utf8))
+        XCTAssertEqual(final.repoID, repoID)
         XCTAssertNil(final.formatVersion)
 
-        let cache = try RepoCacheWire(repoID: "repo", createdAtMs: 10, createdByWriter: "writer").encode()
-        XCTAssertEqual(try RepoCacheWire(data: cache).repoID, "repo")
+        let cache = try RepoCacheWire(repoID: repoID, createdAtMs: 10, createdByWriter: "writer").encode()
+        XCTAssertEqual(try RepoCacheWire(data: cache).repoID, repoID)
 
-        XCTAssertThrowsError(try RepoIdentityFinalizationWire(data: Data(#"{"v":999,"repo_id":"repo"}"#.utf8)))
-        XCTAssertThrowsError(try RepoCacheWire(data: Data(#"{"v":true,"repo_id":"repo"}"#.utf8)))
+        XCTAssertThrowsError(try RepoIdentityFinalizationWire(data: Data(#"{"repo_id":"repo"}"#.utf8)))
+        XCTAssertThrowsError(try RepoIdentityFinalizationWire(data: Data(#"{"v":999,"repo_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#.utf8)))
+        XCTAssertThrowsError(try RepoCacheWire(data: Data(#"{"v":true,"repo_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#.utf8)))
     }
 }

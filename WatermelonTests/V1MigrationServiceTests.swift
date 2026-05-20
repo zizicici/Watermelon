@@ -57,20 +57,20 @@ final class V1MigrationServiceTests: XCTestCase {
 
         // Pre-write repo.json (production builder writes it before phase1; tests stand in).
         try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "r", writerID: "w")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         let identity = RepoIdentity(database: databaseManager)
-        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
         try await service.ensureVersionPublished(writerID: "w")
-        try await service.markProfileMigrated(profileID: profileID, repoID: "r", writerID: "w", runID: "run-001")
+        try await service.markProfileMigrated(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w", runID: "run-001")
 
         let exists = await client.hasFile(RepoLayout.versionFilePath(base: basePath))
         XCTAssertTrue(exists, "ensureVersionPublished must write version.json")
 
-        let state = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        let state = try await identity.loadRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         XCTAssertEqual(state?.migrationCompleted, 1, "markProfileMigrated must flip the flag")
     }
 
@@ -93,7 +93,7 @@ final class V1MigrationServiceTests: XCTestCase {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         let identity = RepoIdentity(database: databaseManager)
         let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
-        let repoID = "test-repo-id"
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: writerID)
 
         let service = makeService(client: client, profileID: profileID)
@@ -143,11 +143,11 @@ final class V1MigrationServiceTests: XCTestCase {
 
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         let identity = RepoIdentity(database: databaseManager)
-        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
         _ = try await service.runPhase1(
-            profileID: profileID, repoID: "r", writerID: "w", runID: "run-001"
+            profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w", runID: "run-001"
         )
 
         let versionExists = await client.hasFile(RepoLayout.versionFilePath(base: basePath))
@@ -171,10 +171,10 @@ final class V1MigrationServiceTests: XCTestCase {
 
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         let identity = RepoIdentity(database: databaseManager)
-        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
-        _ = try await service.runPhase1(profileID: profileID, repoID: "r", writerID: "w", runID: "run-1")
+        _ = try await service.runPhase1(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w", runID: "run-1")
         try await service.runPhase3(writerID: "w", runID: "run-1")
 
         let m1 = await client.hasFile(path1)
@@ -192,10 +192,10 @@ final class V1MigrationServiceTests: XCTestCase {
 
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         let identity = RepoIdentity(database: databaseManager)
-        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
-        _ = try await service.runPhase1(profileID: profileID, repoID: "r", writerID: "w", runID: "run-1")
+        _ = try await service.runPhase1(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w", runID: "run-1")
 
         let lateBytes = try Self.buildV1ManifestSqlite(assetFingerprint: TestFixtures.fingerprint(0x02), resourceHash: TestFixtures.fingerprint(0x22), logicalName: "IMG_2.HEIC")
         let postScanPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", 2025, 7)
@@ -287,19 +287,19 @@ final class V1MigrationServiceTests: XCTestCase {
 
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         let identity = RepoIdentity(database: databaseManager)
-        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
         let outcome = try await service.runFullMigration(
             profileID: profileID,
-            repoID: "r",
+            repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             writerID: "w",
             runID: "run-1"
         )
 
         XCTAssertEqual(outcome.migratedMonthCount, 1)
 
-        let state = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        let state = try await identity.loadRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         XCTAssertEqual(state?.migrationCompleted, 1, "full migration path must mark profile migrated")
 
         let versionExists = await client.hasFile(RepoLayout.versionFilePath(base: basePath))
@@ -317,13 +317,13 @@ final class V1MigrationServiceTests: XCTestCase {
 
         // Set the v2 stage: repo.json + version.json + a peer's stale phase1 marker.
         try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "r", writerID: "peer")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "peer")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "peer")
         try await injectMigrationMarker(client: client, writerID: "peer", phase: 1)
 
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         let identity = RepoIdentity(database: databaseManager)
-        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
         try await service.runCleanupOnly(
@@ -338,7 +338,7 @@ final class V1MigrationServiceTests: XCTestCase {
 
         // Critical asymmetry preservation: cleanup writer's profile keeps migrationCompleted=0.
         // (XCTAssertEqual on optional vs Int catches state==nil as well — `!= 1` would let nil pass.)
-        let state = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        let state = try await identity.loadRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         XCTAssertEqual(state?.migrationCompleted, 0,
                        "cleanup-only path must leave migrationCompleted at 0 (pre-refactor behavior)")
     }
@@ -358,12 +358,12 @@ final class V1MigrationServiceTests: XCTestCase {
 
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         let identity = RepoIdentity(database: databaseManager)
-        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
         // Must not throw — peer-race on delete is benign.
         let processed = try await service.runPhase1(
-            profileID: profileID, repoID: "r", writerID: "w", runID: "run-1"
+            profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w", runID: "run-1"
         )
         XCTAssertEqual(processed, 0, "empty manifest contributes zero migrated months")
         // Peer-race fidelity: the fake mirrors a real backend where the path is
@@ -384,12 +384,12 @@ final class V1MigrationServiceTests: XCTestCase {
 
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         let identity = RepoIdentity(database: databaseManager)
-        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
         let service = makeService(client: client, profileID: profileID)
         do {
             _ = try await service.runPhase1(
-                profileID: profileID, repoID: "r", writerID: "w", runID: "run-1"
+                profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w", runID: "run-1"
             )
             XCTFail("expected permission error to propagate; not-found swallow must not catch other shapes")
         } catch {
@@ -433,7 +433,7 @@ final class V1MigrationServiceTests: XCTestCase {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         let identity = RepoIdentity(database: databaseManager)
         let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
-        let repoID = "test-repo-id"
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: writerID)
 
         // SeqAllocator on a fresh repo allocates seq=1 — pin URL-cancel on that
@@ -490,7 +490,7 @@ final class V1MigrationServiceTests: XCTestCase {
         try await client.connect()
 
         let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
-        let repoID = "test-repo-id"
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         let preExistingMonth = LibraryMonthKey(year: 2024, month: 12)
 
         // Plant pre-existing V2 commits at seq=1..4 with clock high-water=200.
@@ -584,7 +584,7 @@ final class V1MigrationServiceTests: XCTestCase {
         try await client.connect()
 
         let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
-        let repoID = "test-repo-id"
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         let migrationMonth = LibraryMonthKey(year: 2025, month: 6)
         let assetFP = TestFixtures.fingerprint(0xAB)
         let contentHash = TestFixtures.fingerprint(0xCD)

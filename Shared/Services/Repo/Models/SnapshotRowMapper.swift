@@ -138,7 +138,10 @@ enum SnapshotRowMapper {
         if dict["repoID"] == nil {
             repoID = ""
         } else {
-            repoID = try mapValidation { try RepoWireValidator.requireNonEmptyString(dict, "repoID") }
+            repoID = try mapValidation {
+                let raw = try RepoWireValidator.requireString(dict, "repoID")
+                return try RepoWireValidator.validateRepoID(raw, field: "repoID")
+            }
         }
         let writerID = try mapValidation { try RepoWireValidator.requireNonEmptyString(dict, "writerID") }
         return SnapshotHeader(
@@ -165,8 +168,8 @@ enum SnapshotRowMapper {
                 }
                 let lowOpt = Self.uint64FromJSON(pair[0])
                 let highOpt = Self.uint64FromJSON(pair[1])
-                guard let low = lowOpt, let high = highOpt, low <= high else {
-                    throw SnapshotWireError.malformed("covered[\(writer)] non-numeric or low>high")
+                guard let low = lowOpt, let high = highOpt, low > 0, low <= high else {
+                    throw SnapshotWireError.malformed("covered[\(writer)] non-numeric, zero, or low>high")
                 }
                 converted.append([low, high])
             }

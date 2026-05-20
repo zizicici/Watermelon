@@ -31,15 +31,24 @@ struct RemoteIndexV2SyncEngine: Sendable {
         client: any RemoteStorageClientProtocol,
         basePath: String
     ) async throws -> String {
-        switch try await RepoBootstrap(client: client, basePath: basePath).loadRepoIDStrict() {
-        case .absent:
-            throw NSError(
-                domain: "RemoteIndexSyncService",
-                code: -50,
-                userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json — backup-flow can repair, sync cannot"]
-            )
-        case .found(let id):
-            return id
+        do {
+            switch try await RepoBootstrap(client: client, basePath: basePath).loadRepoIDStrict() {
+            case .absent:
+                throw NSError(
+                    domain: "RemoteIndexSyncService",
+                    code: -50,
+                    userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json - backup-flow can repair, sync cannot"]
+                )
+            case .found(let id):
+                return id
+            }
+        } catch let bootstrap as RepoBootstrap.BootstrapError {
+            switch bootstrap {
+            case .futureFormatVersion(let minAppVersion):
+                throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
+            case .ioFailure:
+                throw BackupCompatibilityError.damagedV2Repo
+            }
         }
     }
 }

@@ -5,7 +5,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
     private let basePath = "/repo"
     private let writerA = "11111111-1111-1111-1111-aaaaaaaaaaaa"
     private let writerB = "22222222-2222-2222-2222-bbbbbbbbbbbb"
-    private let repoID = "repo-test-id"
+    private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let runID = "run-stamp-001"
     private let month = LibraryMonthKey(year: 2026, month: 3)
 
@@ -264,10 +264,10 @@ final class SnapshotStampMaterializeTests: XCTestCase {
     }
 
     func testTombstoneStampSurvivesSnapshotRoundTrip() throws {
-        let raw = "{\"t\":\"deleted_key\",\"r\":{\"keyType\":\"asset\",\"keyValue\":\"\(String(repeating: "ab", count: 32))\",\"lastWriterID\":\"writer-A\",\"lastSeq\":7,\"lastClock\":42}}"
+        let raw = "{\"t\":\"deleted_key\",\"r\":{\"keyType\":\"asset\",\"keyValue\":\"\(String(repeating: "ab", count: 32))\",\"lastWriterID\":\"11111111-1111-1111-1111-aaaaaaaaaaaa\",\"lastSeq\":7,\"lastClock\":42}}"
         let decoded = try SnapshotRowMapper.decodeLine(raw)
         guard case .deletedKey(let parsed) = decoded else { XCTFail("deletedKey"); return }
-        XCTAssertEqual(parsed.stamp, OpStamp(writerID: "writer-A", seq: 7, clock: 42))
+        XCTAssertEqual(parsed.stamp, OpStamp(writerID: "11111111-1111-1111-1111-aaaaaaaaaaaa", seq: 7, clock: 42))
     }
 
     func testLegacyTombstoneWithoutStampDecodes() throws {
@@ -289,7 +289,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
 
     func testPartialStampTripleRejected() {
         // Atomic null-or-present: lastWriterID without lastSeq/lastClock is malformed.
-        let raw = #"{"t":"asset","r":{"assetFingerprint":"\#(String(repeating: "ab", count: 32))","backedUpAtMs":1,"creationDateMs":null,"resourceCount":0,"totalFileSizeBytes":0,"lastWriterID":"writer-A"}}"#
+        let raw = #"{"t":"asset","r":{"assetFingerprint":"\#(String(repeating: "ab", count: 32))","backedUpAtMs":1,"creationDateMs":null,"resourceCount":0,"totalFileSizeBytes":0,"lastWriterID":"11111111-1111-1111-1111-aaaaaaaaaaaa"}}"#
         XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
             guard case SnapshotWireError.malformed = err else {
                 XCTFail("expected .malformed, got \(err)"); return
@@ -397,7 +397,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             creationDateMs: 99,
             backedUpAtMs: 100,
             crypto: nil,
-            stamp: OpStamp(writerID: "writer-A", seq: 9, clock: 77)
+            stamp: OpStamp(writerID: "11111111-1111-1111-1111-aaaaaaaaaaaa", seq: 9, clock: 77)
         )
         let line = try SnapshotRowMapper.encodeResourceLine(row)
         let decoded = try SnapshotRowMapper.decodeLine(line)
@@ -413,6 +413,93 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         XCTAssertNil(parsed.stamp, "legacy resource rows must decode with stamp=nil")
     }
 
+
+    func testSnapshotWithStampOutsideCoveredRanges_isSkipped() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+
+        let fp = TestFixtures.fingerprint(0xD1)
+
+        // Snapshot covers only writerB seq 1, but the row stamp claims writerA seq=5,
+        // outside coverage. The snapshot must be rejected so replay isn't poisoned.
+        var covered = CoveredRanges()
+        covered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
+        let snapState = RepoMonthState(
+            assets: [fp: SnapshotAssetRow(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerA, seq: 5, clock: 100)
+            )],
+            resources: [:], assetResources: [:],
+            deletedAssetFingerprints: [], deletedAssetStamps: [:]
+        )
+        let parts = RepoSnapshotBuilder.build(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB, repoID: repoID, covered: covered
+            ),
+            state: snapState
+        )
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB, repoID: repoID, covered: covered
+            ),
+            assets: parts.assets, resources: parts.resources,
+            assetResources: parts.assetResources, deletedKeys: parts.deletedKeys,
+            month: month, lamport: 100, runID: "run-uncovered-stamp",
+            respectTaskCancellation: false
+        )
+
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+
+        XCTAssertNil(
+            output.state.months[month]?.assets[fp],
+            "snapshot whose row stamp falls outside covered ranges must be skipped"
+        )
+    }
+
+    func testSnapshotWithStampedRowAndEmptyCoveredRanges_isSkipped() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+
+        let fp = TestFixtures.fingerprint(0xD2)
+        let snapState = RepoMonthState(
+            assets: [fp: SnapshotAssetRow(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1,
+                resourceCount: 0, totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 10)
+            )],
+            resources: [:], assetResources: [:],
+            deletedAssetFingerprints: [], deletedAssetStamps: [:]
+        )
+        let header = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(month),
+            writerID: writerA, repoID: repoID, covered: .empty
+        )
+        let parts = RepoSnapshotBuilder.build(header: header, state: snapState)
+        _ = try await snapshotWriter.write(
+            header: header,
+            assets: parts.assets, resources: parts.resources,
+            assetResources: parts.assetResources, deletedKeys: parts.deletedKeys,
+            month: month, lamport: 10, runID: "run-empty-covered-stamp",
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath)
+            .materialize(expectedRepoID: repoID)
+
+        XCTAssertNil(
+            output.state.months[month]?.assets[fp],
+            "empty covered ranges must not make stamped snapshot rows authoritative"
+        )
+    }
 
     private func makeHeader(seq: UInt64, clockMin: UInt64, clockMax: UInt64, writerID: String) -> CommitHeader {
         TestFixtures.makeCommitHeader(

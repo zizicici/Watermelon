@@ -119,6 +119,13 @@ struct RepoBootstrapInspectionFSM: Sendable {
                 if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
                     try machine.failDamaged()
                 }
+                if migrationInProgress {
+                    _ = try await parseMarkerEntriesFailingClosed(
+                        markerStore: markerStore,
+                        migrationDirEntries: migrationDirEntries,
+                        machine: machine
+                    )
+                }
                 return machine.finish(.v2WithV1Manifests(formatVersion: RepoLayout.formatVersion))
             }
             if migrationInProgress {
@@ -145,6 +152,21 @@ struct RepoBootstrapInspectionFSM: Sendable {
         }
         if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
             try machine.failDamaged()
+        }
+        let fileMarkers = migrationDirEntries.filter {
+            !$0.isDirectory && $0.name.hasSuffix(".json") &&
+            RepoLayout.parseMigrationMarkerFilename($0.name) != nil
+        }
+        if !fileMarkers.isEmpty {
+            do {
+                _ = try await markerStore.parseEntries(migrationDirEntries)
+            } catch is MigrationMarkerStore.InvalidMarker {
+                try machine.failDamaged()
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Transport errors in !hasV2Data path: can't validate, proceed
+            }
         }
         if v1Manifests { return machine.finish(.v1) }
         return machine.finish(.fresh)

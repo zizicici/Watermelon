@@ -98,11 +98,17 @@ enum RepoWireValidator {
     /// Caller must pass all three or none — partial-present is rejected so a
     /// half-stamp can't accidentally pass an LWW gate.
     static func validateOpStamp(writerID: String, seqRaw: Any?, clockRaw: Any?) throws -> OpStamp {
-        guard !writerID.isEmpty else {
-            throw WireValidationError.malformed("stamp.writerID empty")
+        guard RepoLayout.isValidWriterID(writerID) else {
+            throw WireValidationError.malformed("stamp.writerID not canonical")
         }
         let seq = try requireUInt64(seqRaw, field: "stamp.seq")
+        guard seq > 0 else {
+            throw WireValidationError.malformed("stamp.seq zero")
+        }
         let clock = try requireUInt64(clockRaw, field: "stamp.clock")
+        guard clock > 0 else {
+            throw WireValidationError.malformed("stamp.clock zero")
+        }
         return OpStamp(writerID: writerID, seq: seq, clock: clock)
     }
 
@@ -121,6 +127,16 @@ enum RepoWireValidator {
             throw WireValidationError.malformed("\(key) empty")
         }
         return v
+    }
+
+    static func validateRepoID(_ raw: String, field: String) throws -> String {
+        guard !raw.isEmpty else {
+            throw WireValidationError.malformed("\(field) empty")
+        }
+        guard let uuid = UUID(uuidString: raw) else {
+            throw WireValidationError.malformed("\(field) not a valid UUID")
+        }
+        return uuid.uuidString.lowercased()
     }
 
     static func requireInt(_ raw: Any?, field: String) throws -> Int {

@@ -86,10 +86,8 @@ final class RetentionLivenessCapabilityTests: XCTestCase {
         XCTAssertThrowsError(try LivenessHeartbeat.decode(data(["ts": true])))
     }
 
-    func testDecodeAcceptsNegativeTimestamp() throws {
-        let heartbeat = try LivenessHeartbeat.decode(data(["ts": -1]))
-
-        XCTAssertEqual(heartbeat.timestampMs, -1)
+    func testDecodeRejectsNegativeTimestamp() throws {
+        XCTAssertThrowsError(try LivenessHeartbeat.decode(data(["ts": -1])))
     }
 
     func testEncodeLegacyHeartbeatContainsNoRetentionKey() throws {

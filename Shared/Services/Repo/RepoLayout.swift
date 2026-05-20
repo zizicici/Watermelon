@@ -154,6 +154,7 @@ enum RepoLayout {
         guard let month = parseMonthKey(parts[0]),
               isLowercaseHex(parts[1], count: 16),
               let lamport = UInt64(parts[1], radix: 16),
+              lamport > 0,
               isValidWriterID(parts[2]) else {
             return nil
         }
@@ -180,6 +181,7 @@ enum RepoLayout {
         guard let month = parseMonthKey(parts[0]),
               isLowercaseHex(parts[2], count: 16),
               let seq = UInt64(parts[2], radix: 16),
+              seq > 0,
               isValidWriterID(parts[1]) else {
             return nil
         }

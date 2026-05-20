@@ -23,7 +23,8 @@ struct LivenessHeartbeat: Equatable, Sendable {
 
     static func decode(_ data: Data) throws -> LivenessHeartbeat {
         guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let ts = strictInt64(dict["ts"]) else {
+              let ts = strictInt64(dict["ts"]),
+              ts >= 0 else {
             throw NSError(domain: "LivenessHeartbeat", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: "heartbeat is unreadable"
             ])

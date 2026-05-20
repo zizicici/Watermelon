@@ -5,7 +5,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
     private let basePath = "/repo"
     private let writerA = "11111111-1111-1111-1111-aaaaaaaaaaaa"
     private let writerB = "22222222-2222-2222-2222-bbbbbbbbbbbb"
-    private let repoID = "repo-test-id"
+    private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let runID = "run-001"
     private let month = LibraryMonthKey(year: 2026, month: 1)
 
@@ -196,7 +196,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             respectTaskCancellation: false
         )
         _ = try await writer.write(
-            header: makeHeader(seq: 5, clockMin: 5, clockMax: 5, repoID: "foreign-repo-id", writerID: writerB),
+            header: makeHeader(seq: 5, clockMin: 5, clockMax: 5, repoID: "99999999-9999-9999-9999-999999999999", writerID: writerB),
             ops: [CommitOp(opSeq: 0, clock: 5, body: .addAsset(CommitAddAssetBody(
                 assetFingerprint: foreignFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
             month: month,
@@ -371,6 +371,8 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let goodHash = Self.fingerprint(0x05)
         let badHash = Self.fingerprint(0x06)
         let deletedFP = Self.fingerprint(0x07)
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
 
         _ = try await snapshotWriter.write(
             header: SnapshotHeader(
@@ -378,7 +380,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: .empty
+                covered: covered
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: assetFP,
@@ -548,7 +550,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             version: SnapshotHeader.currentVersion,
             scope: CommitHeader.monthScope(month),
             writerID: writerB,
-            repoID: "foreign-repo-id",
+            repoID: "99999999-9999-9999-9999-999999999999",
             covered: foreignCovered
         )
         _ = try await snapshotWriter.write(
@@ -668,7 +670,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
                 writerID: writerB,
-                repoID: "foreign-repo-id",
+                repoID: "99999999-9999-9999-9999-999999999999",
                 covered: .empty
             ),
             assets: [SnapshotAssetRow(
@@ -1469,7 +1471,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
                 writerID: writerB,
-                repoID: "other-repo-id",
+                repoID: "99999999-9999-9999-9999-999999999999",
                 covered: foreignCovered
             ),
             assets: [SnapshotAssetRow(
@@ -1530,7 +1532,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let poisonedPath = RepoLayout.snapshotFilePath(
             base: basePath,
             month: month,
-            lamport: LamportClock.maxObservableValue,
+            lamport: LamportClock.maxAdoptableValue,
             writerID: writerB,
             runID: "deadbeef"
         )
@@ -1541,8 +1543,8 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
 
         XCTAssertLessThan(
             output.state.observedClock,
-            LamportClock.maxObservableValue,
-            "maxObservableValue filename lamport must not advance observedClock to the new ceiling"
+            LamportClock.maxAdoptableValue,
+            "maxAdoptableValue filename lamport must not advance observedClock to the new ceiling"
         )
         XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
     }
@@ -1782,18 +1784,18 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
         XCTAssertNotNil(output.state.months[month]?.assets[boundaryFP])
 
-        // The original failure vector: observe(observedClock) into a
-        // persisted clock, then attempt one tick. Under the loosened tick
-        // ceiling this succeeds and emits the writer's boundary value
-        // (`maxAdoptableValue`, one above the adopt ceiling).
+        // After the boundary observation, tickRange must throw because the
+        // only emittable value would be `maxAdoptableValue` which readers reject.
         let lamport = LamportClock(initial: 0)
         await lamport.observe(output.state.observedClock)
-        let range = try await lamport.tickRange(count: 1)
-        XCTAssertEqual(
-            range.high,
-            LamportClock.maxAdoptableValue,
-            "tick from the highest-adopted value must emit `maxAdoptableValue` — the writer's last legitimate boundary tick"
-        )
+        do {
+            _ = try await lamport.tickRange(count: 1)
+            XCTFail("expected advanceExhausted because emitting maxAdoptableValue would be rejected by readers")
+        } catch LamportClockError.advanceExhausted {
+            // Expected: emission ceiling equals reader acceptance ceiling.
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
     }
 
     func testValidCommitOpAtAdoptCeilingMinusOneAllowsNextTick() async throws {
@@ -1835,15 +1837,17 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
 
         let lamport = LamportClock(initial: 0)
         await lamport.observe(output.state.observedClock)
-        let range = try await lamport.tickRange(count: 1)
-        XCTAssertEqual(
-            range.high,
-            LamportClock.maxAdoptableValue,
-            "tick after observing the boundary op clock must emit `maxAdoptableValue` (the writer's boundary tick) without throwing"
-        )
+        do {
+            _ = try await lamport.tickRange(count: 1)
+            XCTFail("expected advanceExhausted because emitting maxAdoptableValue would be rejected by readers")
+        } catch LamportClockError.advanceExhausted {
+            // Expected: emission ceiling equals reader acceptance ceiling.
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
     }
 
-    func testMaxObservableValueCommitOpClockIsSkipped() async throws {
+    func testMaxAdoptableValueCommitOpClockIsSkipped() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let writer = CommitLogWriter(client: client, basePath: basePath)
@@ -1858,13 +1862,13 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             respectTaskCancellation: false
         )
 
-        let observable = LamportClock.maxObservableValue
+        let ceiling = LamportClock.maxAdoptableValue
         _ = try await writer.write(
             header: TestFixtures.makeCommitHeader(
                 repoID: repoID, writerID: writerB, seq: 1, runID: runID,
-                month: month, clockMin: observable, clockMax: observable
+                month: month, clockMin: ceiling, clockMax: ceiling
             ),
-            ops: [CommitOp(opSeq: 0, clock: observable, body: .addAsset(CommitAddAssetBody(
+            ops: [CommitOp(opSeq: 0, clock: ceiling, body: .addAsset(CommitAddAssetBody(
                 assetFingerprint: poisonedFP, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
             month: month,
             respectTaskCancellation: false
@@ -1875,8 +1879,8 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
 
         XCTAssertLessThan(
             output.state.observedClock,
-            LamportClock.maxObservableValue,
-            "maxObservableValue op clock must not advance observedClock to the new ceiling"
+            LamportClock.maxAdoptableValue,
+            "maxAdoptableValue op clock must not advance observedClock to the new ceiling"
         )
         XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
         XCTAssertNil(output.state.months[month]?.assets[poisonedFP])

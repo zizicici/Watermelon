@@ -253,7 +253,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.connect()
         try await client.createDirectory(path: basePath)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "future-id")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
 
         let service = RemoteIndexSyncService()
@@ -842,7 +842,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.connect()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-a")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
         try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
@@ -852,7 +852,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
 
         let cachedID = await service.materializedRepoID()
-        XCTAssertEqual(cachedID, "repo-a")
+        XCTAssertEqual(cachedID, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     }
 
     func testMaterializedRepoID_clearedOnProfileSwitch() async throws {
@@ -861,7 +861,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.connect()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-a")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
         try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
@@ -870,7 +870,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         let service = RemoteIndexSyncService()
         _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
         let storedID = await service.materializedRepoID()
-        XCTAssertEqual(storedID, "repo-a")
+        XCTAssertEqual(storedID, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 
         await service.resetForProfileSwitch()
         let clearedID = await service.materializedRepoID()

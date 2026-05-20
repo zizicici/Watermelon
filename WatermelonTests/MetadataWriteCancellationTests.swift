@@ -4,7 +4,7 @@ import XCTest
 final class MetadataWriteCancellationTests: XCTestCase {
     private let basePath = "/repo"
     private let writerID = "11111111-1111-1111-1111-111111111111"
-    private let repoID = "repo-A"
+    private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let month = LibraryMonthKey(year: 2026, month: 5)
 
     func testMetadataCreateGate_publicWriteSurfaceNormalizesCancellationShapes() async throws {

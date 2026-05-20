@@ -527,7 +527,7 @@ final class RepoStateRecordTests: XCTestCase {
         try await clock.observe(LamportClock.maxAdvanceableValue - 1)
 
         let inMemory = await clock.value()
-        XCTAssertEqual(inMemory, 0, "values at/above maxObservableValue must be rejected")
+        XCTAssertEqual(inMemory, 0, "values at/above maxAdoptableValue must be rejected")
         let reloaded = try await identity.loadRepoState(profileID: profileID, repoID: "r")
         XCTAssertEqual(reloaded?.lastClock, 0, "rejected observe must not persist")
     }
@@ -539,7 +539,7 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertEqual(val, 0)
     }
 
-    func testPersistedLamportClockObserveAtBoundaryThenTickRangeSucceeds() async throws {
+    func testPersistedLamportClockObserveAtBoundaryThenTickRangeThrowsExhausted() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
@@ -548,27 +548,15 @@ final class RepoStateRecordTests: XCTestCase {
         let boundary = LamportClock.maxAdoptableValue - 1
         try await clock.observe(boundary)
 
-        let range = try await clock.tickRange(count: 1)
-        XCTAssertEqual(range.low, LamportClock.maxAdoptableValue,
-                       "tick from the highest-adopted value must produce `maxAdoptableValue` — one above the adopt ceiling, which only peers cannot adopt")
-        XCTAssertEqual(range.high, LamportClock.maxAdoptableValue)
-
-        let reloaded = try await identity.loadRepoState(profileID: profileID, repoID: "r")
-        let stored = reloaded.map { UInt64(bitPattern: $0.lastClock) }
-        XCTAssertEqual(stored, LamportClock.maxAdoptableValue,
-                       "writer's legitimate boundary emit must survive in DB — poison detection uses the looser `maxObservableValue` ceiling")
-
-        // The boundary emit is the writer's last legitimate tick; the next
-        // `tickRange(1)` throws because `current == maxAdoptableValue` would
-        // emit `maxAdoptableValue + 1 == maxObservableValue` which violates
-        // the tick-emit strict-`<` ceiling. End-of-clock dead-end is the
-        // expected terminal state for a writer that ticked all the way.
+        // Emission ceiling equals reader acceptance ceiling; emitting
+        // `maxAdoptableValue` would produce an unusable value rejected by
+        // materializer/checkpoint readers, so the allocator must throw.
         do {
             _ = try await clock.tickRange(count: 1)
-            XCTFail("expected advanceExhausted at the absolute emit boundary")
+            XCTFail("expected advanceExhausted because emitting maxAdoptableValue would be rejected by readers")
         } catch PersistedLamportClockError.advanceExhausted {
-            // Expected: writer is now at `maxAdoptableValue`, one tick from
-            // `maxObservableValue` (the absolute emit ceiling).
+            // Expected: the writer observed the highest-adoptable value and
+            // cannot emit a value readers would accept.
         } catch {
             XCTFail("unexpected error: \(error)")
         }
@@ -613,22 +601,22 @@ final class RepoStateRecordTests: XCTestCase {
                        "DB row reflects the new tick, never the unobservable peer value")
     }
 
-    func testPersistedLamportClockInitTreatsMaxObservableValueAsPoison() async throws {
+    func testPersistedLamportClockInitTreatsMaxAdoptableValueAsPoison() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
 
-        let prefixEmit = LamportClock.maxObservableValue
+        let poison = LamportClock.maxAdoptableValue
         try databaseManager.write { db in
             try db.execute(
                 sql: "UPDATE \(RepoStateRecord.databaseTableName) SET lastClock = ? WHERE profileID = ? AND repoID = ?",
-                arguments: [Int64(bitPattern: prefixEmit), profileID, "r"]
+                arguments: [Int64(bitPattern: poison), profileID, "r"]
             )
         }
 
-        let clock = PersistedLamportClock(database: databaseManager, profileID: profileID, repoID: "r", initial: prefixEmit)
+        let clock = PersistedLamportClock(database: databaseManager, profileID: profileID, repoID: "r", initial: poison)
         let inMemory = await clock.value()
-        XCTAssertEqual(inMemory, 0, "init must reset persisted maxObservableValue to 0 as an unobservable dead-end")
+        XCTAssertEqual(inMemory, 0, "init must reset persisted maxAdoptableValue to 0 as an unobservable dead-end")
 
         try await clock.repairPoisonedDBIfNeeded()
         let reloaded = try await identity.loadRepoState(profileID: profileID, repoID: "r")

@@ -7,6 +7,7 @@ private let bootstrapLog = Logger(subsystem: "com.zizicici.watermelon", category
 actor RepoBootstrap {
     enum BootstrapError: Error {
         case ioFailure(Error)
+        case futureFormatVersion(minAppVersion: String?)
     }
 
     private static let postCreateReadRetryFloorSeconds: TimeInterval = 3
@@ -53,6 +54,7 @@ actor RepoBootstrap {
 
     @discardableResult
     func ensureRepoJSON(repoID: String, writerID: String) async throws -> String {
+        let requestedRepoID = try Self.canonicalRepoID(repoID, code: 20)
         do {
             try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
             try await client.createDirectory(path: RepoLayout.identityDirectoryPath(base: basePath))
@@ -87,7 +89,7 @@ actor RepoBootstrap {
                     userInfo: [NSLocalizedDescriptionKey: "own identity claim is corrupt and no trusted repo ID exists; inspect/delete manually"]
                 ))
             } else {
-                suggested = repoID
+                suggested = requestedRepoID
                 isElectingFresh = true
             }
 
@@ -127,6 +129,7 @@ actor RepoBootstrap {
 
     @discardableResult
     func ensureIdentityFinalization(repoID: String, writerID: String) async throws -> String {
+        let canonicalRepoID = try Self.canonicalRepoID(repoID, code: 21)
         do {
             try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
             if let finalized = try await loadFinalizedRepoID() {
@@ -137,7 +140,7 @@ actor RepoBootstrap {
             let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             let temp = try makeTempJSON(
                 RepoIdentityFinalizationWire(
-                    repoID: repoID,
+                    repoID: canonicalRepoID,
                     formatVersion: RepoLayout.formatVersion,
                     createdAtMs: createdAtMs,
                     createdByWriter: writerID
@@ -156,7 +159,7 @@ actor RepoBootstrap {
             // Gate already SHA-confirmed the remote bytes match `temp`, so `repoID`
             // is the canonical finalized id — skip a redundant readback loop.
             if outcome.verification == .verifiedLocalBytes {
-                return repoID
+                return canonicalRepoID
             }
             if let finalized = try await loadFinalizedRepoIDWithRetries() {
                 return finalized
@@ -184,7 +187,13 @@ actor RepoBootstrap {
             try await client.download(remotePath: markerPath, localURL: temp)
             let data = try Data(contentsOf: temp)
             do {
-                return try RepoIdentityFinalizationWire(data: data).repoID
+                let wire = try RepoIdentityFinalizationWire(data: data)
+                if let fv = wire.formatVersion, fv > RepoLayout.currentSupportedFormatVersion {
+                    throw BootstrapError.futureFormatVersion(minAppVersion: nil)
+                }
+                return wire.repoID
+            } catch let bootstrap as BootstrapError {
+                throw bootstrap
             } catch {
                 throw BootstrapError.ioFailure(NSError(
                     domain: "RepoBootstrap",
@@ -297,6 +306,18 @@ actor RepoBootstrap {
             code: code,
             userInfo: [NSLocalizedDescriptionKey: "\(description) at \(path) is a directory"]
         ))
+    }
+
+    private static func canonicalRepoID(_ raw: String, code: Int) throws -> String {
+        do {
+            return try RepoWireValidator.validateRepoID(raw, field: "repoID")
+        } catch {
+            throw BootstrapError.ioFailure(NSError(
+                domain: "RepoBootstrap",
+                code: code,
+                userInfo: [NSLocalizedDescriptionKey: "repoID is malformed"]
+            ))
+        }
     }
 
     enum VersionConflict: Error {

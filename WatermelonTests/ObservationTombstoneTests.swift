@@ -10,7 +10,7 @@ final class ObservationTombstoneTests: XCTestCase {
     private let writerB = "22222222-2222-2222-2222-bbbbbbbbbbbb"
     private let monthKey = LibraryMonthKey(year: 2026, month: 5)
     private let runID = "run-test"
-    private let repoID = "repo-test"
+    private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
     private func computedFP(role: Int = ResourceTypeCode.photo, slot: Int = 0, hash: Data) -> Data {
         BackupAssetResourcePlanner.assetFingerprint(

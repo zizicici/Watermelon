@@ -46,7 +46,7 @@ enum RepoStateAuthority {
 
     static func decodePersistedClock(_ stored: Int64) -> RepoCounterSanitization {
         let decoded = UInt64(bitPattern: stored)
-        guard decoded < LamportClock.maxObservableValue else {
+        guard decoded < LamportClock.maxAdoptableValue else {
             repoStateAuthorityLog.warning("repaired overflowed persisted clock decoded=\(decoded, privacy: .public)")
             return .repaired(decoded)
         }

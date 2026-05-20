@@ -87,7 +87,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 999, writerID: writerB, runID: peerRunID)
         let peerBytes = makeSnapshotBytes(
             writerID: writerB,
-            covered: covered([(1, 1)]),
+            covered: covered([(1, UInt64(0xE1))]),
             assetBytes: [0xE1]
         )
         let client = CheckpointHookClient(inner: inner)
@@ -198,7 +198,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0x81)
         _ = try await CommitLogWriter(client: client, basePath: basePath).write(
             header: TestFixtures.makeCommitHeader(
-                repoID: "foreign-repo",
+                repoID: "99999999-9999-9999-9999-999999999999",
                 writerID: writerID,
                 seq: 9,
                 runID: runID,
@@ -463,7 +463,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
     }
 
     private let basePath = "/repo"
-    private let repoID = "repo-checkpoint-test"
+    private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let writerID = "11111111-1111-1111-1111-111111111111"
     private let writerB = "22222222-2222-2222-2222-222222222222"
     private let runID = "33333333-3333-3333-3333-333333333333"

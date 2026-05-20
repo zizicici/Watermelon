@@ -75,7 +75,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "future-id")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-1111-2222-3333-444444444444")
         let metadataClient = InMemoryRemoteStorageClient()
         try await metadataClient.connect()
         let profile = try insertProfile()
@@ -94,11 +94,41 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
+    func testFutureIdentityWithoutVersion_throwsUnsupportedRemoteFormat() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        await client.injectFile(
+            path: RepoLayout.identityFinalizationFilePath(base: basePath),
+            data: try RepoIdentityFinalizationWire(
+                repoID: "aaaaaaaa-1111-2222-3333-444444444444",
+                formatVersion: RepoLayout.currentSupportedFormatVersion + 1,
+                createdAtMs: 0,
+                createdByWriter: "peer"
+            ).encode()
+        )
+        let metadataClient = InMemoryRemoteStorageClient()
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        do {
+            _ = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+            XCTFail("expected unsupportedRemoteFormat")
+        } catch BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minApp) {
+            XCTAssertNil(minApp)
+        }
+    }
+
     func testV2Repo_localIDMatchesRemote_succeeds() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
-        let canonicalRepoID = "canonical-repo-id"
+        let canonicalRepoID = "bbbbbbbb-1111-2222-3333-444444444444"
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
@@ -124,14 +154,14 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     func testV2Repo_localIDDiffersFromRemote_throwsIdentityMismatch() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "remote-canonical")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-1111-2222-3333-444444444444")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
         try await metadataClient.connect()
         let profile = try insertProfile()
         let identity = RepoIdentity(database: databaseManager)
         let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
-        _ = try await identity.lazyEnsureRepoState(profileID: profile.id!, repoID: "stale-local", writerID: writerID)
+        _ = try await identity.lazyEnsureRepoState(profileID: profile.id!, repoID: "dddddddd-1111-2222-3333-444444444444", writerID: writerID)
 
         do {
             _ = try await BackupV2RuntimeBuilder.build(
@@ -143,8 +173,8 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
             )
             XCTFail("expected repoIdentityMismatch")
         } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) {
-            XCTAssertEqual(stored, "stale-local")
-            XCTAssertEqual(observed, "remote-canonical")
+            XCTAssertEqual(stored, "dddddddd-1111-2222-3333-444444444444")
+            XCTAssertEqual(observed, "cccccccc-1111-2222-3333-444444444444")
         }
     }
 
@@ -177,12 +207,36 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
+    func testV2Repo_nonUUIDRepoJSON_throwsDamagedV2Repo() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "not-a-uuid")
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        do {
+            _ = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+            XCTFail("expected damagedV2Repo")
+        } catch BackupV2RuntimeBuildError.damagedV2Repo {
+        }
+    }
+
     func testV2Repo_identityReadCancellationPropagatesCancellation() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "remote-canonical")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-1111-2222-3333-444444444444")
         await client.injectDownloadCancellation(for: RepoLayout.repoFilePath(base: basePath))
         let metadataClient = InMemoryRemoteStorageClient()
         metadataClient.setMoveIfAbsentGuarantee(.exclusive)
@@ -361,7 +415,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     }
 
     func testBuild_doesNotBumpAllocatorToForeignWriterSeq() async throws {
-        let canonicalRepoID = "shared-repo-id"
+        let canonicalRepoID = "eeeeeeee-1111-2222-3333-444444444444"
         let foreignWriterID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
@@ -524,7 +578,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     }
 
     func testBuild_sanitizesNegativeLastSeqBeforeAllocatorInit() async throws {
-        let canonicalRepoID = "negative-seq-repo-id"
+        let canonicalRepoID = "11111111-aaaa-bbbb-cccc-dddddddddddd"
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
@@ -573,7 +627,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
 
         let identity = RepoIdentity(database: databaseManager)
         let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
-        let priorRepoID = "prior-bound-repo-id"
+        let priorRepoID = "22222222-aaaa-bbbb-cccc-dddddddddddd"
         _ = try await identity.lazyEnsureRepoState(
             profileID: profile.id!, repoID: priorRepoID, writerID: writerID
         )
@@ -605,7 +659,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
 
         let identity = RepoIdentity(database: databaseManager)
         let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
-        let migratedRepoID = "migrated-repo-id"
+        let migratedRepoID = "33333333-aaaa-bbbb-cccc-dddddddddddd"
         _ = try await identity.lazyEnsureRepoState(
             profileID: profile.id!, repoID: migratedRepoID, writerID: writerID
         )
@@ -719,7 +773,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     }
 
     func testBuild_repairsPoisonedRepoStateRow() async throws {
-        let canonicalRepoID = "poison-repair-repo"
+        let canonicalRepoID = "44444444-aaaa-bbbb-cccc-dddddddddddd"
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
@@ -758,7 +812,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         XCTAssertLessThan(recovered!, LamportClock.maxAdvanceableValue,
                           "builder must heal poisoned repo_state.lastClock before returning the runtime — otherwise a session with no tick activity leaves the poison in place forever")
         let lamportValue = await services.lamport.value()
-        XCTAssertLessThan(lamportValue, LamportClock.maxObservableValue,
+        XCTAssertLessThan(lamportValue, LamportClock.maxAdoptableValue,
                           "actor-local mirror must also reflect a sane value after builder recovery")
     }
 
@@ -787,14 +841,14 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     func testVerifyMonthV2_throwsIdentityMismatchWhenLocalRepoIDDiffers() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "remote-repo-b")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "55555555-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         let profile = try insertProfile()
 
         let identity = RepoIdentity(database: databaseManager)
         let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
         _ = try await identity.lazyEnsureRepoState(
-            profileID: profile.id!, repoID: "local-repo-a", writerID: writerID
+            profileID: profile.id!, repoID: "66666666-aaaa-bbbb-cccc-dddddddddddd", writerID: writerID
         )
 
         let service = BackupRunPreparationService(
@@ -819,7 +873,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     }
 
     func testVerifyMonthV2_matchingLocalRepoIDSucceeds() async throws {
-        let repoID = "shared-repo-id"
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
@@ -854,7 +908,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "some-repo")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "77777777-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
 
         let service = BackupRunPreparationService(
@@ -878,7 +932,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-a")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "88888888-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
         try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
@@ -888,10 +942,10 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let remoteIndexService = RemoteIndexSyncService()
         _ = try await remoteIndexService.syncIndex(client: client, profile: profile, localRepoID: nil)
         let cachedID = await remoteIndexService.materializedRepoID()
-        XCTAssertEqual(cachedID, "repo-a", "precondition: materializedRepoID should be set")
+        XCTAssertEqual(cachedID, "88888888-aaaa-bbbb-cccc-dddddddddddd", "precondition: materializedRepoID should be set")
 
         // Swap remote repo.json to a different repo ID (simulates peer swap or corruption)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-b")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "99999999-aaaa-bbbb-cccc-dddddddddddd")
 
         let service = BackupRunPreparationService(
             photoLibraryService: PhotoLibraryService(),
@@ -923,7 +977,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let identity = RepoIdentity(database: databaseManager)
         let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
         _ = try await identity.lazyEnsureRepoState(
-            profileID: profile.id!, repoID: "bound-repo-id", writerID: writerID
+            profileID: profile.id!, repoID: "aaaaaaaa-cccc-dddd-eeee-ffffffffffff", writerID: writerID
         )
         let service = BackupRunPreparationService(
             photoLibraryService: PhotoLibraryService(),
@@ -953,7 +1007,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let identity = RepoIdentity(database: databaseManager)
         let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
         _ = try await identity.lazyEnsureRepoState(
-            profileID: profile.id!, repoID: "bound-repo-id", writerID: writerID
+            profileID: profile.id!, repoID: "aaaaaaaa-cccc-dddd-eeee-ffffffffffff", writerID: writerID
         )
         let service = BackupRunPreparationService(
             photoLibraryService: PhotoLibraryService(),
@@ -1002,7 +1056,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-a")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
         try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
@@ -1012,7 +1066,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let remoteIndexService = RemoteIndexSyncService()
         _ = try await remoteIndexService.syncIndex(client: client, profile: profile, localRepoID: nil)
         let storedID = await remoteIndexService.materializedRepoID()
-        XCTAssertEqual(storedID, "repo-a", "precondition: materializedRepoID should be set")
+        XCTAssertEqual(storedID, "aaaaaaaa-aaaa-bbbb-cccc-dddddddddddd", "precondition: materializedRepoID should be set")
 
         // Wipe V2 structure so inspection returns .fresh
         try await client.delete(path: "\(basePath)/.watermelon")
@@ -1043,7 +1097,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
         try await client.createDirectory(path: basePath)
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "repo-a")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-aaaa-bbbb-cccc-dddddddddddd")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
         try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
@@ -1080,7 +1134,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     // MARK: - verifyMonth V2 always signals refresh
 
     func testVerifyMonth_v2Repo_alwaysReturnsTrue() async throws {
-        let repoID = "repo-always-refresh"
+        let repoID = "11111111-2222-3333-4444-555555555555"
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()

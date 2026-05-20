@@ -4,7 +4,7 @@ import XCTest
 
 final class RepoVerifyMonthServiceTests: XCTestCase {
     private let basePath = "/repo"
-    private let repoID = "repo-test-id"
+    private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let writerA = "11111111-1111-1111-1111-aaaaaaaaaaaa"
     private let writerB = "22222222-2222-2222-2222-bbbbbbbbbbbb"
     private let runID = "run-001"

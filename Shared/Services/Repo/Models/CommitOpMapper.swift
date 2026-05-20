@@ -104,6 +104,9 @@ enum CommitOpMapper {
         _ = try mapValidation { try RepoWireValidator.validateMonthScope(scope) }
         let clockMin = try requireUInt64(dict, "clockMin")
         let clockMax = try requireUInt64(dict, "clockMax")
+        guard clockMin > 0 else {
+            throw CommitWireError.malformed("clockMin must be > 0")
+        }
         guard clockMin <= clockMax else {
             throw CommitWireError.malformed("clockMin > clockMax (\(clockMin) > \(clockMax))")
         }
@@ -111,11 +114,15 @@ enum CommitOpMapper {
         guard bodyKind == CommitHeader.bodyKindPlain else {
             throw CommitWireError.malformed("unknown bodyKind: \(bodyKind)")
         }
+        let seq = try requireUInt64(dict, "seq")
+        guard seq > 0 else {
+            throw CommitWireError.malformed("seq must be > 0")
+        }
         return CommitHeader(
             version: version,
-            repoID: try requireNonEmptyString(dict, "repoID"),
+            repoID: try requireRepoID(dict, "repoID"),
             writerID: try requireNonEmptyString(dict, "writerID"),
-            seq: try requireUInt64(dict, "seq"),
+            seq: seq,
             runID: try requireString(dict, "runID"),
             scope: scope,
             clockMin: clockMin,
@@ -132,6 +139,9 @@ enum CommitOpMapper {
             try RepoWireValidator.validateNonNegativeInt(dict["opSeq"], field: "opSeq")
         }
         let clock = try requireUInt64(dict, "clock")
+        guard clock > 0 else {
+            throw CommitWireError.malformed("clock must be > 0")
+        }
         let kind = try requireString(dict, "kind")
         guard let bodyDict = dict["body"] as? [String: Any] else {
             throw CommitWireError.missingField("body")
@@ -332,6 +342,13 @@ enum CommitOpMapper {
 
     static func requireNonEmptyString(_ dict: [String: Any], _ key: String) throws -> String {
         try mapValidation { try RepoWireValidator.requireNonEmptyString(dict, key) }
+    }
+
+    static func requireRepoID(_ dict: [String: Any], _ key: String) throws -> String {
+        try mapValidation {
+            let raw = try RepoWireValidator.requireString(dict, key)
+            return try RepoWireValidator.validateRepoID(raw, field: key)
+        }
     }
 
     static func requireInt(_ dict: [String: Any], _ key: String) throws -> Int {

@@ -11,7 +11,7 @@ final class SnapshotRowMapperTests: XCTestCase {
             version: 1,
             scope: "month:2026-05",
             writerID: "writer-A",
-            repoID: "repo-test-id",
+            repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             covered: covered
         )
         let line = try SnapshotRowMapper.encodeHeaderLine(header)
@@ -71,7 +71,7 @@ final class SnapshotRowMapperTests: XCTestCase {
     /// silently degrade to empty — an "empty covered" snapshot would still get picked
     /// as baseline and yield wrong replay decisions.
     func testHeaderRejectsCoveredWithNonArrayPair() {
-        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"r","covered":{"writer-A":[[1,"abc"]]}}"#
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{"writer-A":[[1,"abc"]]}}"#
         XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
             guard case SnapshotWireError.malformed = err else {
                 XCTFail("expected .malformed, got \(err)"); return
@@ -80,7 +80,7 @@ final class SnapshotRowMapperTests: XCTestCase {
     }
 
     func testHeaderRejectsCoveredWithStringValue() {
-        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"r","covered":{"writer-A":"not-an-array"}}"#
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{"writer-A":"not-an-array"}}"#
         XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
             guard case SnapshotWireError.malformed = err else {
                 XCTFail("expected .malformed, got \(err)"); return
@@ -107,8 +107,37 @@ final class SnapshotRowMapperTests: XCTestCase {
         }
     }
 
+    func testHeaderRejectsNonUUIDRepoID() {
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"not-a-uuid","covered":{}}"#
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
+            guard case SnapshotWireError.malformed = err else {
+                XCTFail("expected .malformed, got \(err)"); return
+            }
+        }
+    }
+
+    /// A stamp with seq 0 signals corruption; production writers do not emit it.
+    func testAssetRowRejectsStampWithSeqZero() {
+        let raw = #"{"t":"asset","r":{"assetFingerprint":"\#(String(repeating: "ab", count: 32))","backedUpAtMs":1,"resourceCount":1,"totalFileSizeBytes":1,"lastWriterID":"00000000-0000-0000-0000-000000000000","lastSeq":0,"lastClock":1}}"#
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
+            guard case SnapshotWireError.malformed = err else {
+                XCTFail("expected .malformed, got \(err)"); return
+            }
+        }
+    }
+
+    /// A stamp with non-canonical writerID could affect LWW tiebreaker ordering.
+    func testAssetRowRejectsStampWithNonCanonicalWriterID() {
+        let raw = #"{"t":"asset","r":{"assetFingerprint":"\#(String(repeating: "ab", count: 32))","backedUpAtMs":1,"resourceCount":1,"totalFileSizeBytes":1,"lastWriterID":"not-a-uuid","lastSeq":1,"lastClock":1}}"#
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
+            guard case SnapshotWireError.malformed = err else {
+                XCTFail("expected .malformed, got \(err)"); return
+            }
+        }
+    }
+
     func testHeaderRejectsEmptyWriterID() {
-        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"","repoID":"r","covered":{}}"#
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{}}"#
         XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
             guard case SnapshotWireError.malformed = err else {
                 XCTFail("expected .malformed, got \(err)"); return
@@ -119,7 +148,7 @@ final class SnapshotRowMapperTests: XCTestCase {
     /// Negative numbers in `covered` must be rejected rather than wrapping to ~UInt64.max
     /// via NSNumber bridging, which would silently absorb every later commit into "covered".
     func testHeaderRejectsNegativeCoveredValue() {
-        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"r","covered":{"writer-A":[[-1,5]]}}"#
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{"writer-A":[[-1,5]]}}"#
         XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
             guard case SnapshotWireError.malformed = err else {
                 XCTFail("expected .malformed, got \(err)"); return
@@ -131,7 +160,18 @@ final class SnapshotRowMapperTests: XCTestCase {
     /// silently, so a malformed snapshot could shrink the covered range and cause commits
     /// inside the original range to be replayed.
     func testHeaderRejectsFractionalCoveredValue() {
-        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"r","covered":{"writer-A":[[1.9,5]]}}"#
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{"writer-A":[[1.9,5]]}}"#
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
+            guard case SnapshotWireError.malformed = err else {
+                XCTFail("expected .malformed, got \(err)"); return
+            }
+        }
+    }
+
+    /// No production writer emits seq 0; a covered range starting at 0 signals corruption
+    /// and could cause the materializer to skip legitimate commits.
+    func testHeaderRejectsCoveredRangeStartingAtZero() {
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{"writer-A":[[0,10]]}}"#
         XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
             guard case SnapshotWireError.malformed = err else {
                 XCTFail("expected .malformed, got \(err)"); return
@@ -144,7 +184,7 @@ final class SnapshotRowMapperTests: XCTestCase {
     /// accepted as the range `[1,1]` and silently mark writer-A seq 1 as covered,
     /// causing the materializer to skip a commit whose effects aren't in the snapshot.
     func testHeaderRejectsBooleanCoveredValue_true() {
-        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"r","covered":{"writer-A":[[true,true]]}}"#
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{"writer-A":[[true,true]]}}"#
         XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
             guard case SnapshotWireError.malformed = err else {
                 XCTFail("expected .malformed, got \(err)"); return
@@ -153,7 +193,7 @@ final class SnapshotRowMapperTests: XCTestCase {
     }
 
     func testHeaderRejectsBooleanCoveredValue_false() {
-        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"r","covered":{"writer-A":[[false,false]]}}"#
+        let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{"writer-A":[[false,false]]}}"#
         XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
             guard case SnapshotWireError.malformed = err else {
                 XCTFail("expected .malformed, got \(err)"); return
@@ -165,7 +205,7 @@ final class SnapshotRowMapperTests: XCTestCase {
     /// version. The decoder must reject it rather than silently accepting a v=true
     /// header as a valid v1 row.
     func testHeaderRejectsBooleanVersion() {
-        let raw = #"{"t":"header","v":true,"scope":"month:2026-05","writerID":"w","repoID":"r","covered":{}}"#
+        let raw = #"{"t":"header","v":true,"scope":"month:2026-05","writerID":"w","repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","covered":{}}"#
         XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
             // CFBoolean rejection lands as missingField via mapValidation.
             guard case SnapshotWireError.missingField = err else {
@@ -178,7 +218,7 @@ final class SnapshotRowMapperTests: XCTestCase {
     /// validator's NSNumber roundtrip covers the full UInt64 range.
     func testHeaderAcceptsHighUInt64CoveredValue() throws {
         let high = UInt64(Int64.max) + 1
-        let raw = "{\"t\":\"header\",\"v\":1,\"scope\":\"month:2026-05\",\"writerID\":\"w\",\"repoID\":\"r\",\"covered\":{\"writer-A\":[[\(high),\(high)]]}}"
+        let raw = "{\"t\":\"header\",\"v\":1,\"scope\":\"month:2026-05\",\"writerID\":\"w\",\"repoID\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"covered\":{\"writer-A\":[[\(high),\(high)]]}}"
         let row = try SnapshotRowMapper.decodeLine(raw)
         guard case .header(let parsed) = row else { XCTFail("expected header"); return }
         let ranges = parsed.covered.rangesByWriter["writer-A"]
@@ -199,7 +239,7 @@ final class SnapshotRowMapperTests: XCTestCase {
     /// stamp (asset-only field semantically), and the materializer's skip-by-keyType
     /// handles the rest.
     func testDeletedKeyNonAssetKeyTypeAcceptsAndIgnoresStamp() throws {
-        let raw = #"{"t":"deleted_key","r":{"keyType":"resource","keyValue":"some-resource-id","lastWriterID":"w","lastSeq":1,"lastClock":1}}"#
+        let raw = #"{"t":"deleted_key","r":{"keyType":"resource","keyValue":"some-resource-id","lastWriterID":"00000000-0000-0000-0000-000000000000","lastSeq":1,"lastClock":1}}"#
         let decoded = try SnapshotRowMapper.decodeLine(raw)
         guard case .deletedKey(let row) = decoded else { XCTFail("deletedKey"); return }
         XCTAssertEqual(row.keyType, .resource)

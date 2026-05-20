@@ -325,8 +325,12 @@ struct BackupRunPreparationService: Sendable {
         } catch is RepoBootstrap.VersionConflict {
             throw BackupCompatibilityError.damagedV2Repo
         } catch let bootstrap as RepoBootstrap.BootstrapError {
-            if case .ioFailure = bootstrap { throw BackupCompatibilityError.damagedV2Repo }
-            throw bootstrap
+            switch bootstrap {
+            case .ioFailure:
+                throw BackupCompatibilityError.damagedV2Repo
+            case .futureFormatVersion(let minAppVersion):
+                throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
+            }
         }
         switch load {
         case .absent:
@@ -355,15 +359,24 @@ struct BackupRunPreparationService: Sendable {
         // Verifier needs remote repoID to filter foreign-id commits; absent on a V2 repo means broken identity, refuse.
         let bootstrap = RepoBootstrap(client: metadataClient, basePath: basePath)
         let expectedRepoID: String
-        switch try await bootstrap.loadRepoIDStrict() {
-        case .absent:
-            throw NSError(
-                domain: "BackupRunPreparation",
-                code: -51,
-                userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json — run a backup to repair before verifying"]
-            )
-        case .found(let id):
-            expectedRepoID = id
+        do {
+            switch try await bootstrap.loadRepoIDStrict() {
+            case .absent:
+                throw NSError(
+                    domain: "BackupRunPreparation",
+                    code: -51,
+                    userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json - run a backup to repair before verifying"]
+                )
+            case .found(let id):
+                expectedRepoID = id
+            }
+        } catch let bootstrap as RepoBootstrap.BootstrapError {
+            switch bootstrap {
+            case .ioFailure:
+                throw BackupCompatibilityError.damagedV2Repo
+            case .futureFormatVersion(let minAppVersion):
+                throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
+            }
         }
         if let profileID = profile?.id {
             let identity = RepoIdentity(database: databaseManager)

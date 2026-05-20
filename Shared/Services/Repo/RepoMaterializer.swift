@@ -649,19 +649,23 @@ private func materializerResourcePath(_ path: String, belongsTo month: LibraryMo
 }
 
 private func snapshotHasUnworkableRowStamp(_ file: SnapshotFile, filenameLamport: UInt64) -> Bool {
+    let covered = file.header.covered
     for asset in file.assets {
-        if let stamp = asset.stamp, isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) {
-            return true
+        if let stamp = asset.stamp {
+            if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
+            if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
         }
     }
     for resource in file.resources {
-        if let stamp = resource.stamp, isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) {
-            return true
+        if let stamp = resource.stamp {
+            if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
+            if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
         }
     }
     for d in file.deletedKeys {
-        if let stamp = d.stamp, isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) {
-            return true
+        if let stamp = d.stamp {
+            if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
+            if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
         }
     }
     return false

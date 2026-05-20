@@ -9,7 +9,7 @@ import XCTest
 final class SnapshotWriterCancellationTests: XCTestCase {
     private let basePath = "/repo"
     private let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
-    private let repoID = "test-repo"
+    private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let month = LibraryMonthKey(year: 2026, month: 4)
     private let runID = "snap-cancel-run"
 

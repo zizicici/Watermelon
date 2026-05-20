@@ -150,7 +150,7 @@ extension RetentionManifest: Codable {
         guard barrierRaw.count == 16, let barrierLamport = UInt64(barrierRaw, radix: 16) else {
             throw RetentionManifestError.malformed("barrier_lamport")
         }
-        guard barrierLamport < LamportClock.maxAdoptableValue else {
+        guard barrierLamport > 0, barrierLamport < LamportClock.maxAdoptableValue else {
             throw RetentionManifestError.malformed("barrier_lamport")
         }
 

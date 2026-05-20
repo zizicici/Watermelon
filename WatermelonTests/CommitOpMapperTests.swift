@@ -5,7 +5,7 @@ final class CommitOpMapperTests: XCTestCase {
     func testHeaderRoundTrip() throws {
         let header = CommitHeader(
             version: 1,
-            repoID: "repo-uuid",
+            repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             writerID: "writer-uuid",
             seq: 42,
             runID: "run-uuid",
@@ -108,7 +108,7 @@ final class CommitOpMapperTests: XCTestCase {
     }
 
     func testUnsupportedHeaderVersion_throws() {
-        let raw = #"{"t":"header","v":99,"repoID":"r","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
+        let raw = #"{"t":"header","v":99,"repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
             guard case CommitWireError.unsupportedVersion(99) = err else {
                 XCTFail("expected unsupportedVersion(99), got \(err)"); return
@@ -117,7 +117,7 @@ final class CommitOpMapperTests: XCTestCase {
     }
 
     func testHeaderRejectsBooleanVersion() {
-        let raw = #"{"t":"header","v":true,"repoID":"r","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
+        let raw = #"{"t":"header","v":true,"repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
             guard case CommitWireError.missingField = err else {
                 XCTFail("expected .missingField (boolean rejection), got \(err)"); return
@@ -135,7 +135,7 @@ final class CommitOpMapperTests: XCTestCase {
     }
 
     func testHeaderRejectsFractionalClockValue() {
-        let raw = #"{"t":"header","v":1,"repoID":"r","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1.9,"clockMax":2,"bodyKind":"plain"}"#
+        let raw = #"{"t":"header","v":1,"repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1.9,"clockMax":2,"bodyKind":"plain"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
             guard case CommitWireError.missingField = err else {
                 XCTFail("expected .missingField (rejection), got \(err)"); return
@@ -144,7 +144,7 @@ final class CommitOpMapperTests: XCTestCase {
     }
 
     func testHeaderRejectsMalformedScope() {
-        let raw = #"{"t":"header","v":1,"repoID":"r","writerID":"w","seq":1,"runID":"r","scope":"not-a-scope","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
+        let raw = #"{"t":"header","v":1,"repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","writerID":"w","seq":1,"runID":"r","scope":"not-a-scope","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
             guard case CommitWireError.malformed = err else {
                 XCTFail("expected .malformed, got \(err)"); return
@@ -153,7 +153,7 @@ final class CommitOpMapperTests: XCTestCase {
     }
 
     func testHeaderRejectsClockMinAboveClockMax() {
-        let raw = #"{"t":"header","v":1,"repoID":"r","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":10,"clockMax":5,"bodyKind":"plain"}"#
+        let raw = #"{"t":"header","v":1,"repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":10,"clockMax":5,"bodyKind":"plain"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
             guard case CommitWireError.malformed = err else {
                 XCTFail("expected .malformed, got \(err)"); return
@@ -170,8 +170,17 @@ final class CommitOpMapperTests: XCTestCase {
         }
     }
 
+    func testHeaderRejectsNonUUIDRepoID() {
+        let raw = #"{"t":"header","v":1,"repoID":"not-a-uuid","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
+        XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
+            guard case CommitWireError.malformed = err else {
+                XCTFail("expected .malformed for non-UUID repoID, got \(err)"); return
+            }
+        }
+    }
+
     func testHeaderRejectsEmptyWriterID() {
-        let raw = #"{"t":"header","v":1,"repoID":"r","writerID":"","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
+        let raw = #"{"t":"header","v":1,"repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","writerID":"","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"plain"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
             guard case CommitWireError.malformed = err else {
                 XCTFail("expected .malformed for empty writerID, got \(err)"); return
@@ -180,7 +189,7 @@ final class CommitOpMapperTests: XCTestCase {
     }
 
     func testHeaderRejectsUnknownBodyKind() {
-        let raw = #"{"t":"header","v":1,"repoID":"r","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"future-format"}"#
+        let raw = #"{"t":"header","v":1,"repoID":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","writerID":"w","seq":1,"runID":"r","scope":"month:2026-01","clockMin":1,"clockMax":1,"bodyKind":"future-format"}"#
         XCTAssertThrowsError(try CommitOpMapper.decodeLine(raw)) { err in
             guard case CommitWireError.malformed = err else {
                 XCTFail("expected .malformed, got \(err)"); return

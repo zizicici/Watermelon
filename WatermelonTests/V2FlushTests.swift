@@ -4,7 +4,7 @@ import XCTest
 final class V2FlushTests: XCTestCase {
     private let basePath = "/repo"
     private let writerID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-    private let repoID = "repo-test-uuid"
+    private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let runID = "run-test-uuid"
     private let year = 2026
     private let month = 1

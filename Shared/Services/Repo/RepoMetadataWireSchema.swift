@@ -126,7 +126,10 @@ nonisolated struct IdentityClaimWire: Sendable, Equatable {
                 throw WireValidationError.malformed("v unsupported")
             }
         }
-        self.repoID = try RepoWireValidator.requireNonEmptyString(dict, "repo_id")
+        self.repoID = try RepoWireValidator.validateRepoID(
+            try RepoWireValidator.requireString(dict, "repo_id"),
+            field: "repo_id"
+        )
         self.writerID = try RepoWireValidator.requireNonEmptyString(dict, "writer_id")
         self.createdAtMs = try RepoWireValidator.validateNonNegativeInt64(dict["created_at_ms"], field: "created_at_ms")
     }
@@ -164,7 +167,10 @@ nonisolated struct RepoIdentityFinalizationWire: Sendable, Equatable {
                 throw WireValidationError.malformed("v unsupported")
             }
         }
-        self.repoID = try RepoWireValidator.requireNonEmptyString(dict, "repo_id")
+        self.repoID = try RepoWireValidator.validateRepoID(
+            try RepoWireValidator.requireString(dict, "repo_id"),
+            field: "repo_id"
+        )
         self.formatVersion = try? RepoWireValidator.requireInt(dict["format_version"], field: "format_version")
         self.createdAtMs = repoMetadataOptionalInt64(dict["created_at_ms"])
         self.createdByWriter = dict["created_by_writer"] as? String
@@ -203,7 +209,10 @@ nonisolated struct RepoCacheWire: Sendable, Equatable {
                 throw WireValidationError.malformed("v unsupported")
             }
         }
-        self.repoID = try RepoWireValidator.requireNonEmptyString(dict, "repo_id")
+        self.repoID = try RepoWireValidator.validateRepoID(
+            try RepoWireValidator.requireString(dict, "repo_id"),
+            field: "repo_id"
+        )
         self.createdAtMs = repoMetadataOptionalInt64(dict["created_at_ms"])
         self.createdByWriter = dict["created_by_writer"] as? String
     }

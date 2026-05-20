@@ -633,8 +633,8 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
             remoteRelativePath: canonicalFilename
         )])
         XCTAssertEqual(plan.commitFiles.map(\.seq), [1])
-        XCTAssertEqual(plan.protectedSummary.outOfPrefixCommitFileCount, 1)
-        XCTAssertEqual(plan.protectedSummary.targetMonthUnparseableFilenameCount, 1)
+        XCTAssertEqual(plan.protectedSummary.outOfPrefixCommitFileCount, 0)
+        XCTAssertEqual(plan.protectedSummary.targetMonthUnparseableFilenameCount, 2)
         XCTAssertFalse(plan.commitFiles.contains { $0.filename == nonCanonicalFilename })
 
         let listFailureInner = try await makeReadyClient()

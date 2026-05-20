@@ -11,7 +11,7 @@ struct RepoTestBuilder {
 
     static func freshRepo(
         basePath: String = "/repo",
-        repoID: String = "repo-test-uuid",
+        repoID: String = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
         writerID: String = "writer-test-uuid-aaaaaaaaaaaaaaaa",
         runID: String = "run-test"
     ) async throws -> RepoTestBuilder {

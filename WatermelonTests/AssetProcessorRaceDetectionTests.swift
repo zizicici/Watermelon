@@ -368,7 +368,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         )
         let basePath = "/repo"
         let writerID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        let repoID = "repo-test-uuid"
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         let runID = "run-test-uuid"
         let month = LibraryMonthKey(year: 2026, month: 1)
         let client = InMemoryRemoteStorageClient()

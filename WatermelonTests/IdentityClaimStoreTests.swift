@@ -50,20 +50,20 @@ final class IdentityClaimStoreTests: XCTestCase {
 
     func testCanonicalElection_lexMinByCreatedAtMs() async throws {
         let (client, store) = await makeStore()
-        await injectValidClaim(client, writerID: selfWriter, repoID: "repo-A", createdAtMs: 2_000)
-        await injectValidClaim(client, writerID: otherWriter, repoID: "repo-B", createdAtMs: 1_000)
-        await injectValidClaim(client, writerID: thirdWriter, repoID: "repo-C", createdAtMs: 3_000)
+        await injectValidClaim(client, writerID: selfWriter, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", createdAtMs: 2_000)
+        await injectValidClaim(client, writerID: otherWriter, repoID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", createdAtMs: 1_000)
+        await injectValidClaim(client, writerID: thirdWriter, repoID: "cccccccc-cccc-cccc-cccc-cccccccccccc", createdAtMs: 3_000)
         let result = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
-        XCTAssertEqual(result.repoID, "repo-B", "oldest claim must win lex-min")
+        XCTAssertEqual(result.repoID, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "oldest claim must win lex-min")
     }
 
     func testCanonicalElection_tieBreakByWriterID() async throws {
         let (client, store) = await makeStore()
-        await injectValidClaim(client, writerID: otherWriter, repoID: "repo-B", createdAtMs: 1_000)
-        await injectValidClaim(client, writerID: selfWriter, repoID: "repo-A", createdAtMs: 1_000)
+        await injectValidClaim(client, writerID: otherWriter, repoID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", createdAtMs: 1_000)
+        await injectValidClaim(client, writerID: selfWriter, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", createdAtMs: 1_000)
         let result = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
         // selfWriter < otherWriter lexicographically ("111..." < "222...").
-        XCTAssertEqual(result.repoID, "repo-A", "ms-tie must break on lex-smaller writerID")
+        XCTAssertEqual(result.repoID, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "ms-tie must break on lex-smaller writerID")
     }
 
     func testCanonicalElection_serialOnlyClient_returnsLexMin() async throws {
@@ -71,13 +71,13 @@ final class IdentityClaimStoreTests: XCTestCase {
         // (no TaskGroup fan-out) with the same expected lex-min outcome.
         let inner = InMemoryRemoteStorageClient()
         try await inner.connect()
-        await injectValidClaim(inner, writerID: selfWriter, repoID: "repo-A", createdAtMs: 2_000)
-        await injectValidClaim(inner, writerID: otherWriter, repoID: "repo-B", createdAtMs: 1_000)
-        await injectValidClaim(inner, writerID: thirdWriter, repoID: "repo-C", createdAtMs: 3_000)
+        await injectValidClaim(inner, writerID: selfWriter, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", createdAtMs: 2_000)
+        await injectValidClaim(inner, writerID: otherWriter, repoID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", createdAtMs: 1_000)
+        await injectValidClaim(inner, writerID: thirdWriter, repoID: "cccccccc-cccc-cccc-cccc-cccccccccccc", createdAtMs: 3_000)
         let serial = SerialOnlyWrapperClient(inner: inner)
         let store = IdentityClaimStore(client: serial, basePath: basePath)
         let result = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
-        XCTAssertEqual(result.repoID, "repo-B", "serialOnly branch must match concurrent lex-min outcome")
+        XCTAssertEqual(result.repoID, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "serialOnly branch must match concurrent lex-min outcome")
     }
 
     /// A foreign claim with `"created_at_ms": true` must not bridge through `as? Int`
@@ -88,7 +88,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter)
         let dict: [String: Any] = [
             "v": 1,
-            "repo_id": "hijack",
+            "repo_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
             "created_at_ms": true,
             "writer_id": otherWriter
         ]
@@ -110,7 +110,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         let dict: [String: Any] = [
             "v": 1,
-            "repo_id": "ours",
+            "repo_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
             "created_at_ms": false,
             "writer_id": selfWriter
         ]
@@ -123,7 +123,7 @@ final class IdentityClaimStoreTests: XCTestCase {
 
     func testNegativeTimestampRejectedForElectionAndSelfRepair() async throws {
         let (foreignClient, foreignStore) = await makeStore()
-        await injectClaim(foreignClient, writerID: otherWriter, repoID: "hijack", createdAtMs: -1)
+        await injectClaim(foreignClient, writerID: otherWriter, repoID: "dddddddd-dddd-dddd-dddd-dddddddddddd", createdAtMs: -1)
         do {
             _ = try await foreignStore.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
             XCTFail("expected throw on negative timestamp claim")
@@ -133,11 +133,11 @@ final class IdentityClaimStoreTests: XCTestCase {
         }
 
         let (selfClient, selfStore) = await makeStore()
-        await injectClaim(selfClient, writerID: selfWriter, repoID: "repo-A", createdAtMs: -1)
+        await injectClaim(selfClient, writerID: selfWriter, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", createdAtMs: -1)
         let existing = try await selfStore.readOwnClaim(writerID: selfWriter)
         XCTAssertNil(existing)
 
-        try await selfStore.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 123)
+        try await selfStore.writeOwnClaim(repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", writerID: selfWriter, createdAtMs: 123)
         let repairedClaim = try await selfStore.readOwnClaim(writerID: selfWriter)
         let repaired = try XCTUnwrap(repairedClaim)
         XCTAssertEqual(repaired.createdAtMs, 123)
@@ -149,7 +149,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter)
         let dict: [String: Any] = [
             "v": 1,
-            "repo_id": "hijack",
+            "repo_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
             "created_at_ms": 0,
             "writer_id": thirdWriter
         ]
@@ -182,7 +182,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter)
         let dict: [String: Any] = [
             "v": 999,
-            "repo_id": "repo-B",
+            "repo_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
             "created_at_ms": 1,
             "writer_id": otherWriter
         ]
@@ -202,7 +202,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter)
         let dict: [String: Any] = [
             "v": true,
-            "repo_id": "repo-B",
+            "repo_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
             "created_at_ms": 1,
             "writer_id": otherWriter
         ]
@@ -222,7 +222,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         let dict: [String: Any] = [
             "v": true,
-            "repo_id": "repo-A",
+            "repo_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
             "created_at_ms": 1,
             "writer_id": selfWriter
         ]
@@ -246,9 +246,9 @@ final class IdentityClaimStoreTests: XCTestCase {
         let (client, store) = await makeStore()
         let selfPath = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         await client.injectFile(path: selfPath, data: Data("not-json".utf8))
-        await injectValidClaim(client, writerID: otherWriter, repoID: "repo-B", createdAtMs: 1_000)
+        await injectValidClaim(client, writerID: otherWriter, repoID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", createdAtMs: 1_000)
         let result = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
-        XCTAssertEqual(result.repoID, "repo-B")
+        XCTAssertEqual(result.repoID, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
         XCTAssertTrue(result.ignoredSelfCorrupt, "soft signal still surfaces alongside a valid peer claim")
     }
 
@@ -267,7 +267,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         try await inner.connect()
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         await inner.injectFile(path: path, data: Data())  // metadata size=0
-        let nonEmpty = Data(#"{"v":1,"repo_id":"r","writer_id":"\#(selfWriter)","created_at_ms":1}"#.utf8)
+        let nonEmpty = Data(#"{"v":1,"repo_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","writer_id":"\#(selfWriter)","created_at_ms":1}"#.utf8)
         let client = ZeroSizeMetadataNonEmptyDownloadClient(inner: inner, racePath: path, raceBytes: nonEmpty)
         let store = IdentityClaimStore(client: client, basePath: basePath)
 
@@ -282,7 +282,7 @@ final class IdentityClaimStoreTests: XCTestCase {
     func testHeal_nonZeroByteClaim_untouched() async throws {
         let (client, store) = await makeStore()
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
-        await injectValidClaim(client, writerID: selfWriter, repoID: "repo-A", createdAtMs: 100)
+        await injectValidClaim(client, writerID: selfWriter, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", createdAtMs: 100)
         try await store.healZeroByteSelfClaim(writerID: selfWriter)
         let stillThere = await client.hasFile(path)
         XCTAssertTrue(stillThere)
@@ -297,14 +297,14 @@ final class IdentityClaimStoreTests: XCTestCase {
 
     func testWriteOwn_noPriorClaim_writesValidPayload() async throws {
         let (client, store) = await makeStore()
-        try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 1_234)
+        try await store.writeOwnClaim(repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", writerID: selfWriter, createdAtMs: 1_234)
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         guard let bytes = await client.snapshotFiles()[path] else {
             XCTFail("expected claim bytes at \(path)")
             return
         }
         let dict = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
-        XCTAssertEqual(dict?["repo_id"] as? String, "repo-A")
+        XCTAssertEqual(dict?["repo_id"] as? String, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
         XCTAssertEqual(dict?["writer_id"] as? String, selfWriter)
         XCTAssertEqual((dict?["created_at_ms"] as? Int64) ?? Int64(dict?["created_at_ms"] as? Int ?? 0), 1_234)
     }
@@ -313,12 +313,12 @@ final class IdentityClaimStoreTests: XCTestCase {
         // Wrapper throws on any atomicCreate so the .ours short-circuit is the only way the call succeeds.
         let inner = InMemoryRemoteStorageClient()
         try await inner.connect()
-        await injectValidClaim(inner, writerID: selfWriter, repoID: "repo-A", createdAtMs: 1_000)
+        await injectValidClaim(inner, writerID: selfWriter, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", createdAtMs: 1_000)
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         let before = await inner.snapshotFiles()[path]
         let client = ForbidAtomicCreateClient(inner: inner)
         let store = IdentityClaimStore(client: client, basePath: basePath)
-        try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 5_000)
+        try await store.writeOwnClaim(repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", writerID: selfWriter, createdAtMs: 5_000)
         let after = await inner.snapshotFiles()[path]
         XCTAssertEqual(before, after, ".ours must short-circuit before atomicCreate; bytes untouched")
         let attempts = await client.atomicCreateCount
@@ -329,45 +329,45 @@ final class IdentityClaimStoreTests: XCTestCase {
         let (client, store) = await makeStore()
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         await client.injectFile(path: path, data: Data())
-        try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 1_000)
+        try await store.writeOwnClaim(repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", writerID: selfWriter, createdAtMs: 1_000)
         let bytes = await client.snapshotFiles()[path] ?? Data()
         let dict = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
-        XCTAssertEqual(dict?["repo_id"] as? String, "repo-A")
+        XCTAssertEqual(dict?["repo_id"] as? String, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
         XCTAssertEqual(dict?["writer_id"] as? String, selfWriter)
     }
 
     func testWriteOwn_priorClaimStaleRepoID_deletesAndWritesNewID() async throws {
         let (client, store) = await makeStore()
-        await injectValidClaim(client, writerID: selfWriter, repoID: "old-repo", createdAtMs: 999)
-        try await store.writeOwnClaim(repoID: "new-repo", writerID: selfWriter, createdAtMs: 2_000)
+        await injectValidClaim(client, writerID: selfWriter, repoID: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", createdAtMs: 999)
+        try await store.writeOwnClaim(repoID: "ffffffff-ffff-ffff-ffff-ffffffffffff", writerID: selfWriter, createdAtMs: 2_000)
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         let snapshot = await client.snapshotFiles()
         let bytes = try XCTUnwrap(snapshot[path])
         let dict = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
-        XCTAssertEqual(dict?["repo_id"] as? String, "new-repo")
+        XCTAssertEqual(dict?["repo_id"] as? String, "ffffffff-ffff-ffff-ffff-ffffffffffff")
     }
 
     func testWriteOwn_priorClaimCorrupt_deletesAndWrites() async throws {
         let (client, store) = await makeStore()
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         await client.injectFile(path: path, data: Data("garbage".utf8))
-        try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 1_000)
+        try await store.writeOwnClaim(repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", writerID: selfWriter, createdAtMs: 1_000)
         let snapshot = await client.snapshotFiles()
         let bytes = try XCTUnwrap(snapshot[path])
         let dict = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
-        XCTAssertEqual(dict?["repo_id"] as? String, "repo-A")
+        XCTAssertEqual(dict?["repo_id"] as? String, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
     }
 
 
     func testWriteOwn_bestEffortMatchingReadback_succeeds() async throws {
         let (client, store) = await makeStore()
         await client.setAtomicCreateMode(.bestEffort)
-        try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 7_000)
+        try await store.writeOwnClaim(repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", writerID: selfWriter, createdAtMs: 7_000)
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         let snapshot = await client.snapshotFiles()
         let bytes = try XCTUnwrap(snapshot[path])
         let dict = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
-        XCTAssertEqual(dict?["repo_id"] as? String, "repo-A")
+        XCTAssertEqual(dict?["repo_id"] as? String, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
     }
 
     func testWriteOwn_bestEffortDrift_throws() async throws {
@@ -377,14 +377,14 @@ final class IdentityClaimStoreTests: XCTestCase {
         // Stage a hijack: atomicCreate stores these bytes (not ours) and reports .bestEffortRetry.
         let hijack: [String: Any] = [
             "v": 1,
-            "repo_id": "hijacked-repo",
+            "repo_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
             "created_at_ms": 9_999,
             "writer_id": selfWriter
         ]
         let hijackBytes = try JSONSerialization.data(withJSONObject: hijack)
         await client.stageBestEffortRace(at: path, with: hijackBytes)
         do {
-            try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 7_000)
+            try await store.writeOwnClaim(repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", writerID: selfWriter, createdAtMs: 7_000)
             XCTFail("expected post-write drift to throw")
         } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
             XCTAssertEqual(error.domain, "RepoBootstrap")
@@ -399,7 +399,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let incomplete = try JSONSerialization.data(withJSONObject: ["v": 1])
         await client.stageBestEffortRace(at: path, with: incomplete)
         do {
-            try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 7_000)
+            try await store.writeOwnClaim(repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", writerID: selfWriter, createdAtMs: 7_000)
             XCTFail("expected unparseable post-write to throw")
         } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
             XCTAssertEqual(error.domain, "RepoBootstrap")
@@ -417,7 +417,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         await client.stageBestEffortRace(at: path, with: Data("not-json".utf8))
         do {
-            try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 7_000)
+            try await store.writeOwnClaim(repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", writerID: selfWriter, createdAtMs: 7_000)
             XCTFail("expected non-JSON post-write to throw")
         } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
             XCTAssertEqual(error.domain, "RepoBootstrap")
@@ -434,7 +434,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         let matching: [String: Any] = [
             "v": 1,
-            "repo_id": "repo-A",
+            "repo_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
             "created_at_ms": 7_000,
             "writer_id": selfWriter
         ]
@@ -443,7 +443,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let store = IdentityClaimStore(client: client, basePath: basePath)
 
         // createdAtMs ignored by .alreadyExists branch; writer + repoID must match.
-        try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 7_000)
+        try await store.writeOwnClaim(repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", writerID: selfWriter, createdAtMs: 7_000)
         let stillThere = await inner.hasFile(path)
         XCTAssertTrue(stillThere)
     }
@@ -454,7 +454,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
         let drifted: [String: Any] = [
             "v": 1,
-            "repo_id": "repo-A",
+            "repo_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
             "created_at_ms": 7_000,
             "writer_id": otherWriter
         ]
@@ -463,7 +463,7 @@ final class IdentityClaimStoreTests: XCTestCase {
         let store = IdentityClaimStore(client: client, basePath: basePath)
 
         do {
-            try await store.writeOwnClaim(repoID: "repo-A", writerID: selfWriter, createdAtMs: 7_000)
+            try await store.writeOwnClaim(repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", writerID: selfWriter, createdAtMs: 7_000)
             XCTFail("expected drift throw")
         } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
             XCTAssertEqual(error.domain, "RepoBootstrap")
@@ -485,18 +485,18 @@ final class IdentityClaimStoreTests: XCTestCase {
 
     func testStabilize_peerWithEarlierTimestamp_returnsPeerID() async throws {
         let (client, store) = await makeStore()
-        await injectValidClaim(client, writerID: otherWriter, repoID: "peer-repo", createdAtMs: 1)
+        await injectValidClaim(client, writerID: otherWriter, repoID: "11111111-1111-1111-1111-111111111111", createdAtMs: 1)
         let result = try await store.stabilizeFreshElection(
             initial: "fallback",
             maxRounds: 6,
             interval: .milliseconds(20)
         )
-        XCTAssertEqual(result, "peer-repo")
+        XCTAssertEqual(result, "11111111-1111-1111-1111-111111111111")
     }
 
     func testStabilize_transientListErrorMidWindow_clearsStableThenReturns() async throws {
         let (client, store) = await makeStore()
-        await injectValidClaim(client, writerID: otherWriter, repoID: "peer-repo", createdAtMs: 1)
+        await injectValidClaim(client, writerID: otherWriter, repoID: "11111111-1111-1111-1111-111111111111", createdAtMs: 1)
         // One-shot list error must reset stable-read counter without aborting the function.
         await client.injectListError(.transport, for: RepoLayout.identityDirectoryPath(base: basePath))
         let result = try await store.stabilizeFreshElection(
@@ -504,7 +504,7 @@ final class IdentityClaimStoreTests: XCTestCase {
             maxRounds: 6,
             interval: .milliseconds(20)
         )
-        XCTAssertEqual(result, "peer-repo", "transient error mid-window must not abort")
+        XCTAssertEqual(result, "11111111-1111-1111-1111-111111111111", "transient error mid-window must not abort")
     }
 
 

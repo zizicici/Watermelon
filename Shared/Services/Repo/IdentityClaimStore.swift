@@ -176,9 +176,10 @@ nonisolated struct IdentityClaimStore: Sendable {
 
     func writeOwnClaim(repoID: String, writerID: String, createdAtMs: Int64) async throws {
         do {
+            let canonicalRepoID = try Self.canonicalRepoID(repoID)
             let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
             if try await metadataFileIfPresent(path: claimPath, description: "identity claim", code: 15) != nil {
-                switch try await classifyExistingClaim(claimPath: claimPath, writerID: writerID, suggestedRepoID: repoID) {
+                switch try await classifyExistingClaim(claimPath: claimPath, writerID: writerID, suggestedRepoID: canonicalRepoID) {
                 case .ours:
                     return
                 case .zeroByte, .staleRepoID, .corrupt:
@@ -186,7 +187,7 @@ nonisolated struct IdentityClaimStore: Sendable {
                 }
             }
             let temp = try makeTempJSON(
-                IdentityClaimWire(repoID: repoID, createdAtMs: createdAtMs, writerID: writerID).encode(),
+                IdentityClaimWire(repoID: canonicalRepoID, createdAtMs: createdAtMs, writerID: writerID).encode(),
                 prefix: "repo-identity-claim"
             )
             defer { try? FileManager.default.removeItem(at: temp) }
@@ -199,7 +200,7 @@ nonisolated struct IdentityClaimStore: Sendable {
                     )
                     try await Self.verifyOwnClaim(
                         client: client,
-                        repoID: repoID,
+                        repoID: canonicalRepoID,
                         writerID: writerID,
                         createdAtMs: createdAtMs,
                         claimPath: claimPath,
@@ -211,6 +212,18 @@ nonisolated struct IdentityClaimStore: Sendable {
             }
         } catch {
             throw RemoteWriteClassifier.normalizedCancellation(error)
+        }
+    }
+
+    private static func canonicalRepoID(_ raw: String) throws -> String {
+        do {
+            return try RepoWireValidator.validateRepoID(raw, field: "repoID")
+        } catch {
+            throw RepoBootstrap.BootstrapError.ioFailure(NSError(
+                domain: "RepoBootstrap",
+                code: 19,
+                userInfo: [NSLocalizedDescriptionKey: "identity claim repoID is malformed"]
+            ))
         }
     }
 

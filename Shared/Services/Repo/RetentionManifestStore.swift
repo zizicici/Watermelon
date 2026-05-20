@@ -30,7 +30,7 @@ enum RetentionManifestStore {
               month.text == parts[0] else { return nil }
         guard Self.isCanonicalHex(parts[1], count: 16),
               let lamport = UInt64(parts[1], radix: 16),
-              lamport < LamportClock.maxAdoptableValue else { return nil }
+              lamport > 0, lamport < LamportClock.maxAdoptableValue else { return nil }
         guard RepoLayout.isValidWriterID(parts[2]) else { return nil }
         guard Self.isCanonicalHex(parts[3], count: 6) else { return nil }
         return RetentionManifestRef(month: month, lamport: lamport, writerID: parts[2], runIDPrefix: parts[3])

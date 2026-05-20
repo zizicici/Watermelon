@@ -10,11 +10,8 @@ actor LamportClock {
     /// Signed persistence ceiling; values at or above it are corrupt peer metadata.
     static let maxAdvanceableValue: UInt64 = UInt64.max >> 1
 
-    /// Tick emission keeps one more slot than adoption so a max-adopted peer clock can still advance.
-    static let maxObservableValue: UInt64 = maxAdvanceableValue - 1
-
-    /// Adoption is stricter than emission so accepting a peer clock cannot consume the last tick.
-    static let maxAdoptableValue: UInt64 = maxObservableValue - 1
+    /// Emission and adoption ceiling; values at or above it are rejected by readers.
+    static let maxAdoptableValue: UInt64 = maxAdvanceableValue - 2
 
     init(initial: UInt64 = 0) {
         self.current = initial
@@ -57,10 +54,9 @@ actor LamportClock {
 
     private func ensureHeadroom(current: UInt64, count: UInt64) throws {
         guard count > 0 else { return }
-        // Emission uses the looser ceiling so an adopted boundary value still leaves one local tick.
-        if count >= LamportClock.maxObservableValue
-            || current >= LamportClock.maxObservableValue
-            || current >= LamportClock.maxObservableValue - count {
+        if count >= LamportClock.maxAdoptableValue
+            || current >= LamportClock.maxAdoptableValue
+            || current >= LamportClock.maxAdoptableValue - count {
             throw LamportClockError.advanceExhausted(current: current, requested: Int(min(count, UInt64(Int.max))))
         }
     }
@@ -82,8 +78,8 @@ actor PersistedLamportClock {
         self.database = database
         self.profileID = profileID
         self.repoID = repoID
-        // Reset persisted poison above the emit ceiling; a legitimate boundary emit must survive restart.
-        if initial >= LamportClock.maxObservableValue {
+        // Reset persisted poison at/above the emit ceiling.
+        if initial >= LamportClock.maxAdoptableValue {
             self.current = 0
             self.dbPoisonedAtInit = true
         } else {
@@ -120,7 +116,7 @@ actor PersistedLamportClock {
             guard let raw = try Self.readPersistedClock(db: db, profileID: profileID, repoID: repoID) else {
                 throw PersistedLamportClockError.missingRepoState(profileID: profileID, repoID: repoID)
             }
-            guard raw >= LamportClock.maxObservableValue else { return }
+            guard raw >= LamportClock.maxAdoptableValue else { return }
             let signed = Int64(bitPattern: current)
             try db.execute(
                 sql: """
@@ -144,7 +140,7 @@ actor PersistedLamportClock {
             }
             // Treat persisted values above the emit ceiling as poison so allocation can resume.
             let dbCurrent: UInt64
-            if dbCurrentRaw >= LamportClock.maxObservableValue {
+            if dbCurrentRaw >= LamportClock.maxAdoptableValue {
                 lamportLog.warning("reset poisoned persisted lastClock=\(dbCurrentRaw, privacy: .public) to 0 for repo=\(repoID, privacy: .public); next observe restores real high-water")
                 dbCurrent = 0
             } else {
@@ -153,9 +149,9 @@ actor PersistedLamportClock {
             let effective = max(current, dbCurrent)
             let countU = UInt64(count)
             // Throw on exhausted headroom; corrupt peer clocks must not crash every future writer.
-            guard countU < LamportClock.maxObservableValue,
-                  effective < LamportClock.maxObservableValue,
-                  effective < LamportClock.maxObservableValue - countU else {
+            guard countU < LamportClock.maxAdoptableValue,
+                  effective < LamportClock.maxAdoptableValue,
+                  effective < LamportClock.maxAdoptableValue - countU else {
                 throw PersistedLamportClockError.advanceExhausted(current: effective, requested: count)
             }
             let (low, _) = effective.addingReportingOverflow(1)
@@ -185,7 +181,7 @@ actor PersistedLamportClock {
             }
             // Force-overwrite poisoned rows because conditional advance cannot lower an exact-ceiling value.
             let before: UInt64
-            if beforeRaw >= LamportClock.maxObservableValue {
+            if beforeRaw >= LamportClock.maxAdoptableValue {
                 before = value
                 try db.execute(
                     sql: """

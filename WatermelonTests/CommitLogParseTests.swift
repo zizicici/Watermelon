@@ -5,7 +5,7 @@ final class CommitLogParseTests: XCTestCase {
     private func sampleHeader() -> CommitHeader {
         CommitHeader(
             version: 1,
-            repoID: "r",
+            repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             writerID: "w",
             seq: 1,
             runID: "run",
@@ -69,6 +69,27 @@ final class CommitLogParseTests: XCTestCase {
             switch err {
             case CommitLogReader.ReadError.integrityMismatch: break
             default: XCTFail("expected integrity mismatch, got \(err)")
+            }
+        }
+    }
+
+    func testHeaderSeqZeroIsRejected() throws {
+        var header = sampleHeader()
+        header = CommitHeader(
+            version: header.version,
+            repoID: header.repoID,
+            writerID: header.writerID,
+            seq: 0,
+            runID: header.runID,
+            scope: header.scope,
+            clockMin: header.clockMin,
+            clockMax: header.clockMax,
+            bodyKind: header.bodyKind
+        )
+        let line = try CommitOpMapper.encodeHeaderLine(header)
+        XCTAssertThrowsError(try CommitOpMapper.decodeLine(line)) { err in
+            if !(err is CommitWireError) {
+                XCTFail("expected CommitWireError, got \(err)")
             }
         }
     }

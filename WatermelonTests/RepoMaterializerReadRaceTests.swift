@@ -4,7 +4,7 @@ import XCTest
 
 final class RepoMaterializerReadRaceTests: XCTestCase {
     private let basePath = "/repo"
-    private let repoID = "repo-race-id"
+    private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let writerA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     private let writerB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     private let runID = "race-run"
