@@ -119,10 +119,11 @@ actor LivenessTracker {
                 respectTaskCancellation: true
             )
             stagingCreated = true
-        } catch is CancellationError {
-            try? await client.delete(path: stagingPath)
-            return
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) {
+                try? await client.delete(path: stagingPath)
+                return
+            }
             lastFailure = error
             try? await client.delete(path: stagingPath)
             livenessLog.warning("[Liveness] staging write failed for \(remotePath, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -139,19 +140,21 @@ actor LivenessTracker {
                     try? await client.delete(path: stagingPath)
                     return
                 }
-            } catch is CancellationError {
-                try? await client.delete(path: stagingPath)
-                return
             } catch {
+                if RemoteWriteClassifier.isCancellation(error) {
+                    try? await client.delete(path: stagingPath)
+                    return
+                }
                 livenessLog.warning("[Liveness] heartbeat probe failed before staging move for \(remotePath, privacy: .public), continuing move: \(error.localizedDescription, privacy: .public)")
             }
             do {
                 try await client.move(from: stagingPath, to: remotePath)
                 return
-            } catch is CancellationError {
-                try? await client.delete(path: stagingPath)
-                return
             } catch {
+                if RemoteWriteClassifier.isCancellation(error) {
+                    try? await client.delete(path: stagingPath)
+                    return
+                }
                 lastFailure = error
             }
             if Task.isCancelled {
@@ -162,10 +165,11 @@ actor LivenessTracker {
             do {
                 let stagingEntry = try await client.metadata(path: stagingPath)
                 stagingStillExists = stagingEntry?.isDirectory == false
-            } catch is CancellationError {
-                try? await client.delete(path: stagingPath)
-                return
             } catch {
+                if RemoteWriteClassifier.isCancellation(error) {
+                    try? await client.delete(path: stagingPath)
+                    return
+                }
                 stagingStillExists = isStorageNotFoundError(error) ? false : true
             }
             if !stagingStillExists, let lastFailure {
@@ -176,10 +180,11 @@ actor LivenessTracker {
                     try? await client.delete(path: stagingPath)
                     return
                 }
-            } catch is CancellationError {
-                try? await client.delete(path: stagingPath)
-                return
             } catch {
+                if RemoteWriteClassifier.isCancellation(error) {
+                    try? await client.delete(path: stagingPath)
+                    return
+                }
                 livenessLog.warning("[Liveness] heartbeat probe failed after failed move for \(remotePath, privacy: .public), continuing exclusive fallback: \(error.localizedDescription, privacy: .public)")
             }
         }
@@ -201,10 +206,11 @@ actor LivenessTracker {
                 try? await client.delete(path: stagingPath)
                 return
             }
-        } catch is CancellationError {
-            try? await client.delete(path: stagingPath)
-            return
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) {
+                try? await client.delete(path: stagingPath)
+                return
+            }
             livenessLog.warning("[Liveness] heartbeat probe failed before fallback atomic create for \(remotePath, privacy: .public), continuing exclusive create: \(error.localizedDescription, privacy: .public)")
         }
 
@@ -220,10 +226,11 @@ actor LivenessTracker {
                     try? await client.delete(path: stagingPath)
                     return
                 }
-            } catch is CancellationError {
-                try? await client.delete(path: stagingPath)
-                return
             } catch {
+                if RemoteWriteClassifier.isCancellation(error) {
+                    try? await client.delete(path: stagingPath)
+                    return
+                }
                 livenessLog.warning("[Liveness] heartbeat probe failed before refreshed fallback atomic create for \(remotePath, privacy: .public), continuing exclusive create: \(error.localizedDescription, privacy: .public)")
             }
             let createResult = try await client.atomicCreate(localURL: temp, remotePath: remotePath, respectTaskCancellation: true)
@@ -238,10 +245,11 @@ actor LivenessTracker {
                         try? await client.delete(path: stagingPath)
                         return
                     }
-                } catch is CancellationError {
-                    try? await client.delete(path: stagingPath)
-                    return
                 } catch {
+                    if RemoteWriteClassifier.isCancellation(error) {
+                        try? await client.delete(path: stagingPath)
+                        return
+                    }
                     livenessLog.warning("[Liveness] heartbeat probe failed before overwrite renewal for \(remotePath, privacy: .public), continuing renewal: \(error.localizedDescription, privacy: .public)")
                 }
                 do { try writeHeartbeat(timestampMs: renewalTimestampMs) } catch {
@@ -252,10 +260,11 @@ actor LivenessTracker {
             }
             try? await client.delete(path: stagingPath)
             return
-        } catch is CancellationError {
-            try? await client.delete(path: stagingPath)
-            return
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) {
+                try? await client.delete(path: stagingPath)
+                return
+            }
             lastFailure = error
         }
         try? await client.delete(path: stagingPath)
@@ -421,9 +430,10 @@ actor LivenessTracker {
                 try await client.download(remotePath: path, localURL: temp)
                 downloaded = true
                 break
-            } catch is CancellationError {
-                throw CancellationError()
             } catch {
+                if RemoteWriteClassifier.isCancellation(error) {
+                    throw CancellationError()
+                }
                 if isStorageNotFoundError(error) {
                     heartbeatVanished = true
                     break

@@ -134,11 +134,13 @@ actor V1MigrationService {
                     try await clock.observe(output.state.observedClock)
                     existingV2Output = output
                 }
-                let existingFingerprints: Set<Data>
-                if let existingAssets = existingV2Output?.state.months[monthKey]?.assets {
-                    existingFingerprints = Set(existingAssets.keys)
-                } else {
-                    existingFingerprints = []
+                let existingState = existingV2Output?.state.months[monthKey]
+                var existingFingerprints: Set<Data> = []
+                if let existingAssets = existingState?.assets {
+                    existingFingerprints.formUnion(existingAssets.keys)
+                }
+                if let deleted = existingState?.deletedAssetFingerprints {
+                    existingFingerprints.formUnion(deleted)
                 }
                 if !existingFingerprints.isEmpty {
                     migrableAssets.removeAll { existingFingerprints.contains($0.asset.assetFingerprint) }
@@ -227,7 +229,7 @@ actor V1MigrationService {
             }
 
             let finalSeq = migrationHeader.seq
-            var state = RepoMonthState.empty
+            var state = existingV2Output?.state.months[monthKey] ?? .empty
             for op in ops {
                 guard case .addAsset(let body) = op.body else { continue }
                 let stamp = OpStamp(writerID: writerID, seq: finalSeq, clock: op.clock)
@@ -266,7 +268,7 @@ actor V1MigrationService {
                     )
                 }
             }
-            var covered = CoveredRanges()
+            var covered = existingV2Output?.coveredByMonth[monthKey] ?? .empty
             covered.add(writerID: writerID, range: ClosedSeqRange(low: finalSeq, high: finalSeq))
             let snapshotHeader = SnapshotHeader(
                 version: SnapshotHeader.currentVersion,

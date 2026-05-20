@@ -23,13 +23,14 @@ actor SnapshotReader {
         do {
             entries = try await client.list(path: dir)
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             // Not-found error codes vary by backend; metadata probe gives a backend-agnostic
             // absent/transient distinction. If the probe also fails, propagate original.
             do {
                 let metadata = try await client.metadata(path: dir)
                 if metadata == nil { return [] }
             } catch {
-                // metadata also failed → can't confirm absence → propagate original list error
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             }
             throw error
         }

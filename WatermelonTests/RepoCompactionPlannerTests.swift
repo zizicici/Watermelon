@@ -408,6 +408,28 @@ final class RepoCompactionPlannerTests: XCTestCase {
         ])
     }
 
+    func testListCancellationPropagates() async throws {
+        let commitsDir = RepoLayout.commitsDirectoryPath(base: basePath)
+        let snapshotsDir = RepoLayout.snapshotsDirectoryPath(base: basePath)
+        let output = materializedOutput(finalCovered: .empty, acceptedSnapshot: nil)
+
+        let snapshotClient = try await makeClient()
+        await snapshotClient.injectListWrappedURLCancellation(for: snapshotsDir)
+        do {
+            _ = try await RepoCompactionPlanner(client: snapshotClient, basePath: basePath)
+                .makeReport(expectedRepoID: repoID, preMaterialized: output)
+            XCTFail("expected cancellation from snapshots list")
+        } catch is CancellationError {}
+
+        let commitClient = try await makeClient()
+        await commitClient.injectListWrappedURLCancellation(for: commitsDir)
+        do {
+            _ = try await RepoCompactionPlanner(client: commitClient, basePath: basePath)
+                .makeReport(expectedRepoID: repoID, preMaterialized: output)
+            XCTFail("expected cancellation from commits list")
+        } catch is CancellationError {}
+    }
+
     private let basePath = "/repo"
     private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let writerA = "11111111-1111-1111-1111-111111111111"

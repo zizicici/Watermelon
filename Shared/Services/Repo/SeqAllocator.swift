@@ -23,8 +23,8 @@ actor SeqAllocator {
 
     func observeRemoteMax(_ remoteMax: UInt64) throws {
         let repoID = self.repoID
-        guard remoteMax <= RepoStateAuthority.maxPersistableSeq else {
-            seqAllocatorLog.warning("ignore remote seq above persistable ceiling repo=\(repoID, privacy: .public) seq=\(remoteMax, privacy: .public)")
+        guard remoteMax < RepoStateAuthority.maxPersistableSeq else {
+            seqAllocatorLog.warning("ignore remote seq at or above persistable ceiling repo=\(repoID, privacy: .public) seq=\(remoteMax, privacy: .public)")
             return
         }
         guard remoteMax > current else { return }
@@ -67,8 +67,8 @@ actor SeqAllocator {
             guard let before = try Self.readPersistedSeq(db: db, profileID: profileID, repoID: repoID) else {
                 throw SeqAllocatorError.missingRepoState(profileID: profileID, repoID: repoID)
             }
-            guard value <= RepoStateAuthority.maxPersistableSeq else {
-                seqAllocatorLog.warning("ignore persist seq above persistable ceiling repo=\(repoID, privacy: .public) seq=\(value, privacy: .public)")
+            guard value < RepoStateAuthority.maxPersistableSeq else {
+                seqAllocatorLog.warning("ignore persist seq at or above persistable ceiling repo=\(repoID, privacy: .public) seq=\(value, privacy: .public)")
                 return before
             }
             guard value > before else {

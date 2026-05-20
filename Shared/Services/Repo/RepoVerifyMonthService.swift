@@ -126,6 +126,7 @@ actor RepoVerifyMonthService {
         do {
             entries = try await client.list(path: monthAbsolutePath)
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             if isStorageNotFoundError(error) {
                 // A transient 404 on a month dir that the manifest expects to be populated
                 // would otherwise tombstone healthy bytes. Refuse to classify as missing.
@@ -197,9 +198,8 @@ actor RepoVerifyMonthService {
                         case .inconclusive:
                             inconclusiveReason = .probeFailure
                         }
-                    } catch is CancellationError {
-                        throw CancellationError()
                     } catch {
+                        if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                         if isStorageNotFoundError(error) { continue }
                         throw error
                     }

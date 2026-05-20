@@ -191,13 +191,32 @@ final class RepoStateRecordTests: XCTestCase {
         XCTAssertEqual(reloaded?.lastSeq, Int64.max)
     }
 
-    func testSeqAllocatorThrowsWhenNextSeqExceedsPersistableCeiling() async throws {
+    func testSeqAllocatorIgnoresRemoteSeqAtPersistableCeiling() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
 
         let allocator = SeqAllocator(database: databaseManager, profileID: profileID, repoID: "r", initial: 0)
         try await allocator.observeRemoteMax(RepoStateAuthority.maxPersistableSeq)
+
+        let ignoredValue = await allocator.value()
+        XCTAssertEqual(ignoredValue, 0)
+        let reloaded = try await identity.loadRepoState(profileID: profileID, repoID: "r")
+        XCTAssertEqual(reloaded?.lastSeq, 0, "ceiling remote seq must not be persisted")
+
+        let next = try await allocator.allocate()
+        XCTAssertEqual(next, 1, "ignored ceiling must not block allocation")
+    }
+
+    func testSeqAllocatorThrowsWhenNextSeqExceedsPersistableCeiling() async throws {
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "r", writerID: "w")
+
+        let allocator = SeqAllocator(database: databaseManager, profileID: profileID, repoID: "r", initial: 0)
+        try await allocator.observeRemoteMax(RepoStateAuthority.maxPersistableSeq - 1)
+        let ceiling = try await allocator.allocate()
+        XCTAssertEqual(ceiling, RepoStateAuthority.maxPersistableSeq)
 
         do {
             _ = try await allocator.allocate()

@@ -834,6 +834,36 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         XCTAssertEqual(Set(snapshotBeforeFailure.resources), Set(snapshotAfterFailure.resources))
     }
 
+    func testPhysicalPresenceOverlayProbe_monthListURLCancellationPropagates() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+        try await client.createDirectory(path: "\(basePath)/\(monthRel)")
+        let bytes = Data("cancel-overlay-list".utf8)
+        let hash = Data(SHA256.hash(data: bytes))
+        let resource = RemoteManifestResource(
+            year: monthA.year, month: monthA.month,
+            physicalRemotePath: "\(monthRel)/x.jpg",
+            contentHash: hash, fileSize: Int64(bytes.count),
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 0
+        )
+        await client.injectListWrappedURLCancellation(for: "\(basePath)/\(monthRel)")
+        do {
+            _ = try await RemoteIndexPhysicalPresenceOverlayProbe().probe(
+                snapshot: RemoteLibrarySnapshot(resources: [resource], assets: []),
+                client: client,
+                basePath: basePath,
+                fallback: [:],
+                budget: nil,
+                staleFallbackPolicy: .preserveFallback,
+                concurrencyCap: 4
+            )
+            XCTFail("expected cancellation from month list")
+        } catch is CancellationError {}
+    }
+
     // MARK: - localRepoID route guard
 
     func testSyncIndex_localRepoID_freshRemote_throwsDamagedV2Repo() async throws {

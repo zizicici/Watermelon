@@ -78,9 +78,8 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                     do {
                         let probe = try await probeMonthForMissing(client: client, basePath: basePath, month: month, resources: resources, budget: budget)
                         return (probe.month, .success(probe))
-                    } catch is CancellationError {
-                        throw CancellationError()
                     } catch {
+                        if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                         return (month, .failure(error))
                     }
                 }
@@ -135,9 +134,8 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                         do {
                             let probe = try await probeMonthForMissing(client: client, basePath: basePath, month: nextMonth, resources: nextResources, budget: budget)
                             return (probe.month, .success(probe))
-                        } catch is CancellationError {
-                            throw CancellationError()
                         } catch {
+                            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                             return (nextMonth, .failure(error))
                         }
                     }
@@ -238,9 +236,8 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                         case .inconclusive:
                             inconclusiveReason = .probeFailure
                         }
-                    } catch is CancellationError {
-                        throw CancellationError()
                     } catch {
+                        if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                         if isStorageNotFoundError(error) { continue }
                         throw error
                     }

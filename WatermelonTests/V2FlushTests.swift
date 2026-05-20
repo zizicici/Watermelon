@@ -1435,6 +1435,56 @@ final class V2FlushTests: XCTestCase {
         )
     }
 
+    func testLoadOrCreate_createDirectoryURLCancel_propagatesAsCancellationError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+
+        let monthRel = String(format: "%04d/%02d", year, month)
+        let monthAbsPath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRel)
+        await client.injectCreateDirectoryURLErrorCancelled(for: monthAbsPath)
+
+        do {
+            _ = try await V2MonthSession.loadOrCreate(
+                client: client,
+                basePath: basePath,
+                year: year,
+                month: month,
+                v2Services: v2
+            )
+            XCTFail("expected CancellationError from URL-shaped createDirectory cancellation")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+    }
+
+    func testLoadOrCreate_listURLCancel_propagatesAsCancellationError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+
+        let monthRel = String(format: "%04d/%02d", year, month)
+        let monthAbsPath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: monthRel)
+        await client.injectListURLErrorCancelled(for: monthAbsPath)
+
+        do {
+            _ = try await V2MonthSession.loadOrCreate(
+                client: client,
+                basePath: basePath,
+                year: year,
+                month: month,
+                v2Services: v2
+            )
+            XCTFail("expected CancellationError from URL-shaped list cancellation")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+    }
+
     private func insertProfile() throws -> Int64 {
         try TestFixtures.insertServerProfile(
             in: databaseManager, writerID: writerID, basePath: basePath, storageType: .webdav

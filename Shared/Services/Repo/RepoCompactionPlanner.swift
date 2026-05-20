@@ -38,10 +38,13 @@ struct RepoCompactionPlanner: Sendable {
         do {
             return try await client.list(path: path).filter { !$0.isDirectory && $0.name.hasSuffix(".jsonl") }
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             do {
                 let metadata = try await client.metadata(path: path)
                 if metadata == nil { return [] }
-            } catch {}
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            }
             throw error
         }
     }

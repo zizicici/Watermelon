@@ -295,6 +295,62 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         XCTAssertEqual(serialOnly.maxConcurrentOperations(), 1)
     }
 
+    func testMaterializerAcceptedCeilingCommitDoesNotMaskValidLowerSeq() async throws {
+        let client = try await makeConnectedClient()
+        try await writeCommit(client: client, writerID: writerA, seq: 5, clock: 1, fingerprintByte: 0x11)
+        try await writeCommit(client: client, writerID: writerA, seq: RepoStateAuthority.maxPersistableSeq, clock: 2, fingerprintByte: 0x12)
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        XCTAssertEqual(output.observedSeqByWriter[writerA], 5,
+                       "accepted ceiling commit must not mask the valid lower same-writer high-water")
+    }
+
+    func testMaterializerCeilingSeqFilenameDoesNotMaskValidLowerSeq() async throws {
+        let client = try await makeConnectedClient()
+        try await writeCommit(client: client, writerID: writerA, seq: 5, clock: 1, fingerprintByte: 0x11)
+
+        let ceilingSeq = RepoStateAuthority.maxPersistableSeq
+        let ceilingFilename = RepoLayout.commitFileName(month: month, writerID: writerA, seq: ceilingSeq)
+        let ceilingPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: ceilingSeq)
+        await client.injectFile(path: ceilingPath, data: Data("garbage".utf8))
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        XCTAssertEqual(output.observedSeqByWriter[writerA], 5,
+                       "ceiling seq filename must not mask the valid lower seq from the accepted commit")
+    }
+
+    func testMaterializerCoveredRangeCeilingDoesNotMaskSubCeilingHighWater() async throws {
+        let client = try await makeConnectedClient()
+        let ceiling = RepoStateAuthority.maxPersistableSeq
+
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 5))
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: ceiling, high: ceiling))
+
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: covered
+            ),
+            assets: [],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 1,
+            runID: "covered-ceiling-test",
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        XCTAssertEqual(output.observedSeqByWriter[writerA], 5,
+                       "covered ceiling range must not mask the valid sub-ceiling high-water when commit files are absent")
+    }
+
     func testSnapshotBaselinePlusUncoveredCommitsMatchesGenesisReplay() async throws {
         let snapshotClient = try await makeConnectedClient()
         let genesisClient = try await makeConnectedClient()

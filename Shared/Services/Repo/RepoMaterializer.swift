@@ -71,17 +71,27 @@ actor RepoMaterializer {
     }
 
     private func validateRetry(_ output: MaterializeOutput, recovers race: InternalMetadataReadRace) throws {
+        let ceiling = RepoStateAuthority.maxPersistableSeq
         switch race {
         case .requiredCommitVanished(let filename, let month, let writerID, let seq):
             let covered = output.coveredByMonth[month] ?? .empty
-            guard covered.contains(writerID: writerID, seq: seq),
-                  (output.observedSeqByWriter[writerID] ?? 0) >= seq else {
+            guard covered.contains(writerID: writerID, seq: seq) else {
                 throw MetadataReadRaceError.requiredCommitVanished(
                     filename: filename,
                     month: month,
                     writerID: writerID,
                     seq: seq
                 )
+            }
+            if seq < ceiling {
+                guard (output.observedSeqByWriter[writerID] ?? 0) >= seq else {
+                    throw MetadataReadRaceError.requiredCommitVanished(
+                        filename: filename,
+                        month: month,
+                        writerID: writerID,
+                        seq: seq
+                    )
+                }
             }
         case .snapshotVanished(let filename, let month, let lamport, let writerID, let runIDPrefix):
             // Unit 5 invariant: unreadable accepted snapshot candidates cannot downgrade.
@@ -180,10 +190,18 @@ actor RepoMaterializer {
         for month in filenameRejectedMonths where snapshotTrust.acceptedSnapshotLamportByMonth[month] == nil {
             corruptedSnapshotMonths.insert(month)
         }
-        var observedSeqByWriter = commitTrust.observedSeqByWriter
+        let ceiling = RepoStateAuthority.maxPersistableSeq
+        var observedSeqByWriter: [String: UInt64] = [:]
+        for (writer, seq) in commitTrust.observedSeqByWriter where seq < ceiling {
+            observedSeqByWriter[writer] = seq
+        }
         for (_, covered) in commitTrust.coveredByMonth {
             for (writer, ranges) in covered.rangesByWriter {
-                let high = ranges.map(\.high).max() ?? 0
+                let high = ranges.compactMap { range -> UInt64? in
+                    guard range.low < ceiling else { return nil }
+                    return min(range.high, ceiling &- 1)
+                }.max() ?? 0
+                guard high > 0 else { continue }
                 let prior = observedSeqByWriter[writer] ?? 0
                 if high > prior {
                     observedSeqByWriter[writer] = high
@@ -191,7 +209,7 @@ actor RepoMaterializer {
             }
         }
         for reference in commitReferences {
-            guard reference.seq < UInt64.max else { continue }
+            guard reference.seq < ceiling else { continue }
             let prior = observedSeqByWriter[reference.writerID] ?? 0
             if reference.seq > prior {
                 observedSeqByWriter[reference.writerID] = reference.seq

@@ -23,13 +23,14 @@ actor CommitLogReader {
         do {
             entries = try await client.list(path: dir)
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             // Not-found error codes vary by backend; metadata probe is backend-agnostic.
             // If the probe also fails, propagate original (don't silently return empty).
             do {
                 let metadata = try await client.metadata(path: dir)
                 if metadata == nil { return [] }
             } catch {
-                // metadata also failed → propagate original list error
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             }
             throw error
         }

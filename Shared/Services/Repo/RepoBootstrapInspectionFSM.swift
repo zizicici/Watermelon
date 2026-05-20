@@ -9,7 +9,13 @@ struct RepoBootstrapInspectionFSM: Sendable {
     ) async throws -> RemoteFormatInspection {
         let basePath = RemotePathBuilder.normalizePath(profile.basePath)
         let machine = BootstrapInspectionMachine()
-        let entries = try await client.list(path: basePath)
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await client.list(path: basePath)
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            throw error
+        }
         let markerExists = entries.contains { entry in
             entry.isDirectory && entry.name == RepoLayout.watermelonDirectory
         }
@@ -255,6 +261,7 @@ struct RepoBootstrapInspectionFSM: Sendable {
                 let entries = try await client.list(path: path)
                 if !entries.isEmpty { return true }
             } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 if isStorageNotFoundError(error) { continue }
                 throw error
             }
@@ -272,10 +279,22 @@ struct RepoBootstrapInspectionFSM: Sendable {
             .sorted(by: { $0.name > $1.name })
         for yearEntry in yearEntries {
             let yearPath = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: yearEntry.name)
-            let monthEntries = try await client.list(path: yearPath)
+            let monthEntries: [RemoteStorageEntry]
+            do {
+                monthEntries = try await client.list(path: yearPath)
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                throw error
+            }
             for monthEntry in monthEntries where monthEntry.isDirectory && monthEntry.name.range(of: "^[0-9]{2}$", options: .regularExpression) != nil {
                 let monthPath = RemotePathBuilder.absolutePath(basePath: yearPath, remoteRelativePath: monthEntry.name)
-                let monthContents = try await client.list(path: monthPath)
+                let monthContents: [RemoteStorageEntry]
+                do {
+                    monthContents = try await client.list(path: monthPath)
+                } catch {
+                    if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                    throw error
+                }
                 if monthContents.contains(where: { !$0.isDirectory && $0.name == MonthManifestStore.manifestFileName }) {
                     return true
                 }

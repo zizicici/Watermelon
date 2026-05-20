@@ -359,6 +359,69 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
         XCTAssertEqual(sources.suggested, repoID)
     }
 
+    func testCrossMonthObservedSeqDoesNotRecoverVanishedCommit() async throws {
+        let otherMonth = LibraryMonthKey(year: 2026, month: 2)
+        let client = try await makeClient()
+        let fp1 = TestFixtures.fingerprint(0x40)
+        try await writeAddCommit(client: client, seq: 1, fingerprint: fp1)
+
+        let fpOther = TestFixtures.fingerprint(0x41)
+        let otherWriter = CommitLogWriter(client: client, basePath: basePath)
+        let otherOp = CommitOp(opSeq: 0, clock: 10, body: .addAsset(CommitAddAssetBody(
+            assetFingerprint: fpOther,
+            creationDateMs: nil,
+            backedUpAtMs: 10,
+            resources: []
+        )))
+        _ = try await otherWriter.write(
+            header: TestFixtures.makeCommitHeader(
+                repoID: repoID, writerID: writerA, seq: 10, runID: runID, month: otherMonth
+            ),
+            ops: [otherOp],
+            month: otherMonth,
+            respectTaskCancellation: false
+        )
+
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        let race = ReadRaceClient(inner: client)
+        race.setDownloadHook(path: commitPath) { _ in
+            try await client.delete(path: commitPath)
+            throw Self.notFoundError()
+        }
+
+        do {
+            _ = try await RepoMaterializer(client: race, basePath: basePath).materialize(expectedRepoID: repoID)
+            XCTFail("expected requiredCommitVanished — cross-month observedSeq must not recover")
+        } catch RepoMaterializer.MetadataReadRaceError.requiredCommitVanished(let filename, let m, let w, let seq) {
+            XCTAssertEqual(seq, 1)
+            XCTAssertEqual(m, month)
+            XCTAssertEqual(w, writerA)
+        }
+    }
+
+    func testListCancellationPropagatesFromCommitAndSnapshotReaders() async throws {
+        let commitsDir = RepoLayout.commitsDirectoryPath(base: basePath)
+        let snapshotsDir = RepoLayout.snapshotsDirectoryPath(base: basePath)
+
+        let commitClient = try await makeClient()
+        await commitClient.injectListWrappedURLCancellation(for: commitsDir)
+        let commitReader = CommitLogReader(client: commitClient, basePath: basePath)
+        do {
+            _ = try await commitReader.listCommitFilenames()
+            XCTFail("expected cancellation from list error")
+        } catch is CancellationError {
+        }
+
+        let snapshotClient = try await makeClient()
+        await snapshotClient.injectListWrappedURLCancellation(for: snapshotsDir)
+        let snapshotReader = SnapshotReader(client: snapshotClient, basePath: basePath)
+        do {
+            _ = try await snapshotReader.listSnapshotFilenames()
+            XCTFail("expected cancellation from list error")
+        } catch is CancellationError {
+        }
+    }
+
     private func makeClient() async throws -> InMemoryRemoteStorageClient {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)

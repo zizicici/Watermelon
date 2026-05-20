@@ -160,6 +160,7 @@ final class V2MonthSession: BackupMonthStore {
         do {
             try await client.createDirectory(path: monthAbsolutePath)
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             stepLogger?(String.localizedStringWithFormat(
                 String(localized: "backup.manifest.diagnostic.createMonthDirFailed"),
                 monthRelativePath,
@@ -171,6 +172,7 @@ final class V2MonthSession: BackupMonthStore {
         do {
             entries = try await client.list(path: monthAbsolutePath)
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             stepLogger?(String.localizedStringWithFormat(
                 String(localized: "backup.manifest.diagnostic.listMonthDirFailed"),
                 monthRelativePath,

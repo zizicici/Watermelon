@@ -714,4 +714,42 @@ final class BootstrapStateMachineTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: marker)
         await client.injectFile(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID), data: data)
     }
+
+    func testInspect_basePathListURLCancellation_propagatesAsCancellationError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try? await client.connect()
+        let profile = TestFixtures.makeServerProfile(
+            id: 1, name: "Test", storageType: .webdav,
+            host: "host", port: 0, shareName: "", basePath: basePath, username: ""
+        )
+        await client.injectListURLErrorCancelled(for: basePath)
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("expected CancellationError from URL-shaped list cancellation")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+    }
+
+    func testInspect_basePathListWrappedURLCancellation_propagatesAsCancellationError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try? await client.connect()
+        let profile = TestFixtures.makeServerProfile(
+            id: 1, name: "Test", storageType: .webdav,
+            host: "host", port: 0, shareName: "", basePath: basePath, username: ""
+        )
+        await client.injectListWrappedURLCancellation(for: basePath)
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("expected CancellationError from wrapped URL-shaped list cancellation")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+    }
 }

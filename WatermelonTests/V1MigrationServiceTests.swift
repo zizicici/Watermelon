@@ -627,6 +627,96 @@ final class V1MigrationServiceTests: XCTestCase {
     }
 
 
+    func testPhase1_skipsTombstonedFingerprints_fromExistingV2State() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        let month = LibraryMonthKey(year: 2025, month: 6)
+
+        // V2 repo state: add an asset, then tombstone it.
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+
+        let tombstoneFP = TestFixtures.fingerprint(0xAB)
+        let contentHash = TestFixtures.fingerprint(0xCD)
+        let monthRel = String(format: "%04d/%02d", month.year, month.month)
+        let leaf = "IMG_tomb.HEIC"
+        let path = "\(monthRel)/\(leaf)"
+        let addBody = CommitAddAssetBody(
+            assetFingerprint: tombstoneFP,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resources: [
+                CommitResourceEntry(
+                    physicalRemotePath: path,
+                    logicalName: leaf,
+                    contentHash: contentHash,
+                    fileSize: 100,
+                    resourceType: ResourceTypeCode.photo,
+                    role: ResourceTypeCode.photo,
+                    slot: 0,
+                    crypto: nil
+                )
+            ]
+        )
+        let addHeader = TestFixtures.makeCommitHeader(
+            repoID: repoID, writerID: writerID, seq: 1, runID: "preexist",
+            month: month, clockMin: 10, clockMax: 10
+        )
+        _ = try await commitWriter.write(
+            header: addHeader,
+            ops: [CommitOp(opSeq: 0, clock: 10, body: .addAsset(addBody))],
+            month: month, respectTaskCancellation: false
+        )
+        await client.injectFile(path: "\(basePath)/\(path)", data: Data(repeating: 0, count: 100))
+
+        let tombHeader = TestFixtures.makeCommitHeader(
+            repoID: repoID, writerID: writerID, seq: 2, runID: "preexist",
+            month: month, clockMin: 20, clockMax: 20
+        )
+        _ = try await commitWriter.write(
+            header: tombHeader,
+            ops: [CommitOp(opSeq: 0, clock: 20, body: .tombstoneAsset(
+                CommitTombstoneBody(assetFingerprint: tombstoneFP, reason: .userDeleted)
+            ))],
+            month: month, respectTaskCancellation: false
+        )
+
+        // V1 manifest in the same month with the tombstoned fingerprint.
+        let manifestBytes = try Self.buildV1ManifestSqlite(
+            assetFingerprint: tombstoneFP,
+            resourceHash: contentHash,
+            logicalName: leaf
+        )
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", month.year, month.month)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: writerID, basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: writerID)
+
+        let service = makeService(client: client, profileID: profileID)
+        let processed = try await service.runPhase1(
+            profileID: profileID, repoID: repoID, writerID: writerID, runID: "run-tomb"
+        )
+        // The tombstoned fingerprint should be excluded from migration;
+        // with no remaining migrable assets the month is skipped.
+        XCTAssertEqual(processed, 0, "tombstoned V2 fingerprint must not be re-migrated from V1")
+
+        // V2 state must still have the tombstone, not a resurrected asset.
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+        XCTAssertNil(monthState.assets[tombstoneFP],
+                     "tombstoned fingerprint must not be resurrected by migration")
+        XCTAssertTrue(monthState.deletedAssetFingerprints.contains(tombstoneFP),
+                      "tombstone must survive migration")
+    }
+
     private func injectMigrationMarker(client: InMemoryRemoteStorageClient, writerID: String, phase: Int) async throws {
         let dict: [String: Any] = [
             "v": 2,

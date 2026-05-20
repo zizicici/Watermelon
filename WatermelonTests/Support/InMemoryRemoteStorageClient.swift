@@ -104,6 +104,16 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         listErrorByPath[Self.normalize(path)] = error
     }
 
+    func injectListURLErrorCancelled(for path: String) {
+        listURLCancelByPath.insert(Self.normalize(path))
+    }
+    private var listURLCancelByPath: Set<String> = []
+
+    func injectListWrappedURLCancellation(for path: String) {
+        listWrappedURLCancelByPath.insert(Self.normalize(path))
+    }
+    private var listWrappedURLCancelByPath: Set<String> = []
+
     func injectMetadataError(_ error: InjectedError, for path: String) {
         metadataErrorByPath[Self.normalize(path)] = error
     }
@@ -177,6 +187,14 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func list(path: String) async throws -> [RemoteStorageEntry] {
         let dir = Self.normalize(path)
+        if listURLCancelByPath.remove(dir) != nil {
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        }
+        if listWrappedURLCancelByPath.remove(dir) != nil {
+            throw RemoteStorageClientError.underlying(
+                NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+            )
+        }
         if let err = listErrorByPath.removeValue(forKey: dir) {
             throw Self.translate(err)
         }
@@ -397,9 +415,17 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func createDirectory(path: String) async throws {
         let key = Self.normalize(path)
+        if createDirURLCancelByPath.remove(key) != nil {
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        }
         explicitDirectories.insert(key)
         ensureDirectoryChain(for: key)
     }
+
+    func injectCreateDirectoryURLErrorCancelled(for path: String) {
+        createDirURLCancelByPath.insert(Self.normalize(path))
+    }
+    private var createDirURLCancelByPath: Set<String> = []
 
     func move(from sourcePath: String, to destinationPath: String) async throws {
         let src = Self.normalize(sourcePath)
