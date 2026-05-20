@@ -45,11 +45,16 @@ actor RepoBootstrap {
 
     // WebDAV/SMB/SFTP don't auto-create parents on PUT.
     func ensureSubdirectories() async throws {
-        try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
-        try await client.createDirectory(path: RepoLayout.snapshotsDirectoryPath(base: basePath))
-        try await client.createDirectory(path: RepoLayout.livenessDirectoryPath(base: basePath))
-        try await client.createDirectory(path: RepoLayout.identityDirectoryPath(base: basePath))
-        try await client.createDirectory(path: RepoLayout.migrationsDirectoryPath(base: basePath))
+        do {
+            try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
+            try await client.createDirectory(path: RepoLayout.snapshotsDirectoryPath(base: basePath))
+            try await client.createDirectory(path: RepoLayout.livenessDirectoryPath(base: basePath))
+            try await client.createDirectory(path: RepoLayout.identityDirectoryPath(base: basePath))
+            try await client.createDirectory(path: RepoLayout.migrationsDirectoryPath(base: basePath))
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            throw error
+        }
     }
 
     @discardableResult

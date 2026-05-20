@@ -1159,4 +1159,60 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         )
         XCTAssertTrue(needsRefresh, "V2 verify must always signal refresh so Home re-projects the committed view")
     }
+
+    // MARK: - createDirectory URL cancellation normalization
+
+    func testBuild_basePathCreateDirectoryURLCancel_propagatesAsCancellationError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let normalizedBase = RemotePathBuilder.normalizePath(basePath)
+        await client.injectCreateDirectoryURLErrorCancelled(for: normalizedBase)
+        let metadataClient = InMemoryRemoteStorageClient()
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+
+        do {
+            _ = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+            XCTFail("expected CancellationError from URL-shaped basePath createDirectory cancellation")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+    }
+
+    func testReloadRemoteIndex_basePathCreateDirectoryURLCancel_propagatesAsCancellationError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let normalizedBase = RemotePathBuilder.normalizePath(basePath)
+        await client.injectCreateDirectoryURLErrorCancelled(for: normalizedBase)
+        let profile = try insertProfile()
+
+        let remoteIndexService = RemoteIndexSyncService()
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+
+        do {
+            _ = try await service.reloadRemoteIndex(
+                client: client,
+                profile: profile
+            )
+            XCTFail("expected CancellationError from URL-shaped basePath createDirectory cancellation")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+    }
 }

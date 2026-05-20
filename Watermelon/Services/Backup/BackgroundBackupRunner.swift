@@ -47,25 +47,25 @@ final class BackgroundBackupRunner {
         )
     }
 
-    func run() async {
-        guard await ProStatus.verifyEntitlement() else { return }
-        guard BackgroundBackupSetting.getValue() == .enable else { return }
-        guard await isWiFiAvailable() else { return }
+    func run() async -> Bool {
+        guard await ProStatus.verifyEntitlement() else { return true }
+        guard BackgroundBackupSetting.getValue() == .enable else { return true }
+        guard await isWiFiAvailable() else { return true }
 
         guard let profiles = try? databaseManager.fetchBackgroundBackupEnabledProfiles(),
-              !profiles.isEmpty else { return }
+              !profiles.isEmpty else { return true }
 
         guard let cutoff = Calendar.current.date(
             byAdding: .month,
             value: -(Self.recentMonthCount - 1),
             to: Date()
-        )?.startOfMonth() else { return }
+        )?.startOfMonth() else { return true }
 
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "creationDate >= %@", cutoff as NSDate)
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         let recentAssets = PHAsset.fetchAssets(with: options)
-        guard recentAssets.count > 0 else { return }
+        guard recentAssets.count > 0 else { return true }
 
         let monthAssetIDs = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: recentAssets)
         let sortedMonths = monthAssetIDs.keys.sorted(by: >)
@@ -76,6 +76,7 @@ final class BackgroundBackupRunner {
             level: .info
         )
 
+        var anyProfileFailed = false
         for profile in profiles.shuffled() {
             if Task.isCancelled { break }
             if await shouldSkipProfileForCooldown(profile, writer: writer) {
@@ -84,11 +85,14 @@ final class BackgroundBackupRunner {
             let result = await backupProfile(profile, monthAssetIDs: monthAssetIDs, sortedMonths: sortedMonths, writer: writer)
             if result == .completed {
                 markProfileCompleted(profile)
+            } else if result == .failed {
+                anyProfileFailed = true
             }
         }
 
         await writer.appendLog(String(localized: "backup.auto.log.sessionEnd"), level: .info)
         await writer.finalize()
+        return !anyProfileFailed
     }
 
     // MARK: - Per-Profile Backup
@@ -146,6 +150,9 @@ final class BackgroundBackupRunner {
             client = try storageClientFactory.makeClient(profile: profile, password: password)
             try await client.connect()
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) {
+                return .cancelled
+            }
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
                 level: .error
@@ -159,6 +166,10 @@ final class BackgroundBackupRunner {
             // serialOnly backends — wrap to serialize concurrent metadata writes.
             metadataClient = wrapIfSerial(raw)
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) {
+                await client.disconnectSafely()
+                return .cancelled
+            }
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
                 level: .error
@@ -217,6 +228,10 @@ final class BackgroundBackupRunner {
             await metadataClient.disconnectSafely()
             await client.disconnectSafely()
             return .failed
+        } catch is CancellationError {
+            await metadataClient.disconnectSafely()
+            await client.disconnectSafely()
+            return .cancelled
         } catch {
             // Don't degrade to V1 — a V1 manifest into a V2 repo creates dual-format divergence.
             await writer.appendLog(

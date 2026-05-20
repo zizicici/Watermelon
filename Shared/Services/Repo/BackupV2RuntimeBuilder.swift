@@ -28,7 +28,12 @@ enum BackupV2RuntimeBuilder {
             throw BackupV2RuntimeBuildError.profileMissingID
         }
         // Inspect lists basePath; ensure it exists for fresh-profile bootstraps.
-        try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
+        do {
+            try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            throw error
+        }
         let inspection: RemoteFormatInspection
         do {
             inspection = try await format.inspectRemoteFormat(client: client, profile: profile)

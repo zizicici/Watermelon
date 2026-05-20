@@ -360,6 +360,7 @@ enum State {
             if Task.isCancelled {
                 if runToken != nil {
                     self.runDriver.cancelRunTask()
+                    self.runDriver.clearActiveRunState()
                     self.session.resolveStartCancellation(mode: mode)
                     self.activeTerminationIntent = .none
                     self.notifyObserversNow()
@@ -601,11 +602,9 @@ enum State {
                     password: connection.password
                 )
                 try Task.checkCancellation()
-                guard let isV2 = await self.backupCoordinator.currentRepoIsV2() else {
-                    throw RemoteViewHandleError.unknownRepositoryFormat
-                }
+                let isV2 = await self.backupCoordinator.currentRepoIsV2()
                 let dedupMode: BackupResumeDedupMode
-                if isV2 {
+                if let isV2, isV2 {
                     let handle = try await self.backupCoordinator.prepareResumeHandle(
                         profile: connection.profile,
                         password: connection.password
@@ -650,6 +649,7 @@ enum State {
                 if Task.isCancelled || self.activeTerminationIntent != .none {
                     if runToken != nil {
                         self.runDriver.cancelRunTask()
+                        self.runDriver.clearActiveRunState()
                         self.session.cancelResume(
                             pausedMode: resumeContext.pausedMode,
                             pausedDisplayMode: resumeContext.pausedDisplayMode
@@ -679,6 +679,15 @@ enum State {
                 self.notifyObserversNow()
             } catch {
                 self.resumePreparationTask = nil
+                if Task.isCancelled || RemoteWriteClassifier.isCancellation(error) {
+                    self.session.cancelResume(
+                        pausedMode: resumeContext.pausedMode,
+                        pausedDisplayMode: resumeContext.pausedDisplayMode
+                    )
+                    self.activeTerminationIntent = .none
+                    self.notifyObserversNow()
+                    return
+                }
                 self.notifyEventObservers(.log(
                     String.localizedStringWithFormat(
                         String(localized: "backup.session.resumePreparationFailed"),

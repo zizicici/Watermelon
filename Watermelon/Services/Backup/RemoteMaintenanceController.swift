@@ -78,7 +78,11 @@ final class RemoteMaintenanceController {
             } catch is CancellationError {
                 self.handleCancellation()
             } catch {
-                self.handleFailure(profileID: profileID, profile: profile, error: error)
+                if Task.isCancelled || RemoteWriteClassifier.isCancellation(error) {
+                    self.handleCancellation()
+                } else {
+                    self.handleFailure(profileID: profileID, profile: profile, error: error)
+                }
             }
         }
         return true

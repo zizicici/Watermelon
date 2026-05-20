@@ -213,7 +213,12 @@ struct BackupRunPreparationService: Sendable {
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> RemoteIndexSyncDigest {
-        try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
+        do {
+            try await client.createDirectory(path: RemotePathBuilder.normalizePath(profile.basePath))
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            throw error
+        }
         let identity = RepoIdentity(database: databaseManager)
         let localRepoID = try await identity.findRepoStateByProfile(profileID: profile.id ?? 0)?.repoID
         let digest = try await remoteIndexService.syncIndex(
@@ -456,7 +461,12 @@ struct BackupRunPreparationService: Sendable {
         body: (any RemoteStorageClientProtocol) async throws -> T
     ) async throws -> T {
         let client = try makeStorageClient(profile: profile, password: password)
-        try await client.connect()
+        do {
+            try await client.connect()
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            throw error
+        }
         do {
             let result = try await body(client)
             await client.disconnectSafely()

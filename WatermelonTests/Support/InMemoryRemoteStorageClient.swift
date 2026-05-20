@@ -172,7 +172,16 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
 
 
+    func injectConnectURLErrorCancelled() {
+        connectThrowsURLCancel = true
+    }
+    private var connectThrowsURLCancel = false
+
     func connect() async throws {
+        if connectThrowsURLCancel {
+            connectThrowsURLCancel = false
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        }
         connected = true
     }
 

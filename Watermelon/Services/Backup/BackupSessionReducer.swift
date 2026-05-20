@@ -178,13 +178,13 @@ struct BackupSessionState {
         let phaseBeforeCancel = controlPhase
         controlPhase = .idle
         isStartCommandInFlight = false
-        pendingRunConfiguration = nil
 
         let intent: BackupTerminationIntent = (phaseBeforeCancel == .stopping) ? .stop : .pause
         if intent == .stop {
             lastPausedRunMode = nil
             lastPausedDisplayRunMode = nil
             currentRunMode = .full
+            pendingRunConfiguration = nil
             state = .stopped
             statusText = String(localized: "backup.session.stopped")
         } else {

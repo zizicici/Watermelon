@@ -79,4 +79,20 @@ final class RepoBootstrapVersionTests: XCTestCase {
             // expected
         }
     }
+
+    func testEnsureSubdirectories_createDirectoryURLCancel_propagatesAsCancellationError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        await client.injectCreateDirectoryURLErrorCancelled(for: RepoLayout.commitsDirectoryPath(base: basePath))
+
+        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
+        do {
+            try await bootstrap.ensureSubdirectories()
+            XCTFail("expected CancellationError from URL-shaped createDirectory cancellation")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+    }
 }
