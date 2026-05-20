@@ -8,16 +8,20 @@ nonisolated enum RemoteVerifyFailureKind: Sendable, Equatable {
 
 nonisolated enum RemoteWriteClassifier {
     static func cancellationCause(in error: Error) -> CancellationError? {
-        if error is CancellationError { return CancellationError() }
-        if case RemoteStorageClientError.underlying(let underlying) = error {
-            return cancellationCause(in: underlying)
-        }
-        let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
-            return CancellationError()
-        }
-        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
-            return cancellationCause(in: underlying)
+        var current: Error? = error
+        var visited: Set<ObjectIdentifier> = []
+        while let e = current {
+            if e is CancellationError { return CancellationError() }
+            if case RemoteStorageClientError.underlying(let underlying) = e {
+                current = underlying
+                continue
+            }
+            let nsError = e as NSError
+            guard visited.insert(ObjectIdentifier(nsError)).inserted else { return nil }
+            if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+                return CancellationError()
+            }
+            current = nsError.userInfo[NSUnderlyingErrorKey] as? Error
         }
         return nil
     }

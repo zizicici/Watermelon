@@ -208,11 +208,11 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let monthState = try XCTUnwrap(output.state.months[month])
         XCTAssertNotNil(monthState.assets[ourFP])
         XCTAssertNil(monthState.assets[foreignFP], "foreign-repo commit must be filtered out")
-        // Both writerIDs' seqs must advance from filenames so the allocator
-        // doesn't collide on either side.
+        // Accepted commit advances writerA; filename-derived seq advances writerB for
+        // allocator collision avoidance even though the commit was rejected.
         XCTAssertEqual(output.observedSeqByWriter[writerA], 1)
         XCTAssertEqual(output.observedSeqByWriter[writerB], 5,
-                       "foreign writerID's seq must still be tracked from filename")
+                       "foreign writerID's seq must be tracked from filename for allocator collision avoidance")
         XCTAssertFalse((output.coveredByMonth[month] ?? .empty).contains(writerID: writerB, seq: 5))
     }
 
@@ -767,9 +767,8 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
     }
 
     func testSkippedCommitFilenameAdvancesObservedSeq() async throws {
-        // Cold-start scenario: corrupt commit at seq 7 — even if we can't replay
-        // it, observedSeqByWriter[writerA] should be ≥ 7 so the allocator doesn't
-        // try to write seq 1, 2, 3, ... and collide on filename.
+        // Corrupt commit at seq 7 still occupies the filename path — advance
+        // observedSeq so the allocator avoids colliding with it.
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let writer = CommitLogWriter(client: client, basePath: basePath)
@@ -791,14 +790,14 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertEqual(
             output.observedSeqByWriter[writerA],
             7,
-            "observedSeqByWriter must advance from filename even when commit body is corrupt"
+            "corrupt commit must advance observedSeqByWriter from filename for allocator collision avoidance"
         )
         XCTAssertNil(output.state.months[month]?.assets[Self.fingerprint(0x50)])
         XCTAssertFalse((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 7))
         XCTAssertEqual(output.state.observedClock, 0)
     }
 
-    func testCorruptMaxCommitFilenameAdvancesSeqButNotCoveredOrState() async throws {
+    func testCorruptMaxCommitFilenameDoesNotAdvanceSeq() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let corruptPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: UInt64.max)
@@ -806,7 +805,8 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
 
         let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
 
-        XCTAssertEqual(output.observedSeqByWriter[writerA], UInt64.max)
+        XCTAssertNil(output.observedSeqByWriter[writerA],
+                     "corrupt filename must not poison observedSeq even at max seq")
         XCTAssertNil(output.state.months[month]?.assets[Self.fingerprint(0x51)])
         XCTAssertFalse((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: UInt64.max))
         XCTAssertEqual(output.state.observedClock, 0)
@@ -835,7 +835,8 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let output = try await materializer.materialize(expectedRepoID: repoID)
         XCTAssertNil(output.state.months[month]?.assets[fp],
                      "filename-vs-header mismatch must be skipped, not replayed under wrong seq")
-        XCTAssertEqual(output.observedSeqByWriter[writerA], 99)
+        XCTAssertEqual(output.observedSeqByWriter[writerA], 99,
+                       "filename-derived seq must advance for allocator collision avoidance")
         XCTAssertFalse((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 99))
     }
 

@@ -641,10 +641,18 @@ final actor S3Client: RemoteStorageClientProtocol {
     nonisolated static func buildCompleteMultipartXML(parts: [UploadedPart]) -> String {
         var xml = "<CompleteMultipartUpload>"
         for part in parts {
-            xml += "<Part><PartNumber>\(part.partNumber)</PartNumber><ETag>\(part.etag)</ETag></Part>"
+            xml += "<Part><PartNumber>\(part.partNumber)</PartNumber><ETag>\(xmlEscaped(part.etag))</ETag></Part>"
         }
         xml += "</CompleteMultipartUpload>"
         return xml
+    }
+
+    private nonisolated static func xmlEscaped(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     nonisolated private func readFileSlice(at url: URL, offset: Int64, length: Int64) throws -> Data {

@@ -103,8 +103,8 @@ enum RepoStateAuthority {
     }
 
     static func sanitizeRemoteSeqObservation(_ remoteSeq: UInt64, writerID: String) -> RepoCounterSanitization {
-        guard remoteSeq <= maxPersistableSeq else {
-            repoStateAuthorityLog.warning("ignore same-writer remote seq above persistable ceiling writerID=\(writerID, privacy: .public) seq=\(remoteSeq, privacy: .public)")
+        guard remoteSeq < maxPersistableSeq else {
+            repoStateAuthorityLog.warning("ignore same-writer remote seq at or above persistable ceiling writerID=\(writerID, privacy: .public) seq=\(remoteSeq, privacy: .public)")
             return .ignoredAsUntrusted(remoteSeq)
         }
         return .accepted(remoteSeq)

@@ -190,6 +190,13 @@ actor RepoMaterializer {
                 }
             }
         }
+        for reference in commitReferences {
+            guard reference.seq < UInt64.max else { continue }
+            let prior = observedSeqByWriter[reference.writerID] ?? 0
+            if reference.seq > prior {
+                observedSeqByWriter[reference.writerID] = reference.seq
+            }
+        }
 
         if !corruptedSnapshotMonths.isEmpty {
             materializerLog.warning("materialize: \(corruptedSnapshotMonths.count, privacy: .public) month(s) had all snapshots corrupt; commit replay rebuilt state — caller should force a fresh baseline on next flush")
@@ -424,10 +431,6 @@ private struct CommitTrustPipeline {
         var observedSeqByWriter: [String: UInt64] = [:]
         var commitsToRead: [MaterializerCommitReference] = []
         for reference in references {
-            let prior = observedSeqByWriter[reference.writerID] ?? 0
-            if reference.seq > prior {
-                observedSeqByWriter[reference.writerID] = reference.seq
-            }
             let covered = initialCoveredByMonth[reference.month] ?? .empty
             if !covered.contains(writerID: reference.writerID, seq: reference.seq) {
                 commitsToRead.append(reference)

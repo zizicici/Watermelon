@@ -210,6 +210,26 @@ final class RepoStateRecordTests: XCTestCase {
         }
     }
 
+    func testSanitizeRemoteSeqObservation_rejectsPersistableCeiling() async throws {
+        let result = RepoStateAuthority.sanitizeRemoteSeqObservation(
+            RepoStateAuthority.maxPersistableSeq, writerID: "w"
+        )
+        if case .ignoredAsUntrusted = result {
+            // correct
+        } else {
+            XCTFail("maxPersistableSeq must be ignoredAsUntrusted, got \(result)")
+        }
+
+        let belowCeiling = RepoStateAuthority.sanitizeRemoteSeqObservation(
+            RepoStateAuthority.maxPersistableSeq - 1, writerID: "w"
+        )
+        if case .accepted(let seq) = belowCeiling {
+            XCTAssertEqual(seq, RepoStateAuthority.maxPersistableSeq - 1)
+        } else {
+            XCTFail("maxPersistableSeq - 1 must be accepted, got \(belowCeiling)")
+        }
+    }
+
     func testSeqAllocatorSanitizesNegativePersistedSeqOnAllocate() async throws {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w")
         let identity = RepoIdentity(database: databaseManager)

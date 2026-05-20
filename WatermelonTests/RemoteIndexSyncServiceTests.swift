@@ -596,6 +596,46 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                      "month-dir 404 must leave the month not-fresh so callers don't read the fallback as authoritative")
     }
 
+    func testRefreshPhysicalPresenceOverlay_monthDirNotFound_noFallback_preservesPriorState() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+
+        let service = RemoteIndexSyncService()
+        let writer = service.makeOptimisticAssetWriter()
+        var allHashes: Set<Data> = []
+        for index in 0..<3 {
+            let bytes = Data("month-dir-404-nofallback-\(index)".utf8)
+            let hash = Data(SHA256.hash(data: bytes))
+            allHashes.insert(hash)
+            let name = "f\(index).jpg"
+            let resource = RemoteManifestResource(
+                year: monthA.year, month: monthA.month,
+                physicalRemotePath: "\(monthRel)/\(name)",
+                contentHash: hash, fileSize: Int64(bytes.count),
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil, backedUpAtMs: 0
+            )
+            writer.appendResource(resource)
+        }
+
+        let priorMissing = Set([allHashes.first!])
+        service.markPhysicallyMissingV2(month: monthA, hashes: priorMissing)
+
+        // No fallback passed — the probe sees not-found and has nothing to
+        // cover the inconclusive hashes. The overlay must NOT clear the
+        // prior missing state by applying an empty missing set.
+        _ = try await service.refreshPhysicalPresenceOverlay(
+            client: client,
+            basePath: basePath
+        )
+
+        let published = service.physicallyMissingHashesForTest(month: monthA)
+        XCTAssertEqual(published, priorMissing,
+                       "month-dir 404 with no fallback must preserve prior missing state, not clear it")
+    }
+
     func testSyncOverlayAndCaptureHandle_failureArm_preservesFallbackInsteadOfAllMissing() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()

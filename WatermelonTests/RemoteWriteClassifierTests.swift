@@ -56,4 +56,21 @@ final class RemoteWriteClassifierTests: XCTestCase {
         XCTAssertTrue(chain.contains { $0.domain == "outer" && $0.code == 7 })
         XCTAssertTrue(chain.contains { $0.domain == NSURLErrorDomain && $0.code == NSURLErrorTimedOut })
     }
+
+    func testCancellationCauseTerminatesOnDeeplyNestedChain() {
+        var error: Error = NSError(domain: "leaf", code: 42)
+        for _ in 0..<200 {
+            error = NSError(domain: "wrap", code: 1, userInfo: [NSUnderlyingErrorKey: error as NSError])
+        }
+        XCTAssertFalse(RemoteWriteClassifier.isCancellation(error))
+    }
+
+    func testCancellationCauseFindsCancellationInDeeplyNestedChain() {
+        let cancellation = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        var error: Error = cancellation
+        for _ in 0..<200 {
+            error = NSError(domain: "wrap", code: 1, userInfo: [NSUnderlyingErrorKey: error as NSError])
+        }
+        XCTAssertTrue(RemoteWriteClassifier.isCancellation(error))
+    }
 }

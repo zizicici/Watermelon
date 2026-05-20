@@ -56,6 +56,6 @@ nonisolated enum RemoteStorageErrorClassifier {
     }
 }
 
-func isStorageNotFoundError(_ error: Error) -> Bool {
+nonisolated func isStorageNotFoundError(_ error: Error) -> Bool {
     RemoteStorageErrorClassifier.isNotFound(error)
 }

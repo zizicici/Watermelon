@@ -119,13 +119,13 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                     } else {
                         anyFailure = true
                     }
-                    missingByMonth[month] = missing
+                    if monthFresh || !missing.isEmpty {
+                        missingByMonth[month] = missing
+                    }
                 case .failure(let error):
                     anyFailure = true
                     if let stale = fallback[month] {
                         missingByMonth[month] = stale
-                    } else {
-                        missingByMonth[month] = []
                     }
                     overlayProbeLog.info("[SyncTiming] probe failed for \(month.text): \(error.localizedDescription)")
                 }
