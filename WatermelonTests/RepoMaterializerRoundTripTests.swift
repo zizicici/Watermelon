@@ -246,6 +246,86 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertTrue(output.corruptedSnapshotMonths.isEmpty)
     }
 
+    func testNonCanonicalCommitFilenameIsIgnoredByMaterializer() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = Self.fingerprint(0x12)
+
+        _ = try await writer.write(
+            header: makeHeader(seq: 1, clockMin: 1, clockMax: 1),
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+                assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1, resources: [])))],
+            month: month,
+            respectTaskCancellation: false
+        )
+        let canonicalPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        let commitFiles = await client.snapshotFiles()
+        let bytes = try XCTUnwrap(commitFiles[canonicalPath])
+        let nonCanonicalPath = RepoLayout.normalize(joining: [
+            basePath,
+            RepoLayout.watermelonDirectory,
+            RepoLayout.commitsDirectory,
+            "\(month.text)--\(writerA)--1.jsonl"
+        ])
+        await client.injectFile(path: nonCanonicalPath, data: bytes)
+        try await client.delete(path: canonicalPath)
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNil(output.state.months[month]?.assets[fp])
+        XCTAssertNil(output.observedSeqByWriter[writerA])
+        XCTAssertEqual(output.state.observedClock, 0)
+    }
+
+    func testNonCanonicalSnapshotFilenameIsIgnoredByMaterializer() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let fp = Self.fingerprint(0x13)
+
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: .empty
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: fp,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 0,
+                totalFileSizeBytes: 0
+            )],
+            resources: [],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 2,
+            runID: "abc123",
+            respectTaskCancellation: false
+        )
+        let canonicalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerA, runID: "abc123")
+        let snapshotFiles = await client.snapshotFiles()
+        let bytes = try XCTUnwrap(snapshotFiles[canonicalPath])
+        let nonCanonicalPath = RepoLayout.normalize(joining: [
+            basePath,
+            RepoLayout.watermelonDirectory,
+            RepoLayout.snapshotsDirectory,
+            "\(month.text)--2--\(writerA)--abc123.jsonl"
+        ])
+        await client.injectFile(path: nonCanonicalPath, data: bytes)
+        try await client.delete(path: canonicalPath)
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNil(output.state.months[month]?.assets[fp])
+        XCTAssertNil(output.acceptedSnapshotBaselinesByMonth[month])
+        XCTAssertEqual(output.state.observedClock, 0)
+    }
+
     func testLegacyUnstampedSnapshotRejectedWhenExpectedRepoIDProvided() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

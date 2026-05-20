@@ -63,64 +63,36 @@ actor CommitLogWriter {
         let guarantee = client.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
         switch guarantee {
         case .exclusive:
-            let result: AtomicCreateResult
-            do {
-                result = try await client.atomicCreate(
-                    localURL: tempURL,
-                    remotePath: remotePath,
-                    respectTaskCancellation: respectTaskCancellation
-                )
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                throw WriteError.ioFailure(error)
-            }
-            switch result {
-            case .created:
-                break
-            case .alreadyExists:
-                // Verify alreadyExists because S3 may have stored our bytes before losing the response.
-                try await verifyAfterAlreadyExists(
-                    remotePath: remotePath,
-                    expectedSha: sha,
-                    expectedRowCount: integrity.rowCount
-                )
-            case .bestEffortRetry:
-                // Verify best-effort retries so peer collisions still surface.
-                try await verifyAfterAlreadyExists(
-                    remotePath: remotePath,
-                    expectedSha: sha,
-                    expectedRowCount: integrity.rowCount
+            if !respectTaskCancellation {
+                // Keep create and readback verification in the same uncancelled task.
+                try await Task { @Sendable () throws -> Void in
+                    try await Self.performExclusiveCreateAndVerify(
+                        client: client, localURL: tempURL, remotePath: remotePath,
+                        expectedSha: sha, expectedRowCount: integrity.rowCount,
+                        respectTaskCancellation: false
+                    )
+                }.value
+            } else {
+                try await Self.performExclusiveCreateAndVerify(
+                    client: client, localURL: tempURL, remotePath: remotePath,
+                    expectedSha: sha, expectedRowCount: integrity.rowCount,
+                    respectTaskCancellation: true
                 )
             }
         case .overwritePossible:
-            // Stage SMB-style writes so exists+upload cannot overwrite a peer commit.
-            let result: AtomicCreateResult
-            do {
-                result = try await MetadataCreateGate.createWithStagingFallback(
-                    client: client,
-                    localURL: tempURL,
-                    remotePath: remotePath,
-                    respectTaskCancellation: respectTaskCancellation,
-                    finalizationPolicy: .requireExclusiveMove
-                )
-            } catch let error as MetadataCreateGate.Error {
-                if RemoteWriteClassifier.isMetadataGateCancellation(error) { throw CancellationError() }
-                throw WriteError.ioFailure(error)
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                throw WriteError.ioFailure(error)
-            }
-            switch result {
-            case .created:
-                break
-            case .alreadyExists:
-                throw WriteError.alreadyExists
-            case .bestEffortRetry:
-                // Re-verify transient readback failures so peer collisions still surface.
-                try await verifyAfterAlreadyExists(
-                    remotePath: remotePath,
-                    expectedSha: sha,
-                    expectedRowCount: integrity.rowCount
+            if !respectTaskCancellation {
+                try await Task { @Sendable () throws -> Void in
+                    try await Self.performStagedCreateAndVerify(
+                        client: client, localURL: tempURL, remotePath: remotePath,
+                        expectedSha: sha, expectedRowCount: integrity.rowCount,
+                        respectTaskCancellation: false
+                    )
+                }.value
+            } else {
+                try await Self.performStagedCreateAndVerify(
+                    client: client, localURL: tempURL, remotePath: remotePath,
+                    expectedSha: sha, expectedRowCount: integrity.rowCount,
+                    respectTaskCancellation: true
                 )
             }
         }
@@ -128,14 +100,82 @@ actor CommitLogWriter {
         return CommitFile(header: header, ops: ops, sha256Hex: sha, rowCount: integrity.rowCount)
     }
 
+    private static func performExclusiveCreateAndVerify(
+        client: any RemoteStorageClientProtocol,
+        localURL: URL,
+        remotePath: String,
+        expectedSha: String,
+        expectedRowCount: Int,
+        respectTaskCancellation: Bool
+    ) async throws {
+        let result = try await performExclusiveCreate(
+            client: client,
+            localURL: localURL,
+            remotePath: remotePath,
+            respectTaskCancellation: respectTaskCancellation
+        )
+        switch result {
+        case .created:
+            return
+        case .alreadyExists, .bestEffortRetry:
+            try await verifyAfterAlreadyExists(
+                client: client,
+                remotePath: remotePath,
+                expectedSha: expectedSha,
+                expectedRowCount: expectedRowCount
+            )
+        }
+    }
+
+    private static func performStagedCreateAndVerify(
+        client: any RemoteStorageClientProtocol,
+        localURL: URL,
+        remotePath: String,
+        expectedSha: String,
+        expectedRowCount: Int,
+        respectTaskCancellation: Bool
+    ) async throws {
+        let result: AtomicCreateResult
+        do {
+            result = try await MetadataCreateGate.createWithStagingFallback(
+                client: client,
+                localURL: localURL,
+                remotePath: remotePath,
+                respectTaskCancellation: respectTaskCancellation,
+                finalizationPolicy: .requireExclusiveMove
+            )
+        } catch let error as MetadataCreateGate.Error {
+            if RemoteWriteClassifier.isMetadataGateCancellation(error) { throw CancellationError() }
+            throw WriteError.ioFailure(error)
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            throw WriteError.ioFailure(error)
+        }
+        switch result {
+        case .created:
+            return
+        case .alreadyExists:
+            throw WriteError.alreadyExists
+        case .bestEffortRetry:
+            try await verifyAfterAlreadyExists(
+                client: client,
+                remotePath: remotePath,
+                expectedSha: expectedSha,
+                expectedRowCount: expectedRowCount
+            )
+        }
+    }
+
     /// Only transient verify failures become alreadyExists retries; permanent causes must surface.
-    private func verifyAfterAlreadyExists(
+    private static func verifyAfterAlreadyExists(
+        client: any RemoteStorageClientProtocol,
         remotePath: String,
         expectedSha: String,
         expectedRowCount: Int
     ) async throws {
         do {
             try await verifyCommitOnRemote(
+                client: client,
                 remotePath: remotePath,
                 expectedSha: expectedSha,
                 expectedRowCount: expectedRowCount
@@ -152,7 +192,26 @@ actor CommitLogWriter {
         }
     }
 
-    private func verifyCommitOnRemote(
+    private static func performExclusiveCreate(
+        client: any RemoteStorageClientProtocol,
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool
+    ) async throws -> AtomicCreateResult {
+        do {
+            return try await client.atomicCreate(
+                localURL: localURL,
+                remotePath: remotePath,
+                respectTaskCancellation: respectTaskCancellation
+            )
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            throw WriteError.ioFailure(error)
+        }
+    }
+
+    private static func verifyCommitOnRemote(
+        client: any RemoteStorageClientProtocol,
         remotePath: String,
         expectedSha: String,
         expectedRowCount: Int

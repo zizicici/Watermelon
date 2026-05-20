@@ -312,7 +312,7 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
-    func testHijackedMigrationMarker_isSkippedAndRoutesToV2() async throws {
+    func testHijackedMigrationMarker_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
@@ -324,9 +324,12 @@ final class BootstrapStateMachineTests: XCTestCase {
             contents: #"{"v":2,"writer_id":"\#(hijackJSONWriterID)","phase":2}"#
         )
 
-        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
-        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
-                       "hijacked marker must be skipped, never adopted as cleanup ownerWriterID")
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("expected damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
     }
 
     func testMigrationMarkerParse_acceptsLegacyVoneMarker() throws {
@@ -447,7 +450,7 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
-    func testWrongTypePhaseMarker_isSkippedAndRoutesToV2() async throws {
+    func testWrongTypePhaseMarker_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
@@ -458,12 +461,15 @@ final class BootstrapStateMachineTests: XCTestCase {
             contents: #"{"v":2,"writer_id":"\#(writerID)","phase":"2"}"#
         )
 
-        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
-        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
-                       "wrong-type phase must be skipped, never routed to cleanup")
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("expected damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
     }
 
-    func testBooleanPhaseMarker_isSkippedAndRoutesToV2() async throws {
+    func testBooleanPhaseMarker_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
@@ -474,9 +480,170 @@ final class BootstrapStateMachineTests: XCTestCase {
             contents: #"{"v":2,"writer_id":"\#(writerID)","phase":true}"#
         )
 
-        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
-        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
-                       "boolean phase must be skipped, never routed to cleanup")
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("expected damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testMalformedParseableMigrationMarker_versionAbsentWithV2Data_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
+        await client.injectFile(path: "\(RepoLayout.commitsDirectoryPath(base: basePath))/leftover.jsonl", contents: "data")
+        let writerID = "abababab-abab-abab-abab-abababababab"
+        await client.injectFile(
+            path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID),
+            contents: #"{"v":2,"writer_id":"\#(writerID)","phase":true}"#
+        )
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("expected damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testDirectoryShapedMigrationMarker_withVersionJson_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        // Create a directory at the canonical migration marker path.
+        let writerID = "12121212-1212-1212-1212-121212121212"
+        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
+        try await client.createDirectory(path: markerPath)
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("directory-shaped migration marker with version.json should throw damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testDirectoryShapedPhaseSuffixedMigrationMarker_withVersionJson_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        let writerID = "12121212-1212-1212-1212-121212121212"
+        let markerPath = RepoLayout.migrationPhaseMarkerPath(
+            base: basePath,
+            writerID: writerID,
+            phase: 3,
+            markerID: "abcd1111-abcd-1111-abcd-111111111111"
+        )
+        try await client.createDirectory(path: markerPath)
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("directory-shaped phase-suffixed migration marker should throw damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testDirectoryShapedMigrationMarker_alongsideValidMarker_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "id-A")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        // Valid phase-3 file marker for writer B.
+        let fileWriterID = "55555555-5555-5555-5555-555555555555"
+        try await injectMigrationMarker(client: client, writerID: fileWriterID, phase: 3)
+        // Directory-shaped marker for writer A alongside it.
+        let dirWriterID = "66666666-6666-6666-6666-666666666666"
+        try await client.createDirectory(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: dirWriterID))
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("mixed directory + file migration markers should throw damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testDirectoryShapedMigrationMarker_versionAbsent_alongsideValidMarker_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
+        await client.injectFile(path: "\(RepoLayout.commitsDirectoryPath(base: basePath))/leftover.jsonl", contents: "data")
+        // Valid phase-3 file marker for writer B.
+        let fileWriterID = "77777777-7777-7777-7777-777777777777"
+        try await injectMigrationMarker(client: client, writerID: fileWriterID, phase: 3)
+        // Directory-shaped marker for writer A alongside it.
+        let dirWriterID = "88888888-8888-8888-8888-888888888888"
+        try await client.createDirectory(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: dirWriterID))
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("mixed directory + file migration markers in version-absent path should throw damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testDirectoryShapedMigrationMarker_versionAbsent_withV2Data_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
+        await client.injectFile(path: "\(RepoLayout.commitsDirectoryPath(base: basePath))/leftover.jsonl", contents: "data")
+        let writerID = "34343434-3434-3434-3434-343434343434"
+        try await client.createDirectory(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID))
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("directory-shaped migration marker with V2 data should throw damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testDirectoryShapedMigrationMarker_versionAbsent_withV2DataAndV1Manifests_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
+        await client.injectFile(path: "\(RepoLayout.commitsDirectoryPath(base: basePath))/leftover.jsonl", contents: "data")
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        let writerID = "34343434-3434-3434-3434-343434343434"
+        try await client.createDirectory(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID))
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("directory-shaped migration marker with V2 data + V1 manifests should throw damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testDirectoryShapedMigrationMarker_versionAbsent_noV2Data_withV1Manifests_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        let writerID = "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1"
+        try await client.createDirectory(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID))
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("directory-shaped migration marker with V1 manifests and no V2 data should throw damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+    }
+
+    func testDirectoryShapedMigrationMarker_versionAbsent_noV2Data_noV1Manifests_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        let writerID = "b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2"
+        try await client.createDirectory(path: RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID))
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("directory-shaped migration marker with no V2 data and no V1 manifests should throw damagedV2Repo")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
     }
 
     private func makeFixture() async -> (InMemoryRemoteStorageClient, ServerProfileRecord) {

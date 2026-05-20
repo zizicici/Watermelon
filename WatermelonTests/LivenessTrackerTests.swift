@@ -85,6 +85,43 @@ final class LivenessTrackerTests: XCTestCase {
         XCTAssertFalse(view.isComplete)
     }
 
+    func testSnapshotPeerStatuses_directoryAtHeartbeatPath_yieldsUnknown() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: RepoLayout.livenessDirectoryPath(base: basePath))
+        // Create a directory at the canonical heartbeat path for a peer.
+        let dirPath = RepoLayout.livenessFilePath(base: basePath, writerID: activeWriter)
+        try await client.createDirectory(path: dirPath)
+
+        let tracker = LivenessTracker(client: client, basePath: basePath, writerID: selfWriter, isLocalVolume: false)
+        let view = try await tracker.snapshotPeerStatuses()
+
+        XCTAssertEqual(view.unknownPeerIDs, [activeWriter],
+                       "directory at heartbeat path must be unknown, not silently skipped")
+        XCTAssertTrue(view.activePeerIDs.isEmpty)
+        XCTAssertFalse(view.isComplete, "directory-shaped heartbeat must block cleanup")
+        XCTAssertTrue(view.sweepProtectionSet.contains(activeWriter))
+    }
+
+    func testSnapshotRetentionPeerStatuses_directoryAtHeartbeatPath_yieldsUnknown() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: RepoLayout.livenessDirectoryPath(base: basePath))
+        let dirPath = RepoLayout.livenessFilePath(base: basePath, writerID: activeWriter)
+        try await client.createDirectory(path: dirPath)
+
+        let tracker = LivenessTracker(client: client, basePath: basePath, writerID: selfWriter, isLocalVolume: false)
+        let view = try await tracker.snapshotRetentionPeerStatuses()
+
+        XCTAssertEqual(view.peers.count, 1)
+        XCTAssertEqual(view.peers.first?.writerID, activeWriter)
+        if case .unknown = view.peers.first?.status {
+        } else {
+            XCTFail("directory-shaped heartbeat must yield unknown status")
+        }
+        XCTAssertTrue(view.listComplete, "listComplete reflects successful list; unknown is in the peer data")
+    }
+
     func testSnapshotPeerStatuses_booleanTimestamp_yieldsUnknown_blocksSweep() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

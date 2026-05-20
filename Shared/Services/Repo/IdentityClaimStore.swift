@@ -190,8 +190,25 @@ nonisolated struct IdentityClaimStore: Sendable {
                 prefix: "repo-identity-claim"
             )
             defer { try? FileManager.default.removeItem(at: temp) }
-            let result = try await client.atomicCreate(localURL: temp, remotePath: claimPath, respectTaskCancellation: false)
-            try await verifyOwnClaim(repoID: repoID, writerID: writerID, createdAtMs: createdAtMs, claimPath: claimPath, atomicResult: result)
+            do {
+                try await Task { @Sendable () throws -> Void in
+                    let result = try await client.atomicCreate(
+                        localURL: temp,
+                        remotePath: claimPath,
+                        respectTaskCancellation: false
+                    )
+                    try await Self.verifyOwnClaim(
+                        client: client,
+                        repoID: repoID,
+                        writerID: writerID,
+                        createdAtMs: createdAtMs,
+                        claimPath: claimPath,
+                        atomicResult: result
+                    )
+                }.value
+            } catch {
+                throw RemoteWriteClassifier.normalizedCancellation(error)
+            }
         } catch {
             throw RemoteWriteClassifier.normalizedCancellation(error)
         }
@@ -275,7 +292,8 @@ nonisolated struct IdentityClaimStore: Sendable {
         return .none
     }
 
-    private func verifyOwnClaim(
+    private static func verifyOwnClaim(
+        client: any RemoteStorageClientProtocol,
         repoID: String,
         writerID: String,
         createdAtMs: Int64,

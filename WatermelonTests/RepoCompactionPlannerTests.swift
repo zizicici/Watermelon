@@ -235,6 +235,24 @@ final class RepoCompactionPlannerTests: XCTestCase {
         XCTAssertEqual(report.totals.protectedUnparseableFilenameCount, 1)
     }
 
+    func testNonCanonicalCommitFilenameIsProtectedAsUnparseable() async throws {
+        let client = try await makeClient()
+        await client.injectFile(
+            path: "\(RepoLayout.commitsDirectoryPath(base: basePath))/\(month.text)--\(writerA)--1.jsonl",
+            data: Data([0x01, 0x02, 0x03])
+        )
+        let output = materializedOutput(finalCovered: .empty, acceptedSnapshot: nil)
+
+        let report = try await RepoCompactionPlanner(client: client, basePath: basePath)
+            .makeReport(expectedRepoID: repoID, preMaterialized: output)
+        let monthReport = try XCTUnwrap(report.months.first)
+        XCTAssertEqual(monthReport.commitFileCount, 1)
+        XCTAssertEqual(monthReport.parseableCommitFileCount, 0)
+        XCTAssertEqual(monthReport.unparseableCommitFileCount, 1)
+        XCTAssertEqual(monthReport.protectedUnparseableFilenameCount, 1)
+        XCTAssertEqual(monthReport.commitBytes, 3)
+    }
+
     func testForeignRepoCommitRemainsProtectedOnMaterializedPath() async throws {
         let client = try await makeClient()
         await injectCommitFiles(client: client, writerID: writerA, seqs: 1...3)

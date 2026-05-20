@@ -148,12 +148,21 @@ enum RepoLayout {
     }
 
     static func parseSnapshotFilename(_ name: String) -> ParsedSnapshotFilename? {
-        let stripped = stripJsonlSuffix(name)
+        guard let stripped = stripRequiredJsonlSuffix(name) else { return nil }
         let parts = stripped.components(separatedBy: "--")
         guard parts.count == 4 else { return nil }
         guard let month = parseMonthKey(parts[0]),
+              isLowercaseHex(parts[1], count: 16),
               let lamport = UInt64(parts[1], radix: 16),
               isValidWriterID(parts[2]) else {
+            return nil
+        }
+        guard name == snapshotFileName(
+            month: month,
+            lamport: lamport,
+            writerID: parts[2],
+            runID: parts[3]
+        ) else {
             return nil
         }
         return ParsedSnapshotFilename(
@@ -165,12 +174,16 @@ enum RepoLayout {
     }
 
     static func parseCommitFilename(_ name: String) -> ParsedCommitFilename? {
-        let stripped = stripJsonlSuffix(name)
+        guard let stripped = stripRequiredJsonlSuffix(name) else { return nil }
         let parts = stripped.components(separatedBy: "--")
         guard parts.count == 3 else { return nil }
         guard let month = parseMonthKey(parts[0]),
+              isLowercaseHex(parts[2], count: 16),
               let seq = UInt64(parts[2], radix: 16),
               isValidWriterID(parts[1]) else {
+            return nil
+        }
+        guard name == commitFileName(month: month, writerID: parts[1], seq: seq) else {
             return nil
         }
         return ParsedCommitFilename(month: month, writerID: parts[1], seq: seq)
@@ -223,11 +236,16 @@ enum RepoLayout {
         return index == s.endIndex
     }
 
-    private static func stripJsonlSuffix(_ name: String) -> String {
-        if name.hasSuffix(".jsonl") {
-            return String(name.dropLast(".jsonl".count))
+    private static func stripRequiredJsonlSuffix(_ name: String) -> String? {
+        guard name.hasSuffix(".jsonl") else { return nil }
+        return String(name.dropLast(".jsonl".count))
+    }
+
+    private static func isLowercaseHex(_ value: String, count: Int) -> Bool {
+        guard value.count == count else { return false }
+        return value.allSatisfy { c in
+            (c >= "0" && c <= "9") || (c >= "a" && c <= "f")
         }
-        return name
     }
 
     private static func parseMonthKey(_ text: String) -> LibraryMonthKey? {

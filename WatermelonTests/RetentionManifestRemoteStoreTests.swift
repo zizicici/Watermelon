@@ -129,6 +129,65 @@ final class RetentionManifestRemoteStoreTests: XCTestCase {
         XCTAssertEqual(barrier.valid, [valid])
     }
 
+    func testDirectoryShapedRetentionManifest_isInvalid() async throws {
+        let client = try await makeClient()
+        let retentionDir = RepoLayout.retentionDirectoryPath(base: basePath)
+        try await client.createDirectory(path: retentionDir)
+        // Write a valid manifest for the target month.
+        let valid = makeManifest()
+        await client.injectFile(path: RepoLayout.retentionManifestPath(base: basePath, ref: valid.ref),
+                                data: try RetentionManifestStore.encode(valid))
+        // Create a directory at a retention manifest path for the same month.
+        let dirManifest = makeManifest(lamport: 99)
+        let dirPath = RepoLayout.retentionManifestPath(base: basePath, ref: dirManifest.ref)
+        try await client.createDirectory(path: dirPath)
+
+        let loaded = try await store(client).loadManifests(expectedRepoID: repoID, month: month)
+        XCTAssertEqual(loaded.valid, [valid])
+        XCTAssertTrue(loaded.invalid.contains(where: { $0.reason == .bodyDecodeFailed }),
+                       "directory-shaped manifest for target month must be invalid")
+
+        let barrier = try await store(client).loadBarrierSet(expectedRepoID: repoID, month: month)
+        XCTAssertFalse(barrier.isComplete, "directory-shaped manifest must block barrier completeness")
+    }
+
+    func testDirectoryShapedRetentionManifest_differentMonth_isNotInvalid() async throws {
+        let client = try await makeClient()
+        let retentionDir = RepoLayout.retentionDirectoryPath(base: basePath)
+        try await client.createDirectory(path: retentionDir)
+        let valid = makeManifest()
+        await client.injectFile(path: RepoLayout.retentionManifestPath(base: basePath, ref: valid.ref),
+                                data: try RetentionManifestStore.encode(valid))
+        // Create a directory at a retention manifest path for a different month.
+        let otherMonth = LibraryMonthKey(year: 2026, month: 6)
+        let otherManifest = makeManifest(lamport: 77, month: otherMonth)
+        let otherPath = RepoLayout.retentionManifestPath(base: basePath, ref: otherManifest.ref)
+        try await client.createDirectory(path: otherPath)
+
+        let barrier = try await store(client).loadBarrierSet(expectedRepoID: repoID, month: month)
+        XCTAssertTrue(barrier.isComplete,
+                       "directory-shaped manifest for different month must not block barrier")
+    }
+
+    func testDirectoryShapedMalformedJsonName_isInvalid() async throws {
+        let client = try await makeClient()
+        let retentionDir = RepoLayout.retentionDirectoryPath(base: basePath)
+        try await client.createDirectory(path: retentionDir)
+        let valid = makeManifest()
+        await client.injectFile(path: RepoLayout.retentionManifestPath(base: basePath, ref: valid.ref),
+                                data: try RetentionManifestStore.encode(valid))
+        // Create a directory with a malformed .json name that parseFilename rejects.
+        try await client.createDirectory(path: "\(retentionDir)/not-a-manifest.json")
+
+        let loaded = try await store(client).loadManifests(expectedRepoID: repoID, month: month)
+        XCTAssertEqual(loaded.valid, [valid])
+        XCTAssertTrue(loaded.invalid.contains(where: { $0.reason == .filenameMalformed && $0.filename == "not-a-manifest.json" }),
+                       "malformed .json directory must be invalid as filenameMalformed")
+
+        let barrier = try await store(client).loadBarrierSet(expectedRepoID: repoID, month: month)
+        XCTAssertFalse(barrier.isComplete, "malformed .json directory must block barrier completeness")
+    }
+
     func testLoadBarrierSetMatchesPureSupersedingSemantics() async throws {
         let client = try await makeClient()
         let manifests = [

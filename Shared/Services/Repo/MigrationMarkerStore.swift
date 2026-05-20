@@ -7,6 +7,11 @@ private let migrationMarkerStoreLog = Logger(
 )
 
 nonisolated struct MigrationMarkerStore: Sendable {
+    struct InvalidMarker: Error, Sendable {
+        let path: String
+        let reason: String
+    }
+
     let client: any RemoteStorageClientProtocol
     let basePath: String
 
@@ -39,7 +44,7 @@ nonisolated struct MigrationMarkerStore: Sendable {
         var paths: Set<String> = [RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)]
         do {
             let entries = try await client.list(path: dir)
-            for entry in entries where !entry.isDirectory {
+            for entry in entries {
                 guard RepoLayout.parseMigrationMarkerFilename(entry.name)?.writerID == writerID else { continue }
                 paths.insert(RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name))
             }
@@ -87,7 +92,8 @@ nonisolated struct MigrationMarkerStore: Sendable {
             guard let meta = try await metadataIfPresent(path: path) else { continue }
             sawMarker = true
             if meta.isDirectory {
-                bestPhase = Self.maxPhase(bestPhase, .phase1)
+                let filenamePhase = RepoLayout.parseMigrationMarkerFilename((path as NSString).lastPathComponent)?.phase
+                bestPhase = Self.maxPhase(bestPhase, MigrationMarkerPhase(rawValue: filenamePhase ?? 1) ?? .phase1)
                 continue
             }
             guard let info = try await tolerantMarkerInfo(path: path, writerID: writerID) else {
@@ -132,14 +138,21 @@ nonisolated struct MigrationMarkerStore: Sendable {
                 if !isStorageNotFoundError(error) { throw error }
                 continue
             }
+            guard RepoLayout.parseMigrationMarkerFilename(entry.name) != nil else {
+                migrationMarkerStoreLog.warning(
+                    "skipping non-marker .json at \(path, privacy: .public)"
+                )
+                continue
+            }
             do {
                 let parsed = try MigrationMarker.parse(filename: entry.name, bytes: data)
                 results.append(parsed)
             } catch {
+                let reason = String(describing: error)
                 migrationMarkerStoreLog.warning(
-                    "skipping migration marker at \(path, privacy: .public): \(String(describing: error), privacy: .public)"
+                    "invalid migration marker at \(path, privacy: .public): \(reason, privacy: .public)"
                 )
-                continue
+                throw InvalidMarker(path: path, reason: reason)
             }
         }
         return results

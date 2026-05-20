@@ -322,8 +322,15 @@ actor LivenessTracker {
         var unknown: Set<String> = []
 
         for entry in entries {
-            guard !entry.isDirectory,
-                  let parsed = RepoLayout.parseLivenessFilename(entry.name),
+            if entry.isDirectory {
+                // A directory at a canonical heartbeat path is unreadable — treat as
+                // unknown so cleanup stays blocked until the entry is resolved.
+                if let parsed = RepoLayout.parseLivenessFilename(entry.name), parsed != writerID {
+                    unknown.insert(parsed)
+                }
+                continue
+            }
+            guard let parsed = RepoLayout.parseLivenessFilename(entry.name),
                   parsed != writerID else { continue }
             let path = RepoLayout.normalize(joining: [
                 basePath, RepoLayout.watermelonDirectory, RepoLayout.livenessDirectory, entry.name
@@ -353,8 +360,17 @@ actor LivenessTracker {
         var peers: [RetentionPeerStatus] = []
 
         for entry in entries {
-            guard !entry.isDirectory,
-                  let parsed = RepoLayout.parseLivenessFilename(entry.name),
+            if entry.isDirectory {
+                if let parsed = RepoLayout.parseLivenessFilename(entry.name), parsed != writerID {
+                    peers.append(RetentionPeerStatus(
+                        writerID: parsed,
+                        status: .unknown(reason: .readFailed),
+                        capability: nil
+                    ))
+                }
+                continue
+            }
+            guard let parsed = RepoLayout.parseLivenessFilename(entry.name),
                   parsed != writerID else { continue }
             let path = RepoLayout.normalize(joining: [
                 basePath, RepoLayout.watermelonDirectory, RepoLayout.livenessDirectory, entry.name

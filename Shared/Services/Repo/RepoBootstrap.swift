@@ -230,11 +230,15 @@ actor RepoBootstrap {
             prefix: "repo-bootstrap"
         )
         defer { try? FileManager.default.removeItem(at: temp) }
-        _ = try await client.atomicCreate(
-            localURL: temp,
-            remotePath: RepoLayout.repoFilePath(base: basePath),
-            respectTaskCancellation: false
-        )
+        let storageClient = client
+        let remotePath = RepoLayout.repoFilePath(base: basePath)
+        _ = try await Task { @Sendable () throws -> AtomicCreateResult in
+            try await storageClient.atomicCreate(
+                localURL: temp,
+                remotePath: remotePath,
+                respectTaskCancellation: false
+            )
+        }.value
     }
 
     private func loadFinalizedRepoIDWithRetries() async throws -> String? {

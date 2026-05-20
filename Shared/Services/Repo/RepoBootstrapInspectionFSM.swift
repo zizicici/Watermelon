@@ -62,7 +62,7 @@ struct RepoBootstrapInspectionFSM: Sendable {
 
         let markerStore = MigrationMarkerStore(client: client, basePath: basePath)
         let migrationDirEntries = try await markerStore.migrationsDirectoryEntries()
-        let migrationInProgress = migrationDirEntries.contains { !$0.isDirectory && $0.name.hasSuffix(".json") }
+        let migrationInProgress = migrationDirEntries.contains { $0.name.hasSuffix(".json") }
         machine.apply(.listedMigrationDirectory(rawMigrationMarkerExists: migrationInProgress))
 
         var cachedV1Manifests: Bool?
@@ -116,12 +116,24 @@ struct RepoBootstrapInspectionFSM: Sendable {
 
         if hasV2Data {
             if v1Manifests {
+                if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
+                    try machine.failDamaged()
+                }
                 return machine.finish(.v2WithV1Manifests(formatVersion: RepoLayout.formatVersion))
             }
             if migrationInProgress {
-                let markerStates = try await markerStore.parseEntries(migrationDirEntries)
+                let markerStates = try await parseMarkerEntriesFailingClosed(
+                    markerStore: markerStore,
+                    migrationDirEntries: migrationDirEntries,
+                    machine: machine
+                )
                 let ordered = Self.sortedMarkers(markerStates)
                 machine.apply(.parsedMarkers(ordered.map(MigrationMarkerRoute.init)))
+                // Directory .json markers alongside parseable ones leave cleanup with
+                // an incomplete marker set — fail closed.
+                if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
+                    try machine.failDamaged()
+                }
                 if let marker = ordered.first {
                     return machine.finish(.v2WithPendingMigrationCleanup(
                         formatVersion: RepoLayout.formatVersion,
@@ -129,6 +141,9 @@ struct RepoBootstrapInspectionFSM: Sendable {
                     ))
                 }
             }
+            try machine.failDamaged()
+        }
+        if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
             try machine.failDamaged()
         }
         if v1Manifests { return machine.finish(.v1) }
@@ -147,9 +162,18 @@ struct RepoBootstrapInspectionFSM: Sendable {
             return machine.finish(.unsupported(minAppVersion: manifest.minAppVersion))
         }
 
-        let markerStates = try await markerStore.parseEntries(migrationDirEntries)
+        let markerStates = try await parseMarkerEntriesFailingClosed(
+            markerStore: markerStore,
+            migrationDirEntries: migrationDirEntries,
+            machine: machine
+        )
         let ordered = Self.sortedMarkers(markerStates)
         machine.apply(.parsedMarkers(ordered.map(MigrationMarkerRoute.init)))
+        // parseEntries skips directories; any directory-shaped .json marker alongside
+        // parseable ones leaves cleanup with an incomplete marker set — fail closed.
+        if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
+            try machine.failDamaged()
+        }
         if try await hasV1Manifests() {
             machine.apply(.versionSupported(
                 formatVersion: formatVersion,
@@ -185,6 +209,18 @@ struct RepoBootstrapInspectionFSM: Sendable {
                 return lhs.phase.rawValue > rhs.phase.rawValue
             }
             return lhs.writerID < rhs.writerID
+        }
+    }
+
+    private func parseMarkerEntriesFailingClosed(
+        markerStore: MigrationMarkerStore,
+        migrationDirEntries: [RemoteStorageEntry],
+        machine: BootstrapInspectionMachine
+    ) async throws -> [ParsedMigrationMarker] {
+        do {
+            return try await markerStore.parseEntries(migrationDirEntries)
+        } catch is MigrationMarkerStore.InvalidMarker {
+            try machine.failDamaged()
         }
     }
 

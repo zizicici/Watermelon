@@ -160,6 +160,22 @@ final class MigrationMarkerStoreTests: XCTestCase {
         XCTAssertTrue(exists, "metadata-only presence includes directories — no isDirectory filter")
     }
 
+    func testExistsFor_treatsDirectoryAtPhaseSuffixedPathAsPresence() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let phasePath = RepoLayout.migrationPhaseMarkerPath(
+            base: basePath,
+            writerID: validWriterID,
+            phase: 3,
+            markerID: "abcd1111-abcd-1111-abcd-111111111111"
+        )
+        try await client.createDirectory(path: phasePath)
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+
+        let exists = try await store.existsFor(writerID: validWriterID)
+        XCTAssertTrue(exists, "phase-suffixed directories must remain visible to cleanup verification")
+    }
+
     func testDeleteAll_removesCanonicalForNonUUIDWriterID() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
@@ -171,6 +187,24 @@ final class MigrationMarkerStoreTests: XCTestCase {
 
         let canonicalGone = await client.hasFile(canonical) == false
         XCTAssertTrue(canonicalGone, "deleteAll must remove canonical even when writerID isn't UUID-shaped")
+    }
+
+    func testDeleteAll_removesDirectoryAtPhaseSuffixedPath() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let phasePath = RepoLayout.migrationPhaseMarkerPath(
+            base: basePath,
+            writerID: validWriterID,
+            phase: 3,
+            markerID: "abcd3333-abcd-3333-abcd-333333333333"
+        )
+        try await client.createDirectory(path: phasePath)
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+
+        try await store.deleteAll(writerID: validWriterID)
+
+        let metadata = try await client.metadata(path: phasePath)
+        XCTAssertNil(metadata)
     }
 
     func testDeleteAll_doesNotTouchOtherWriterMarkers() async throws {
@@ -215,6 +249,22 @@ final class MigrationMarkerStoreTests: XCTestCase {
 
         let phase = try await store.currentPhase(writerID: validWriterID)
         XCTAssertEqual(phase, .phase1, "directory at canonical path must count as sawMarker, matching existsFor")
+    }
+
+    func testCurrentPhase_directoryAtPhaseSuffixedPath_usesFilenamePhase() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let phasePath = RepoLayout.migrationPhaseMarkerPath(
+            base: basePath,
+            writerID: validWriterID,
+            phase: 3,
+            markerID: "abcd2222-abcd-2222-abcd-222222222222"
+        )
+        try await client.createDirectory(path: phasePath)
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+
+        let phase = try await store.currentPhase(writerID: validWriterID)
+        XCTAssertEqual(phase, .phase3)
     }
 
     func testCurrentPhase_returnsNilWhenNoMarkers() async throws {
@@ -281,7 +331,7 @@ final class MigrationMarkerStoreTests: XCTestCase {
     }
 
 
-    func testParseEntries_skipsParseFailuresAndReturnsValidOnly() async throws {
+    func testParseEntries_skipsUnparseableFilenamesAndReturnsValidOnly() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
@@ -289,20 +339,6 @@ final class MigrationMarkerStoreTests: XCTestCase {
 
         // filename unparseable
         await client.injectFile(path: "\(dir)/not-a-writer.json", data: Data("{}".utf8))
-        // writerID mismatch (filename WriterID-A, JSON writer_id=B)
-        let mismatchFilename = "\(validWriterID).json"
-        let mismatchPath = "\(dir)/\(mismatchFilename)"
-        await client.injectFile(
-            path: mismatchPath,
-            data: Data(#"{"v":2,"writer_id":"\#(otherWriterID)","phase":2}"#.utf8)
-        )
-        // phase wrong type (boolean)
-        let booleanWriter = "33333333-3333-3333-3333-333333333333"
-        let booleanPath = "\(dir)/\(booleanWriter).json"
-        await client.injectFile(
-            path: booleanPath,
-            data: Data(#"{"v":2,"writer_id":"\#(booleanWriter)","phase":true}"#.utf8)
-        )
         // valid marker
         let validPath = RepoLayout.migrationPhaseMarkerPath(
             base: basePath, writerID: otherWriterID, phase: 2, markerID: "cccc3333-cccc-3333-cccc-333333333333"
@@ -316,6 +352,27 @@ final class MigrationMarkerStoreTests: XCTestCase {
         XCTAssertEqual(parsed.count, 1)
         XCTAssertEqual(parsed.first?.writerID, otherWriterID)
         XCTAssertEqual(parsed.first?.phase, .phase2)
+    }
+
+    func testParseEntries_parseableInvalidMarkerThrows() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
+        try await client.createDirectory(path: dir)
+        let mismatchPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: validWriterID)
+        await client.injectFile(
+            path: mismatchPath,
+            data: Data(#"{"v":2,"writer_id":"\#(otherWriterID)","phase":2}"#.utf8)
+        )
+
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+        let entries = try await store.migrationsDirectoryEntries()
+        do {
+            _ = try await store.parseEntries(entries)
+            XCTFail("expected parseable invalid marker to throw")
+        } catch let invalid as MigrationMarkerStore.InvalidMarker {
+            XCTAssertEqual(invalid.path, mismatchPath)
+        }
     }
 
     func testParseEntries_skipsNotFoundDownload() async throws {

@@ -244,6 +244,165 @@ final class MetadataWriteCancellationTests: XCTestCase {
         }
     }
 
+    // MARK: - Exclusive-path cancellation protection
+
+    func testCommitLogWriter_exclusivePath_respectTaskCancellationFalse_completesUnderCancellation() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        inner.setAtomicCreateGuarantee(.exclusive)
+        let client = TaskCancellationSimulatingClient(inner: inner)
+
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let task = Task {
+            try? await Task.sleep(for: .milliseconds(1))
+            return try await writer.write(
+                header: self.commitHeader(),
+                ops: [self.sampleOp()],
+                month: self.month,
+                respectTaskCancellation: false
+            )
+        }
+        task.cancel()
+        switch await task.result {
+        case .success(let file):
+            XCTAssertEqual(file.sha256Hex.isEmpty, false)
+        case .failure(let error):
+            XCTFail("exclusive-path commit should complete under cancellation with respectTaskCancellation: false, got \(error)")
+        }
+    }
+
+    func testCommitLogWriter_exclusiveAlreadyExistsVerification_completesUnderCancellation() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        inner.setAtomicCreateGuarantee(.exclusive)
+        let client = PostCreateReadCancellationClient(inner: inner, atomicResult: .alreadyExists)
+
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let task = Task {
+            try? await Task.sleep(for: .milliseconds(1))
+            return try await writer.write(
+                header: self.commitHeader(),
+                ops: [self.sampleOp()],
+                month: self.month,
+                respectTaskCancellation: false
+            )
+        }
+        task.cancel()
+        switch await task.result {
+        case .success(let file):
+            XCTAssertFalse(file.sha256Hex.isEmpty)
+            let verifiedDownloads = await client.downloadCount()
+            XCTAssertEqual(verifiedDownloads, 1)
+        case .failure(let error):
+            XCTFail("commit readback verification should complete under cancellation, got \(error)")
+        }
+    }
+
+    func testCommitLogWriter_exclusivePath_respectTaskCancellationTrue_failsUnderCancellation() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        inner.setAtomicCreateGuarantee(.exclusive)
+        let client = TaskCancellationSimulatingClient(inner: inner)
+
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let task = Task {
+            try? await Task.sleep(for: .milliseconds(1))
+            return try await writer.write(
+                header: self.commitHeader(),
+                ops: [self.sampleOp()],
+                month: self.month,
+                respectTaskCancellation: true
+            )
+        }
+        task.cancel()
+        switch await task.result {
+        case .success:
+            XCTFail("exclusive-path commit should fail under cancellation with respectTaskCancellation: true")
+        case .failure(let error):
+            XCTAssertTrue(error is CancellationError, "expected CancellationError, got \(error)")
+        }
+    }
+
+    func testIdentityClaimStore_writeOwnClaim_completesUnderCancellation() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        inner.setAtomicCreateGuarantee(.exclusive)
+        let client = TaskCancellationSimulatingClient(inner: inner)
+
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+
+        let task = Task {
+            try? await Task.sleep(for: .milliseconds(1))
+            try await store.writeOwnClaim(repoID: self.repoID, writerID: self.writerID, createdAtMs: 1)
+        }
+        task.cancel()
+        switch await task.result {
+        case .success:
+            break
+        case .failure(let error):
+            XCTFail("identity claim write should complete under cancellation, got \(error)")
+        }
+    }
+
+    func testIdentityClaimStore_postCreateVerification_completesUnderCancellation() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        inner.setAtomicCreateGuarantee(.exclusive)
+        let client = PostCreateReadCancellationClient(inner: inner, atomicResult: .bestEffortRetry)
+
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+
+        let task = Task {
+            try? await Task.sleep(for: .milliseconds(1))
+            try await store.writeOwnClaim(repoID: self.repoID, writerID: self.writerID, createdAtMs: 1)
+        }
+        task.cancel()
+        switch await task.result {
+        case .success:
+            let verifiedDownloads = await client.downloadCount()
+            XCTAssertEqual(verifiedDownloads, 1)
+        case .failure(let error):
+            XCTFail("identity claim readback verification should complete under cancellation, got \(error)")
+        }
+    }
+
+    func testRepoBootstrap_writeRepoJSONCache_completesUnderCancellation() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        inner.setAtomicCreateGuarantee(.exclusive)
+
+        // Pre-seed finalization marker so ensureRepoJSON skips stabilizeFreshElection
+        // (which has Task.checkCancellation and would fail in a cancelled task).
+        let finalizationPath = RepoLayout.identityFinalizationFilePath(base: basePath)
+        await inner.injectFile(
+            path: finalizationPath,
+            data: try RepoIdentityFinalizationWire(
+                repoID: repoID,
+                formatVersion: RepoLayout.formatVersion,
+                createdAtMs: 1,
+                createdByWriter: writerID
+            ).encode()
+        )
+
+        let client = TaskCancellationSimulatingClient(inner: inner)
+        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
+
+        let task = Task {
+            try? await Task.sleep(for: .milliseconds(1))
+            _ = try await bootstrap.ensureRepoJSON(repoID: self.repoID, writerID: self.writerID)
+        }
+        task.cancel()
+        switch await task.result {
+        case .success:
+            break
+        case .failure(let error):
+            XCTFail("repo.json cache write should complete under cancellation, got \(error)")
+        }
+    }
+
     private func cancellationShapes() -> [Error] {
         let url = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
         return [
@@ -495,5 +654,155 @@ private actor OperationFailureClient: RemoteStorageClientProtocol {
 
     private func shouldFail(_ operation: FailingOperation, path: String) -> Bool {
         failingOperation == operation && (failingRemotePath == nil || failingRemotePath == path)
+    }
+}
+
+/// Simulates S3/WebDAV URLSession cancellation: throws NSURLErrorCancelled when
+/// the Swift task is cancelled, even though the caller passes `respectTaskCancellation: false`.
+private actor TaskCancellationSimulatingClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { inner.supportsLivenessSafeOverwriteMove }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { inner.moveIfAbsentGuarantee }
+
+    private let inner: InMemoryRemoteStorageClient
+
+    init(inner: InMemoryRemoteStorageClient) {
+        self.inner = inner
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        inner.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
+    }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        try await inner.list(path: path)
+    }
+
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        try await inner.metadata(path: path)
+    }
+
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+
+    func atomicCreate(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws -> AtomicCreateResult {
+        if Task.isCancelled {
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        }
+        return try await inner.atomicCreate(
+            localURL: localURL, remotePath: remotePath,
+            respectTaskCancellation: respectTaskCancellation, onProgress: onProgress
+        )
+    }
+
+    func setModificationDate(_ date: Date, forPath path: String) async throws {
+        try await inner.setModificationDate(date, forPath: path)
+    }
+
+    func download(remotePath: String, localURL: URL) async throws {
+        try await inner.download(remotePath: remotePath, localURL: localURL)
+    }
+
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws {
+        try await inner.move(from: sourcePath, to: destinationPath)
+    }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws {
+        try await inner.copy(from: sourcePath, to: destinationPath)
+    }
+}
+
+private actor PostCreateReadCancellationClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { inner.supportsLivenessSafeOverwriteMove }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { inner.moveIfAbsentGuarantee }
+
+    private let inner: InMemoryRemoteStorageClient
+    private let atomicResult: AtomicCreateResult
+    private var createdPaths: Set<String> = []
+    private var downloads = 0
+
+    init(inner: InMemoryRemoteStorageClient, atomicResult: AtomicCreateResult) {
+        self.inner = inner
+        self.atomicResult = atomicResult
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        inner.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
+    }
+
+    func downloadCount() -> Int { downloads }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        try await inner.list(path: path)
+    }
+
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        if createdPaths.contains(RemotePathBuilder.normalizePath(path)), Task.isCancelled {
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        }
+        return try await inner.metadata(path: path)
+    }
+
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+
+    func atomicCreate(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws -> AtomicCreateResult {
+        let normalized = RemotePathBuilder.normalizePath(remotePath)
+        let data = try Data(contentsOf: localURL)
+        await inner.injectFile(path: normalized, data: data)
+        createdPaths.insert(normalized)
+        onProgress?(1.0)
+        return atomicResult
+    }
+
+    func setModificationDate(_ date: Date, forPath path: String) async throws {
+        try await inner.setModificationDate(date, forPath: path)
+    }
+
+    func download(remotePath: String, localURL: URL) async throws {
+        if createdPaths.contains(RemotePathBuilder.normalizePath(remotePath)), Task.isCancelled {
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        }
+        downloads += 1
+        try await inner.download(remotePath: remotePath, localURL: localURL)
+    }
+
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws {
+        try await inner.move(from: sourcePath, to: destinationPath)
+    }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws {
+        try await inner.copy(from: sourcePath, to: destinationPath)
     }
 }

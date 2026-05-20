@@ -40,6 +40,11 @@ final class RepoLayoutTests: XCTestCase {
         XCTAssertNil(RepoLayout.parseSnapshotFilename("2026-13--00000000000000ff--writer--abc123.jsonl"))
         XCTAssertNil(RepoLayout.parseCommitFilename("2026-05--writer.jsonl"))
         XCTAssertNil(RepoLayout.parseCommitFilename("2026-05--writer--zzzzzz.jsonl"))
+        XCTAssertNil(RepoLayout.parseCommitFilename("2026-05--11112222-3333-4444-5555-666677778888--1.jsonl"))
+        XCTAssertNil(RepoLayout.parseCommitFilename("2026-05--11112222-3333-4444-5555-666677778888--0000000000000001"))
+        XCTAssertNil(RepoLayout.parseCommitFilename("2026-5--11112222-3333-4444-5555-666677778888--0000000000000001.jsonl"))
+        XCTAssertNil(RepoLayout.parseSnapshotFilename("2026-05--1--11112222-3333-4444-5555-666677778888--abcdef.jsonl"))
+        XCTAssertNil(RepoLayout.parseSnapshotFilename("2026-05--0000000000000001--11112222-3333-4444-5555-666677778888--ABCDEF.jsonl"))
     }
 
     func testPathHelpersStartWithLeadingSlash() {

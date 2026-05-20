@@ -130,7 +130,18 @@ struct RetentionManifestRemoteStore: Sendable {
         var invalid: [InvalidRetentionManifestEntry] = []
         var ignoredFilenameCount = 0
 
-        for entry in entries where !entry.isDirectory {
+        for entry in entries {
+            if entry.isDirectory {
+                if let parsedRef = RetentionManifestStore.parseFilename(entry.name) {
+                    let matchesMonth = month.map { parsedRef.month == $0 } ?? true
+                    if matchesMonth {
+                        invalid.append(InvalidRetentionManifestEntry(filename: entry.name, reason: .bodyDecodeFailed))
+                    }
+                } else if entry.name.hasSuffix(".json") {
+                    invalid.append(InvalidRetentionManifestEntry(filename: entry.name, reason: .filenameMalformed))
+                }
+                continue
+            }
             guard let parsedRef = RetentionManifestStore.parseFilename(entry.name) else {
                 if entry.name.hasSuffix(".json") {
                     invalid.append(InvalidRetentionManifestEntry(filename: entry.name, reason: .filenameMalformed))

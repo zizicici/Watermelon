@@ -99,7 +99,10 @@ enum BackupV2RuntimeBuilder {
                     case .higherFormatVersion(_, _, let minApp),
                          .mismatchedFormatVersion(_, _, let minApp):
                         throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
-                    case .unreadable:
+                    case .unreadable(let underlying):
+                        if let underlying, RemoteWriteClassifier.isCancellation(underlying) {
+                            throw CancellationError()
+                        }
                         throw BackupV2RuntimeBuildError.damagedV2Repo
                     }
                 }
@@ -108,7 +111,10 @@ enum BackupV2RuntimeBuilder {
                 // `repo.json` / `repo-identity-final.json` / peer claim through
                 // `ensureRepoJSON` / `ensureIdentityFinalization`; mirror sibling
                 // arms so the user sees `damagedV2Repo` instead of a raw enum render.
-                if case .ioFailure = error {
+                if case .ioFailure(let underlying) = error {
+                    if RemoteWriteClassifier.isCancellation(underlying) {
+                        throw CancellationError()
+                    }
                     throw BackupV2RuntimeBuildError.damagedV2Repo
                 }
                 throw error
