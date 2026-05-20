@@ -331,15 +331,13 @@ final class MigrationMarkerStoreTests: XCTestCase {
     }
 
 
-    func testParseEntries_skipsUnparseableFilenamesAndReturnsValidOnly() async throws {
+    func testParseEntries_unparseableFilenameThrowsInvalidMarker() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
         try await client.createDirectory(path: dir)
 
-        // filename unparseable
         await client.injectFile(path: "\(dir)/not-a-writer.json", data: Data("{}".utf8))
-        // valid marker
         let validPath = RepoLayout.migrationPhaseMarkerPath(
             base: basePath, writerID: otherWriterID, phase: 2, markerID: "cccc3333-cccc-3333-cccc-333333333333"
         )
@@ -347,11 +345,58 @@ final class MigrationMarkerStoreTests: XCTestCase {
 
         let store = MigrationMarkerStore(client: client, basePath: basePath)
         let entries = try await store.migrationsDirectoryEntries()
-        let parsed = try await store.parseEntries(entries)
+        do {
+            _ = try await store.parseEntries(entries)
+            XCTFail("expected InvalidMarker for non-parseable filename")
+        } catch let error as MigrationMarkerStore.InvalidMarker {
+            XCTAssertTrue(error.path.hasSuffix("not-a-writer.json"))
+            XCTAssertTrue(error.reason.contains("migration marker pattern"))
+        }
+    }
 
-        XCTAssertEqual(parsed.count, 1)
-        XCTAssertEqual(parsed.first?.writerID, otherWriterID)
-        XCTAssertEqual(parsed.first?.phase, .phase2)
+    /// Invalid filenames must be rejected from the listing alone — no download needed.
+    /// If validation happened after download, a not-found error would silently skip
+    /// the entry and the caller's `!hasV2Data` path would proceed as `.fresh`/`.v1`.
+    func testParseEntries_invalidFilenameFailsClosedWithoutDownload() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
+        try await client.createDirectory(path: dir)
+        let badPath = "\(dir)/not-a-writer.json"
+        await client.injectFile(path: badPath, data: Data("{}".utf8))
+        await client.injectDownloadError(.notFound, for: badPath)
+
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+        let entries = try await store.migrationsDirectoryEntries()
+        do {
+            _ = try await store.parseEntries(entries)
+            XCTFail("expected InvalidMarker — filename must be validated before download")
+        } catch let error as MigrationMarkerStore.InvalidMarker {
+            XCTAssertTrue(error.path.hasSuffix("not-a-writer.json"))
+        }
+    }
+
+    /// A transport error for an invalid filename must surface as InvalidMarker, not
+    /// as a raw IO error that the caller's generic catch block would tolerate.
+    func testParseEntries_invalidFilenameFailsClosedWithTransportError() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
+        try await client.createDirectory(path: dir)
+        let badPath = "\(dir)/rogue-marker.json"
+        await client.injectFile(path: badPath, data: Data("{}".utf8))
+        await client.injectPersistentDownloadError(.transport, for: badPath)
+
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+        let entries = try await store.migrationsDirectoryEntries()
+        do {
+            _ = try await store.parseEntries(entries)
+            XCTFail("expected InvalidMarker, not transport tolerance")
+        } catch is MigrationMarkerStore.InvalidMarker {
+            // expected — filename rejected before download attempted
+        } catch {
+            XCTFail("transport error for invalid filename must not bypass InvalidMarker: \(error)")
+        }
     }
 
     func testParseEntries_parseableInvalidMarkerThrows() async throws {

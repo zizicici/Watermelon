@@ -133,8 +133,9 @@ final class BootstrapStateMachineTests: XCTestCase {
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         // Plant a migration marker.
-        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: "A")
-        await client.injectFile(path: markerPath, contents: #"{"v":1,"writer_id":"A","started_at_ms":0}"#)
+        let writerID = "a0a0a0a0-a0a0-a0a0-a0a0-a0a0a0a0a0a0"
+        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
+        await client.injectFile(path: markerPath, contents: #"{"v":2,"writer_id":"\#(writerID)","phase":3,"started_at_ms":0}"#)
         // Phase3 cleanup has not finished.
         await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
 
@@ -147,11 +148,12 @@ final class BootstrapStateMachineTests: XCTestCase {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
-        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: "A")
-        await client.injectFile(path: markerPath, contents: #"{"v":1,"writer_id":"A","started_at_ms":0}"#)
+        let writerID = "b1b1b1b1-b1b1-b1b1-b1b1-b1b1b1b1b1b1"
+        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
+        await client.injectFile(path: markerPath, contents: #"{"v":2,"writer_id":"\#(writerID)","phase":3,"started_at_ms":0}"#)
 
         let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
-        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion), "stale marker without V1 manifests → V2")
+        XCTAssertEqual(outcome, .v2WithPendingMigrationCleanup(formatVersion: RepoLayout.formatVersion, ownerWriterID: writerID), "stale marker without V1 manifests → V2 cleanup")
     }
 
     func testPhase1ResidueMarker_noV1Manifests_routesToCleanup() async throws {

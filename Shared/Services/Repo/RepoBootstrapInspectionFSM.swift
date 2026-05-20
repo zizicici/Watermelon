@@ -154,8 +154,7 @@ struct RepoBootstrapInspectionFSM: Sendable {
             try machine.failDamaged()
         }
         let fileMarkers = migrationDirEntries.filter {
-            !$0.isDirectory && $0.name.hasSuffix(".json") &&
-            RepoLayout.parseMigrationMarkerFilename($0.name) != nil
+            !$0.isDirectory && $0.name.hasSuffix(".json")
         }
         if !fileMarkers.isEmpty {
             do {

@@ -409,6 +409,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
         for seq in coveredSeqs {
             covered.add(writerID: writerA, seq: seq)
         }
+        covered.add(writerID: writerID, seq: 1)
         let assets = fingerprints.map { fp in
             SnapshotAssetRow(
                 assetFingerprint: fp,

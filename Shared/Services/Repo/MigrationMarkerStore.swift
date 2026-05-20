@@ -117,12 +117,23 @@ nonisolated struct MigrationMarkerStore: Sendable {
     }
 
 
-    /// `CancellationError` and non-not-found IO errors propagate so a transport
-    /// glitch can't be misread as "no markers"; parse failures log + skip.
+    /// All non-directory `*.json` filenames are validated before any downloads so
+    /// an invalid entry in the reserved namespace fails closed from the listing alone.
+    /// Transport-error tolerance then applies only to syntactically valid filenames.
     func parseEntries(_ rawEntries: [RemoteStorageEntry]) async throws -> [ParsedMigrationMarker] {
         let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
+        let jsonEntries = rawEntries.filter { !$0.isDirectory && $0.name.hasSuffix(".json") }
+        for entry in jsonEntries {
+            guard RepoLayout.parseMigrationMarkerFilename(entry.name) != nil else {
+                let path = RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name)
+                migrationMarkerStoreLog.warning(
+                    "non-marker .json in reserved migrations dir at \(path, privacy: .public)"
+                )
+                throw InvalidMarker(path: path, reason: "filename does not match migration marker pattern")
+            }
+        }
         var results: [ParsedMigrationMarker] = []
-        for entry in rawEntries where !entry.isDirectory && entry.name.hasSuffix(".json") {
+        for entry in jsonEntries {
             let path = RemotePathBuilder.absolutePath(basePath: dir, remoteRelativePath: entry.name)
             let temp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("migration-marker-detect-\(UUID().uuidString).json")
@@ -136,12 +147,6 @@ nonisolated struct MigrationMarkerStore: Sendable {
             } catch {
                 if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 if !isStorageNotFoundError(error) { throw error }
-                continue
-            }
-            guard RepoLayout.parseMigrationMarkerFilename(entry.name) != nil else {
-                migrationMarkerStoreLog.warning(
-                    "skipping non-marker .json at \(path, privacy: .public)"
-                )
                 continue
             }
             do {
