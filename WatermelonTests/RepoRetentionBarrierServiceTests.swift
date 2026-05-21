@@ -265,6 +265,22 @@ final class RepoRetentionBarrierServiceTests: XCTestCase {
         let runtimeSource = try String(contentsOf: runtimeBuilder, encoding: .utf8)
         XCTAssertFalse(runtimeSource.contains("RepoRetentionBarrierService"))
         XCTAssertFalse(runtimeSource.contains("RetentionManifestRemoteStore"))
+        XCTAssertFalse(runtimeSource.contains("OrphanMetadataCleanup"))
+        XCTAssertFalse(runtimeSource.contains("RepoRetentionStartupMaintenance"))
+        XCTAssertFalse(runtimeSource.contains("snapshotPeerStatuses"))
+        XCTAssertFalse(runtimeSource.contains("liveness.start"))
+
+        let openService = root.appendingPathComponent("Shared/Services/Repo/BackupV2RepoOpenService.swift")
+        let openSource = try String(contentsOf: openService, encoding: .utf8)
+        XCTAssertFalse(openSource.contains("OrphanMetadataCleanup"))
+        XCTAssertFalse(openSource.contains("RepoRetentionStartupMaintenance"))
+        XCTAssertFalse(openSource.contains("Task(priority: .utility)"))
+
+        let maintenanceRuntime = root.appendingPathComponent("Shared/Services/Repo/RepoMaintenanceRuntime.swift")
+        let maintenanceSource = try String(contentsOf: maintenanceRuntime, encoding: .utf8)
+        XCTAssertTrue(maintenanceSource.contains("OrphanMetadataCleanup"))
+        XCTAssertTrue(maintenanceSource.contains("RepoRetentionStartupMaintenance"))
+        XCTAssertTrue(maintenanceSource.contains("liveness.start"))
 
         let cleanup = root.appendingPathComponent("Shared/Services/Repo/OrphanMetadataCleanup.swift")
         let cleanupSource = try String(contentsOf: cleanup, encoding: .utf8)

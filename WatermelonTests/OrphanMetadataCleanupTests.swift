@@ -228,7 +228,7 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         await client.injectFile(path: path, contents: "stranded heartbeat")
         await client.setModificationDateForTest(Date(timeIntervalSinceNow: -7200), path: path)
 
-        let deleted = await OrphanMetadataCleanup.sweepOwnLivenessStagings(
+        let deleted = try await OrphanMetadataCleanup.sweepOwnLivenessStagings(
             client: client,
             basePath: basePath,
             writerID: writerA
@@ -250,7 +250,7 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         await client.injectFile(path: path, contents: "in-flight heartbeat")
         await client.setModificationDateForTest(Date(timeIntervalSinceNow: -60), path: path)
 
-        let deleted = await OrphanMetadataCleanup.sweepOwnLivenessStagings(
+        let deleted = try await OrphanMetadataCleanup.sweepOwnLivenessStagings(
             client: client,
             basePath: basePath,
             writerID: writerA
@@ -271,7 +271,7 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         await client.injectFile(path: path, contents: "no-mtime staging")
         // Deliberately skip setModificationDateForTest → listing reports nil mtime.
 
-        let deleted = await OrphanMetadataCleanup.sweepOwnLivenessStagings(
+        let deleted = try await OrphanMetadataCleanup.sweepOwnLivenessStagings(
             client: client,
             basePath: basePath,
             writerID: writerA
@@ -293,7 +293,7 @@ final class OrphanMetadataCleanupTests: XCTestCase {
         await client.injectFile(path: path, contents: "peer heartbeat")
         await client.setModificationDateForTest(Date(timeIntervalSinceNow: -7200), path: path)
 
-        let deleted = await OrphanMetadataCleanup.sweepOwnLivenessStagings(
+        let deleted = try await OrphanMetadataCleanup.sweepOwnLivenessStagings(
             client: client,
             basePath: basePath,
             writerID: writerA
@@ -320,7 +320,7 @@ final class OrphanMetadataCleanupTests: XCTestCase {
             await client.setModificationDateForTest(Date(timeIntervalSinceNow: -7200), path: path)
         }
 
-        let deleted = await OrphanMetadataCleanup.sweepOwnLivenessStagings(
+        let deleted = try await OrphanMetadataCleanup.sweepOwnLivenessStagings(
             client: client,
             basePath: basePath,
             writerID: writerA

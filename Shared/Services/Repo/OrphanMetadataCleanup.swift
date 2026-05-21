@@ -71,12 +71,14 @@ enum OrphanMetadataCleanup {
         writerID: String,
         ageThresholdSeconds: TimeInterval = 3600,
         now: Date = Date()
-    ) async -> Int {
+    ) async throws -> Int {
+        try Task.checkCancellation()
         let dir = RepoLayout.livenessDirectoryPath(base: basePath)
         let entries: [RemoteStorageEntry]
         do {
             entries = try await client.list(path: dir)
         } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             cleanupLog.warning("self-liveness sweep list failed: \(dir, privacy: .public) \(String(describing: error), privacy: .public)")
             return 0
         }
@@ -84,7 +86,7 @@ enum OrphanMetadataCleanup {
         var stagingsSeen = 0
         var stagingsWithoutMtime = 0
         for entry in entries {
-            if Task.isCancelled { return deleted }
+            try Task.checkCancellation()
             guard !entry.isDirectory else { continue }
             guard let range = entry.name.range(of: ".staging-") else { continue }
             let originalName = String(entry.name[..<range.lowerBound])
@@ -100,6 +102,7 @@ enum OrphanMetadataCleanup {
                 try await client.delete(path: path)
                 deleted += 1
             } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 cleanupLog.warning("self-liveness orphan delete failed: \(path, privacy: .public) \(String(describing: error), privacy: .public)")
             }
         }

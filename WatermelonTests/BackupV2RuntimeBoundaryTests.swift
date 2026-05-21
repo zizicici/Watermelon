@@ -163,12 +163,13 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
             XCTAssertEqual(disconnectCount, 1, testCase.name)
         }
     }
-    func testProductionBackupV2RuntimeBuilderCallSitesDoNotPassRetentionRuntimeMode() throws {
+    func testProductionBackupV2RuntimeBuilderCallSitesDoNotDisableMaintenanceExceptVerifyMonth() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let excluded: Set<String> = [
             "Shared/Services/Repo/BackupV2RuntimeBuilder.swift",
             "Shared/Services/Repo/BackupV2RuntimeServices.swift",
-            "Shared/Services/Repo/RepoRetentionRuntimeMode.swift"
+            "Shared/Services/Repo/RepoRetentionRuntimeMode.swift",
+            "Shared/Services/Repo/RepoMaintenanceRuntime.swift"
         ]
         var matches: [String] = []
 
@@ -184,6 +185,16 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
                 let contents = try String(contentsOf: fileURL, encoding: .utf8)
                 for (index, line) in contents.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
                     if line.range(of: #"\bretentionRuntimeMode\s*:"#, options: .regularExpression) != nil {
+                        matches.append("\(relative):\(index + 1):\(line.trimmingCharacters(in: .whitespaces))")
+                    }
+                    if line.contains("maintenanceStartupMode: .disabled") {
+                        let allowed = relative == "Watermelon/Services/Backup/BackupRunPreparation.swift"
+                            && line.contains(".verifyMonthTombstoneApply")
+                        if !allowed {
+                            matches.append("\(relative):\(index + 1):\(line.trimmingCharacters(in: .whitespaces))")
+                        }
+                    }
+                    if line.contains("runMaintenanceTasks") {
                         matches.append("\(relative):\(index + 1):\(line.trimmingCharacters(in: .whitespaces))")
                     }
                 }
@@ -204,7 +215,7 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
         let services = try await BackupV2RuntimeBuilder.build(
             client: client,
             metadataClient: client,
-            runMaintenanceTasks: false,
+            maintenanceStartupMode: .disabled(.test),
             profile: profile,
             databaseManager: databaseManager,
             allowMigration: false

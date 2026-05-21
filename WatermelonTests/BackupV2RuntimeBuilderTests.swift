@@ -718,6 +718,155 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
                        "self-sweep must reclaim aged own liveness staging even on renewal-unsafe backends (SMB/SFTP) — otherwise own crash residue is immortal")
     }
 
+    func testRepoOpenServiceDoesNotStartMaintenance() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+        let identity = RepoIdentity(database: databaseManager)
+        let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        let ownStagingPath = "\(basePath)/.watermelon/liveness/\(writerID).json.staging-\(UUID().uuidString).tmp"
+        await metadataClient.injectFile(path: ownStagingPath, contents: "stranded heartbeat")
+        await metadataClient.setModificationDateForTest(Date(timeIntervalSinceNow: -7200), path: ownStagingPath)
+
+        let opened = try await BackupV2RepoOpenService(
+            client: client,
+            metadataClient: metadataClient,
+            profile: profile,
+            databaseManager: databaseManager,
+            format: RemoteFormatCompatibilityService(),
+            allowMigration: false
+        ).open()
+        try await Task.sleep(for: .milliseconds(150))
+
+        XCTAssertEqual(opened.writerID, writerID)
+        let heartbeatExists = await metadataClient.hasFile(RepoLayout.livenessFilePath(base: basePath, writerID: writerID))
+        let stagingExists = await metadataClient.hasFile(ownStagingPath)
+        XCTAssertFalse(heartbeatExists)
+        XCTAssertTrue(stagingExists)
+    }
+
+    func testDisabledMaintenanceModeIsQuietAndShutdownStillDisconnects() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+        let identity = RepoIdentity(database: databaseManager)
+        let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        let ownStagingPath = "\(basePath)/.watermelon/liveness/\(writerID).json.staging-\(UUID().uuidString).tmp"
+        await metadataClient.injectFile(path: ownStagingPath, contents: "stranded heartbeat")
+        await metadataClient.setModificationDateForTest(Date(timeIntervalSinceNow: -7200), path: ownStagingPath)
+
+        let services = try await BackupV2RuntimeBuilder.build(
+            client: client,
+            metadataClient: metadataClient,
+            maintenanceStartupMode: .disabled(.test),
+            profile: profile,
+            databaseManager: databaseManager,
+            allowMigration: false
+        )
+        try await Task.sleep(for: .milliseconds(150))
+
+        let heartbeatExists = await metadataClient.hasFile(RepoLayout.livenessFilePath(base: basePath, writerID: writerID))
+        let stagingExists = await metadataClient.hasFile(ownStagingPath)
+        XCTAssertFalse(heartbeatExists)
+        XCTAssertTrue(stagingExists)
+        await services.shutdown()
+        let disconnectCount = await metadataClient.disconnectCount
+        XCTAssertEqual(disconnectCount, 1)
+    }
+
+    func testStartupRetentionCancellationShutsDownOwnedMetadataClient() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        await metadataClient.injectListWrappedURLCancellation(for: RepoLayout.retentionDirectoryPath(base: basePath))
+        let profile = try insertProfile()
+
+        do {
+            _ = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+            XCTFail("expected startup retention cancellation")
+        } catch is CancellationError {
+        }
+
+        let disconnectCount = await metadataClient.disconnectCount
+        XCTAssertEqual(disconnectCount, 1)
+    }
+
+    func testMaintenanceSelfSweepCancellationAbortsBeforeLivenessStart() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+        let identity = RepoIdentity(database: databaseManager)
+        let writerID = try await identity.lazyEnsureWriterID(profileID: profile.id!)
+        await metadataClient.injectListWrappedURLCancellation(
+            for: RepoLayout.livenessDirectoryPath(base: basePath)
+        )
+
+        do {
+            let services = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+            await services.shutdown()
+            XCTFail("expected maintenance self-sweep cancellation")
+        } catch is CancellationError {
+        }
+        try await Task.sleep(for: .milliseconds(150))
+
+        let heartbeatExists = await metadataClient.hasFile(RepoLayout.livenessFilePath(base: basePath, writerID: writerID))
+        XCTAssertFalse(heartbeatExists)
+    }
+
+    func testMaintenancePeerStatusCancellationStopsLivenessAndAborts() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        let metadataClient = InMemoryRemoteStorageClient()
+        metadataClient.setMoveIfAbsentGuarantee(.exclusive)
+        try await metadataClient.connect()
+        let profile = try insertProfile()
+        await metadataClient.injectListWrappedURLCancellation(
+            for: RepoLayout.livenessDirectoryPath(base: basePath),
+            onAttempt: 2
+        )
+
+        do {
+            let services = try await BackupV2RuntimeBuilder.build(
+                client: client,
+                metadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                allowMigration: false
+            )
+            await services.shutdown()
+            XCTFail("expected maintenance peer-status cancellation")
+        } catch is CancellationError {
+        }
+    }
+
     func testRetentionCapabilityHeartbeatRequiresSafeRenewal() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)

@@ -114,6 +114,13 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     }
     private var listWrappedURLCancelByPath: Set<String> = []
 
+    func injectListWrappedURLCancellation(for path: String, onAttempt attempt: Int) {
+        let key = Self.normalize(path)
+        listWrappedURLCancelAttemptsByPath[key, default: []].insert(attempt)
+    }
+    private var listWrappedURLCancelAttemptsByPath: [String: Set<Int>] = [:]
+    private var listAttemptCountByPath: [String: Int] = [:]
+
     func injectMetadataError(_ error: InjectedError, for path: String) {
         metadataErrorByPath[Self.normalize(path)] = error
     }
@@ -196,6 +203,18 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func list(path: String) async throws -> [RemoteStorageEntry] {
         let dir = Self.normalize(path)
+        let attempt = (listAttemptCountByPath[dir] ?? 0) + 1
+        listAttemptCountByPath[dir] = attempt
+        if var attempts = listWrappedURLCancelAttemptsByPath[dir], attempts.remove(attempt) != nil {
+            if attempts.isEmpty {
+                listWrappedURLCancelAttemptsByPath.removeValue(forKey: dir)
+            } else {
+                listWrappedURLCancelAttemptsByPath[dir] = attempts
+            }
+            throw RemoteStorageClientError.underlying(
+                NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+            )
+        }
         if listURLCancelByPath.remove(dir) != nil {
             throw NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
         }

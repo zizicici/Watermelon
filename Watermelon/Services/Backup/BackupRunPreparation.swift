@@ -405,7 +405,7 @@ struct BackupRunPreparationService: Sendable {
                     client: client,
                     metadataClient: metadataClient,
                     ownsMetadataClient: false,
-                    runMaintenanceTasks: false,
+                    maintenanceStartupMode: .disabled(.verifyMonthTombstoneApply),
                     profile: profile,
                     databaseManager: databaseManager,
                     format: formatCompatibilityService,

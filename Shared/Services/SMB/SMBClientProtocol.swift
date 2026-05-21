@@ -182,9 +182,8 @@ extension RemoteStorageClientProtocol {
     /// renewal-safety contract end-to-end.
     var supportsLivenessSafeOverwriteUpload: Bool { false }
     /// Derived: a backend can renew the liveness path iff at least one of the two
-    /// renewal atoms is safe. `BackupV2RuntimeBuilder` consumes this — when false
-    /// the orphan sweep MUST decline to run, since a stale heartbeat would let a
-    /// peer delete our live staging files.
+    /// renewal atoms is safe. Maintenance startup consumes this; when false the
+    /// orphan sweep MUST decline to run.
     var supportsLivenessSafeRenewal: Bool {
         supportsLivenessSafeOverwriteUpload || supportsLivenessSafeOverwriteMove
     }

@@ -189,7 +189,7 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
             XCTAssertFalse(text.contains("commitPrefixDeletionEnabled"), "commitPrefixDeletionEnabled unexpectedly present in \(path)")
         }
 
-        // Production callers of BackupV2RuntimeBuilder.build() must not carry retention off-mode overrides.
+        // Production backup runtime callers must not carry maintenance-off overrides.
         let productionBuildCallers = [
             "Watermelon/Services/Backup/BackupRunPreparation.swift",
             "Watermelon/Services/Backup/BackgroundBackupRunner.swift"
@@ -198,7 +198,17 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
             let text = try source(root, path)
             XCTAssertFalse(text.contains("retentionRuntimeMode:"), "retentionRuntimeMode unexpectedly passed in \(path)")
             XCTAssertFalse(text.contains("RepoRetentionRuntimeMode"), "retention runtime mode unexpectedly referenced in \(path)")
+            XCTAssertFalse(text.contains("runMaintenanceTasks:"), "runMaintenanceTasks unexpectedly passed in \(path)")
+            if path.hasSuffix("BackgroundBackupRunner.swift") {
+                XCTAssertFalse(text.contains("maintenanceStartupMode:"), "background backup unexpectedly overrides maintenance startup in \(path)")
+            }
         }
+        let preparation = try source(root, "Watermelon/Services/Backup/BackupRunPreparation.swift")
+        XCTAssertEqual(
+            preparation.components(separatedBy: "maintenanceStartupMode: .disabled(.verifyMonthTombstoneApply)").count - 1,
+            1
+        )
+        XCTAssertFalse(preparation.contains("maintenanceStartupMode: .disabled(.test)"))
 
         for path in [
             "Shared/Services/Backup/V2MonthSession.swift",
