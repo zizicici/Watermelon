@@ -256,8 +256,12 @@ final class LegacyMigrationPlanner {
         if store.containsAssetFingerprint(bundle.assetFingerprint) {
             return .skipExactMatch
         }
-        let resources = bundle.resources.map { (role: $0.role, slot: $0.slot, hash: $0.contentHash) }
-        if store.findEnclosingAssetFingerprint(forResources: resources) != nil {
+        let resourceKeys = Set(
+            bundle.resources.map {
+                AssetResourceLinkKey(role: $0.role, slot: $0.slot, hash: $0.contentHash)
+            }
+        )
+        if store.findEnclosingAssetFingerprint(forResourceKeys: resourceKeys) != nil {
             return .skipEnclosed
         }
         // Manifest-driven bundles carry authoritative role assignments — never drop perceptually.
@@ -269,7 +273,7 @@ final class LegacyMigrationPlanner {
                 }
             }
         }
-        let subsets = store.findStrictSubsetAssetFingerprints(forResources: resources)
+        let subsets = store.findStrictSubsetAssetFingerprints(forResourceKeys: resourceKeys)
         if !subsets.isEmpty {
             return .replacesSubsets(count: subsets.count)
         }

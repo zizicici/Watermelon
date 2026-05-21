@@ -28,12 +28,12 @@ protocol BackupMonthStore: AnyObject {
         replacingSubsetFingerprints: Set<Data>
     ) throws
 
-    /// Older partial assets whose links are a strict subset of `resources`'s (role, slot, hash)
-    /// tuples — the incoming bundle supersedes them and the caller should tombstone via
+    /// Older partial assets whose links are a strict subset of `keys`.
+    /// The incoming bundle supersedes them and the caller should tombstone via
     /// `upsertAsset(..., replacingSubsetFingerprints:)`. Default returns []; only stores that
     /// track per-fingerprint links provide a real implementation.
     func findStrictSubsetAssetFingerprints(
-        forResources resources: [(role: Int, slot: Int, hash: Data)]
+        forResourceKeys keys: Set<AssetResourceLinkKey>
     ) -> [Data]
 
     @discardableResult
@@ -66,7 +66,7 @@ extension BackupMonthStore {
     }
 
     func findStrictSubsetAssetFingerprints(
-        forResources resources: [(role: Int, slot: Int, hash: Data)]
+        forResourceKeys keys: Set<AssetResourceLinkKey>
     ) -> [Data] { [] }
 
     @discardableResult

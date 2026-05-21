@@ -308,10 +308,9 @@ final class AssetProcessor: Sendable {
         )
 
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
+        let resourceKeys = AssetResourceLinkSetPredicate.keys(fromLinks: links)
         let subsetFingerprints = Set(
-            context.monthStore.findStrictSubsetAssetFingerprints(
-                forResources: links.map { (role: $0.role, slot: $0.slot, hash: $0.resourceHash) }
-            )
+            context.monthStore.findStrictSubsetAssetFingerprints(forResourceKeys: resourceKeys)
         )
         try context.monthStore.upsertAsset(
             manifestAsset,
@@ -415,10 +414,15 @@ final class AssetProcessor: Sendable {
         // Subset survivors (older partial assets in the manifest whose links are a strict
         // subset of this asset's) also force the fall-through so the resources-reused
         // upsert tombstones them — without this, pre-fix backups never self-heal.
+        let cachedResourceKeys = Set(
+            roleSlotHashes.map {
+                AssetResourceLinkKey(role: $0.role, slot: $0.slot, hash: $0.contentHash)
+            }
+        )
         if context.monthStore.containsAssetFingerprint(cachedFingerprint),
            !context.monthStore.isAssetIncomplete(cachedFingerprint),
            context.monthStore.findStrictSubsetAssetFingerprints(
-               forResources: roleSlotHashes.map { (role: $0.role, slot: $0.slot, hash: $0.contentHash) }
+               forResourceKeys: cachedResourceKeys
            ).isEmpty {
             let totalFileSizeBytes = Self.totalSizeBytes(of: context.selectedResources)
             let dbStart = CFAbsoluteTimeGetCurrent()
@@ -490,10 +494,9 @@ final class AssetProcessor: Sendable {
             totalFileSizeBytes: totalFileSizeBytes
         )
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
+        let resourceKeys = AssetResourceLinkSetPredicate.keys(fromLinks: links)
         let subsetFingerprints = Set(
-            context.monthStore.findStrictSubsetAssetFingerprints(
-                forResources: links.map { (role: $0.role, slot: $0.slot, hash: $0.resourceHash) }
-            )
+            context.monthStore.findStrictSubsetAssetFingerprints(forResourceKeys: resourceKeys)
         )
         try context.monthStore.upsertAsset(
             manifestAsset,

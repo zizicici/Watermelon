@@ -1708,13 +1708,91 @@ final class V2FlushTests: XCTestCase {
         try store.upsertAsset(unrelated, links: [unrelatedLink])
 
         // Incoming bundle (photo + paired video) — A's links are a strict subset; C's are not.
-        let supersedingTuples: [(role: Int, slot: Int, hash: Data)] = [
-            (role: ResourceTypeCode.photo, slot: 0, hash: photoHash),
-            (role: ResourceTypeCode.pairedVideo, slot: 0, hash: videoHash)
+        let supersedingKeys: Set<AssetResourceLinkKey> = [
+            AssetResourceLinkKey(role: ResourceTypeCode.photo, slot: 0, hash: photoHash),
+            AssetResourceLinkKey(role: ResourceTypeCode.pairedVideo, slot: 0, hash: videoHash)
         ]
-        let subsets = store.findStrictSubsetAssetFingerprints(forResources: supersedingTuples)
+        let subsets = store.findStrictSubsetAssetFingerprints(forResourceKeys: supersedingKeys)
         XCTAssertEqual(Set(subsets), [partialFP],
                        "strict-subset finder must report the partial asset and only it")
+    }
+
+    func testFindStrictSubsetAssetFingerprints_v1AndV2ReturnSameFingerprints() async throws {
+        let v1Client = InMemoryRemoteStorageClient()
+        try await v1Client.connect()
+        let v1Store = try await MonthManifestStore.loadOrCreate(
+            client: v1Client, basePath: basePath, year: year, month: month
+        )
+
+        let v2Client = InMemoryRemoteStorageClient()
+        try await v2Client.connect()
+        let v2 = try await makeV2Services(client: v2Client)
+        let v2Store = try await V2MonthSession.loadOrCreate(
+            client: v2Client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let photoHash = TestFixtures.fingerprint(0xA1)
+        let videoHash = TestFixtures.fingerprint(0xA2)
+        let unrelatedHash = TestFixtures.fingerprint(0xCC)
+        let partialFP = TestFixtures.fingerprint(0xB1)
+        let unrelatedFP = TestFixtures.fingerprint(0xB2)
+
+        let photoResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: "2026/01/photo.jpg",
+            contentHash: photoHash, fileSize: 100,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let videoResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: "2026/01/photo.mov",
+            contentHash: videoHash, fileSize: 200,
+            resourceType: ResourceTypeCode.pairedVideo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let unrelatedResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: "2026/01/other.jpg",
+            contentHash: unrelatedHash, fileSize: 50,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let partialAsset = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: partialFP,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 100
+        )
+        let partialLink = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: partialFP, resourceHash: photoHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "photo.jpg"
+        )
+        let unrelatedAsset = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: unrelatedFP,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 50
+        )
+        let unrelatedLink = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: unrelatedFP, resourceHash: unrelatedHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "other.jpg"
+        )
+
+        func seed(_ store: any BackupMonthStore) throws {
+            _ = try store.upsertResource(photoResource)
+            _ = try store.upsertResource(videoResource)
+            _ = try store.upsertResource(unrelatedResource)
+            try store.upsertAsset(partialAsset, links: [partialLink])
+            try store.upsertAsset(unrelatedAsset, links: [unrelatedLink])
+        }
+
+        try seed(v1Store)
+        try seed(v2Store)
+
+        let supersedingKeys: Set<AssetResourceLinkKey> = [
+            AssetResourceLinkKey(role: ResourceTypeCode.photo, slot: 0, hash: photoHash),
+            AssetResourceLinkKey(role: ResourceTypeCode.pairedVideo, slot: 0, hash: videoHash)
+        ]
+
+        XCTAssertEqual(
+            Set(v1Store.findStrictSubsetAssetFingerprints(forResourceKeys: supersedingKeys)),
+            [partialFP]
+        )
+        XCTAssertEqual(
+            Set(v2Store.findStrictSubsetAssetFingerprints(forResourceKeys: supersedingKeys)),
+            [partialFP]
+        )
     }
 
     func testFindStrictSubsetAssetFingerprints_excludesEqualLinkSet() async throws {
@@ -1743,10 +1821,10 @@ final class V2FlushTests: XCTestCase {
         try store.upsertAsset(asset, links: [link])
 
         // Equal link set — same (role, slot, hash); must not be flagged as a strict subset.
-        let sameTuples: [(role: Int, slot: Int, hash: Data)] = [
-            (role: ResourceTypeCode.photo, slot: 0, hash: hash)
+        let sameKeys: Set<AssetResourceLinkKey> = [
+            AssetResourceLinkKey(role: ResourceTypeCode.photo, slot: 0, hash: hash)
         ]
-        XCTAssertTrue(store.findStrictSubsetAssetFingerprints(forResources: sameTuples).isEmpty,
+        XCTAssertTrue(store.findStrictSubsetAssetFingerprints(forResourceKeys: sameKeys).isEmpty,
                       "equal link set is not a strict subset")
     }
 
@@ -1818,10 +1896,8 @@ final class V2FlushTests: XCTestCase {
         // Replay AssetProcessor's wiring: compute strict subsets from B's links and pass
         // them into upsertAsset. With the fix, this tombstones A even though the caller
         // is just re-asserting B against the existing baseline.
-        let fullTuples: [(role: Int, slot: Int, hash: Data)] = fullLinks.map {
-            (role: $0.role, slot: $0.slot, hash: $0.resourceHash)
-        }
-        let subsets = Set(store.findStrictSubsetAssetFingerprints(forResources: fullTuples))
+        let fullKeys = AssetResourceLinkSetPredicate.keys(fromLinks: fullLinks)
+        let subsets = Set(store.findStrictSubsetAssetFingerprints(forResourceKeys: fullKeys))
         XCTAssertEqual(subsets, [partialFP],
                        "strict-subset finder must surface A given B's full link set")
         try store.upsertAsset(fullAsset, links: fullLinks, replacingSubsetFingerprints: subsets)

@@ -49,7 +49,7 @@ final class MonthManifestStore {
 
     // Derived from assetLinksByFingerprint; without them, legacy-import finders below
     // are O(N²) per month on a full manifest.
-    private var linkKeySetByFingerprint: [Data: Set<LinkKey>] = [:]
+    private var linkKeySetByFingerprint: [Data: Set<AssetResourceLinkKey>] = [:]
     private var assetsByResourceHash: [Data: Set<Data>] = [:]
 
     var remoteFilesByName: [String: RemoteFileMetadata] = [:]
@@ -95,17 +95,17 @@ final class MonthManifestStore {
         assetsByFingerprint[fingerprint] != nil
     }
 
-    /// Existing asset whose link set ⊇ the given (role, slot, hash) tuples — used by legacy
+    /// Existing asset whose link set ⊇ the given resource keys — used by legacy
     /// import to skip bundles already represented by an Asset with extra (adjustment, etc.) roles.
     func findEnclosingAssetFingerprint(
-        forResources resources: [(role: Int, slot: Int, hash: Data)]
+        forResourceKeys keys: Set<AssetResourceLinkKey>
     ) -> Data? {
-        guard !resources.isEmpty else { return nil }
-        // Candidates = fingerprints whose links cover ALL of resources' hashes.
+        guard !keys.isEmpty else { return nil }
+        // Candidates = fingerprints whose links cover ALL of the requested hashes.
         // Intersect over each hash bucket; if any hash has no asset, no enclosing exists.
         var candidates: Set<Data>?
-        for r in resources {
-            guard let bucket = assetsByResourceHash[r.hash], !bucket.isEmpty else { return nil }
+        for key in keys {
+            guard let bucket = assetsByResourceHash[key.hash], !bucket.isEmpty else { return nil }
             if let existing = candidates {
                 let inter = existing.intersection(bucket)
                 if inter.isEmpty { return nil }
@@ -115,51 +115,34 @@ final class MonthManifestStore {
             }
         }
         guard let candidates else { return nil }
-        let needed = Self.linkKeySet(fromTuples: resources)
         for fingerprint in candidates {
             guard let have = linkKeySetByFingerprint[fingerprint] else { continue }
-            if have.count < needed.count { continue }
-            if have.isSuperset(of: needed) { return fingerprint }
+            if AssetResourceLinkSetPredicate.isSuperset(have, of: keys) { return fingerprint }
         }
         return nil
     }
 
-    /// Existing assets whose link set is a strict subset of the given (role, slot, hash) tuples
+    /// Existing assets whose link set is a strict subset of the given resource keys
     /// — used by legacy import to find older partial Assets that the incoming bundle supersedes.
     func findStrictSubsetAssetFingerprints(
-        forResources resources: [(role: Int, slot: Int, hash: Data)]
+        forResourceKeys keys: Set<AssetResourceLinkKey>
     ) -> [Data] {
-        guard !resources.isEmpty else { return [] }
+        guard !keys.isEmpty else { return [] }
         // Candidates = fingerprints sharing AT LEAST ONE hash with resources. A strict subset's
-        // links are a subset of resources' tuples → its hashes are necessarily a subset too.
+        // links are a subset of resource keys, so its hashes are necessarily a subset too.
         var candidates: Set<Data> = []
-        for r in resources {
-            if let bucket = assetsByResourceHash[r.hash] { candidates.formUnion(bucket) }
+        for key in keys {
+            if let bucket = assetsByResourceHash[key.hash] { candidates.formUnion(bucket) }
         }
         if candidates.isEmpty { return [] }
-        let needed = Self.linkKeySet(fromTuples: resources)
         var result: [Data] = []
         for fingerprint in candidates {
             guard let have = linkKeySetByFingerprint[fingerprint] else { continue }
-            if have.isEmpty { continue }
-            if have.count >= needed.count { continue }
-            if needed.isSuperset(of: have) { result.append(fingerprint) }
+            if AssetResourceLinkSetPredicate.isStrictSubset(have, of: keys) {
+                result.append(fingerprint)
+            }
         }
         return result
-    }
-
-    private struct LinkKey: Hashable {
-        let role: Int
-        let slot: Int
-        let hash: Data
-    }
-
-    private static func linkKeySet(fromTuples tuples: [(role: Int, slot: Int, hash: Data)]) -> Set<LinkKey> {
-        Set(tuples.map { LinkKey(role: $0.role, slot: $0.slot, hash: $0.hash) })
-    }
-
-    private static func linkKeySet(fromLinks links: [RemoteAssetResourceLink]) -> Set<LinkKey> {
-        Set(links.map { LinkKey(role: $0.role, slot: $0.slot, hash: $0.resourceHash) })
     }
 
     /// Rebuilds the link/hash indexes from `assetLinksByFingerprint`. Call after wholesale
@@ -169,7 +152,7 @@ final class MonthManifestStore {
         assetsByResourceHash.removeAll(keepingCapacity: true)
         linkKeySetByFingerprint.reserveCapacity(assetLinksByFingerprint.count)
         for (fingerprint, links) in assetLinksByFingerprint {
-            linkKeySetByFingerprint[fingerprint] = Self.linkKeySet(fromLinks: links)
+            linkKeySetByFingerprint[fingerprint] = AssetResourceLinkSetPredicate.keys(fromLinks: links)
             for link in links {
                 assetsByResourceHash[link.resourceHash, default: []].insert(fingerprint)
             }
@@ -177,7 +160,7 @@ final class MonthManifestStore {
     }
 
     private func indexAddAsset(fingerprint: Data, links: [RemoteAssetResourceLink]) {
-        linkKeySetByFingerprint[fingerprint] = Self.linkKeySet(fromLinks: links)
+        linkKeySetByFingerprint[fingerprint] = AssetResourceLinkSetPredicate.keys(fromLinks: links)
         for link in links {
             assetsByResourceHash[link.resourceHash, default: []].insert(fingerprint)
         }

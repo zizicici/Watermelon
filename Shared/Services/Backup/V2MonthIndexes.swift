@@ -146,26 +146,17 @@ final class V2MonthIndexes {
     /// Mirrors `MonthManifestStore.findStrictSubsetAssetFingerprints` so upload paths
     /// can tombstone older partial assets that the incoming bundle supersedes.
     func findStrictSubsetAssetFingerprints(
-        forResources resources: [(role: Int, slot: Int, hash: Data)]
+        forResourceKeys keys: Set<AssetResourceLinkKey>
     ) -> [Data] {
-        guard !resources.isEmpty else { return [] }
-        let needed = Set(resources.map { LinkKey(role: $0.role, slot: $0.slot, hash: $0.hash) })
+        guard !keys.isEmpty else { return [] }
         var result: [Data] = []
         for (fingerprint, links) in linksByFingerprint {
-            if links.isEmpty { continue }
-            let have = Set(links.map { LinkKey(role: $0.role, slot: $0.slot, hash: $0.resourceHash) })
-            if have.count >= needed.count { continue }
-            if needed.isSuperset(of: have) {
+            let have = AssetResourceLinkSetPredicate.keys(fromLinks: links)
+            if AssetResourceLinkSetPredicate.isStrictSubset(have, of: keys) {
                 result.append(fingerprint)
             }
         }
         return result
-    }
-
-    private struct LinkKey: Hashable {
-        let role: Int
-        let slot: Int
-        let hash: Data
     }
 
     func isAssetIncomplete(_ fingerprint: Data) -> Bool {

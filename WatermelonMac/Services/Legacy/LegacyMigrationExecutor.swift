@@ -211,17 +211,19 @@ final class LegacyMigrationExecutor {
             return BundleAttemptResult(outcome: .skippedFingerprintExists, error: nil)
         }
 
-        let bundleResources = bundle.resources.map {
-            (role: $0.role, slot: $0.slot, hash: $0.contentHash)
-        }
-        if monthStore.findEnclosingAssetFingerprint(forResources: bundleResources) != nil {
+        let bundleResourceKeys = Set(
+            bundle.resources.map {
+                AssetResourceLinkKey(role: $0.role, slot: $0.slot, hash: $0.contentHash)
+            }
+        )
+        if monthStore.findEnclosingAssetFingerprint(forResourceKeys: bundleResourceKeys) != nil {
             return BundleAttemptResult(outcome: .skippedFingerprintExists, error: nil)
         }
 
         let subsetFingerprints: Set<Data>
         if options.replaceSubsetAssets {
             subsetFingerprints = Set(
-                monthStore.findStrictSubsetAssetFingerprints(forResources: bundleResources)
+                monthStore.findStrictSubsetAssetFingerprints(forResourceKeys: bundleResourceKeys)
             )
         } else {
             subsetFingerprints = []

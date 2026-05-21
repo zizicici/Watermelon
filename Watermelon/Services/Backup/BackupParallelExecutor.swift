@@ -782,10 +782,12 @@ struct BackupParallelExecutor: Sendable {
             }
             // Pre-fix manifests may still carry strict-subset survivors of this asset;
             // force the per-asset path so AssetProcessor tombstones them.
-            let tuples = cache.hashesByRoleSlot.map {
-                (role: $0.key.role, slot: $0.key.slot, hash: $0.value)
-            }
-            if !monthStore.findStrictSubsetAssetFingerprints(forResources: tuples).isEmpty {
+            let resourceKeys = Set(
+                cache.hashesByRoleSlot.map {
+                    AssetResourceLinkKey(role: $0.key.role, slot: $0.key.slot, hash: $0.value)
+                }
+            )
+            if !monthStore.findStrictSubsetAssetFingerprints(forResourceKeys: resourceKeys).isEmpty {
                 return false
             }
         }
