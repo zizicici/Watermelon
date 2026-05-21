@@ -208,13 +208,17 @@ struct HomeExecutionSession {
         switch result {
         case .completed(let failedCountByMonth, let downloadIncompleteMonths, let downloadIncompleteMessagesByMonth):
             uploadPhaseCompleted = true
+            for (month, failedCount) in failedCountByMonth where failedCount > 0 {
+                if monthPlans[month]?.phase == .failed {
+                    monthPlans[month]?.failedItemCount = failedCount
+                } else {
+                    monthPlans[month]?.apply(.partiallyFailed(count: failedCount))
+                }
+            }
             markDownloadIncompleteMonths(
                 downloadIncompleteMonths,
                 messagesByMonth: downloadIncompleteMessagesByMonth
             )
-            for (month, failedCount) in failedCountByMonth where failedCount > 0 {
-                monthPlans[month]?.apply(.partiallyFailed(count: failedCount))
-            }
 
             if remainingDownloadMonths().isEmpty {
                 finishExecution()

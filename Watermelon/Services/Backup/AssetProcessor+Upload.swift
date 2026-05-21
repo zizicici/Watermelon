@@ -444,6 +444,8 @@ extension AssetProcessor {
                     }
                 }
                 assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
+                try cancellationController?.throwIfCancelled()
+                try Task.checkCancellation()
                 if let shotDate = prepared.shotDate {
                     let setDateStart = CFAbsoluteTimeGetCurrent()
                     if client.shouldSetModificationDate() {

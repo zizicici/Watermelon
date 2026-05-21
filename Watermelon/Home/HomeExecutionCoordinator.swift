@@ -741,27 +741,23 @@ final class HomeExecutionCoordinator {
     ) -> BackupMonthFinalizationResult {
         switch result {
         case .success(_, let skippedIncompleteCount, let unverifiedFingerprintCount):
-            if skippedIncompleteCount > 0 {
-                // Mark month failed so finishExecution reports partial; skip the alert — informational, not a crash.
-                let reason = String.localizedStringWithFormat(
-                    String(localized: "restore.log.skippedIncomplete"),
-                    month.displayText,
-                    skippedIncompleteCount
-                )
-                session.markDownloadIncompleteMonth(month, reason: reason)
-                appendWarningLog(reason)
-                refreshTerminalStatus(notifyState: false)
-                notifyStateChanged()
-                // Don't abort the whole upload phase for an informational skip.
-                return .downloadIncomplete(reason)
-            }
-            if unverifiedFingerprintCount > 0 {
-                // Asset saved to Photos but local fingerprint not durable; if marked .completed the next sync re-downloads as duplicate.
-                let reason = String.localizedStringWithFormat(
-                    String(localized: "restore.log.skippedIncomplete"),
-                    month.displayText,
-                    unverifiedFingerprintCount
-                )
+            if skippedIncompleteCount > 0 || unverifiedFingerprintCount > 0 {
+                var parts: [String] = []
+                if skippedIncompleteCount > 0 {
+                    parts.append(String.localizedStringWithFormat(
+                        String(localized: "restore.log.skippedIncomplete"),
+                        month.displayText,
+                        skippedIncompleteCount
+                    ))
+                }
+                if unverifiedFingerprintCount > 0 {
+                    parts.append(String.localizedStringWithFormat(
+                        String(localized: "restore.log.unverifiedFingerprint"),
+                        month.displayText,
+                        unverifiedFingerprintCount
+                    ))
+                }
+                let reason = parts.joined(separator: ". ")
                 session.markDownloadIncompleteMonth(month, reason: reason)
                 appendWarningLog(reason)
                 refreshTerminalStatus(notifyState: false)

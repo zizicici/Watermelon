@@ -114,10 +114,6 @@ final actor S3Client: RemoteStorageClientProtocol {
 
     // MARK: - RemoteStorageClientProtocol
 
-    nonisolated func shouldSetModificationDate() -> Bool {
-        false
-    }
-
     nonisolated func shouldLimitUploadRetries(for error: Error) -> Bool {
         S3ErrorClassifier.shouldLimitUploadRetries(error)
     }

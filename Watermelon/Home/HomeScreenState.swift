@@ -191,6 +191,9 @@ struct MonthPlan {
             phase = .downloading
         case (.downloading, .downloadCompleted):
             phase = .completed
+        case (.partiallyFailed, .failed(let reason)):
+            failureMessage = reason
+            phase = .failed
         case (_, .failed(let reason)) where !isTerminal:
             phase = .failed
             failureMessage = reason
@@ -241,7 +244,12 @@ struct HomeExecutionState {
         monthPlans.compactMap { month, plan in
             switch plan.phase {
             case .failed:
-                return MonthFailureInfo(month: month, message: plan.failureMessage ?? String(localized: "home.execution.failed"))
+                let baseMessage = plan.failureMessage ?? String(localized: "home.execution.failed")
+                if plan.failedItemCount > 0 {
+                    let countMessage = String(format: String(localized: "home.execution.failedItems"), plan.failedItemCount)
+                    return MonthFailureInfo(month: month, message: "\(countMessage). \(baseMessage)")
+                }
+                return MonthFailureInfo(month: month, message: baseMessage)
             case .partiallyFailed:
                 return MonthFailureInfo(month: month, message: plan.failureMessage ?? String(format: String(localized: "home.execution.failedItems"), plan.failedItemCount))
             default:

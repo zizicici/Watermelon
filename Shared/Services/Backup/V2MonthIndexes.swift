@@ -153,8 +153,8 @@ final class V2MonthIndexes {
         var result: [Data] = []
         for (fingerprint, links) in linksByFingerprint {
             if links.isEmpty { continue }
-            if links.count >= needed.count { continue }
             let have = Set(links.map { LinkKey(role: $0.role, slot: $0.slot, hash: $0.resourceHash) })
+            if have.count >= needed.count { continue }
             if needed.isSuperset(of: have) {
                 result.append(fingerprint)
             }

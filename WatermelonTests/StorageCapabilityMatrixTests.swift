@@ -28,6 +28,7 @@ final class StorageCapabilityMatrixTests: XCTestCase {
         XCTAssertTrue(client.supportsLivenessSafeOverwriteMove)
         XCTAssertTrue(client.supportsLivenessSafeOverwriteUpload)
         XCTAssertTrue(client.supportsLivenessSafeRenewal)
+        XCTAssertTrue(client.shouldSetModificationDate())
     }
 
     func testWebDAVTriple() {
