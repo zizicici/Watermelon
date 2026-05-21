@@ -245,10 +245,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 }
                 let overlayFresh = revisionUnchanged && probe.fresh
                 let (revision, snapshot) = committedView.currentSnapshotWithRevision()
-                let fingerprints = Self.committedFingerprints(from: snapshot)
+                let coverage = Self.resumeCoverage(from: snapshot)
                 let handle = RemoteViewHandle(
                     revision: revision,
-                    committedAssetFingerprintsByMonth: fingerprints,
+                    resumeCoverage: coverage,
                     overlayFreshness: overlayFresh ? .fresh : .stale,
                     producedAt: Date()
                 )
@@ -264,12 +264,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     private func handleFromCurrentSnapshot(overlayFresh: Bool) -> RemoteViewHandle {
         let captured = optimisticMutationLock.withLock {
             let (revision, snapshot) = committedView.currentSnapshotWithRevision()
-            let fingerprints = Self.committedFingerprints(from: snapshot)
-            return (revision: revision, fingerprints: fingerprints)
+            let coverage = Self.resumeCoverage(from: snapshot)
+            return (revision: revision, coverage: coverage)
         }
         return RemoteViewHandle(
             revision: captured.revision,
-            committedAssetFingerprintsByMonth: captured.fingerprints,
+            resumeCoverage: captured.coverage,
             overlayFreshness: overlayFresh ? .fresh : .stale,
             producedAt: Date()
         )
@@ -640,13 +640,17 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         await state.setIsV2Repo(true)
     }
 
-    func committedAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
+    func resumeCoverageForCurrentView() -> RemoteResumeCoverage {
         optimisticMutationLock.withLock {
-            Self.committedFingerprints(from: committedView.current())
+            Self.resumeCoverage(from: committedView.current())
         }
     }
 
-    private static func committedFingerprints(from snapshot: RemoteLibrarySnapshot) -> PerMonth<Set<Data>> {
+    func resumeSafeToSkipAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
+        resumeCoverageForCurrentView().safeToSkipAssetFingerprintsByMonth
+    }
+
+    private static func resumeCoverage(from snapshot: RemoteLibrarySnapshot) -> RemoteResumeCoverage {
         var linksByMonthFP: [LibraryMonthKey: [Data: [RemoteAssetResourceLink]]] = [:]
         for link in snapshot.assetResourceLinks {
             let month = LibraryMonthKey(year: link.year, month: link.month)
@@ -657,24 +661,83 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             let month = LibraryMonthKey(year: resource.year, month: resource.month)
             resourceHashesByMonth[month, default: []].insert(resource.contentHash)
         }
-        var byMonth = PerMonth<Set<Data>>()
         let missingByMonth = snapshot.physicallyMissingHashesByMonth
+        var availableHashesByMonth = resourceHashesByMonth
+        // Physical-missing overlays keep commit rows but make dependent assets repair work.
+        for (month, missingHashes) in missingByMonth {
+            availableHashesByMonth[month, default: []].subtract(missingHashes)
+        }
+        var survivorKeySetsByMonthFP: [LibraryMonthKey: [Data: Set<AssetResourceLinkKey>]] = [:]
+        for (month, linksByFingerprint) in linksByMonthFP {
+            for (fingerprint, links) in linksByFingerprint {
+                let keySet = AssetResourceLinkSetPredicate.keys(fromLinks: links)
+                guard !keySet.isEmpty else { continue }
+                survivorKeySetsByMonthFP[month, default: [:]][fingerprint] = keySet
+            }
+        }
+
+        var healthyKeySetsByMonthFP: [LibraryMonthKey: [Data: Set<AssetResourceLinkKey>]] = [:]
         for asset in snapshot.assets {
             let month = LibraryMonthKey(year: asset.year, month: asset.month)
             let links = linksByMonthFP[month]?[asset.assetFingerprint] ?? []
-            // Physically-missing resources still have commit-log rows; subtract so resume planner sees the asset as needing repair.
-            let availableHashes = (resourceHashesByMonth[month] ?? [])
-                .subtracting(missingByMonth[month] ?? [])
+            let availableHashes = availableHashesByMonth[month] ?? []
             let state = RemoteAssetIntegrityClassifier.classify(
                 assetFingerprint: asset.assetFingerprint,
                 links: links,
                 isResourceAvailable: { availableHashes.contains($0) }
             )
             if state.isHealthy {
-                byMonth.insert(asset.assetFingerprint, for: month)
+                healthyKeySetsByMonthFP[month, default: [:]][asset.assetFingerprint] =
+                    survivorKeySetsByMonthFP[month]?[asset.assetFingerprint]
+                    ?? AssetResourceLinkSetPredicate.keys(fromLinks: links)
             }
         }
-        return byMonth
+
+        var safeToSkipByMonth = PerMonth<Set<Data>>()
+        var healingRequiredByMonth = PerMonth<Set<Data>>()
+        for (month, keySetsByFingerprint) in healthyKeySetsByMonthFP {
+            let survivorKeySetsByFingerprint = survivorKeySetsByMonthFP[month] ?? [:]
+            var fingerprintsByResourceKey: [AssetResourceLinkKey: Set<Data>] = [:]
+            fingerprintsByResourceKey.reserveCapacity(
+                survivorKeySetsByFingerprint.values.reduce(0) { $0 + $1.count }
+            )
+            for (fingerprint, keySet) in survivorKeySetsByFingerprint {
+                for key in keySet {
+                    fingerprintsByResourceKey[key, default: []].insert(fingerprint)
+                }
+            }
+
+            var safeToSkip = Set(keySetsByFingerprint.keys)
+            var healingRequired: Set<Data> = []
+            healingRequired.reserveCapacity(keySetsByFingerprint.count)
+            for (fingerprint, incomingKeys) in keySetsByFingerprint {
+                var possibleSurvivors: Set<Data> = []
+                for key in incomingKeys {
+                    if let bucket = fingerprintsByResourceKey[key] {
+                        possibleSurvivors.formUnion(bucket)
+                    }
+                }
+                possibleSurvivors.remove(fingerprint)
+                for survivor in possibleSurvivors {
+                    guard let survivorKeys = survivorKeySetsByFingerprint[survivor] else { continue }
+                    if AssetResourceLinkSetPredicate.isStrictSubset(survivorKeys, of: incomingKeys) {
+                        healingRequired.insert(fingerprint)
+                        safeToSkip.remove(fingerprint)
+                        break
+                    }
+                }
+            }
+            if !safeToSkip.isEmpty {
+                safeToSkipByMonth.set(safeToSkip, for: month)
+            }
+            if !healingRequired.isEmpty {
+                healingRequiredByMonth.set(healingRequired, for: month)
+            }
+        }
+        return RemoteResumeCoverage(
+            safeToSkipAssetFingerprintsByMonth: safeToSkipByMonth,
+            healingRequiredAssetFingerprintsByMonth: healingRequiredByMonth
+        )
     }
 
     func replaceCachedMonth(

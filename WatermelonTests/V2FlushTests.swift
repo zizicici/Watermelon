@@ -279,7 +279,7 @@ final class V2FlushTests: XCTestCase {
         )
 
         XCTAssertEqual(delta.committedV2AssetFingerprints, [rows.asset.assetFingerprint])
-        XCTAssertEqual(remoteIndexService.committedAssetFingerprintsByMonth()[monthKey], [rows.asset.assetFingerprint])
+        XCTAssertEqual(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey], [rows.asset.assetFingerprint])
     }
 
     func testDefensiveFlushPublishesBeforeSnapshotFailurePropagation() async throws {
@@ -310,7 +310,7 @@ final class V2FlushTests: XCTestCase {
             XCTAssertEqual(committedAssets, [rows.asset.assetFingerprint])
         }
 
-        XCTAssertEqual(remoteIndexService.committedAssetFingerprintsByMonth()[monthKey], [rows.asset.assetFingerprint])
+        XCTAssertEqual(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey], [rows.asset.assetFingerprint])
         let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
         XCTAssertNotNil(output.state.months[monthKey]?.assets[rows.asset.assetFingerprint])
 

@@ -153,7 +153,7 @@ final class BackgroundBackupRunner {
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter
     ) async -> ProfileRunResult {
-        // BG runner reuses one RemoteIndexSyncService across profiles; mixed-profile state would corrupt committedAssetFingerprintsByMonth.
+        // BG runner reuses one RemoteIndexSyncService across profiles; mixed-profile state would corrupt resume coverage.
         await assetProcessor.remoteIndexService.resetForProfileSwitch()
         await writer.appendLog(
             String(format: String(localized: "backup.auto.log.profileStart"), profile.name),

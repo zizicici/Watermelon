@@ -11,33 +11,57 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         month: LibraryMonthKey,
         contentHash: Data
     ) -> Data {
-        let role = ResourceTypeCode.photo
-        let slot = 0
-        let fp = BackupAssetResourcePlanner.assetFingerprint(
-            resourceRoleSlotHashes: [(role: role, slot: slot, contentHash: contentHash)]
+        seedAsset(
+            in: service,
+            month: month,
+            resources: [(role: ResourceTypeCode.photo, slot: 0, hash: contentHash, logicalName: "x.jpg")]
         )
-        let resource = RemoteManifestResource(
-            year: month.year,
-            month: month.month,
-            physicalRemotePath: String(format: "%04d/%02d/%@.jpg", month.year, month.month, contentHash.hexString),
-            contentHash: contentHash,
-            fileSize: 1,
-            resourceType: ResourceTypeCode.photo,
-            creationDateMs: nil,
-            backedUpAtMs: 1
+    }
+
+    private func seedAsset(
+        in service: RemoteIndexSyncService,
+        month: LibraryMonthKey,
+        resources: [(role: Int, slot: Int, hash: Data, logicalName: String)],
+        assetFingerprint overrideFingerprint: Data? = nil
+    ) -> Data {
+        let computedFingerprint = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: resources.map { (role: $0.role, slot: $0.slot, contentHash: $0.hash) }
         )
+        let fp = overrideFingerprint ?? computedFingerprint
         let writer = service.makeOptimisticAssetWriter()
-        writer.appendResource(resource)
+        for item in resources {
+            let resource = RemoteManifestResource(
+                year: month.year,
+                month: month.month,
+                physicalRemotePath: String(
+                    format: "%04d/%02d/%@-%d-%d.dat",
+                    month.year,
+                    month.month,
+                    item.hash.hexString,
+                    item.role,
+                    item.slot
+                ),
+                contentHash: item.hash,
+                fileSize: 1,
+                resourceType: item.role,
+                creationDateMs: nil,
+                backedUpAtMs: 1
+            )
+            writer.appendResource(resource)
+        }
         let asset = RemoteManifestAsset(
             year: month.year, month: month.month, assetFingerprint: fp,
-            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
+            creationDateMs: nil, backedUpAtMs: 1,
+            resourceCount: resources.count, totalFileSizeBytes: Int64(resources.count)
         )
-        let link = RemoteAssetResourceLink(
-            year: month.year, month: month.month,
-            assetFingerprint: fp, resourceHash: contentHash,
-            role: role, slot: slot, logicalName: "x.jpg"
-        )
-        writer.appendAsset(asset, links: [link])
+        let links = resources.map { item in
+            RemoteAssetResourceLink(
+                year: month.year, month: month.month,
+                assetFingerprint: fp, resourceHash: item.hash,
+                role: item.role, slot: item.slot, logicalName: item.logicalName
+            )
+        }
+        writer.appendAsset(asset, links: links)
         return fp
     }
 
@@ -45,12 +69,12 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         let service = RemoteIndexSyncService()
         let hash = TestFixtures.fingerprint(0xAB)
         let fp = seedCompleteAsset(in: service, month: monthA, contentHash: hash)
-        let byMonth = service.committedAssetFingerprintsByMonth()
+        let byMonth = service.resumeSafeToSkipAssetFingerprintsByMonth()
         XCTAssertEqual(byMonth[monthA], [fp],
                        "append happens after per-asset commit, so no separate commit-clear is needed")
     }
 
-    func testCommittedFingerprints_excludesPhantomAsset() {
+    func testResumeSafeCoverage_excludesPhantomAsset() {
         let service = RemoteIndexSyncService()
         let fp = TestFixtures.fingerprint(0x42)
         let phantom = RemoteManifestAsset(
@@ -58,12 +82,12 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
             creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
         )
         service.makeOptimisticAssetWriter().appendAsset(phantom, links: nil)
-        let byMonth = service.committedAssetFingerprintsByMonth()
+        let byMonth = service.resumeSafeToSkipAssetFingerprintsByMonth()
         XCTAssertNil(byMonth[monthA],
-                     "phantom asset (no links) must not appear as committed")
+                     "phantom asset (no links) must not be safe to skip")
     }
 
-    func testCommittedFingerprints_excludesAssetWithMissingResource() {
+    func testResumeSafeCoverage_excludesAssetWithMissingResource() {
         let service = RemoteIndexSyncService()
         let hash = TestFixtures.fingerprint(0x55)
         let role = ResourceTypeCode.photo
@@ -82,12 +106,12 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
             role: role, slot: slot, logicalName: "x.jpg"
         )
         service.makeOptimisticAssetWriter().appendAsset(asset, links: [link])
-        let byMonth = service.committedAssetFingerprintsByMonth()
+        let byMonth = service.resumeSafeToSkipAssetFingerprintsByMonth()
         XCTAssertNil(byMonth[monthA],
-                     "asset with missing resource must not appear as committed")
+                     "asset with missing resource must not be safe to skip")
     }
 
-    func testCommittedFingerprints_subtractsPhysicallyMissingHash() {
+    func testResumeSafeCoverage_subtractsPhysicallyMissingHash() {
         let service = RemoteIndexSyncService()
         let hash = TestFixtures.fingerprint(0x99)
         let role = ResourceTypeCode.photo
@@ -115,14 +139,165 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         writer.appendResource(resource)
         writer.appendAsset(asset, links: [link])
 
-        XCTAssertTrue(service.committedAssetFingerprintsByMonth()[monthA]?.contains(fp) ?? false)
+        XCTAssertTrue(service.resumeSafeToSkipAssetFingerprintsByMonth()[monthA]?.contains(fp) ?? false)
 
         service.markPhysicallyMissingV2(month: monthA, hashes: [hash])
-        XCTAssertNil(service.committedAssetFingerprintsByMonth()[monthA])
+        XCTAssertNil(service.resumeSafeToSkipAssetFingerprintsByMonth()[monthA])
 
         writer.appendResource(resource)
-        XCTAssertTrue(service.committedAssetFingerprintsByMonth()[monthA]?.contains(fp) ?? false,
+        XCTAssertTrue(service.resumeSafeToSkipAssetFingerprintsByMonth()[monthA]?.contains(fp) ?? false,
                       "fresh upload must clear the overlay entry")
+    }
+
+    func testResumeCoverage_marksSupersetWithStrictSubsetSurvivorHealingRequired() {
+        let service = RemoteIndexSyncService()
+        let photoHash = TestFixtures.fingerprint(0xA1)
+        let videoHash = TestFixtures.fingerprint(0xA2)
+        let partialFP = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [(role: ResourceTypeCode.photo, slot: 0, hash: photoHash, logicalName: "photo.jpg")]
+        )
+        let fullFP = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [
+                (role: ResourceTypeCode.photo, slot: 0, hash: photoHash, logicalName: "photo.jpg"),
+                (role: ResourceTypeCode.pairedVideo, slot: 0, hash: videoHash, logicalName: "photo.mov")
+            ]
+        )
+
+        let coverage = service.resumeCoverageForCurrentView()
+
+        XCTAssertTrue(coverage.containsSafeToSkip(partialFP, in: monthA))
+        XCTAssertFalse(coverage.containsSafeToSkip(fullFP, in: monthA))
+        XCTAssertTrue(coverage.healingRequiredAssetFingerprintsByMonth.contains(fullFP, in: monthA))
+    }
+
+    func testResumeCoverage_marksSupersetHealingRequiredForMetadataOnlySubsetSurvivor() {
+        let service = RemoteIndexSyncService()
+        let adjustmentHash = TestFixtures.fingerprint(0xB1)
+        let photoHash = TestFixtures.fingerprint(0xB2)
+        let metadataFP = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [
+                (role: ResourceTypeCode.adjustmentData, slot: 0, hash: adjustmentHash, logicalName: "adjustment.dat")
+            ]
+        )
+        let fullFP = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [
+                (role: ResourceTypeCode.adjustmentData, slot: 0, hash: adjustmentHash, logicalName: "adjustment.dat"),
+                (role: ResourceTypeCode.photo, slot: 0, hash: photoHash, logicalName: "photo.jpg")
+            ]
+        )
+
+        let coverage = service.resumeCoverageForCurrentView()
+
+        XCTAssertFalse(coverage.containsSafeToSkip(metadataFP, in: monthA))
+        XCTAssertFalse(coverage.containsSafeToSkip(fullFP, in: monthA))
+        XCTAssertTrue(coverage.healingRequiredAssetFingerprintsByMonth.contains(fullFP, in: monthA))
+    }
+
+    func testResumeCoverage_marksSupersetHealingRequiredForFingerprintMismatchSubsetSurvivor() {
+        let service = RemoteIndexSyncService()
+        let photoHash = TestFixtures.fingerprint(0xB3)
+        let videoHash = TestFixtures.fingerprint(0xB4)
+        let mismatchFP = TestFixtures.fingerprint(0xF7)
+        let recomputedPartialFP = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: photoHash)]
+        )
+        XCTAssertNotEqual(mismatchFP, recomputedPartialFP)
+        _ = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [(role: ResourceTypeCode.photo, slot: 0, hash: photoHash, logicalName: "photo.jpg")],
+            assetFingerprint: mismatchFP
+        )
+        let fullFP = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [
+                (role: ResourceTypeCode.photo, slot: 0, hash: photoHash, logicalName: "photo.jpg"),
+                (role: ResourceTypeCode.pairedVideo, slot: 0, hash: videoHash, logicalName: "photo.mov")
+            ]
+        )
+
+        let coverage = service.resumeCoverageForCurrentView()
+
+        XCTAssertFalse(coverage.containsSafeToSkip(mismatchFP, in: monthA))
+        XCTAssertFalse(coverage.containsSafeToSkip(fullFP, in: monthA))
+        XCTAssertTrue(coverage.healingRequiredAssetFingerprintsByMonth.contains(fullFP, in: monthA))
+    }
+
+    func testResumeCoverage_keepsUnrelatedHealthyAssetSafeToSkip() {
+        let service = RemoteIndexSyncService()
+        let photoHash = TestFixtures.fingerprint(0xA3)
+        let videoHash = TestFixtures.fingerprint(0xA4)
+        _ = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [(role: ResourceTypeCode.photo, slot: 0, hash: photoHash, logicalName: "photo.jpg")]
+        )
+        _ = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [
+                (role: ResourceTypeCode.photo, slot: 0, hash: photoHash, logicalName: "photo.jpg"),
+                (role: ResourceTypeCode.pairedVideo, slot: 0, hash: videoHash, logicalName: "photo.mov")
+            ]
+        )
+        let unrelatedFP = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [(role: ResourceTypeCode.photo, slot: 0, hash: TestFixtures.fingerprint(0xC1), logicalName: "other.jpg")]
+        )
+
+        let coverage = service.resumeCoverageForCurrentView()
+
+        XCTAssertTrue(coverage.containsSafeToSkip(unrelatedFP, in: monthA))
+        XCTAssertFalse(coverage.healingRequiredAssetFingerprintsByMonth.contains(unrelatedFP, in: monthA))
+    }
+
+    func testResumeCoverage_equalLinkSetRemainsSafeToSkip() {
+        let service = RemoteIndexSyncService()
+        let fp = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [(role: ResourceTypeCode.photo, slot: 0, hash: TestFixtures.fingerprint(0xD1), logicalName: "same.jpg")]
+        )
+
+        let coverage = service.resumeCoverageForCurrentView()
+
+        XCTAssertTrue(coverage.containsSafeToSkip(fp, in: monthA))
+        XCTAssertFalse(coverage.healingRequiredAssetFingerprintsByMonth.contains(fp, in: monthA))
+    }
+
+    func testResumeCoverage_physicallyMissingResourceIsNotSafeOrHealingRequired() {
+        let service = RemoteIndexSyncService()
+        let photoHash = TestFixtures.fingerprint(0xE1)
+        let videoHash = TestFixtures.fingerprint(0xE2)
+        _ = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [(role: ResourceTypeCode.photo, slot: 0, hash: photoHash, logicalName: "photo.jpg")]
+        )
+        let fullFP = seedAsset(
+            in: service,
+            month: monthA,
+            resources: [
+                (role: ResourceTypeCode.photo, slot: 0, hash: photoHash, logicalName: "photo.jpg"),
+                (role: ResourceTypeCode.pairedVideo, slot: 0, hash: videoHash, logicalName: "photo.mov")
+            ]
+        )
+
+        service.markPhysicallyMissingV2(month: monthA, hashes: [videoHash])
+        let coverage = service.resumeCoverageForCurrentView()
+
+        XCTAssertFalse(coverage.containsSafeToSkip(fullFP, in: monthA))
+        XCTAssertFalse(coverage.healingRequiredAssetFingerprintsByMonth.contains(fullFP, in: monthA))
     }
 
     func testApplyOptimisticUpsert_clearingOverlay_bumpsRevisionEvenWhenRowUnchanged() {

@@ -168,7 +168,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
 
         XCTAssertEqual(store.ignoreCancellationValues, [false])
         XCTAssertFalse(hashWriteCalled)
-        XCTAssertNil(remoteIndexService.committedAssetFingerprintsByMonth()[month])
+        XCTAssertNil(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month])
     }
 
     func testFinalizeRowWritingAsset_commitPrecedesHashWriteAndPublishes() async throws {
@@ -234,13 +234,13 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
             timing: &timing
         ) {
             XCTAssertEqual(recorder.events, ["commit"])
-            XCTAssertEqual(remoteIndexService.committedAssetFingerprintsByMonth()[month], [assetFingerprint])
+            XCTAssertEqual(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month], [assetFingerprint])
             recorder.append("hash")
         }
 
         XCTAssertEqual(recorder.events, ["commit", "hash"])
         XCTAssertEqual(store.ignoreCancellationValues, [false])
-        XCTAssertEqual(remoteIndexService.committedAssetFingerprintsByMonth()[month], [assetFingerprint])
+        XCTAssertEqual(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month], [assetFingerprint])
     }
 
     func testFinalizeRowWritingAsset_publishesCommittedSweepFromDelta() async throws {
@@ -344,7 +344,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         ) {}
 
         XCTAssertEqual(
-            remoteIndexService.committedAssetFingerprintsByMonth()[month],
+            remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month],
             [carriedFingerprint, currentFingerprint]
         )
     }
@@ -406,7 +406,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
             timing: &timing
         ) {
             XCTAssertEqual(
-                remoteIndexService.committedAssetFingerprintsByMonth()[month],
+                remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month],
                 [carried.asset.assetFingerprint, current.asset.assetFingerprint]
             )
             hashWriteCalled = true
@@ -414,7 +414,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
 
         XCTAssertTrue(hashWriteCalled)
         XCTAssertEqual(
-            remoteIndexService.committedAssetFingerprintsByMonth()[month],
+            remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month],
             [carried.asset.assetFingerprint, current.asset.assetFingerprint]
         )
         let seqValue = await v2.seqAllocator.value()
@@ -474,7 +474,7 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         let primingWriter = remoteIndexService.makeOptimisticAssetWriter()
         primingWriter.appendResource(photoResource)
         primingWriter.appendAsset(supersededAsset, links: [supersededLink])
-        XCTAssertEqual(remoteIndexService.committedAssetFingerprintsByMonth()[month], [supersededFP])
+        XCTAssertEqual(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month], [supersededFP])
 
         // The superseding asset B (photo + paired video). A is a strict subset of B's
         // links — what AssetProcessor would detect via findStrictSubsetAssetFingerprints.
@@ -519,10 +519,10 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
             tombstonedSubsetFingerprints: [supersededFP]
         ) {}
 
-        let committed = remoteIndexService.committedAssetFingerprintsByMonth()[month] ?? []
-        XCTAssertFalse(committed.contains(supersededFP),
+        let safeToSkip = remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month] ?? []
+        XCTAssertFalse(safeToSkip.contains(supersededFP),
                        "V1 subset-tombstone path must evict the superseded fingerprint from the optimistic cache so remote-only views stop offering it")
-        XCTAssertTrue(committed.contains(supersedingFP),
+        XCTAssertTrue(safeToSkip.contains(supersedingFP),
                       "the superseding fingerprint must remain in the cache after the upsert")
     }
 

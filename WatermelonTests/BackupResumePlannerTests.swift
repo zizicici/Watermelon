@@ -40,10 +40,10 @@ final class BackupResumePlannerTests: XCTestCase {
         XCTAssertEqual(pending, ["b", "c"])
     }
 
-    private func freshHandle(_ committed: PerMonth<Set<Data>>) -> RemoteViewHandle {
+    private func freshHandle(_ safeToSkip: PerMonth<Set<Data>>) -> RemoteViewHandle {
         RemoteViewHandle(
             revision: 1,
-            committedAssetFingerprintsByMonth: committed,
+            resumeCoverage: RemoteResumeCoverage(safeToSkipAssetFingerprintsByMonth: safeToSkip),
             overlayFreshness: .fresh,
             producedAt: Date()
         )
@@ -52,7 +52,7 @@ final class BackupResumePlannerTests: XCTestCase {
     private func staleHandle() -> RemoteViewHandle {
         RemoteViewHandle(
             revision: 0,
-            committedAssetFingerprintsByMonth: PerMonth<Set<Data>>(),
+            resumeCoverage: RemoteResumeCoverage(),
             overlayFreshness: .stale,
             producedAt: Date()
         )
@@ -88,8 +88,8 @@ final class BackupResumePlannerTests: XCTestCase {
         XCTAssertEqual(pending, ["a", "b"])
     }
 
-    /// Empty V2 committed view must ignore optimistic reducer completions.
-    func testRetryMode_v2EmptyCommitted_ignoresCompletedAssetIDs() async throws {
+    /// Empty V2 safe-to-skip coverage must ignore optimistic reducer completions.
+    func testRetryMode_v2EmptySafeToSkip_ignoresCompletedAssetIDs() async throws {
         let planner = BackupResumePlanner(
             photoLibraryService: PhotoLibraryService(),
             hashIndexRepository: hashIndex

@@ -70,12 +70,12 @@ final class BackupResumePlanner {
             guard let hashIndexRepository else {
                 return assetIDs.subtracting(completedAssetIDs)
             }
-            let committedView = handle.committedAssetFingerprintsByMonth
+            let safeToSkip = handle.safeToSkipAssetFingerprintsByMonth
             let coverageWorker = self.coverageWorker
             return try await Self.runDetached {
                 var pending = assetIDs
                 let records = try hashIndexRepository.fetchAssetFingerprintRecords(assetIDs: pending)
-                let covered = try await coverageWorker.assetIDsCoveredByRemote(records: records, committedView: committedView)
+                let covered = try await coverageWorker.assetIDsCoveredByRemote(records: records, safeToSkip: safeToSkip)
                 pending.subtract(covered)
                 return pending
             }
@@ -121,11 +121,11 @@ final class BackupResumePlanner {
                 guard let repository = hashIndexRepository else {
                     return pending.subtracting(completedAssetIDs)
                 }
-                let committedView = handle.committedAssetFingerprintsByMonth
+                let safeToSkip = handle.safeToSkipAssetFingerprintsByMonth
                 try Task.checkCancellation()
                 let records = try repository.fetchAssetFingerprintRecords(assetIDs: pending)
                 try Task.checkCancellation()
-                let covered = try await coverageWorker.assetIDsCoveredByRemote(records: records, committedView: committedView)
+                let covered = try await coverageWorker.assetIDsCoveredByRemote(records: records, safeToSkip: safeToSkip)
                 try Task.checkCancellation()
                 pending.subtract(covered)
             }
@@ -176,7 +176,7 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
 
     func assetIDsCoveredByRemote(
         records: [String: LocalAssetFingerprintRecord],
-        committedView: PerMonth<Set<Data>>
+        safeToSkip: PerMonth<Set<Data>>
     ) async throws -> Set<String> {
         let entries = Array(records)
         var covered: Set<String> = []
@@ -186,7 +186,7 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
             try Task.checkCancellation()
             let end = min(offset + Self.coverageChunkSize, entries.count)
             let chunk = Array(entries[offset ..< end])
-            let chunkCovered = await assetIDsCoveredByRemoteChunk(records: chunk, committedView: committedView)
+            let chunkCovered = await assetIDsCoveredByRemoteChunk(records: chunk, safeToSkip: safeToSkip)
             covered.formUnion(chunkCovered)
             offset = end
             await Task.yield()
@@ -196,7 +196,7 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
 
     private func assetIDsCoveredByRemoteChunk(
         records: [(String, LocalAssetFingerprintRecord)],
-        committedView: PerMonth<Set<Data>>
+        safeToSkip: PerMonth<Set<Data>>
     ) async -> Set<String> {
         await withCheckedContinuation { continuation in
             queue.async {
@@ -208,7 +208,7 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
                     guard let phAsset = phAssets[id] else { continue }
                     guard Self.cachedSignatureMatchesCurrent(record: record, phAsset: phAsset) else { continue }
                     let month = LibraryMonthKey.from(date: phAsset.creationDate)
-                    guard committedView.contains(record.fingerprint, in: month) else { continue }
+                    guard safeToSkip.contains(record.fingerprint, in: month) else { continue }
                     if let modDate = phAsset.modificationDate, modDate > record.updatedAt { continue }
                     covered.insert(id)
                 }

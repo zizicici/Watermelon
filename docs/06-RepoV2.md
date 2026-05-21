@@ -251,7 +251,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 ### `BackupResumePlanner` 切 `RemoteViewHandle`
 
 - `makePlan` 接受 `BackupResumeDedupMode`：V1 用 `completedAssetIDs`，V2 用 `RemoteViewHandle`
-- V2 模式用 `RemoteViewHandle.committedAssetFingerprintsByMonth` 去重；该 handle 直接反映 durable per-asset commits，并扣掉 physical-missing resources
+- V2 模式用 `RemoteViewHandle.resumeCoverage.safeToSkipAssetFingerprintsByMonth` 去重；该 handle 从 durable per-asset commits 投影 safe-to-skip 覆盖，扣掉 physical-missing resources，并把存在同月 strict-subset survivor 的 superseding fingerprint 留给 AssetProcessor healing
 - retry / scoped / full 共用这条 fingerprint 覆盖过滤路径
 
 ### Iter 9 加固：`.perKey` 数据路径走 writerID / runID 后缀
