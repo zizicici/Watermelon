@@ -400,8 +400,11 @@ struct BackupRunPreparationService: Sendable {
         var report = try await verifier.verify(month: month)
         if !report.cleanupCandidates.isEmpty, let profile {
             let v2: BackupV2RuntimeServices
-            do {
-                v2 = try await BackupV2RuntimeBuilder.build(
+            v2 = try await BackupV2RuntimeOpenErrorMapping.withCompatibilityMapping(
+                metadataClient: metadataClient,
+                disconnectOnError: false
+            ) {
+                try await BackupV2RuntimeBuilder.build(
                     client: client,
                     metadataClient: metadataClient,
                     ownsMetadataClient: false,
@@ -411,18 +414,6 @@ struct BackupRunPreparationService: Sendable {
                     format: formatCompatibilityService,
                     allowMigration: false
                 )
-            } catch BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) {
-                throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
-            } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
-                throw BackupCompatibilityError.repoIdentityMismatch
-            } catch BackupV2RuntimeBuildError.requiresForegroundMigration {
-                throw BackupCompatibilityError.requiresForegroundMigration
-            } catch BackupV2RuntimeBuildError.repoFormatRegression {
-                throw BackupCompatibilityError.repoFormatRegression
-            } catch BackupV2RuntimeBuildError.damagedV2Repo {
-                throw BackupCompatibilityError.damagedV2Repo
-            } catch {
-                throw error
             }
             do {
                 let appliedFingerprints = try await verifier.applyTombstones(
@@ -551,7 +542,10 @@ struct BackupRunPreparationService: Sendable {
         try await raw.connect()
         // serialOnly backends must serialize concurrent metadata writes.
         let metadataClient = wrapIfSerial(raw)
-        return try await withBackupV2RuntimeBuildErrorMapping(metadataClient: metadataClient) {
+        return try await BackupV2RuntimeOpenErrorMapping.withCompatibilityMapping(
+            metadataClient: metadataClient,
+            disconnectOnError: true
+        ) {
             try await BackupV2RuntimeBuilder.build(
                 client: client,
                 metadataClient: metadataClient,
@@ -572,39 +566,4 @@ struct BackupRunPreparationService: Sendable {
         }
     }
 
-}
-
-func withBackupV2RuntimeBuildErrorMapping<T>(
-    metadataClient: any RemoteStorageClientProtocol,
-    build: () async throws -> T
-) async throws -> T {
-    do {
-        return try await build()
-    } catch BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) {
-        await metadataClient.disconnectSafely()
-        throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
-    } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
-        await metadataClient.disconnectSafely()
-        throw BackupCompatibilityError.repoIdentityMismatch
-    } catch BackupV2RuntimeBuildError.requiresForegroundMigration {
-        await metadataClient.disconnectSafely()
-        throw BackupCompatibilityError.requiresForegroundMigration
-    } catch BackupV2RuntimeBuildError.repoFormatRegression {
-        await metadataClient.disconnectSafely()
-        throw BackupCompatibilityError.repoFormatRegression
-    } catch BackupV2RuntimeBuildError.damagedV2Repo {
-        await metadataClient.disconnectSafely()
-        throw BackupCompatibilityError.damagedV2Repo
-    } catch BackupV2RuntimeBuildError.profileMissingID {
-        await metadataClient.disconnectSafely()
-        // Fail-closed: V1 fallback would write V1 manifests over a V2 repo.
-        throw NSError(
-            domain: "BackupRunPreparation",
-            code: -90,
-            userInfo: [NSLocalizedDescriptionKey: "profile missing id — cannot prepare V2 runtime"]
-        )
-    } catch {
-        await metadataClient.disconnectSafely()
-        throw error
-    }
 }

@@ -53,18 +53,12 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
             throw BackupV2RuntimeBuildError.profileMissingID
         }
         let basePath = RemotePathBuilder.normalizePath(profile.basePath)
-        do {
+        try await BackupV2RuntimeOpenErrorMapping.withOpenErrorNormalization {
             try await client.createDirectory(path: basePath)
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            throw error
         }
 
-        let inspection: RemoteFormatInspection
-        do {
-            inspection = try await format.inspectRemoteFormat(client: client, profile: profile)
-        } catch BackupCompatibilityError.damagedV2Repo {
-            throw BackupV2RuntimeBuildError.damagedV2Repo
+        let inspection = try await BackupV2RuntimeOpenErrorMapping.withOpenErrorNormalization {
+            try await format.inspectRemoteFormat(client: client, profile: profile)
         }
 
         let identity = RepoIdentity(database: databaseManager)
@@ -106,7 +100,7 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
                 format: format,
                 publishBootstrap: cleanupBootstrap
             )
-            try await withShapedRepoBootstrapErrorMapping {
+            try await BackupV2RuntimeOpenErrorMapping.withOpenErrorNormalization {
                 try await cleanup.runCleanupOnly(
                     ownerWriterID: ownerWriterID,
                     writerID: writerID,
@@ -117,31 +111,8 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
             if let existing = try await identity.findRepoStateByProfile(profileID: profileID) {
                 throw BackupV2RuntimeBuildError.repoFormatRegression(repoID: existing.repoID)
             }
-            do {
-                do {
-                    resolvedRepoID = try await bootstrap.initializeFreshRepo(writerID: writerID)
-                } catch let error as RepoBootstrap.VersionConflict {
-                    switch error {
-                    case .higherFormatVersion(_, _, let minApp),
-                         .mismatchedFormatVersion(_, _, let minApp):
-                        throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
-                    case .unreadable(let underlying):
-                        if let underlying, RemoteWriteClassifier.isCancellation(underlying) {
-                            throw CancellationError()
-                        }
-                        throw BackupV2RuntimeBuildError.damagedV2Repo
-                    }
-                }
-            } catch let error as RepoBootstrap.BootstrapError {
-                switch error {
-                case .ioFailure(let underlying):
-                    if RemoteWriteClassifier.isCancellation(underlying) {
-                        throw CancellationError()
-                    }
-                    throw BackupV2RuntimeBuildError.damagedV2Repo
-                case .futureFormatVersion(let minAppVersion):
-                    throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
-                }
+            resolvedRepoID = try await BackupV2RuntimeOpenErrorMapping.withOpenErrorNormalization {
+                try await bootstrap.initializeFreshRepo(writerID: writerID)
             }
             await onBootstrap?()
         case .v1, .v2WithV1Manifests:
@@ -164,7 +135,7 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
                 format: format,
                 publishBootstrap: bootstrap
             )
-            _ = try await withShapedRepoBootstrapErrorMapping {
+            _ = try await BackupV2RuntimeOpenErrorMapping.withOpenErrorNormalization {
                 try await migration.runFullMigration(
                     profileID: profileID,
                     repoID: resolvedRepoID,
@@ -232,7 +203,7 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
         format: RemoteFormatCompatibilityService,
         publishBootstrap: RepoBootstrap
     ) async throws -> String {
-        try await withShapedRepoBootstrapErrorMapping {
+        try await BackupV2RuntimeOpenErrorMapping.withOpenErrorNormalization {
             let authority = RepoIdentityAuthority(context: RepoIdentityAuthorityContext(
                 profileID: profileID,
                 writerID: writerID,
@@ -243,44 +214,6 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
             ))
             let resolution = try await authority.resolve()
             return try await authority.publish(resolution, using: publishBootstrap)
-        }
-    }
-
-    private func withShapedRepoBootstrapErrorMapping<T>(
-        _ operation: () async throws -> T
-    ) async throws -> T {
-        do {
-            return try await operation()
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as BackupV2RuntimeBuildError {
-            throw error
-        } catch let error as RepoBootstrap.BootstrapError {
-            switch error {
-            case .ioFailure(let underlying):
-                if RemoteWriteClassifier.isCancellation(underlying) {
-                    throw CancellationError()
-                }
-                throw BackupV2RuntimeBuildError.damagedV2Repo
-            case .futureFormatVersion(let minAppVersion):
-                throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
-            }
-        } catch let error as RepoBootstrap.VersionConflict {
-            switch error {
-            case .higherFormatVersion(_, _, let minApp),
-                 .mismatchedFormatVersion(_, _, let minApp):
-                throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minApp)
-            case .unreadable(let underlying):
-                if let underlying, RemoteWriteClassifier.isCancellation(underlying) {
-                    throw CancellationError()
-                }
-                throw BackupV2RuntimeBuildError.damagedV2Repo
-            }
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) {
-                throw CancellationError()
-            }
-            throw error
         }
     }
 }

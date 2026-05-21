@@ -9,6 +9,18 @@ import Photos
 import Security
 import MoreKit
 
+enum BackgroundRuntimeOpenFailureDisposition: Equatable {
+    case skippedForegroundMigration
+    case failedUnsupportedRemoteFormat(minAppVersion: String?)
+    case failedRepoIdentityMismatch
+    case failedRepoFormatRegression
+    case failedDamagedV2Repo
+    case failedProfileMissingID
+    case cancelled
+    case failedTransientRemoteFailure
+    case skippedOther
+}
+
 final class BackgroundBackupRunner {
     static let taskIdentifier = "com.zizicici.watermelon.background-backup"
 
@@ -110,6 +122,31 @@ final class BackgroundBackupRunner {
         case cancelled
     }
 
+    static func runtimeOpenFailureDisposition(
+        _ kind: BackupV2RuntimeOpenFailureKind
+    ) -> BackgroundRuntimeOpenFailureDisposition {
+        switch kind {
+        case .requiresForegroundMigration:
+            return .skippedForegroundMigration
+        case .unsupportedRemoteFormat(let minAppVersion):
+            return .failedUnsupportedRemoteFormat(minAppVersion: minAppVersion)
+        case .repoIdentityMismatch:
+            return .failedRepoIdentityMismatch
+        case .repoFormatRegression:
+            return .failedRepoFormatRegression
+        case .damagedV2Repo:
+            return .failedDamagedV2Repo
+        case .profileMissingID:
+            return .failedProfileMissingID
+        case .cancellation:
+            return .cancelled
+        case .transientRemoteFailure:
+            return .failedTransientRemoteFailure
+        case .other:
+            return .skippedOther
+        }
+    }
+
     private func backupProfile(
         _ profile: ServerProfileRecord,
         monthAssetIDs: [LibraryMonthKey: [String]],
@@ -193,69 +230,11 @@ final class BackgroundBackupRunner {
                 databaseManager: databaseManager,
                 allowMigration: false
             )
-        } catch BackupV2RuntimeBuildError.requiresForegroundMigration {
-            await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.profileNeedsForegroundMigration"), profile.name),
-                level: .warning
-            )
-            await metadataClient.disconnectSafely()
-            await client.disconnectSafely()
-            return .skipped
-        } catch BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) {
-            await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.profileFormatUnsupported"), profile.name, minAppVersion ?? "?"),
-                level: .error
-            )
-            await metadataClient.disconnectSafely()
-            await client.disconnectSafely()
-            return .failed
-        } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
-            // BG can't resolve identity drift; surface the specific error to the log.
-            await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.profileRepoIdentityMismatch"), profile.name),
-                level: .error
-            )
-            await metadataClient.disconnectSafely()
-            await client.disconnectSafely()
-            return .failed
-        } catch BackupV2RuntimeBuildError.repoFormatRegression {
-            await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.profileRepoFormatRegression"), profile.name),
-                level: .error
-            )
-            await metadataClient.disconnectSafely()
-            await client.disconnectSafely()
-            return .failed
-        } catch BackupV2RuntimeBuildError.damagedV2Repo {
-            await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, BackupCompatibilityError.damagedV2Repo.errorDescription ?? ""),
-                level: .error
-            )
-            await metadataClient.disconnectSafely()
-            await client.disconnectSafely()
-            return .failed
-        } catch is CancellationError {
-            await metadataClient.disconnectSafely()
-            await client.disconnectSafely()
-            return .cancelled
         } catch {
-            if RemoteWriteClassifier.isTransientVerifyFailure(error) {
-                await writer.appendLog(
-                    String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
-                    level: .error
-                )
-                await metadataClient.disconnectSafely()
-                await client.disconnectSafely()
-                return .failed
-            }
-            // Don't degrade to V1 — a V1 manifest into a V2 repo creates dual-format divergence.
-            await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
-                level: .warning
-            )
+            let failure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(error)
             await metadataClient.disconnectSafely()
             await client.disconnectSafely()
-            return .skipped
+            return await handleRuntimeOpenFailure(failure, profile: profile, writer: writer)
         }
 
         do {
@@ -320,6 +299,66 @@ final class BackgroundBackupRunner {
                 level: .info
             )
             return .completed
+        }
+    }
+
+    private func handleRuntimeOpenFailure(
+        _ failure: BackupV2RuntimeOpenFailure,
+        profile: ServerProfileRecord,
+        writer: ExecutionLogSessionWriter
+    ) async -> ProfileRunResult {
+        switch Self.runtimeOpenFailureDisposition(failure.kind) {
+        case .skippedForegroundMigration:
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileNeedsForegroundMigration"), profile.name),
+                level: .warning
+            )
+            return .skipped
+        case .failedUnsupportedRemoteFormat(let minAppVersion):
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileFormatUnsupported"), profile.name, minAppVersion ?? "?"),
+                level: .error
+            )
+            return .failed
+        case .failedRepoIdentityMismatch:
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileRepoIdentityMismatch"), profile.name),
+                level: .error
+            )
+            return .failed
+        case .failedRepoFormatRegression:
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileRepoFormatRegression"), profile.name),
+                level: .error
+            )
+            return .failed
+        case .failedDamagedV2Repo:
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, BackupCompatibilityError.damagedV2Repo.errorDescription ?? ""),
+                level: .error
+            )
+            return .failed
+        case .failedProfileMissingID:
+            let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: failure)
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, mapped.localizedDescription),
+                level: .error
+            )
+            return .failed
+        case .cancelled:
+            return .cancelled
+        case .failedTransientRemoteFailure:
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(failure.originalError)),
+                level: .error
+            )
+            return .failed
+        case .skippedOther:
+            await writer.appendLog(
+                String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, profile.userFacingStorageErrorMessage(failure.originalError)),
+                level: .warning
+            )
+            return .skipped
         }
     }
 

@@ -1076,6 +1076,77 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         XCTAssertTrue(report.reportOnly.isEmpty)
     }
 
+    func testVerifyMonthV2_cleanupRuntimeProfileMissingIDMapsAndDoesNotDisconnectBorrowedClient() async throws {
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        let writerID = "11111111-1111-1111-1111-111111111111"
+        let month = LibraryMonthKey(year: 2026, month: 5)
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID)
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
+        let commitWriter = CommitLogWriter(client: client, basePath: basePath)
+        let fp = TestFixtures.fingerprint(0x31)
+        let hash = TestFixtures.fingerprint(0xA1)
+        let body = CommitAddAssetBody(
+            assetFingerprint: fp,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resources: [
+                CommitResourceEntry(
+                    physicalRemotePath: "2026/05/missing.jpg",
+                    logicalName: "missing.jpg",
+                    contentHash: hash,
+                    fileSize: 100,
+                    resourceType: ResourceTypeCode.photo,
+                    role: ResourceTypeCode.photo,
+                    slot: 0,
+                    crypto: nil
+                )
+            ]
+        )
+        let header = TestFixtures.makeCommitHeader(
+            repoID: repoID,
+            writerID: writerID,
+            seq: 1,
+            runID: "run",
+            month: month,
+            clockMin: 1,
+            clockMax: 1
+        )
+        _ = try await commitWriter.write(
+            header: header,
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(body))],
+            month: month,
+            respectTaskCancellation: false
+        )
+        try await client.createDirectory(path: "\(basePath)/2026/05")
+        let profile = TestFixtures.makeServerProfile(id: nil, storageType: .webdav, basePath: basePath)
+        let service = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: RemoteIndexSyncService(),
+            databaseManager: databaseManager
+        )
+
+        do {
+            _ = try await service.verifyMonthV2(
+                client: client,
+                basePath: basePath,
+                month: month,
+                profile: profile
+            )
+            XCTFail("expected profileMissingID compatibility mapping")
+        } catch {
+            let nsError = error as NSError
+            XCTAssertEqual(nsError.domain, "BackupRunPreparation")
+            XCTAssertEqual(nsError.code, -90)
+        }
+        let disconnectCount = await client.disconnectCount
+        XCTAssertEqual(disconnectCount, 0)
+    }
+
     func testVerifyMonthV2_nilBinding_cachedRepoIDMismatch_throwsIdentityMismatch() async throws {
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
