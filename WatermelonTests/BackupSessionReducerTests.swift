@@ -79,4 +79,85 @@ final class BackupSessionReducerTests: XCTestCase {
         XCTAssertEqual(state.state, .stopped)
         XCTAssertNil(state.pendingRunConfiguration)
     }
+
+    // MARK: - incomplete month summaries
+
+    func testIncompleteMonthSummaryMergesByMaxAndRemovesCompletedMonth() {
+        var state = BackupSessionState()
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        let first = BackupMonthIncompleteSummary(
+            downloadIssues: DownloadIssueSummary(skippedIncompleteCount: 3, fingerprintMismatchCount: 1),
+            metadataSnapshotDeferredMessage: "old"
+        )
+        let second = BackupMonthIncompleteSummary(
+            downloadIssues: DownloadIssueSummary(skippedIncompleteCount: 1, fingerprintMismatchCount: 4),
+            metadataSnapshotDeferredMessage: "new"
+        )
+
+        reduce(&state, .monthChanged(MonthChangeEvent(year: month.year, month: month.month, action: .completed)))
+        reduce(&state, .monthChanged(MonthChangeEvent(year: month.year, month: month.month, action: .incomplete(first))))
+        reduce(&state, .monthChanged(MonthChangeEvent(year: month.year, month: month.month, action: .incomplete(first))))
+        reduce(&state, .monthChanged(MonthChangeEvent(year: month.year, month: month.month, action: .incomplete(second))))
+
+        XCTAssertFalse(state.completedMonths.contains(month))
+        XCTAssertEqual(state.incompleteMonths, [month])
+        XCTAssertEqual(state.incompleteSummaryByMonth[month]?.downloadIssues.skippedIncompleteCount, 3)
+        XCTAssertEqual(state.incompleteSummaryByMonth[month]?.downloadIssues.fingerprintMismatchCount, 4)
+        XCTAssertEqual(state.incompleteSummaryByMonth[month]?.metadataSnapshotDeferredMessage, "new")
+    }
+
+    func testCompletedMonthEventClearsIncompleteSummary() {
+        var state = BackupSessionState()
+        let month = LibraryMonthKey(year: 2024, month: 6)
+
+        reduce(&state, .monthChanged(MonthChangeEvent(
+            year: month.year,
+            month: month.month,
+            action: .incomplete(BackupMonthIncompleteSummary(
+                downloadIssues: DownloadIssueSummary(skippedIncompleteCount: 2)
+            ))
+        )))
+        reduce(&state, .monthChanged(MonthChangeEvent(year: month.year, month: month.month, action: .completed)))
+
+        XCTAssertTrue(state.completedMonths.contains(month))
+        XCTAssertNil(state.incompleteSummaryByMonth[month])
+    }
+
+    func testFinishedRunWithIncompleteSummaryUsesPartialStatusText() {
+        var state = BackupSessionState()
+        let month = LibraryMonthKey(year: 2024, month: 6)
+
+        reduce(&state, .monthChanged(MonthChangeEvent(
+            year: month.year,
+            month: month.month,
+            action: .incomplete(BackupMonthIncompleteSummary(
+                metadataSnapshotDeferredMessage: "snapshot deferred"
+            ))
+        )))
+        reduce(&state, .finished(BackupExecutionResult(
+            total: 1,
+            succeeded: 1,
+            failed: 0,
+            skipped: 0,
+            paused: false
+        )))
+
+        XCTAssertEqual(state.state, .completed)
+        XCTAssertEqual(state.statusText, String(localized: "backup.session.backupCompletedPartial"))
+    }
+
+    private func reduce(
+        _ state: inout BackupSessionState,
+        _ event: BackupEvent,
+        runMode: BackupRunMode = .full,
+        displayMode: BackupRunMode = .full,
+        terminalIntent: BackupTerminationIntent = .none
+    ) {
+        _ = state.reduce(
+            event: event,
+            runMode: runMode,
+            displayMode: displayMode,
+            terminalIntent: terminalIntent
+        )
+    }
 }

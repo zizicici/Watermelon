@@ -206,19 +206,12 @@ struct HomeExecutionSession {
 
     mutating func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) -> UploadResultOutcome {
         switch result {
-        case .completed(let failedCountByMonth, let downloadIncompleteMonths, let downloadIncompleteMessagesByMonth):
+        case .completed(let failedCountByMonth, let incompleteSummaryByMonth):
             uploadPhaseCompleted = true
             for (month, failedCount) in failedCountByMonth where failedCount > 0 {
-                if monthPlans[month]?.phase == .failed {
-                    monthPlans[month]?.failedItemCount = failedCount
-                } else {
-                    monthPlans[month]?.apply(.partiallyFailed(count: failedCount))
-                }
+                monthPlans[month]?.apply(.recordUploadFailures(observedFailedItemCount: failedCount))
             }
-            markDownloadIncompleteMonths(
-                downloadIncompleteMonths,
-                messagesByMonth: downloadIncompleteMessagesByMonth
-            )
+            recordMonthIncompleteSummaries(incompleteSummaryByMonth)
 
             if remainingDownloadMonths().isEmpty {
                 finishExecution()
@@ -234,7 +227,7 @@ struct HomeExecutionSession {
             return .paused
 
         case .failed(let message):
-            applyUploadTargetsFailed(reason: message)
+            recordUploadTargetsTerminalFailure(kind: .uploadRunFailed, message: message)
             phase = .failed(message)
             return .failed(AlertMessage(title: String(localized: "home.execution.uploadFailed"), message: message))
 
@@ -243,7 +236,7 @@ struct HomeExecutionSession {
 
         case .startFailed:
             let message = String(localized: "home.execution.startFailed")
-            applyUploadTargetsFailed(reason: message)
+            recordUploadTargetsTerminalFailure(kind: .backupStartFailed, message: message)
             phase = .failed(message)
             return .failed(AlertMessage(title: String(localized: "home.execution.uploadFailed"), message: message))
         }
@@ -259,7 +252,10 @@ struct HomeExecutionSession {
 
     mutating func failForMissingConnection() -> AlertMessage {
         let message = String(localized: "home.execution.notConnected")
-        applyEvent(.failed(reason: message), where: { !$0.isTerminal })
+        applyEvent(
+            .recordTerminalFailure(MonthTerminalFailure(kind: .missingConnection, message: message)),
+            where: { !$0.isTerminal }
+        )
         phase = .failed(message)
         return AlertMessage(title: String(localized: "common.error"), message: message)
     }
@@ -283,11 +279,11 @@ struct HomeExecutionSession {
     }
 
     mutating func failDownloadMonth(_ month: LibraryMonthKey, reason: String) {
-        monthPlans[month]?.apply(.failed(reason: reason))
+        monthPlans[month]?.apply(.recordTerminalFailure(MonthTerminalFailure(kind: .downloadRunFailed, message: reason)))
     }
 
-    mutating func markDownloadIncompleteMonth(_ month: LibraryMonthKey, reason: String) {
-        monthPlans[month]?.apply(.failed(reason: reason))
+    mutating func recordMonthIncomplete(_ month: LibraryMonthKey, summary: BackupMonthIncompleteSummary) {
+        monthPlans[month]?.apply(.recordIncomplete(summary))
     }
 
     func phaseLabel(for month: LibraryMonthKey) -> String {
@@ -296,13 +292,8 @@ struct HomeExecutionSession {
 
     mutating func finishExecution() {
         for key in monthPlans.keys {
-            monthPlans[key]?.apply(.completed)
+            monthPlans[key]?.finalizeIfOpen()
         }
-        // Global phase folds from per-month outcome predicates. `hasUserVisibleFailure`
-        // (≠ `isFailed`) includes `.partiallyFailed` so a "some months failed" run
-        // can never report a top-level `.completed`. The reduce is the contract; if
-        // a new MonthPlan.Phase shows up, it must opt into the predicate explicitly
-        // rather than silently landing on the wrong global phase.
         let hasFailure = monthPlans.values.contains(where: \.hasUserVisibleFailure)
         phase = hasFailure ? .failed(String(localized: "home.execution.partialFailed")) : .completed
     }
@@ -311,8 +302,14 @@ struct HomeExecutionSession {
         localIndexPreflightCompleted = true
     }
 
-    mutating func failExecution(reason: String) -> AlertMessage {
-        applyEvent(.failed(reason: reason), where: { !$0.isTerminal })
+    mutating func failExecution(
+        reason: String,
+        kind: MonthTerminalFailure.Kind = .generic
+    ) -> AlertMessage {
+        applyEvent(
+            .recordTerminalFailure(MonthTerminalFailure(kind: kind, message: reason)),
+            where: { !$0.isTerminal }
+        )
         phase = .failed(reason)
         return AlertMessage(title: String(localized: "common.error"), message: reason)
     }
@@ -343,22 +340,23 @@ struct HomeExecutionSession {
         )
     }
 
-    private mutating func applyUploadTargetsFailed(reason: String) {
+    private mutating func recordUploadTargetsTerminalFailure(
+        kind: MonthTerminalFailure.Kind,
+        message: String
+    ) {
         let uploadTargets = Set(backupMonths).union(complementMonths)
         for month in uploadTargets {
             let phase = monthPlans[month]?.phase
             guard phase != .uploadDone && phase != .completed && phase != .partiallyFailed else { continue }
-            monthPlans[month]?.apply(.failed(reason: reason))
+            monthPlans[month]?.apply(.recordTerminalFailure(MonthTerminalFailure(kind: kind, message: message)))
         }
     }
 
-    private mutating func markDownloadIncompleteMonths(
-        _ months: Set<LibraryMonthKey>,
-        messagesByMonth: [LibraryMonthKey: String]
+    private mutating func recordMonthIncompleteSummaries(
+        _ summariesByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary]
     ) {
-        let fallback = String(localized: "home.execution.partialFailed")
-        for month in months {
-            monthPlans[month]?.apply(.failed(reason: messagesByMonth[month] ?? fallback))
+        for (month, summary) in summariesByMonth {
+            monthPlans[month]?.apply(.recordIncomplete(summary))
         }
     }
 

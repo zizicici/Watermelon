@@ -33,8 +33,7 @@ enum State {
         let total: Int
         let startedMonths: Set<LibraryMonthKey>
         let completedMonths: Set<LibraryMonthKey>
-        let downloadIncompleteMonths: Set<LibraryMonthKey>
-        let downloadIncompleteMessagesByMonth: [LibraryMonthKey: String]
+        let incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary]
         let processedCountByMonth: [LibraryMonthKey: Int]
         let failedCountByMonth: [LibraryMonthKey: Int]
     }

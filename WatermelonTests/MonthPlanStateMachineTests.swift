@@ -3,133 +3,185 @@ import XCTest
 
 final class MonthPlanStateMachineTests: XCTestCase {
 
-    // MARK: - .partiallyFailed → .failed preserves failedItemCount
+    func testUploadAndDownloadFactsMergeInEitherOrder() {
+        let summary = BackupMonthIncompleteSummary(downloadIssues: DownloadIssueSummary(
+            skippedIncompleteCount: 2,
+            fingerprintMismatchCount: 1,
+            localFingerprintVerificationIncompleteCount: 3
+        ))
 
-    func testPartiallyFailedToFailedPreservesFailedItemCount() {
-        var plan = MonthPlan(needsUpload: true, needsDownload: true)
-        plan.apply(.uploadStarted)
-        XCTAssertEqual(plan.phase, .uploading)
+        var uploadFirst = MonthPlan(needsUpload: true, needsDownload: true)
+        uploadFirst.apply(.uploadStarted)
+        uploadFirst.apply(.uploadCompleted)
+        uploadFirst.apply(.recordUploadFailures(observedFailedItemCount: 4))
+        uploadFirst.apply(.recordIncomplete(summary))
 
-        plan.apply(.uploadCompleted)
-        XCTAssertEqual(plan.phase, .uploadDone)
+        var downloadFirst = MonthPlan(needsUpload: true, needsDownload: true)
+        downloadFirst.apply(.uploadStarted)
+        downloadFirst.apply(.uploadCompleted)
+        downloadFirst.apply(.recordIncomplete(summary))
+        downloadFirst.apply(.recordUploadFailures(observedFailedItemCount: 4))
 
-        plan.apply(.partiallyFailed(count: 3))
-        XCTAssertEqual(plan.phase, .partiallyFailed)
-        XCTAssertEqual(plan.failedItemCount, 3)
-
-        plan.apply(.failed(reason: "download incomplete"))
-        XCTAssertEqual(plan.phase, .failed)
-        XCTAssertEqual(plan.failedItemCount, 3, "failedItemCount must survive partiallyFailed → failed escalation")
-        XCTAssertEqual(plan.failureMessage, "download incomplete")
+        XCTAssertEqual(uploadFirst.phase, .partiallyFailed)
+        XCTAssertEqual(downloadFirst.phase, .partiallyFailed)
+        XCTAssertEqual(uploadFirst.failureFacts, downloadFirst.failureFacts)
+        XCTAssertEqual(uploadFirst.failureFacts.uploadFailedItemCount, 4)
+        XCTAssertEqual(uploadFirst.failureFacts.incomplete.downloadIssues, summary.downloadIssues)
     }
 
-    func testFailedBlocksPartiallyFailedRegression() {
+    func testTerminalFailureAfterNonFatalFactsPreservesFacts() {
+        let terminal = MonthTerminalFailure(kind: .downloadRunFailed, message: "download failed")
+        let summary = BackupMonthIncompleteSummary(downloadIssues: DownloadIssueSummary(skippedIncompleteCount: 2))
         var plan = MonthPlan(needsUpload: true, needsDownload: true)
-        plan.apply(.uploadStarted)
-        plan.apply(.uploadCompleted)
-        XCTAssertEqual(plan.phase, .uploadDone)
 
-        plan.apply(.failed(reason: "download incomplete"))
+        plan.apply(.recordUploadFailures(observedFailedItemCount: 3))
+        plan.apply(.recordIncomplete(summary))
+        plan.apply(.recordTerminalFailure(terminal))
+        plan.apply(.completed)
+
         XCTAssertEqual(plan.phase, .failed)
-
-        plan.apply(.partiallyFailed(count: 5))
-        XCTAssertEqual(plan.phase, .failed, "partiallyFailed must not override .failed")
-        XCTAssertEqual(plan.failedItemCount, 0, "failedItemCount stays 0 because transition was blocked")
+        XCTAssertEqual(plan.failureFacts.uploadFailedItemCount, 3)
+        XCTAssertEqual(plan.failureFacts.incomplete.downloadIssues.skippedIncompleteCount, 2)
+        XCTAssertEqual(plan.failureFacts.terminalFailure, terminal)
     }
 
-    func testPartiallyFailedToFailedFromUploading() {
-        var plan = MonthPlan(needsUpload: true, needsDownload: false)
-        plan.apply(.uploadStarted)
-        XCTAssertEqual(plan.phase, .uploading)
-
-        plan.apply(.partiallyFailed(count: 2))
-        XCTAssertEqual(plan.phase, .partiallyFailed)
-        XCTAssertEqual(plan.failedItemCount, 2)
-
-        plan.apply(.failed(reason: "connection lost"))
-        XCTAssertEqual(plan.phase, .failed)
-        XCTAssertEqual(plan.failedItemCount, 2)
-        XCTAssertEqual(plan.failureMessage, "connection lost")
-    }
-
-    func testTerminalPartiallyFailedBlocksCompleted() {
-        var plan = MonthPlan(needsUpload: true, needsDownload: true)
-        plan.apply(.uploadStarted)
-        plan.apply(.uploadCompleted)
-        plan.apply(.partiallyFailed(count: 1))
-        XCTAssertEqual(plan.phase, .partiallyFailed)
+    func testCompletedAfterNonFatalFactsRemainsPartiallyFailed() {
+        var plan = MonthPlan(needsUpload: false, needsDownload: true)
+        plan.apply(.downloadStarted)
+        plan.apply(.recordIncomplete(BackupMonthIncompleteSummary(
+            downloadIssues: DownloadIssueSummary(fingerprintMismatchCount: 2)
+        )))
 
         plan.apply(.completed)
-        XCTAssertEqual(plan.phase, .partiallyFailed, "completed must not override partiallyFailed")
+
+        XCTAssertEqual(plan.phase, .partiallyFailed)
+        XCTAssertTrue(plan.failureFacts.hasUserVisibleFailure)
     }
 
-    // MARK: - handleUploadResult preserves failedItemCount on already-.failed months
+    func testDuplicateFactsUseMaxAndLatestMessage() {
+        let first = BackupMonthIncompleteSummary(
+            downloadIssues: DownloadIssueSummary(
+                skippedIncompleteCount: 3,
+                fingerprintMismatchCount: 1,
+                localFingerprintVerificationIncompleteCount: 2
+            ),
+            metadataSnapshotDeferredMessage: "old snapshot warning"
+        )
+        let second = BackupMonthIncompleteSummary(
+            downloadIssues: DownloadIssueSummary(
+                skippedIncompleteCount: 1,
+                fingerprintMismatchCount: 4,
+                localFingerprintVerificationIncompleteCount: 2
+            ),
+            metadataSnapshotDeferredMessage: "new snapshot warning"
+        )
+        var plan = MonthPlan(needsUpload: true, needsDownload: true)
 
-    func testHandleUploadResultPreservesFailedCountOnAlreadyFailedMonth() {
+        plan.apply(.recordUploadFailures(observedFailedItemCount: 2))
+        plan.apply(.recordUploadFailures(observedFailedItemCount: 2))
+        plan.apply(.recordUploadFailures(observedFailedItemCount: 5))
+        plan.apply(.recordUploadFailures(observedFailedItemCount: -9))
+        plan.apply(.recordIncomplete(first))
+        plan.apply(.recordIncomplete(first))
+        plan.apply(.recordIncomplete(second))
+
+        XCTAssertEqual(plan.failureFacts.uploadFailedItemCount, 5)
+        XCTAssertEqual(plan.failureFacts.incomplete.downloadIssues.skippedIncompleteCount, 3)
+        XCTAssertEqual(plan.failureFacts.incomplete.downloadIssues.fingerprintMismatchCount, 4)
+        XCTAssertEqual(plan.failureFacts.incomplete.downloadIssues.localFingerprintVerificationIncompleteCount, 2)
+        XCTAssertEqual(plan.failureFacts.incomplete.metadataSnapshotDeferredMessage, "new snapshot warning")
+    }
+
+    func testTerminalFailureLatestWins() {
+        var plan = MonthPlan(needsUpload: true, needsDownload: false)
+        plan.apply(.recordTerminalFailure(MonthTerminalFailure(kind: .backupStartFailed, message: "start failed")))
+        plan.apply(.recordTerminalFailure(MonthTerminalFailure(kind: .uploadRunFailed, message: "upload failed")))
+
+        XCTAssertEqual(plan.phase, .failed)
+        XCTAssertEqual(plan.failureFacts.terminalFailure?.kind, .uploadRunFailed)
+        XCTAssertEqual(plan.failureFacts.terminalFailure?.message, "upload failed")
+    }
+
+    func testFinishExecutionUsesFactsForGlobalRollup() {
         let month = LibraryMonthKey(year: 2024, month: 6)
         var session = HomeExecutionSession()
-        session.enter(
-            backup: [], download: [], complement: [month],
-            localAssetIDs: { _ in ["asset1"] }
-        )
+        session.enter(backup: [], download: [month], complement: [], localAssetIDs: { _ in [] })
 
-        // Simulate inline download marking month .failed during upload phase
+        session.recordMonthIncomplete(month, summary: BackupMonthIncompleteSummary(
+            downloadIssues: DownloadIssueSummary(skippedIncompleteCount: 1)
+        ))
+        session.finishExecution()
+
+        XCTAssertEqual(session.monthPlans[month]?.phase, .partiallyFailed)
+        if case .failed(let message) = session.phase {
+            XCTAssertEqual(message, String(localized: "home.execution.partialFailed"))
+        } else {
+            XCTFail("expected failed phase, got \(String(describing: session.phase))")
+        }
+    }
+
+    func testFinishExecutionWithNoFactsCompletes() {
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        var session = HomeExecutionSession()
+        session.enter(backup: [], download: [month], complement: [], localAssetIDs: { _ in [] })
+
+        session.finishExecution()
+
+        XCTAssertEqual(session.monthPlans[month]?.phase, .completed)
+        XCTAssertEqual(session.phase, .completed)
+    }
+
+    func testHandleUploadResultMergesAlreadyRecordedIncompleteFacts() {
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        let summary = BackupMonthIncompleteSummary(downloadIssues: DownloadIssueSummary(
+            skippedIncompleteCount: 2,
+            fingerprintMismatchCount: 1
+        ))
+        var session = HomeExecutionSession()
+        session.enter(backup: [], download: [], complement: [month], localAssetIDs: { _ in ["asset1"] })
+
         session.completeComplementMonthUpload(month)
         session.beginDownloadMonth(month)
-        session.markDownloadIncompleteMonth(month, reason: "download incomplete")
-        XCTAssertEqual(session.monthPlans[month]?.phase, .failed)
+        session.recordMonthIncomplete(month, summary: summary)
 
         let result = BackupSessionAsyncBridge.UploadResult.completed(
             failedCountByMonth: [month: 3],
-            downloadIncompleteMonths: [month],
-            downloadIncompleteMessagesByMonth: [month: "download incomplete"]
+            incompleteSummaryByMonth: [month: summary]
         )
         let outcome = session.handleUploadResult(result)
-        if case .finished = outcome { /* expected */ } else {
-            XCTFail("expected .finished, got \(outcome)")
-        }
-
-        let plan = session.monthPlans[month]!
-        XCTAssertEqual(plan.phase, .failed)
-        XCTAssertEqual(plan.failedItemCount, 3, "failedItemCount must be set even when month was already .failed")
-    }
-
-    func testHandleUploadResultAppliesPartiallyFailedOnNonFailedMonth() {
-        let month = LibraryMonthKey(year: 2024, month: 6)
-        var session = HomeExecutionSession()
-        session.enter(
-            backup: [], download: [], complement: [month],
-            localAssetIDs: { _ in ["asset1"] }
-        )
-        session.completeComplementMonthUpload(month)
-        XCTAssertEqual(session.monthPlans[month]?.phase, .uploadDone)
-
-        let result = BackupSessionAsyncBridge.UploadResult.completed(
-            failedCountByMonth: [month: 2],
-            downloadIncompleteMonths: [],
-            downloadIncompleteMessagesByMonth: [:]
-        )
-        let outcome = session.handleUploadResult(result)
-        if case .finished = outcome { /* expected */ } else {
+        if case .finished = outcome {} else {
             XCTFail("expected .finished, got \(outcome)")
         }
 
         let plan = session.monthPlans[month]!
         XCTAssertEqual(plan.phase, .partiallyFailed)
-        XCTAssertEqual(plan.failedItemCount, 2)
+        XCTAssertEqual(plan.failureFacts.uploadFailedItemCount, 3)
+        XCTAssertEqual(plan.failureFacts.incomplete.downloadIssues.skippedIncompleteCount, 2)
+        XCTAssertEqual(plan.failureFacts.incomplete.downloadIssues.fingerprintMismatchCount, 1)
     }
 
-    // MARK: - failedMonthInfos includes upload count for .failed months
-
-    func testFailedMonthInfosIncludesUploadCountForFailedMonth() {
+    func testFailedMonthInfosRenderAllFailureFactsInOrder() {
         let month = LibraryMonthKey(year: 2024, month: 6)
-        let plan = MonthPlan(
-            needsUpload: true, needsDownload: true,
-            phase: .failed, failedItemCount: 3,
-            failureMessage: "download incomplete"
+        let summary = BackupMonthIncompleteSummary(
+            downloadIssues: DownloadIssueSummary(
+                skippedIncompleteCount: 1,
+                fingerprintMismatchCount: 2,
+                localFingerprintVerificationIncompleteCount: 3
+            ),
+            metadataSnapshotDeferredMessage: "snapshot deferred"
+        )
+        let facts = MonthFailureFacts(
+            uploadFailedItemCount: 4,
+            incomplete: summary,
+            terminalFailure: MonthTerminalFailure(kind: .downloadRunFailed, message: "download failed")
         )
         let state = HomeExecutionState(
-            monthPlans: [month: plan],
+            monthPlans: [month: MonthPlan(
+                needsUpload: true,
+                needsDownload: true,
+                phase: .failed,
+                failureFacts: facts
+            )],
             phase: .failed("error"),
             controlState: .idle,
             statusText: "",
@@ -139,83 +191,35 @@ final class MonthPlanStateMachineTests: XCTestCase {
             downloadMonths: [],
             complementMonths: [month]
         )
-        let infos = state.failedMonthInfos
-        XCTAssertEqual(infos.count, 1)
-        XCTAssertTrue(infos[0].message.contains("3"), "message should include upload failure count")
-        XCTAssertTrue(infos[0].message.contains("download incomplete"), "message should include original failure reason")
-    }
 
-    func testFailedMonthInfosExcludesCountWhenZeroForFailedMonth() {
-        let month = LibraryMonthKey(year: 2024, month: 6)
-        let plan = MonthPlan(
-            needsUpload: true, needsDownload: true,
-            phase: .failed, failedItemCount: 0,
-            failureMessage: "connection lost"
-        )
-        let state = HomeExecutionState(
-            monthPlans: [month: plan],
-            phase: .failed("error"),
-            controlState: .idle,
-            statusText: "",
-            processedCountByMonth: [:],
-            assetCountByMonth: [:],
-            backupMonths: [],
-            downloadMonths: [],
-            complementMonths: [month]
-        )
-        let infos = state.failedMonthInfos
-        XCTAssertEqual(infos.count, 1)
-        XCTAssertEqual(infos[0].message, "connection lost", "message should not include count when failedItemCount is 0")
-    }
-
-    // MARK: - Download incomplete reason strings
-
-    func testUnverifiedFingerprintStringDiffersFromSkippedIncomplete() {
-        let unverified = String(localized: "restore.log.unverifiedFingerprint")
-        let skipped = String(localized: "restore.log.skippedIncomplete")
-        XCTAssertNotEqual(unverified, skipped)
-    }
-
-    func testCombinedDownloadIncompleteReasonIncludesBothCounts() {
-        let month = LibraryMonthKey(year: 2024, month: 6)
-        let skippedPart = String.localizedStringWithFormat(
-            String(localized: "restore.log.skippedIncomplete"),
-            month.displayText,
-            3
-        )
-        let unverifiedPart = String.localizedStringWithFormat(
-            String(localized: "restore.log.unverifiedFingerprint"),
-            month.displayText,
-            2
-        )
-        let combined = [skippedPart, unverifiedPart].joined(separator: ". ")
-        XCTAssertTrue(combined.hasPrefix(month.displayText), "combined reason should start with month name")
-        XCTAssertTrue(combined.contains(skippedPart), "combined reason should include skipped part")
-        XCTAssertTrue(combined.contains(unverifiedPart), "combined reason should include unverified part")
-    }
-
-    func testFingerprintMismatchStringDiffersFromOtherDownloadStrings() {
-        let mismatch = String(localized: "restore.log.fingerprintMismatch")
-        let skipped = String(localized: "restore.log.skippedIncomplete")
-        let unverified = String(localized: "restore.log.unverifiedFingerprint")
-        XCTAssertNotEqual(mismatch, skipped)
-        XCTAssertNotEqual(mismatch, unverified)
-    }
-
-    func testCombinedReasonIncludesFingerprintMismatchPart() {
-        let month = LibraryMonthKey(year: 2024, month: 6)
-        let skippedPart = String.localizedStringWithFormat(
+        let message = state.failedMonthInfos.first?.message ?? ""
+        XCTAssertTrue(message.contains("4"), "message should include upload failure count")
+        XCTAssertTrue(message.contains(String.localizedStringWithFormat(
             String(localized: "restore.log.skippedIncomplete"),
             month.displayText,
             1
-        )
-        let mismatchPart = String.localizedStringWithFormat(
+        )))
+        XCTAssertTrue(message.contains(String.localizedStringWithFormat(
             String(localized: "restore.log.fingerprintMismatch"),
             month.displayText,
             2
-        )
-        let combined = [skippedPart, mismatchPart].joined(separator: ". ")
-        XCTAssertTrue(combined.contains(skippedPart), "combined reason should include skipped part")
-        XCTAssertTrue(combined.contains(mismatchPart), "combined reason should include mismatch part")
+        )))
+        XCTAssertTrue(message.contains(String.localizedStringWithFormat(
+            String(localized: "restore.log.unverifiedFingerprint"),
+            month.displayText,
+            3
+        )))
+        XCTAssertTrue(message.contains("snapshot deferred"))
+        XCTAssertTrue(message.hasSuffix("download failed"))
+    }
+
+    func testDownloadIssueLocalizationKeysRemainDistinct() {
+        let unverified = String(localized: "restore.log.unverifiedFingerprint")
+        let skipped = String(localized: "restore.log.skippedIncomplete")
+        let mismatch = String(localized: "restore.log.fingerprintMismatch")
+
+        XCTAssertNotEqual(unverified, skipped)
+        XCTAssertNotEqual(mismatch, skipped)
+        XCTAssertNotEqual(mismatch, unverified)
     }
 }

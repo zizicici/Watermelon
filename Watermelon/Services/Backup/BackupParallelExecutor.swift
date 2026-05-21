@@ -577,7 +577,8 @@ struct BackupParallelExecutor: Sendable {
                                 switch await onMonthUploaded(monthKey) {
                                 case .success:
                                     emitCompleted()
-                                case .downloadIncomplete(let message):
+                                case .incomplete(let summary):
+                                    let message = BackupMonthIncompleteSummaryRenderer.message(for: summary, month: monthKey)
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(
                                             String(localized: "backup.parallel.finalizationFailed"),
@@ -590,7 +591,7 @@ struct BackupParallelExecutor: Sendable {
                                     eventStream.emit(.monthChanged(MonthChangeEvent(
                                         year: monthKey.year,
                                         month: monthKey.month,
-                                        action: .downloadIncomplete(message)
+                                        action: .incomplete(summary)
                                     )))
                                 case .failed(let failure):
                                     eventStream.emitLog(
@@ -700,7 +701,9 @@ struct BackupParallelExecutor: Sendable {
                                 eventStream.emit(.monthChanged(MonthChangeEvent(
                                     year: monthKey.year,
                                     month: monthKey.month,
-                                    action: .downloadIncomplete(profile.userFacingStorageErrorMessage(error))
+                                    action: .incomplete(BackupMonthIncompleteSummary(
+                                        metadataSnapshotDeferredMessage: profile.userFacingStorageErrorMessage(error)
+                                    ))
                                 )))
                             } else {
                                 throw error

@@ -551,7 +551,7 @@ final class HomeExecutionCoordinator {
                     from: result,
                     iCloudPhotoBackupMode: settings.iCloudPhotoBackupMode
                 )
-                let alert = session.failExecution(reason: message)
+                let alert = session.failExecution(reason: message, kind: .localIndexIncomplete)
                 transientControlState = nil
                 setErrorStatus(message, log: String(format: String(localized: "home.execution.log.executionFailed"), message))
                 notifyStateChanged()
@@ -569,7 +569,7 @@ final class HomeExecutionCoordinator {
                 profile: dependencies.appSession.activeProfile
             )
             let message = String(format: String(localized: "home.execution.log.indexFailed"), errorMessage)
-            let alert = session.failExecution(reason: message)
+            let alert = session.failExecution(reason: message, kind: .localIndexIncomplete)
             transientControlState = nil
             setErrorStatus(message, log: String(format: String(localized: "home.execution.log.executionFailed"), message))
             notifyStateChanged()
@@ -740,36 +740,15 @@ final class HomeExecutionCoordinator {
         phaseLabel: String
     ) -> BackupMonthFinalizationResult {
         switch result {
-        case .success(_, let skippedIncompleteCount, let fingerprintMismatchCount, let unverifiedFingerprintCount):
-            if skippedIncompleteCount > 0 || fingerprintMismatchCount > 0 || unverifiedFingerprintCount > 0 {
-                var parts: [String] = []
-                if skippedIncompleteCount > 0 {
-                    parts.append(String.localizedStringWithFormat(
-                        String(localized: "restore.log.skippedIncomplete"),
-                        month.displayText,
-                        skippedIncompleteCount
-                    ))
-                }
-                if fingerprintMismatchCount > 0 {
-                    parts.append(String.localizedStringWithFormat(
-                        String(localized: "restore.log.fingerprintMismatch"),
-                        month.displayText,
-                        fingerprintMismatchCount
-                    ))
-                }
-                if unverifiedFingerprintCount > 0 {
-                    parts.append(String.localizedStringWithFormat(
-                        String(localized: "restore.log.unverifiedFingerprint"),
-                        month.displayText,
-                        unverifiedFingerprintCount
-                    ))
-                }
-                let reason = parts.joined(separator: ". ")
-                session.markDownloadIncompleteMonth(month, reason: reason)
+        case .success(let outcome):
+            if !outcome.issues.isEmpty {
+                let summary = BackupMonthIncompleteSummary(downloadIssues: outcome.issues)
+                let reason = BackupMonthIncompleteSummaryRenderer.message(for: summary, month: month)
+                session.recordMonthIncomplete(month, summary: summary)
                 appendWarningLog(reason)
                 refreshTerminalStatus(notifyState: false)
                 notifyStateChanged()
-                return .downloadIncomplete(reason)
+                return .incomplete(summary)
             }
             session.completeDownloadMonth(month)
             appendInfoLog(String(format: String(localized: "home.execution.log.downloadDone"), phaseLabel, month.displayText))
@@ -812,11 +791,11 @@ final class HomeExecutionCoordinator {
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadStartMonth"), month.displayText))
             case .completed:
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadDoneMonth"), month.displayText))
-            case .downloadIncomplete(let message):
+            case .incomplete(let summary):
                 let wasTerminal = session.monthPlans[month]?.isTerminal == true
-                session.markDownloadIncompleteMonth(month, reason: message)
+                session.recordMonthIncomplete(month, summary: summary)
                 guard !wasTerminal else { break }
-                appendWarningLog(message)
+                appendWarningLog(BackupMonthIncompleteSummaryRenderer.message(for: summary, month: month))
                 refreshTerminalStatus(notifyState: false)
                 notifyStateChanged()
             }

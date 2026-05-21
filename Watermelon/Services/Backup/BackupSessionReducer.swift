@@ -54,10 +54,13 @@ struct BackupSessionState {
     var completedAssetIDsForResume: Set<String> = []
     var startedMonths = Set<LibraryMonthKey>()
     var completedMonths = Set<LibraryMonthKey>()
-    var downloadIncompleteMonths = Set<LibraryMonthKey>()
-    var downloadIncompleteMessagesByMonth: [LibraryMonthKey: String] = [:]
+    var incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary] = [:]
     var processedCountByMonth: [LibraryMonthKey: Int] = [:]
     var failedCountByMonth: [LibraryMonthKey: Int] = [:]
+
+    var incompleteMonths: Set<LibraryMonthKey> {
+        Set(incompleteSummaryByMonth.keys)
+    }
 
     var canUpdateScopeSelection: Bool {
         guard controlPhase == .idle else { return false }
@@ -80,8 +83,7 @@ struct BackupSessionState {
             total: total,
             startedMonths: startedMonths,
             completedMonths: completedMonths,
-            downloadIncompleteMonths: downloadIncompleteMonths,
-            downloadIncompleteMessagesByMonth: downloadIncompleteMessagesByMonth,
+            incompleteSummaryByMonth: incompleteSummaryByMonth,
             processedCountByMonth: processedCountByMonth,
             failedCountByMonth: failedCountByMonth
         )
@@ -117,8 +119,7 @@ struct BackupSessionState {
         if shouldResetSessionItems {
             startedMonths.removeAll()
             completedMonths.removeAll()
-            downloadIncompleteMonths.removeAll()
-            downloadIncompleteMessagesByMonth.removeAll()
+            incompleteSummaryByMonth.removeAll()
             processedCountByMonth.removeAll()
             failedCountByMonth.removeAll()
         }
@@ -203,8 +204,7 @@ struct BackupSessionState {
         controlPhase = .resuming
         currentRunMode = pausedDisplayMode
         statusText = String(localized: "backup.session.resuming")
-        downloadIncompleteMonths.removeAll()
-        downloadIncompleteMessagesByMonth.removeAll()
+        incompleteSummaryByMonth.removeAll()
         return BackupSessionResumeContext(pausedMode: pausedMode, pausedDisplayMode: pausedDisplayMode)
     }
 
@@ -300,16 +300,13 @@ struct BackupSessionState {
             case .started:
                 startedMonths.insert(monthKey)
                 completedMonths.remove(monthKey)
-                downloadIncompleteMonths.remove(monthKey)
-                downloadIncompleteMessagesByMonth.removeValue(forKey: monthKey)
+                incompleteSummaryByMonth.removeValue(forKey: monthKey)
             case .completed:
                 completedMonths.insert(monthKey)
-                downloadIncompleteMonths.remove(monthKey)
-                downloadIncompleteMessagesByMonth.removeValue(forKey: monthKey)
-            case .downloadIncomplete(let message):
+                incompleteSummaryByMonth.removeValue(forKey: monthKey)
+            case .incomplete(let summary):
                 completedMonths.remove(monthKey)
-                downloadIncompleteMonths.insert(monthKey)
-                downloadIncompleteMessagesByMonth[monthKey] = message
+                incompleteSummaryByMonth[monthKey, default: BackupMonthIncompleteSummary()].mergeObserved(summary)
             }
             return BackupSessionReductionOutcome(shouldStop: false, notification: .throttled)
 
@@ -419,7 +416,7 @@ struct BackupSessionState {
     }
 
     private func completedStatusText(runMode: BackupRunMode, failedCount: Int) -> String {
-        let completedWithoutWarnings = failedCount == 0 && downloadIncompleteMonths.isEmpty
+        let completedWithoutWarnings = failedCount == 0 && incompleteSummaryByMonth.isEmpty
         switch (runMode.isRetry, completedWithoutWarnings) {
         case (true, true):
             return String(localized: "backup.session.retryCompleted")

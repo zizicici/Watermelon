@@ -29,7 +29,14 @@ final class DownloadWorkflowHelper {
         let skippedIncompleteCount = remoteItems.count - toRestore.count - fingerprintMismatchCount
 
         guard !toRestore.isEmpty else {
-            return .success(restoredCount: 0, skippedIncompleteCount: skippedIncompleteCount, fingerprintMismatchCount: fingerprintMismatchCount, unverifiedFingerprintCount: 0)
+            return .success(DownloadMonthOutcome(
+                restoredCount: 0,
+                issues: DownloadIssueSummary(
+                    skippedIncompleteCount: skippedIncompleteCount,
+                    fingerprintMismatchCount: fingerprintMismatchCount,
+                    localFingerprintVerificationIncompleteCount: 0
+                )
+            ))
         }
 
         let verifier = dependencies.restoredAssetFingerprintVerifier
@@ -80,12 +87,14 @@ final class DownloadWorkflowHelper {
                 }
             )
             if Task.isCancelled { return .cancelled }
-            return .success(
+            return .success(DownloadMonthOutcome(
                 restoredCount: restored.count,
-                skippedIncompleteCount: skippedIncompleteCount,
-                fingerprintMismatchCount: fingerprintMismatchCount,
-                unverifiedFingerprintCount: await unverifiedTracker.count
-            )
+                issues: DownloadIssueSummary(
+                    skippedIncompleteCount: skippedIncompleteCount,
+                    fingerprintMismatchCount: fingerprintMismatchCount,
+                    localFingerprintVerificationIncompleteCount: await unverifiedTracker.count
+                )
+            ))
         } catch {
             if Task.isCancelled { return .cancelled }
             let message = context.profile.userFacingStorageErrorMessage(error)
@@ -104,13 +113,13 @@ final class DownloadWorkflowHelper {
     func cancel() {}
 }
 
-enum DownloadMonthResult {
-    case success(restoredCount: Int, skippedIncompleteCount: Int, fingerprintMismatchCount: Int, unverifiedFingerprintCount: Int)
+enum DownloadMonthResult: Sendable {
+    case success(DownloadMonthOutcome)
     case failed(DownloadMonthFailure)
     case cancelled
 }
 
-struct DownloadMonthFailure {
+struct DownloadMonthFailure: @unchecked Sendable {
     let message: String
     let underlyingError: Error?
 }

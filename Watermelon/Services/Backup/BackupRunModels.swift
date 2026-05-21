@@ -42,10 +42,52 @@ struct BackupFinalizationFailure: @unchecked Sendable {
 
 enum BackupMonthFinalizationResult: Sendable {
     case success
-    /// Upload OK, inline download skipped items; the upload run must not treat this as fatal.
-    case downloadIncomplete(String)
+    case incomplete(BackupMonthIncompleteSummary)
     case failed(BackupFinalizationFailure)
     case cancelled
+}
+
+enum BackupMonthIncompleteSummaryRenderer {
+    static func message(
+        for summary: BackupMonthIncompleteSummary,
+        month: LibraryMonthKey
+    ) -> String {
+        let parts = messageParts(for: summary, month: month)
+        return parts.isEmpty ? String(localized: "home.execution.partialFailed") : parts.joined(separator: ". ")
+    }
+
+    static func messageParts(
+        for summary: BackupMonthIncompleteSummary,
+        month: LibraryMonthKey
+    ) -> [String] {
+        var parts: [String] = []
+        let issues = summary.downloadIssues
+        if issues.skippedIncompleteCount > 0 {
+            parts.append(String.localizedStringWithFormat(
+                String(localized: "restore.log.skippedIncomplete"),
+                month.displayText,
+                issues.skippedIncompleteCount
+            ))
+        }
+        if issues.fingerprintMismatchCount > 0 {
+            parts.append(String.localizedStringWithFormat(
+                String(localized: "restore.log.fingerprintMismatch"),
+                month.displayText,
+                issues.fingerprintMismatchCount
+            ))
+        }
+        if issues.localFingerprintVerificationIncompleteCount > 0 {
+            parts.append(String.localizedStringWithFormat(
+                String(localized: "restore.log.unverifiedFingerprint"),
+                month.displayText,
+                issues.localFingerprintVerificationIncompleteCount
+            ))
+        }
+        if let message = summary.metadataSnapshotDeferredMessage, !message.isEmpty {
+            parts.append(message)
+        }
+        return parts
+    }
 }
 
 typealias BackupMonthFinalizer = @Sendable @MainActor (LibraryMonthKey) async -> BackupMonthFinalizationResult
