@@ -213,7 +213,7 @@ struct HomeExecutionSession {
             }
             recordMonthIncompleteSummaries(incompleteSummaryByMonth)
 
-            if remainingDownloadMonths().isEmpty {
+            if pendingDownloadMonths().isEmpty {
                 finishExecution()
                 return .finished
             }
@@ -242,8 +242,8 @@ struct HomeExecutionSession {
         }
     }
 
-    func remainingDownloadMonths() -> [LibraryMonthKey] {
-        (downloadMonths + complementMonths).filter { monthPlans[$0]?.isTerminal != true }
+    func pendingDownloadMonths() -> [LibraryMonthKey] {
+        (downloadMonths + complementMonths).filter { monthPlans[$0]?.hasPendingDownloadWork == true }
     }
 
     mutating func beginDownloadPhase() {
@@ -275,15 +275,39 @@ struct HomeExecutionSession {
     }
 
     mutating func completeDownloadMonth(_ month: LibraryMonthKey) {
-        monthPlans[month]?.apply(.downloadCompleted)
+        finishDownloadAttempt(month)
     }
 
     mutating func failDownloadMonth(_ month: LibraryMonthKey, reason: String) {
-        monthPlans[month]?.apply(.recordTerminalFailure(MonthTerminalFailure(kind: .downloadRunFailed, message: reason)))
+        finishDownloadAttemptWithFailure(
+            month,
+            failure: MonthTerminalFailure(kind: .downloadRunFailed, message: reason)
+        )
     }
 
     mutating func recordMonthIncomplete(_ month: LibraryMonthKey, summary: BackupMonthIncompleteSummary) {
         monthPlans[month]?.apply(.recordIncomplete(summary))
+    }
+
+    mutating func finishDownloadAttempt(_ month: LibraryMonthKey) {
+        monthPlans[month]?.apply(.downloadCompleted)
+        monthPlans[month]?.apply(.downloadAttemptFinished)
+    }
+
+    mutating func finishDownloadAttemptWithIncomplete(
+        _ month: LibraryMonthKey,
+        summary: BackupMonthIncompleteSummary
+    ) {
+        monthPlans[month]?.apply(.recordIncomplete(summary))
+        monthPlans[month]?.apply(.downloadAttemptFinished)
+    }
+
+    mutating func finishDownloadAttemptWithFailure(
+        _ month: LibraryMonthKey,
+        failure: MonthTerminalFailure
+    ) {
+        monthPlans[month]?.apply(.recordTerminalFailure(failure))
+        monthPlans[month]?.apply(.downloadAttemptFinished)
     }
 
     func phaseLabel(for month: LibraryMonthKey) -> String {

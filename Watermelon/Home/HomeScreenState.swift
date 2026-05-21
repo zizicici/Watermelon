@@ -115,6 +115,7 @@ enum MonthEvent {
     case downloadPaused
     case downloadResumed
     case downloadCompleted
+    case downloadAttemptFinished
     case completed
     case recordUploadFailures(observedFailedItemCount: Int)
     case recordIncomplete(BackupMonthIncompleteSummary)
@@ -171,6 +172,16 @@ struct MonthFailureFacts: Equatable, Sendable {
     }
 }
 
+struct MonthWorkFacts: Equatable, Sendable {
+    var uploadFinished = false
+    var downloadStarted = false
+    var downloadFinished = false
+
+    var hasActiveDownloadAttempt: Bool {
+        downloadStarted && !downloadFinished
+    }
+}
+
 struct MonthTerminalFailure: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case missingConnection
@@ -191,6 +202,7 @@ struct MonthPlan {
     let needsDownload: Bool
     var phase: Phase = .pending
     var failureFacts = MonthFailureFacts()
+    var workFacts = MonthWorkFacts()
 
     enum Phase {
         case pending
@@ -211,6 +223,12 @@ struct MonthPlan {
     var hasTerminalFailure: Bool { failureFacts.hasTerminalFailure }
     var hasUserVisibleFailure: Bool { failureFacts.hasUserVisibleFailure }
     var isActive: Bool { phase == .uploading || phase == .downloading }
+    var hasPendingDownloadWork: Bool {
+        needsDownload && !workFacts.downloadFinished && !failureFacts.hasTerminalFailure
+    }
+    var canStartInlineComplementDownload: Bool {
+        needsUpload && needsDownload && hasPendingDownloadWork
+    }
     var intent: MonthIntent? {
         switch (needsUpload, needsDownload) {
         case (true, false): return .backup
@@ -247,36 +265,51 @@ struct MonthPlan {
             }
             refreshTerminalPhaseProjection()
         case .uploadCompleted:
+            workFacts.uploadFinished = true
             if phase == .uploading || phase == .pending {
                 phase = needsDownload ? .uploadDone : .completed
             }
             refreshTerminalPhaseProjection(defaultWhenNoFacts: phase == .completed ? .completed : nil)
         case .downloadStarted:
-            if phase == .uploadDone || phase == .pending {
+            guard hasPendingDownloadWork else {
+                refreshTerminalPhaseProjection(defaultWhenNoFacts: phase == .completed ? .completed : nil)
+                break
+            }
+            workFacts.downloadStarted = true
+            if phase == .uploadDone || phase == .pending || phase == .partiallyFailed {
                 phase = .downloading
             }
-            refreshTerminalPhaseProjection()
         case .downloadPaused:
             if phase == .downloading {
                 phase = .downloadPaused
             }
-            refreshTerminalPhaseProjection()
+            if failureFacts.hasTerminalFailure {
+                refreshTerminalPhaseProjection()
+            }
         case .downloadResumed:
             if phase == .downloadPaused {
                 phase = .downloading
             }
-            refreshTerminalPhaseProjection()
+            if failureFacts.hasTerminalFailure {
+                refreshTerminalPhaseProjection()
+            }
         case .downloadCompleted:
             if phase == .downloading {
                 phase = .completed
             }
             refreshTerminalPhaseProjection(defaultWhenNoFacts: phase == .completed ? .completed : nil)
+        case .downloadAttemptFinished:
+            guard workFacts.downloadStarted else { break }
+            workFacts.downloadFinished = true
+            refreshTerminalPhaseProjection(defaultWhenNoFacts: .completed)
         case .completed:
             refreshTerminalPhaseProjection(defaultWhenNoFacts: .completed)
         }
     }
 
     mutating func finalizeIfOpen() {
+        workFacts.uploadFinished = true
+        workFacts.downloadFinished = true
         guard !isTerminal else {
             refreshTerminalPhaseProjection()
             return

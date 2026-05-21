@@ -392,8 +392,8 @@ final class HomeExecutionCoordinator {
     // MARK: - Download Phase
 
     private func runDownloadPhase() async {
-        let remaining = session.remainingDownloadMonths()
-        guard !remaining.isEmpty else {
+        let pending = session.pendingDownloadMonths()
+        guard !pending.isEmpty else {
             session.finishExecution()
             appendInfoLog(String(localized: "home.execution.log.allTasksComplete"))
             refreshTerminalStatus(notifyState: false)
@@ -410,11 +410,11 @@ final class HomeExecutionCoordinator {
         }
 
         session.beginDownloadPhase()
-        appendInfoLog(String(format: String(localized: "home.execution.log.startDownloadPhase"), remaining.count))
+        appendInfoLog(String(format: String(localized: "home.execution.log.startDownloadPhase"), pending.count))
         setStatusText(phaseStatusText() ?? String(localized: "home.execution.downloading"), notifyState: false)
         notifyStateChanged()
 
-        for month in remaining {
+        for month in pending {
             if Task.isCancelled { return }
             await runDownloadMonth(month, context: context, phaseLabel: session.phaseLabel(for: month))
         }
@@ -652,9 +652,7 @@ final class HomeExecutionCoordinator {
         _ month: LibraryMonthKey,
         context: DownloadWorkflowHelper.Context?
     ) async -> BackupMonthFinalizationResult {
-        guard session.monthPlans[month]?.needsUpload == true,
-              session.monthPlans[month]?.needsDownload == true,
-              session.monthPlans[month]?.isTerminal != true else {
+        guard session.monthPlans[month]?.canStartInlineComplementDownload == true else {
             return .success
         }
         guard !Task.isCancelled else { return .cancelled }
@@ -670,7 +668,10 @@ final class HomeExecutionCoordinator {
 
         guard let context else {
             let message = String(localized: "home.execution.notConnected")
-            session.failDownloadMonth(month, reason: message)
+            session.finishDownloadAttemptWithFailure(
+                month,
+                failure: MonthTerminalFailure(kind: .downloadRunFailed, message: message)
+            )
             setErrorStatus(message, log: String(format: String(localized: "home.execution.log.downloadFailed"), phaseLabel, month.displayText, message))
             notifyStateChanged()
             onAlert?(String(format: String(localized: "home.execution.log.phaseFailed"), phaseLabel), String(format: String(localized: "home.execution.log.phaseFailedDetail"), month.displayText, message))
@@ -744,19 +745,22 @@ final class HomeExecutionCoordinator {
             if !outcome.issues.isEmpty {
                 let summary = BackupMonthIncompleteSummary(downloadIssues: outcome.issues)
                 let reason = BackupMonthIncompleteSummaryRenderer.message(for: summary, month: month)
-                session.recordMonthIncomplete(month, summary: summary)
+                session.finishDownloadAttemptWithIncomplete(month, summary: summary)
                 appendWarningLog(reason)
                 refreshTerminalStatus(notifyState: false)
                 notifyStateChanged()
                 return .incomplete(summary)
             }
-            session.completeDownloadMonth(month)
+            session.finishDownloadAttempt(month)
             appendInfoLog(String(format: String(localized: "home.execution.log.downloadDone"), phaseLabel, month.displayText))
             refreshTerminalStatus(notifyState: false)
             notifyStateChanged()
             return .success
         case .failed(let failure):
-            session.failDownloadMonth(month, reason: failure.message)
+            session.finishDownloadAttemptWithFailure(
+                month,
+                failure: MonthTerminalFailure(kind: .downloadRunFailed, message: failure.message)
+            )
             setErrorStatus(failure.message, log: String(format: String(localized: "home.execution.log.downloadFailed"), phaseLabel, month.displayText, failure.message))
             notifyStateChanged()
             onAlert?(String(format: String(localized: "home.execution.log.phaseFailed"), phaseLabel), String(format: String(localized: "home.execution.log.phaseFailedDetail"), month.displayText, failure.message))
@@ -770,11 +774,8 @@ final class HomeExecutionCoordinator {
         var assetIDs = Set<String>()
         for (month, plan) in session.monthPlans {
             guard plan.needsUpload && plan.needsDownload else { continue }
-            switch plan.phase {
-            case .uploadDone, .downloadPaused:
+            if plan.workFacts.uploadFinished && !plan.workFacts.downloadFinished {
                 assetIDs.formUnion(session.uploadAssetIDsByMonth[month] ?? [])
-            default:
-                break
             }
         }
         return assetIDs
