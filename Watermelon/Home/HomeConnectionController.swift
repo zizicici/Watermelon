@@ -1,5 +1,12 @@
 import Foundation
 
+private func isRequiresForegroundMigration(_ error: Error) -> Bool {
+    if case BackupCompatibilityError.requiresForegroundMigration = error {
+        return true
+    }
+    return false
+}
+
 @MainActor
 final class HomeConnectionController {
 
@@ -140,23 +147,33 @@ final class HomeConnectionController {
             } catch {
                 guard !Task.isCancelled else { return }
 
-                // The failed sync may have reset the shared snapshot cache.
-                // If a previous profile is still active, restore its remote index.
-                if let prev = self.dependencies.appSession.activeProfile,
-                   let prevPassword = prev.resolvedSessionPassword(from: self.dependencies.appSession) {
-                    _ = try? await self.dependencies.backupCoordinator.reloadRemoteIndex(
-                        profile: prev,
-                        password: prevPassword,
-                        onSyncProgress: nil
-                    )
-                }
+                if isRequiresForegroundMigration(error) {
+                    // Remote is reachable but needs foreground migration.
+                    // Activate session so user can trigger foreground backup → migration.
+                    try? self.dependencies.databaseManager.setActiveServerProfileID(profile.id)
+                    self.connectingProfile = nil
+                    self.connectTask = nil
+                    self.dependencies.appSession.activate(profile: profile, password: password)
+                    self.clearSyncProgress()
+                } else {
+                    // The failed sync may have reset the shared snapshot cache.
+                    // If a previous profile is still active, restore its remote index.
+                    if let prev = self.dependencies.appSession.activeProfile,
+                       let prevPassword = prev.resolvedSessionPassword(from: self.dependencies.appSession) {
+                        _ = try? await self.dependencies.backupCoordinator.reloadRemoteIndex(
+                            profile: prev,
+                            password: prevPassword,
+                            onSyncProgress: nil
+                        )
+                    }
 
-                self.connectingProfile = nil
-                self.connectTask = nil
-                self.clearSyncProgress()
-                self.onStateChanged?()
-                if reportFailure {
-                    self.onConnectFailed?(profile, error)
+                    self.connectingProfile = nil
+                    self.connectTask = nil
+                    self.clearSyncProgress()
+                    self.onStateChanged?()
+                    if reportFailure {
+                        self.onConnectFailed?(profile, error)
+                    }
                 }
             }
         }

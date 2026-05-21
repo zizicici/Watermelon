@@ -33,6 +33,7 @@ enum State {
         let total: Int
         let startedMonths: Set<LibraryMonthKey>
         let completedMonths: Set<LibraryMonthKey>
+        let incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary]
         let processedCountByMonth: [LibraryMonthKey: Int]
         let failedCountByMonth: [LibraryMonthKey: Int]
     }
@@ -139,15 +140,22 @@ enum State {
         set { session.failedCountByMonth = newValue }
     }
 
+    private let backupCoordinator: BackupCoordinator
+
     init(
         backupCoordinator: BackupCoordinator,
         appSession: AppSession,
         databaseManager: DatabaseManager,
-        photoLibraryService: PhotoLibraryService
+        photoLibraryService: PhotoLibraryService,
+        hashIndexRepository: ContentHashIndexRepository
     ) {
         self.appSession = appSession
         self.databaseManager = databaseManager
-        self.resumePlanner = BackupResumePlanner(photoLibraryService: photoLibraryService)
+        self.backupCoordinator = backupCoordinator
+        self.resumePlanner = BackupResumePlanner(
+            photoLibraryService: photoLibraryService,
+            hashIndexRepository: hashIndexRepository
+        )
         self.runDriver = BackupRunDriver(backupCoordinator: backupCoordinator)
     }
 
@@ -156,7 +164,8 @@ enum State {
             backupCoordinator: dependencies.backupCoordinator,
             appSession: dependencies.appSession,
             databaseManager: dependencies.databaseManager,
-            photoLibraryService: dependencies.photoLibraryService
+            photoLibraryService: dependencies.photoLibraryService,
+            hashIndexRepository: dependencies.hashIndexRepository
         )
     }
 
@@ -299,7 +308,7 @@ enum State {
         }
 
         let configuration = resolveRunConfiguration(override: configurationOverride)
-        let startContext = session.prepareForStart(mode: mode)
+        let startContext = session.prepareForStart(mode: mode, configuration: configuration)
         notifyObserversNow()
 
         startCommandTask?.cancel()
@@ -328,6 +337,14 @@ enum State {
                 return
             }
 
+            if Task.isCancelled || self.activeTerminationIntent != .none {
+                self.startCommandTask = nil
+                self.session.resolveStartCancellation(mode: mode)
+                self.activeTerminationIntent = .none
+                self.notifyObserversNow()
+                return
+            }
+
             let runToken = self.startRun(
                 profile: connection.profile,
                 password: connection.password,
@@ -341,7 +358,11 @@ enum State {
             self.startCommandTask = nil
             if Task.isCancelled {
                 if runToken != nil {
-                    self.session.completeAcceptedStartLaunch()
+                    self.runDriver.cancelRunTask()
+                    self.runDriver.clearActiveRunState()
+                    self.session.resolveStartCancellation(mode: mode)
+                    self.activeTerminationIntent = .none
+                    self.notifyObserversNow()
                 } else {
                     self.session.resolveStartCancellation(mode: mode)
                     self.activeTerminationIntent = .none
@@ -561,21 +582,41 @@ enum State {
         }
         guard let connection = resolveActiveConnection() else {
             session.failForMissingConnection()
-            notifyObservers()
+            notifyObserversNow()
             return false
         }
 
         let resumeContext = session.prepareForResume()
-        let iCloudPhotoBackupMode = runDriver.activeICloudPhotoBackupMode
-        let workerCountOverride = runDriver.activeWorkerCountOverride
+        // `runDriver.active*` only populates inside startRun; a pause before startRun executed would resume on defaults without this copy.
+        let pendingConfig = session.pendingRunConfiguration
+        let iCloudPhotoBackupMode = pendingConfig?.iCloudPhotoBackupMode ?? runDriver.activeICloudPhotoBackupMode
+        let workerCountOverride = pendingConfig?.workerCountOverride ?? runDriver.activeWorkerCountOverride
         notifyObserversNow()
 
         resumePreparationTask = Task { [weak self] in
             guard let self else { return }
             do {
+                _ = try await self.backupCoordinator.reloadRemoteIndex(
+                    profile: connection.profile,
+                    password: connection.password
+                )
+                try Task.checkCancellation()
+                let isV2 = await self.backupCoordinator.currentRepoIsV2()
+                let dedupMode: BackupResumeDedupMode
+                if let isV2, isV2 {
+                    let handle = try await self.backupCoordinator.prepareResumeHandle(
+                        profile: connection.profile,
+                        password: connection.password
+                    )
+                    try Task.checkCancellation()
+                    dedupMode = .v2(handle)
+                } else {
+                    dedupMode = .v1CompletedIDs
+                }
                 let resumePlan = try await self.resumePlanner.makePlan(
                     pausedMode: resumeContext.pausedMode,
-                    completedAssetIDs: self.completedAssetIDsForResume
+                    completedAssetIDs: self.completedAssetIDsForResume,
+                    dedupMode: dedupMode
                 )
                 try Task.checkCancellation()
 
@@ -589,6 +630,10 @@ enum State {
                 }
 
                 try await self.runDriver.waitForPreviousRunToClear()
+                try Task.checkCancellation()
+                if self.activeTerminationIntent != .none {
+                    throw CancellationError()
+                }
 
                 let runToken = self.startRun(
                     profile: connection.profile,
@@ -599,6 +644,21 @@ enum State {
                     iCloudPhotoBackupMode: iCloudPhotoBackupMode,
                     onMonthUploaded: onMonthUploaded
                 )
+
+                if Task.isCancelled || self.activeTerminationIntent != .none {
+                    if runToken != nil {
+                        self.runDriver.cancelRunTask()
+                        self.runDriver.clearActiveRunState()
+                        self.session.cancelResume(
+                            pausedMode: resumeContext.pausedMode,
+                            pausedDisplayMode: resumeContext.pausedDisplayMode
+                        )
+                        self.activeTerminationIntent = .none
+                        self.notifyObserversNow()
+                        return
+                    }
+                    throw CancellationError()
+                }
 
                 if runToken != nil {
                     self.session.completeResumeLaunchSucceeded(displayMode: resumeContext.pausedDisplayMode)
@@ -614,9 +674,19 @@ enum State {
                     pausedMode: resumeContext.pausedMode,
                     pausedDisplayMode: resumeContext.pausedDisplayMode
                 )
+                self.activeTerminationIntent = .none
                 self.notifyObserversNow()
             } catch {
                 self.resumePreparationTask = nil
+                if Task.isCancelled || RemoteWriteClassifier.isCancellation(error) {
+                    self.session.cancelResume(
+                        pausedMode: resumeContext.pausedMode,
+                        pausedDisplayMode: resumeContext.pausedDisplayMode
+                    )
+                    self.activeTerminationIntent = .none
+                    self.notifyObserversNow()
+                    return
+                }
                 self.notifyEventObservers(.log(
                     String.localizedStringWithFormat(
                         String(localized: "backup.session.resumePreparationFailed"),
@@ -624,7 +694,17 @@ enum State {
                     ),
                     level: .error
                 ))
-                self.session.failResumePreparation()
+                // Transient drop must keep paused context; clearing it would force a full restart on the next resume tap.
+                if connection.profile.isConnectionUnavailableError(error) ||
+                    error is RemoteViewHandleError {
+                    self.session.cancelResume(
+                        pausedMode: resumeContext.pausedMode,
+                        pausedDisplayMode: resumeContext.pausedDisplayMode
+                    )
+                } else {
+                    self.session.failResumePreparation()
+                }
+                self.activeTerminationIntent = .none
                 self.notifyObserversNow()
             }
         }

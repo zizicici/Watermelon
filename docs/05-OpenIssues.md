@@ -1,11 +1,10 @@
 # 当前风险点 / 技术债（按当前实现）
 
-## 1. 自动化测试只覆盖了纯逻辑层
+## 1. 自动化测试仍缺真实端到端覆盖
 
-1. `WatermelonTests` 已覆盖 Home 端的引擎（`HomeLocalIndexEngine` / `HomeRemoteIndexEngine`）、`HomeDataProcessingWorker`、`HomeRefreshScheduler`、`HomeScopeController` / `HomeScopeNormalizer`、`HomeSelectionController`、`HomeSectionBuilder`、`HomeHeaderSummaryFormatter`、`RemoteFileNaming` 等纯逻辑单元。
-2. `HomeExecutionCoordinator`、`BackupCoordinator`、`BackupParallelExecutor`、`AssetProcessor`、`RestoreService`、连接切换 / 暂停恢复 / sync 月份内联下载 / 外接存储拔出等真正涉及相册或远端的链路 **仍然没有自动化覆盖**。
-3. macOS target 和 `BackgroundBackupRunner` 也都不在测试范围内。
-4. 这些链路依旧依赖真机手工回归。
+1. `WatermelonTests` 已覆盖 Home 端纯逻辑、RemoteFileNaming、S3/SFTP 形状、Repo V2 materialize / flush / bootstrap / migration、RemoteIndexSyncService、RepoVerifyMonthService、storage capability matrix、RestoreService fallback、RestoredAssetFingerprintVerifier 等。
+2. 仍缺的是跨真实 PhotoKit + 真实远端的端到端链路：`HomeExecutionCoordinator`、`BackupCoordinator`、`BackupParallelExecutor`、`AssetProcessor` 组合后的连接切换 / 暂停恢复 / sync 月份内联下载 / 外接存储拔出等。
+3. macOS target 和 `BackgroundBackupRunner` 的真实调度路径也仍主要依赖手工或系统集成回归。
 
 ## 2. iCloud-only 资源仍有重复 I/O 成本
 
@@ -22,11 +21,13 @@
 1. full backup 或其恢复流程，仍需要重新遍历图库并重新计算 pending 集。
 2. 大图库下，开始执行和恢复执行都会有明显前置耗时。
 
-## 4. manifest flush 仍存在强杀窗口
+## 4. 强杀窗口（V2 metadata batch 窗口已由 Unit 8 消除）
 
-1. manifest 主要在“月份完成”与“任务收尾”时 flush。
-2. 如果应用在 flush 前被系统强杀，最近一批增量仍可能没写回远端 manifest。
-3. `MonthManifestStore.loadSeeded(...)` 已通过列出真实远端目录来规避重名碰撞，但不能消除未 flush 元数据丢失本身。
+V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1→V2 migration 流程，详见 `docs/06-RepoV2.md`）。Unit 8 后，V2 row-writing asset 在 publish asset / 写本地 hash-index 前会先写 per-asset commit；每 10 个非 failed 结果的 flush cadence 仅用于 snapshot。
+
+1. V1 路径（cutover 前）：manifest 在「月份完成」与「任务收尾」时 flush；强杀前一批未 flush 元数据丢失（月级窗口）。
+2. V2 路径（cutover 后）：row-writing asset 逐条写 commit；batch / final flush 写 snapshot cadence，不再有 deferred batch commit 窗口。
+3. 剩余未解决项是旧 commit 文件长期增长；安全 retention / compaction policy 仍需单独设计，见 §12。
 
 ## 5. 首页状态机复杂度依然不低
 
@@ -59,13 +60,13 @@
 2. 用户可手动覆盖到 `1...4`
 3. iCloud-only 资产存在时上传会被强制单 worker
 4. 目前没有根据带宽、远端 RTT、失败率动态调节 worker 数
-5. SFTP 多 worker = 多 SSH 会话；遇 sshd `MaxStartups` / `MaxSessions` 紧配置需要回落到 1，目前没有自动探测
+5. SFTP 多 worker = 多 SSH 会话；V2 cutover 后每个 profile 还会额外开一条专用的 metadata SSH 连接（`BackupV2RuntimeServices.metadataClient`，commit/snapshot/liveness 写入用），因此实际并发连接数 = `worker_count + 1`。遇 sshd `MaxStartups` / `MaxSessions` 紧配置需要回落到 1，目前没有自动探测
 
-## 8. 下载取消粒度仍是 item 级
+## 8. 下载恢复进度仍未持久化到 resource 级
 
-1. `RestoreService.restoreItems(...)` 在 item 循环边界检查取消。
-2. 一个 item 内部若包含多资源（如 Live Photo），中断时仍可能丢掉该 item 的部分临时进度。
-3. 不过成功完成的 item 会立即写回 hash 索引，所以下次能跳过整 item。
+1. `RestoreService.restoreItems(...)` 会在 item、resource 与 hash 读取循环中检查取消。
+2. 但一个 item 内部若包含多资源（如 Live Photo），中断时仍没有持久化 resource 级恢复进度，可能丢掉该 item 的部分临时进度。
+3. 成功保存到相册后，`DownloadWorkflowHelper` 会通过 `RestoredAssetFingerprintVerifier` 重建并验证 durable fingerprint binding；只有验证成功的 item 才能被后续 reconcile 当作已恢复。
 
 ## 9. macOS Target 的定位仍偏窄
 
@@ -88,7 +89,22 @@
 2. `SFTPConnectionParams` / `SFTPCredentialBlob` / `RemotePathBuilder` 已加 `nonisolated`；遗留的 `ExternalVolumeConnectionParams` / `WebDAVConnectionParams` / `S3ConnectionParams` 还没加，目前是 warning（"main actor-isolated conformance ... cannot be used in nonisolated context; this is an error in the Swift 6 language mode"），未来打开 Swift 6 模式会变 error。
 3. 修法是给这三个类型也加 `nonisolated`，与 SFTP 的处理一致；本仓库未跟 SFTP 的改动一起做，避免扩大 PR 范围。
 
-## 12. 建议优先级
+## 12. V2 per-asset commit + snapshot cadence（Unit 8）
+
+Unit 8 已把 V2 row-writing asset 改为 per-asset commit：`AssetProcessor` 在 publish asset / 写本地 hash-index 前调用 `commitPendingAssetToRemote(ignoreCancellation: false)`。每 10 个非 failed 结果的 flush cadence 保留，但职责变为写 compacting snapshot；旧 batch commit / optimistic subtraction 链已删除。
+
+仍未解决的是 commit 文件长期增长：当前 snapshot 降低 replay 成本，但不删除旧 commit。安全 compaction / retention policy 仍需单独设计。
+
+## 13. V2 元数据 atomic-create 在 `.overwritePossible` 后端的残留风险
+
+1. SMB/WebDAV 的 `atomicCreate` 走 exists+upload，无真正的 no-overwrite 原语；S3 multipart 同样落到 `.overwritePossible`。`CommitLogWriter` 写最终路径用 atomicCreate + readback verify。`RepoBootstrap.ensureVersionJSON` 已切到 pre-check + `MetadataCreateGate` 暂存路径 + 回读校验，但 staged-move 阶段仍可能在极端窗口被对端 overwrite。
+2. `CommitLogWriter` 写 `(writerID, seq)` 最终路径用 atomicCreate + post-verify。同一 writer 的并发 run 仍可能两次都通过 verify，后写的覆盖前者；写入路径写 writer-unique 物理文件（`~widN`）也只能压低概率，因为同 writer 在同一秒选到的候选名仍可能相同。真修需要 no-overwrite primitive 或 run-unique（runID + attempt counter）终态文件名 + 一致的 manifest 引用。当前作为残留技术债保留。
+3. `RepoBootstrap.ensureRepoJSON` 已从单次 500ms 等待改为 read-stability loop（最长 ~1.5s）；首次写入仍无法用 no-overwrite 原语保证全局唯一 canonical，losing-claim 的 ts 仍留在 claims 目录，未来 winning claim 损坏后 lex-min 可能翻转 canonical。需要 protocol-level 修改（immutable seed / losing-claim adoption），不在本轮范围。
+4. `RemoteFileNaming.preferredRemoteFileName` 已通过 `clampLeafToByteBudget` 把最终文件名（含 `~widN` / `-N` / UUID 后缀和扩展名）压回 255 UTF-8 byte 内；输入超长 sanitized stem 会被按 UTF-8 边界截断再加后缀。极端碰撞导致 UUID escape 时仍由同一预算闸控制。
+5. Physical-presence overlay / probe 会先按 leaf-name 找候选，再要求 listing size 等于 manifest `fileSize`；size 不一致会被纳入 missing 集合，下次 sync 会真修。被 truncate 但 size 完全没变的损坏（如同尺寸覆盖）仍只能通过深度 verify 抓出。
+6. `BackupMonthFinalizationResult.failed` 已携带 `underlyingError`，但后续层对 inline-download underlying error 的分类仍有限；如果要让 `BackupSessionController` 对 connection-unavailable / verify failure / user cancellation 做完全一致的 UI 分类，还需要把 Home `DownloadMonthResult`、Async bridge、BSC reducer 的错误分类协议继续收敛。
+
+## 14. 建议优先级
 
 1. 优先补 `HomeExecutionCoordinator` / `BackupCoordinator` 的中等粒度集成测试，特别是暂停 / 恢复 / stop / 连接丢失。
 2. 评估为 full run 持久化 pending 集，减少恢复时重扫。

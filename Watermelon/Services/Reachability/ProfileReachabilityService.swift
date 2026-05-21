@@ -26,6 +26,17 @@ final class ProfileReachabilityService: @unchecked Sendable {
 
     private static let throttleWindow: TimeInterval = 5
     private static let probeTimeout: TimeInterval = 3
+    private static let stateQueueKey = DispatchSpecificKey<Bool>()
+
+    /// URLSession.shared's session-level timeout (60s default) wins over request-level
+    /// during TLS / SYN-ACK wait; dedicated ephemeral session bounds probes to probeTimeout.
+    private static let probeSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = probeTimeout
+        config.timeoutIntervalForResource = probeTimeout
+        config.waitsForConnectivity = false
+        return URLSession(configuration: config)
+    }()
 
     private let pathMonitor = NWPathMonitor()
     private let pathQueue = DispatchQueue(label: "watermelon.reachability.path")
@@ -42,11 +53,25 @@ final class ProfileReachabilityService: @unchecked Sendable {
 
     var onChange: (@MainActor () -> Void)?
 
+    init() {
+        stateQueue.setSpecific(key: Self.stateQueueKey, value: true)
+    }
+
     func start() {
-        stateQueue.async { [weak self] in
-            guard let self, !self.started else { return }
-            self.started = true
+        // NWPathMonitor.start traps on second call; guard sync.
+        let alreadyStarted: Bool
+        if DispatchQueue.getSpecific(key: Self.stateQueueKey) == true {
+            let was = started
+            started = true
+            alreadyStarted = was
+        } else {
+            alreadyStarted = stateQueue.sync { () -> Bool in
+                let was = started
+                started = true
+                return was
+            }
         }
+        guard !alreadyStarted else { return }
         pathMonitor.pathUpdateHandler = { [weak self] _ in
             self?.sweep(force: true)
         }
@@ -273,7 +298,7 @@ final class ProfileReachabilityService: @unchecked Sendable {
         request.httpMethod = "HEAD"
         request.timeoutInterval = Self.probeTimeout
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await Self.probeSession.data(for: request)
             return response is HTTPURLResponse ? .reachable : .unreachable
         } catch {
             return .unreachable

@@ -8,6 +8,7 @@ final class DependencyContainer {
     let photoLibraryService: PhotoLibraryService
     let hashIndexRepository: ContentHashIndexRepository
     let localHashIndexBuildService: LocalHashIndexBuildService
+    let restoredAssetFingerprintVerifier: RestoredAssetFingerprintVerifier
     let localIndexChangePublisher: LocalIndexChangePublisher
     let localIndexBuildCoordinator: LocalIndexBuildCoordinator
     let backupCoordinator: BackupCoordinator
@@ -32,9 +33,23 @@ final class DependencyContainer {
         storageClientFactory = StorageClientFactory(databaseManager: databaseManager)
         photoLibraryService = PhotoLibraryService()
         hashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
-        localHashIndexBuildService = LocalHashIndexBuildService(
+        let localHashIndexBuildService = LocalHashIndexBuildService(
             photoLibraryService: photoLibraryService,
             repository: hashIndexRepository
+        )
+        self.localHashIndexBuildService = localHashIndexBuildService
+        let hashIndexRepositoryForVerifier = hashIndexRepository
+        restoredAssetFingerprintVerifier = RestoredAssetFingerprintVerifier(
+            buildIndex: { ids in
+                try await localHashIndexBuildService.buildIndex(
+                    for: ids,
+                    workerCount: 1,
+                    allowNetworkAccess: false
+                )
+            },
+            fetchRecords: { ids in
+                try hashIndexRepositoryForVerifier.fetchAssetFingerprintRecords(assetIDs: ids)
+            }
         )
         let localIndexChangePublisher = LocalIndexChangePublisher()
         self.localIndexChangePublisher = localIndexChangePublisher
@@ -48,7 +63,8 @@ final class DependencyContainer {
         let backupCoordinator = BackupCoordinator(
             photoLibraryService: photoLibraryService,
             storageClientFactory: storageClientFactory,
-            hashIndexRepository: hashIndexRepository
+            hashIndexRepository: hashIndexRepository,
+            databaseManager: databaseManager
         )
         self.backupCoordinator = backupCoordinator
 

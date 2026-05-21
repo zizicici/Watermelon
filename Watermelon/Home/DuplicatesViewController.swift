@@ -534,10 +534,7 @@ final class DuplicatesViewController: UIViewController {
             var validFingerprints: [String: Data] = [:]
             for asset in phAssets {
                 guard let row = valid[asset.localIdentifier] else { continue }
-                if let modificationDate = asset.modificationDate,
-                   modificationDate > row.updatedAt {
-                    continue
-                }
+                guard Self.canTrustIndexedRow(row, for: asset) else { continue }
                 assetsByID[asset.localIdentifier] = asset
                 validFingerprints[asset.localIdentifier] = row.assetFingerprint
             }
@@ -601,12 +598,25 @@ final class DuplicatesViewController: UIViewController {
                       let keepAsset = phAssetByID[pair.keep],
                       let deleteAsset = phAssetByID[pair.delete]
                 else { return false }
-                if let mtime = keepAsset.modificationDate, mtime > keepRow.updatedAt { return false }
-                if let mtime = deleteAsset.modificationDate, mtime > deleteRow.updatedAt { return false }
+                guard Self.canTrustIndexedRow(keepRow, for: keepAsset),
+                      Self.canTrustIndexedRow(deleteRow, for: deleteAsset) else {
+                    return false
+                }
                 if keepRow.assetFingerprint != deleteRow.assetFingerprint { return false }
             }
             return true
         }
+    }
+
+    private nonisolated static func canTrustIndexedRow(_ row: IndexedAssetRow, for asset: PHAsset) -> Bool {
+        if let mtime = asset.modificationDate, mtime > row.updatedAt { return false }
+        guard row.selectionVersion >= BackupAssetResourcePlanner.currentSelectionVersion,
+              let cachedSignature = row.resourceSignature else {
+            return false
+        }
+        let currentResources = PHAssetResource.assetResources(for: asset)
+        let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: currentResources)
+        return cachedSignature == BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered)
     }
 
     private nonisolated static func deleteAssets(

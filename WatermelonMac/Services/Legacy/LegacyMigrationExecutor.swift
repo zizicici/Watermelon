@@ -51,6 +51,8 @@ final class LegacyMigrationExecutor {
         emit(.started(totals: totals))
 
         try await ensureBasePathExists()
+        // V1 manifest is invisible to V2 — refuse to strand files on a V2 remote.
+        try await ensureNotV2()
 
         for plan in report.plans {
             try Task.checkCancellation()
@@ -78,6 +80,8 @@ final class LegacyMigrationExecutor {
                     year: plan.month.year,
                     month: plan.month.month
                 )
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 totals.bundlesFailed += plan.bundles.count
                 totals.bundlesProcessed += plan.bundles.count
@@ -89,7 +93,7 @@ final class LegacyMigrationExecutor {
 
             for bundle in plan.bundles {
                 try Task.checkCancellation()
-                let outcome = await processBundleWithRetry(
+                let outcome = try await processBundleWithRetry(
                     bundle: bundle,
                     monthStore: store,
                     options: options,
@@ -138,14 +142,10 @@ final class LegacyMigrationExecutor {
         options: LegacyMigrationOptions,
         totals: inout LegacyImportTotals,
         emit: @Sendable (LegacyImportEvent) -> Void
-    ) async -> LegacyImportBundleOutcome {
+    ) async throws -> LegacyImportBundleOutcome {
         for attempt in 0..<Self.maxRetryAttempts {
-            if Task.isCancelled {
-                totals.bundlesProcessed += 1
-                totals.bundlesFailed += 1
-                return .failed(reason: "cancelled")
-            }
-            let attemptResult = await processBundle(
+            try Task.checkCancellation()
+            let attemptResult = try await processBundle(
                 bundle: bundle,
                 monthStore: monthStore,
                 options: options
@@ -172,7 +172,7 @@ final class LegacyMigrationExecutor {
                 if shouldRetry {
                     let delay = Self.retryBackoffSchedule[attempt]
                     emit(.logMessage("transient error: retrying in \(delay / 1_000_000_000)s"))
-                    try? await Task.sleep(nanoseconds: delay)
+                    try await Task.sleep(nanoseconds: delay)
                     continue
                 }
                 totals.bundlesProcessed += 1
@@ -201,7 +201,7 @@ final class LegacyMigrationExecutor {
         bundle: LegacyAssetBundle,
         monthStore: MonthManifestStore,
         options: LegacyMigrationOptions
-    ) async -> BundleAttemptResult {
+    ) async throws -> BundleAttemptResult {
         // Honor scan-time perceptual decision: dHash data isn't in the manifest, so executor
         // can't re-derive it cheaply. Trust the scan classification.
         if case .skipPerceptualDuplicate = bundle.action {
@@ -211,17 +211,19 @@ final class LegacyMigrationExecutor {
             return BundleAttemptResult(outcome: .skippedFingerprintExists, error: nil)
         }
 
-        let bundleResources = bundle.resources.map {
-            (role: $0.role, slot: $0.slot, hash: $0.contentHash)
-        }
-        if monthStore.findEnclosingAssetFingerprint(forResources: bundleResources) != nil {
+        let bundleResourceKeys = Set(
+            bundle.resources.map {
+                AssetResourceLinkKey(role: $0.role, slot: $0.slot, hash: $0.contentHash)
+            }
+        )
+        if monthStore.findEnclosingAssetFingerprint(forResourceKeys: bundleResourceKeys) != nil {
             return BundleAttemptResult(outcome: .skippedFingerprintExists, error: nil)
         }
 
         let subsetFingerprints: Set<Data>
         if options.replaceSubsetAssets {
             subsetFingerprints = Set(
-                monthStore.findStrictSubsetAssetFingerprints(forResources: bundleResources)
+                monthStore.findStrictSubsetAssetFingerprints(forResourceKeys: bundleResourceKeys)
             )
         } else {
             subsetFingerprints = []
@@ -263,6 +265,7 @@ final class LegacyMigrationExecutor {
                 case .alreadyInPlace, .skippedHashExists:
                     resourcesAlreadyInPlace += 1
                 }
+                let logicalLeaf = monthStore.findResourceByHash(component.contentHash)?.logicalName ?? component.originalFilename ?? ""
                 resourceLinks.append(
                     RemoteAssetResourceLink(
                         year: monthStore.year,
@@ -270,11 +273,12 @@ final class LegacyMigrationExecutor {
                         assetFingerprint: bundle.assetFingerprint,
                         resourceHash: component.contentHash,
                         role: component.role,
-                        slot: component.slot
+                        slot: component.slot,
+                        logicalName: logicalLeaf
                     )
                 )
             } catch is CancellationError {
-                return BundleAttemptResult(outcome: .failed(reason: "cancelled"), error: nil)
+                throw CancellationError()
             } catch {
                 return BundleAttemptResult(outcome: .failed(reason: error.localizedDescription), error: error)
             }
@@ -339,7 +343,7 @@ final class LegacyMigrationExecutor {
                 originalFilename: component.originalFilename
             )
         )
-        let targetFileName = RemoteFileNaming.resolveNextAvailableName(
+        let targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
             baseName: baseFileName,
             collisionKeys: collisionKeys
         )
@@ -368,7 +372,7 @@ final class LegacyMigrationExecutor {
         let resource = RemoteManifestResource(
             year: monthStore.year,
             month: monthStore.month,
-            fileName: targetFileName,
+            physicalRemotePath: monthRelativePath + "/" + targetFileName,
             contentHash: component.contentHash,
             fileSize: component.fileSize,
             resourceType: component.role,
@@ -384,5 +388,60 @@ final class LegacyMigrationExecutor {
     private func ensureBasePathExists() async throws {
         let normalized = RemotePathBuilder.normalizePath(profile.basePath)
         try await client.createDirectory(path: normalized)
+    }
+
+    private func ensureNotV2() async throws {
+        // Shared inspect catches half-initialized V2 (commits/snapshots present, version.json absent) as damagedV2.
+        let inspection: RemoteFormatInspection
+        do {
+            inspection = try await RemoteFormatCompatibilityService()
+                .inspectRemoteFormat(client: client, profile: profile)
+        } catch {
+            // Fail-closed; any inspect error is opaque about V2 presence.
+            throw NSError(
+                domain: "LegacyMigrationExecutor",
+                code: -101,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Cannot determine remote format (\(error.localizedDescription)); refusing legacy import."]
+            )
+        }
+        switch inspection {
+        case .v1:
+            return
+        case .fresh:
+            // inspect treats lingering identity claims / `repo.json` as `.fresh`; legacy import has no adoption path.
+            try await refuseIfV2IdentityPresent()
+            return
+        case .v2, .v2WithV1Manifests, .v2WithPendingMigrationCleanup, .unsupported:
+            throw NSError(
+                domain: "LegacyMigrationExecutor",
+                code: -100,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Remote is V2; legacy importer would write V1 manifest invisible to iOS clients. Use the iOS app to import."]
+            )
+        }
+    }
+
+    private func refuseIfV2IdentityPresent() async throws {
+        let bootstrap = RepoBootstrap(client: client, basePath: profile.basePath)
+        let repoID: String?
+        do {
+            repoID = try await bootstrap.loadRepoID()
+        } catch {
+            throw NSError(
+                domain: "LegacyMigrationExecutor",
+                code: -102,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Cannot read remote V2 identity (\(error.localizedDescription)); refusing legacy import."]
+            )
+        }
+        guard repoID == nil else {
+            throw NSError(
+                domain: "LegacyMigrationExecutor",
+                code: -103,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Remote has V2 identity (identity claim or repo.json) from an in-progress bootstrap; legacy importer would write V1 alongside it. Resume the iOS backup to complete bootstrap, then retry."]
+            )
+        }
     }
 }

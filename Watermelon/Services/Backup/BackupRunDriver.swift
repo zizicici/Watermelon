@@ -110,6 +110,7 @@ final class BackupRunDriver {
     }
 
     func clearActiveRunState() {
+        activeRunToken &+= 1
         runTask = nil
         activeEventStream = nil
         eventListenerTask?.cancel()

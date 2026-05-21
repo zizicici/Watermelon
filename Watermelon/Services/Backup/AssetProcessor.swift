@@ -11,6 +11,7 @@ final class AssetProcessor: Sendable {
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
     let remoteIndexService: RemoteIndexSyncService
+    let optimisticWriter: OptimisticAssetWriter
 
     init(
         photoLibraryService: PhotoLibraryService,
@@ -20,6 +21,7 @@ final class AssetProcessor: Sendable {
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
         self.remoteIndexService = remoteIndexService
+        self.optimisticWriter = remoteIndexService.makeOptimisticAssetWriter()
     }
 
     static func monthKey(for date: Date?) -> LibraryMonthKey {
@@ -88,7 +90,7 @@ final class AssetProcessor: Sendable {
             selectedResources: context.selectedResources
         )
 
-        if let cachedResult = try processWithLocalCache(
+        if let cachedResult = try await processWithLocalCache(
             context: context,
             displayName: displayName,
             cancellationController: cancellationController
@@ -237,6 +239,8 @@ final class AssetProcessor: Sendable {
             }
 
             if uploadResult.status != .failed {
+                // logicalName is what restore surfaces as `originalFilename`; must reflect the user's name, not the collision-renamed remote path.
+                let originalLogicalName = prepared.local.preferredRemoteFileName
                 links.append(
                     RemoteAssetResourceLink(
                         year: context.monthStore.year,
@@ -244,7 +248,8 @@ final class AssetProcessor: Sendable {
                         assetFingerprint: assetFingerprint,
                         resourceHash: prepared.contentHash,
                         role: prepared.local.resourceRole,
-                        slot: prepared.local.resourceSlot
+                        slot: prepared.local.resourceSlot,
+                        logicalName: originalLogicalName
                     )
                 )
             }
@@ -303,26 +308,44 @@ final class AssetProcessor: Sendable {
         )
 
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
-        try context.monthStore.upsertAsset(manifestAsset, links: links)
-        timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
-        remoteIndexService.upsertCachedAsset(manifestAsset, links: links)
-
-        let snapshotWriteStart = CFAbsoluteTimeGetCurrent()
-        try hashIndexRepository.upsertAssetHashSnapshot(
-            assetLocalIdentifier: context.asset.localIdentifier,
-            assetFingerprint: assetFingerprint,
-            resources: preparedResources.map {
-                LocalAssetResourceHashRecord(
-                    role: $0.local.resourceRole,
-                    slot: $0.local.resourceSlot,
-                    contentHash: $0.contentHash,
-                    fileSize: $0.fileSize
-                )
-            },
-            totalFileSizeBytes: totalFileSizeBytes,
-            modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch
+        let resourceKeys = AssetResourceLinkSetPredicate.keys(fromLinks: links)
+        let subsetFingerprints = Set(
+            context.monthStore.findStrictSubsetAssetFingerprints(forResourceKeys: resourceKeys)
         )
-        timing.databaseSeconds += Self.elapsedSeconds(since: snapshotWriteStart)
+        try context.monthStore.upsertAsset(
+            manifestAsset,
+            links: links,
+            replacingSubsetFingerprints: subsetFingerprints
+        )
+        timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
+
+        let resourceSignature = BackupAssetResourcePlanner.resourceSignature(
+            roleSlots: preparedResources.map { (role: $0.local.resourceRole, slot: $0.local.resourceSlot) }
+        )
+        try await finalizeRowWritingAsset(
+            monthStore: context.monthStore,
+            manifestAsset: manifestAsset,
+            links: links,
+            timing: &timing,
+            tombstonedSubsetFingerprints: subsetFingerprints
+        ) { [hashIndexRepository] in
+            try hashIndexRepository.upsertAssetHashSnapshot(
+                assetLocalIdentifier: context.asset.localIdentifier,
+                assetFingerprint: assetFingerprint,
+                resources: preparedResources.map {
+                    LocalAssetResourceHashRecord(
+                        role: $0.local.resourceRole,
+                        slot: $0.local.resourceSlot,
+                        contentHash: $0.contentHash,
+                        fileSize: $0.fileSize
+                    )
+                },
+                totalFileSizeBytes: totalFileSizeBytes,
+                modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch,
+                selectionVersion: BackupAssetResourcePlanner.currentSelectionVersion,
+                resourceSignature: resourceSignature
+            )
+        }
 
         if successCount == 0 {
             return AssetProcessResult(
@@ -351,7 +374,7 @@ final class AssetProcessor: Sendable {
         context: AssetProcessContext,
         displayName: String,
         cancellationController: BackupCancellationController?
-    ) throws -> AssetProcessResult? {
+    ) async throws -> AssetProcessResult? {
         var timing = AssetProcessTiming()
         try cancellationController?.throwIfCancelled()
         try Task.checkCancellation()
@@ -361,6 +384,15 @@ final class AssetProcessor: Sendable {
         if let modificationDate = context.asset.modificationDate, modificationDate > cachedLocalHash.updatedAt {
             return nil
         }
+
+        if cachedLocalHash.selectionVersion < BackupAssetResourcePlanner.currentSelectionVersion {
+            return nil
+        }
+        guard let cachedSignature = cachedLocalHash.resourceSignature else { return nil }
+        let currentSignature = BackupAssetResourcePlanner.resourceSignature(
+            roleSlots: context.selectedResources.map { (role: $0.role, slot: $0.slot) }
+        )
+        guard cachedSignature == currentSignature else { return nil }
 
         try cancellationController?.throwIfCancelled()
         try Task.checkCancellation()
@@ -379,8 +411,19 @@ final class AssetProcessor: Sendable {
         }
 
         // Incomplete asset falls through to the full upload path so missing resources heal.
+        // Subset survivors (older partial assets in the manifest whose links are a strict
+        // subset of this asset's) also force the fall-through so the resources-reused
+        // upsert tombstones them — without this, pre-fix backups never self-heal.
+        let cachedResourceKeys = Set(
+            roleSlotHashes.map {
+                AssetResourceLinkKey(role: $0.role, slot: $0.slot, hash: $0.contentHash)
+            }
+        )
         if context.monthStore.containsAssetFingerprint(cachedFingerprint),
-           !context.monthStore.isAssetIncomplete(cachedFingerprint) {
+           !context.monthStore.isAssetIncomplete(cachedFingerprint),
+           context.monthStore.findStrictSubsetAssetFingerprints(
+               forResourceKeys: cachedResourceKeys
+           ).isEmpty {
             let totalFileSizeBytes = Self.totalSizeBytes(of: context.selectedResources)
             let dbStart = CFAbsoluteTimeGetCurrent()
             try hashIndexRepository.upsertAssetFingerprint(
@@ -402,14 +445,32 @@ final class AssetProcessor: Sendable {
             )
         }
 
+        // logicalName must reflect the user's name; reusing the existing resource's name would surface another asset's collision-renamed filename on restore.
+        let preferredAssetNameStem = Self.preferredAssetNameStem(
+            asset: context.asset,
+            selectedResources: context.selectedResources
+        )
+        let logicalNamesByRoleSlot: [AssetResourceRoleSlot: String] = Dictionary(
+            uniqueKeysWithValues: context.selectedResources.map { selected in
+                let key = AssetResourceRoleSlot(role: selected.role, slot: selected.slot)
+                let name = Self.preferredRemoteFileName(
+                    preferredAssetNameStem: preferredAssetNameStem,
+                    selected: selected
+                )
+                return (key, name)
+            }
+        )
         let links = roleSlotHashes.map { item in
-            RemoteAssetResourceLink(
+            let key = AssetResourceRoleSlot(role: item.role, slot: item.slot)
+            let logical = logicalNamesByRoleSlot[key] ?? ""
+            return RemoteAssetResourceLink(
                 year: context.monthStore.year,
                 month: context.monthStore.month,
                 assetFingerprint: cachedFingerprint,
                 resourceHash: item.contentHash,
                 role: item.role,
-                slot: item.slot
+                slot: item.slot,
+                logicalName: logical
             )
         }
 
@@ -433,19 +494,32 @@ final class AssetProcessor: Sendable {
             totalFileSizeBytes: totalFileSizeBytes
         )
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
-        try context.monthStore.upsertAsset(manifestAsset, links: links)
-        timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
-        remoteIndexService.upsertCachedAsset(manifestAsset, links: links)
-
-        let dbStart = CFAbsoluteTimeGetCurrent()
-        try hashIndexRepository.upsertAssetFingerprint(
-            assetLocalIdentifier: context.asset.localIdentifier,
-            assetFingerprint: cachedFingerprint,
-            resourceCount: context.selectedResources.count,
-            totalFileSizeBytes: totalFileSizeBytes,
-            modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch
+        let resourceKeys = AssetResourceLinkSetPredicate.keys(fromLinks: links)
+        let subsetFingerprints = Set(
+            context.monthStore.findStrictSubsetAssetFingerprints(forResourceKeys: resourceKeys)
         )
-        timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
+        try context.monthStore.upsertAsset(
+            manifestAsset,
+            links: links,
+            replacingSubsetFingerprints: subsetFingerprints
+        )
+        timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
+
+        try await finalizeRowWritingAsset(
+            monthStore: context.monthStore,
+            manifestAsset: manifestAsset,
+            links: links,
+            timing: &timing,
+            tombstonedSubsetFingerprints: subsetFingerprints
+        ) { [hashIndexRepository] in
+            try hashIndexRepository.upsertAssetFingerprint(
+                assetLocalIdentifier: context.asset.localIdentifier,
+                assetFingerprint: cachedFingerprint,
+                resourceCount: context.selectedResources.count,
+                totalFileSizeBytes: totalFileSizeBytes,
+                modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch
+            )
+        }
 
         return AssetProcessResult(
             status: .skipped,
@@ -455,6 +529,56 @@ final class AssetProcessor: Sendable {
             timing: timing,
             totalFileSizeBytes: totalFileSizeBytes,
             uploadedFileSizeBytes: 0
+        )
+    }
+
+    func finalizeRowWritingAsset(
+        monthStore: any BackupMonthStore,
+        manifestAsset: RemoteManifestAsset,
+        links: [RemoteAssetResourceLink],
+        timing: inout AssetProcessTiming,
+        tombstonedSubsetFingerprints: Set<Data> = [],
+        hashIndexWrite: () throws -> Void
+    ) async throws {
+        let commitStart = CFAbsoluteTimeGetCurrent()
+        let delta = try await monthStore.commitPendingAssetToRemote(ignoreCancellation: false)
+        timing.databaseSeconds += Self.elapsedSeconds(since: commitStart)
+        publishCommittedSweepIfNeeded(
+            monthStore: monthStore,
+            manifestAsset: manifestAsset,
+            delta: delta,
+            tombstonedSubsetFingerprints: tombstonedSubsetFingerprints
+        )
+        optimisticWriter.appendAsset(manifestAsset, links: links)
+
+        let dbStart = CFAbsoluteTimeGetCurrent()
+        try hashIndexWrite()
+        timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
+    }
+
+    private func publishCommittedSweepIfNeeded(
+        monthStore: any BackupMonthStore,
+        manifestAsset: RemoteManifestAsset,
+        delta: MonthManifestStore.FlushDelta,
+        tombstonedSubsetFingerprints: Set<Data>
+    ) {
+        // V1 commits eagerly inside upsertAsset, so `delta` always reports no tombstones —
+        // the `tombstonedSubsetFingerprints` argument is the only signal that subset rows
+        // were just removed and the cache needs eviction.
+        guard !delta.committedV2TombstoneFingerprints.isEmpty ||
+            !tombstonedSubsetFingerprints.subtracting([manifestAsset.assetFingerprint]).isEmpty ||
+            delta.committedV2AssetFingerprints.subtracting([manifestAsset.assetFingerprint]).isEmpty == false else {
+            return
+        }
+        let snapshot = monthStore.unsortedSnapshot()
+        remoteIndexService.replaceCachedMonth(
+            LibraryMonthKey(year: monthStore.year, month: monthStore.month),
+            resources: snapshot.resources,
+            assets: snapshot.assets,
+            links: snapshot.links,
+            physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
+                ? monthStore.physicallyMissingHashesSnapshot()
+                : nil
         )
     }
 

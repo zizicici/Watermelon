@@ -90,6 +90,79 @@ final class RemoteFileNamingTests: XCTestCase {
         XCTAssertEqual(result, "img_1_1.heic")
     }
 
+    /// V2 cutover: when a writerID is supplied (we're in V2 mode), the collision
+    /// suffix changes to `~<wid6>` (then `~<wid6>-N`) so each writer gets a
+    /// distinguishable filename for its own version of a colliding upload.
+    func testResolveNextAvailableName_v2_appendsWriterShortSuffix() {
+        let wid = "11112222-3333-4444-5555-666677778888"
+        let result = RemoteFileNaming.resolveNextAvailableName(
+            baseName: "IMG_1.heic",
+            occupiedNames: ["IMG_1.heic"],
+            writerID: wid
+        )
+        // wid6 = first 6 hex chars of the dash-stripped writerID, lowercased.
+        XCTAssertEqual(result, "IMG_1~111122.heic")
+    }
+
+    func testResolveNextAvailableName_v2_writerSuffixAlsoCollides_appendsCounter() {
+        let wid = "11112222-3333-4444-5555-666677778888"
+        let result = RemoteFileNaming.resolveNextAvailableName(
+            baseName: "IMG_1.heic",
+            occupiedNames: ["IMG_1.heic", "IMG_1~111122.heic"],
+            writerID: wid
+        )
+        XCTAssertEqual(result, "IMG_1~111122-1.heic")
+    }
+
+    func testResolveNextAvailableName_v2_noExtension_handlesSuffix() {
+        let wid = "abcdef1234567890"
+        let result = RemoteFileNaming.resolveNextAvailableName(
+            baseName: "RAW",
+            occupiedNames: ["RAW"],
+            writerID: wid
+        )
+        XCTAssertEqual(result, "RAW~abcdef")
+    }
+
+    /// `forceWriterIDSuffix` adds the writerID suffix even when the baseName has
+    /// no manifest collision — peer writers can race on `.overwritePossible`
+    /// backends without us seeing each other's local manifests.
+    func testResolveNextAvailableName_forceWriterIDSuffix_appendsEvenWithoutCollision() {
+        let wid = "11112222-3333-4444-5555-666677778888"
+        let result = RemoteFileNaming.resolveNextAvailableName(
+            baseName: "IMG_1.heic",
+            occupiedNames: [],
+            writerID: wid,
+            forceWriterIDSuffix: true
+        )
+        XCTAssertEqual(result, "IMG_1~111122.heic")
+    }
+
+    /// Force-suffix path must still escalate to numeric counter when the
+    /// suffixed name is already in our local manifest (e.g., previous run).
+    func testResolveNextAvailableName_forceWriterIDSuffix_escalatesOnSuffixCollision() {
+        let wid = "11112222-3333-4444-5555-666677778888"
+        let result = RemoteFileNaming.resolveNextAvailableName(
+            baseName: "IMG_1.heic",
+            occupiedNames: ["IMG_1~111122.heic"],
+            writerID: wid,
+            forceWriterIDSuffix: true
+        )
+        XCTAssertEqual(result, "IMG_1~111122-1.heic")
+    }
+
+    /// Without `forceWriterIDSuffix` AND no collision, baseName wins.
+    func testResolveNextAvailableName_withoutForce_noCollision_returnsBase() {
+        let wid = "11112222-3333-4444-5555-666677778888"
+        let result = RemoteFileNaming.resolveNextAvailableName(
+            baseName: "IMG_1.heic",
+            occupiedNames: [],
+            writerID: wid,
+            forceWriterIDSuffix: false
+        )
+        XCTAssertEqual(result, "IMG_1.heic")
+    }
+
     // MARK: - fallbackResourceLabel
 
     func testFallbackResourceLabel_titleCasesKnownRoles() {

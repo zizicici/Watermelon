@@ -69,13 +69,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         let completionGuard = OSAllocatedUnfairLock(initialState: false)
 
         let backupTask = Task {
-            await runner.run()
+            let success = await runner.run()
             let isFirst = completionGuard.withLock { (done: inout Bool) -> Bool in
                 guard !done else { return false }
                 done = true
                 return true
             }
-            if isFirst { task.setTaskCompleted(success: true) }
+            if isFirst { task.setTaskCompleted(success: success) }
         }
 
         task.expirationHandler = {

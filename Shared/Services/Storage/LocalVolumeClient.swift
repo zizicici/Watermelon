@@ -1,6 +1,34 @@
 import Foundation
+import Darwin
+import os.log
+
+private let localVolumeLog = Logger(subsystem: "com.zizicici.watermelon", category: "LocalVolumeClient")
+
+private final class LocalVolumeNameCaseSensitivityState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: BackendNameCaseSensitivity = .unknown
+
+    var value: BackendNameCaseSensitivity {
+        lock.withLock { current }
+    }
+
+    func update(_ value: BackendNameCaseSensitivity) {
+        lock.withLock { current = value }
+    }
+}
 
 final actor LocalVolumeClient: RemoteStorageClientProtocol {
+    private let nameCaseSensitivityState = LocalVolumeNameCaseSensitivityState()
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    // POSIX O_EXCL → kernel-enforced uniqueness per path, even across processes; no peer can win.
+    nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .none }
+    // No peer race on a local mount; failure cleanup affects only this writer.
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
+    // POSIX `rename(2)` is atomic-replace; `replaceItemAt` wraps `renamex_np` / `renameat2`.
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { nameCaseSensitivityState.value }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
     struct Config {
         let rootBookmarkData: Data
         let onBookmarkRefreshed: ((BookmarkRefreshPayload) -> Void)?
@@ -62,6 +90,7 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         guard resolved.url.startAccessingSecurityScopedResource() else {
             throw RemoteStorageClientError.externalStorageUnavailable
         }
+        nameCaseSensitivityState.update(Self.detectNameCaseSensitivity(for: resolved.url))
         rootURL = resolved.url
         isAccessing = true
     }
@@ -233,6 +262,96 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         }
     }
 
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        // POSIX O_EXCL — kernel-level exclusive create; unconditional `.exclusive`.
+        .exclusive
+    }
+
+    func atomicCreate(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws -> AtomicCreateResult {
+        let root = try requireRootURL()
+        do {
+            if respectTaskCancellation { try Task.checkCancellation() }
+            let destinationURL = try remoteFileURL(forRemotePath: remotePath, rootURL: root)
+            let parentURL = destinationURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
+
+            let fd = destinationURL.path.withCString { cPath in
+                Darwin.open(cPath, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+            }
+            if fd < 0 {
+                if errno == EEXIST {
+                    return .alreadyExists
+                }
+                throw NSError(
+                    domain: NSPOSIXErrorDomain,
+                    code: Int(errno),
+                    userInfo: [NSLocalizedDescriptionKey: String(cString: strerror(errno))]
+                )
+            }
+
+            let destinationHandle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            let sourceHandle: FileHandle
+            do {
+                sourceHandle = try FileHandle(forReadingFrom: localURL)
+            } catch {
+                // Source open failed after O_EXCL claimed the destination; remove the
+                // zero-byte stub so it doesn't poison the (path, hash) binding.
+                try? destinationHandle.close()
+                try? FileManager.default.removeItem(at: destinationURL)
+                throw error
+            }
+            defer {
+                try? sourceHandle.close()
+            }
+            let totalSize = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? Int64) ?? 0
+            var bytesWritten: Int64 = 0
+
+            do {
+                while true {
+                    if respectTaskCancellation { try Task.checkCancellation() }
+                    let chunk = try sourceHandle.read(upToCount: Self.uploadBufferSize) ?? Data()
+                    if chunk.isEmpty { break }
+                    try destinationHandle.write(contentsOf: chunk)
+                    bytesWritten += Int64(chunk.count)
+                    if let onProgress, totalSize > 0 {
+                        onProgress(min(1.0, Double(bytesWritten) / Double(totalSize)))
+                    }
+                }
+            } catch {
+                try? destinationHandle.close()
+                try? FileManager.default.removeItem(at: destinationURL)
+                throw error
+            }
+            // External volumes (USB / SD) need an explicit barrier — close(2) only
+            // releases the FD, dirty pages can sit in the kernel page cache for
+            // seconds-to-tens-of-seconds. Without this, atomicCreate returns .created
+            // but the bytes are gone on unplug / power loss. F_FULLFSYNC is Apple's
+            // strong-barrier fcntl (forces device-level flush, not just kernel sync).
+            if fcntl(fd, F_FULLFSYNC) == -1 {
+                // Some FUSE / network-mounted "local" volumes don't support F_FULLFSYNC;
+                // weaker than the device-barrier we wanted but kernel sync at close still runs.
+                localVolumeLog.warning("F_FULLFSYNC unsupported on \(destinationURL.path, privacy: .public) errno=\(errno)")
+            }
+            // External-volume write-back errors (USB unmount mid-write, full disk) only
+            // surface at close; don't swallow them.
+            do {
+                try destinationHandle.close()
+            } catch {
+                try? FileManager.default.removeItem(at: destinationURL)
+                throw error
+            }
+            onProgress?(1.0)
+            return .created
+        } catch {
+            throw mapStorageError(error)
+        }
+    }
+
     func setModificationDate(_ date: Date, forPath path: String) async throws {
         let root = try requireRootURL()
         do {
@@ -324,6 +443,40 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         }
     }
 
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        let root = try requireRootURL()
+        do {
+            let sourceURL = try remoteFileURL(forRemotePath: sourcePath, rootURL: root)
+            let destinationURL = try remoteFileURL(forRemotePath: destinationPath, rootURL: root)
+            let destinationParent = destinationURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: destinationParent, withIntermediateDirectories: true)
+            let result = sourceURL.path.withCString { source in
+                destinationURL.path.withCString { destination in
+                    renamex_np(source, destination, UInt32(RENAME_EXCL))
+                }
+            }
+            guard result == 0 else {
+                let code = errno
+                if code == EEXIST {
+                    return .alreadyExists
+                }
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [
+                    NSLocalizedDescriptionKey: String(cString: strerror(code))
+                ])
+            }
+            return .created
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileWriteFileExistsError {
+                return .alreadyExists
+            }
+            if nsError.domain == NSPOSIXErrorDomain && nsError.code == EEXIST {
+                return .alreadyExists
+            }
+            throw mapStorageError(error)
+        }
+    }
+
     func copy(from sourcePath: String, to destinationPath: String) async throws {
         let root = try requireRootURL()
         do {
@@ -392,6 +545,14 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
             return "/"
         }
         return RemotePathBuilder.normalizePath(suffix)
+    }
+
+    private static func detectNameCaseSensitivity(for rootURL: URL) -> BackendNameCaseSensitivity {
+        guard let values = try? rootURL.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]),
+              let supportsCaseSensitiveNames = values.volumeSupportsCaseSensitiveNames else {
+            return .unknown
+        }
+        return supportsCaseSensitiveNames ? .caseSensitive : .caseInsensitive
     }
 
     private func mapStorageError(_ error: Error) -> Error {

@@ -1,6 +1,9 @@
 import CryptoKit
 import Foundation
 import Photos
+import os.log
+
+private let uploadLog = Logger(subsystem: "com.zizicici.watermelon", category: "BackupUpload")
 
 struct UploadPreparation {
     let baseFileName: String
@@ -8,6 +11,9 @@ struct UploadPreparation {
     var remoteAbsolutePath: String
     var attemptedFileNames: Set<String>
     let skipReason: String?
+    let forceWriterIDSuffix: Bool
+    let retryBaseFileName: String
+    let nameCaseSensitivity: BackendNameCaseSensitivity
 }
 
 struct UploadRetryOutcome {
@@ -18,7 +24,7 @@ struct UploadRetryOutcome {
 extension AssetProcessor {
     func uploadResource(
         prepared: PreparedResource,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
         workerID: Int,
@@ -108,7 +114,7 @@ extension AssetProcessor {
 
     func prepareUpload(
         prepared: PreparedResource,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
         displayName: String,
@@ -123,39 +129,147 @@ extension AssetProcessor {
         var targetFileName = baseFileName
         var skipReason: String?
         var attemptedFileNames: Set<String> = [targetFileName]
+        var retryBaseFileName = baseFileName
 
-        let existingFileNames = monthStore.existingFileNames()
-        let existingCollisionKeys = RemoteFileNaming.collisionKeySet(from: existingFileNames)
-        if existingCollisionKeys.contains(RemoteFileNaming.collisionKey(for: targetFileName)) {
-            let existingManifestResource = monthStore.findByFileName(targetFileName)
-            let knownRemoteSize = existingManifestResource?.fileSize ?? monthStore.remoteFileSize(named: targetFileName)
-            if localFileSize < Self.smallFileThresholdBytes {
-                if let knownRemoteSize, knownRemoteSize != localFileSize {
-                    // Different size means definitely not the same file; avoid remote download+hash.
-                } else {
-                    try cancellationController?.throwIfCancelled()
-                    try Task.checkCancellation()
-                    let remoteHash = try await downloadAndHashRemoteFileForConflictCheck(
-                        profile: profile,
-                        client: client,
-                        monthStore: monthStore,
-                        fileName: targetFileName,
-                        displayName: displayName,
-                        eventStream: eventStream,
-                        cancellationController: cancellationController
-                    )
-                    if let remoteHash, remoteHash == localHash {
-                        skipReason = "name_same_hash"
-                    }
+        let writerID = monthStore.v2Services?.writerID
+        let runID = monthStore.v2Services?.runID
+        let forceWriterIDSuffix = client.dataPathOverwriteRisk == .perKey && writerID != nil
+        let nameCaseSensitivity = client.backendNameCaseSensitivity
+        var occupiedNameKeys: Set<String>
+        if nameCaseSensitivity.foldsCaseForCollisionAvoidance {
+            occupiedNameKeys = monthStore.existingCollisionKeys()
+        } else {
+            occupiedNameKeys = monthStore.existingFileNames()
+        }
+        func nameKey(_ name: String) -> String {
+            RemoteFileNaming.nameKey(for: name, caseSensitivity: nameCaseSensitivity)
+        }
+        let baseCollides = occupiedNameKeys.contains(nameKey(baseFileName))
+
+        var claimCandidates: [(name: String, knownSize: Int64?)] = []
+        var claimCandidateKeys = Set<String>()
+        func appendClaimCandidate(_ name: String, knownSize: Int64?) {
+            let key = nameKey(name)
+            guard !claimCandidateKeys.contains(key) else { return }
+            claimCandidateKeys.insert(key)
+            claimCandidates.append((name, knownSize))
+        }
+        if baseCollides {
+            let manifestSize = monthStore.findByFileName(baseFileName)?.fileSize
+                ?? monthStore.remoteFileSize(named: baseFileName)
+            appendClaimCandidate(baseFileName, knownSize: manifestSize)
+        }
+        if forceWriterIDSuffix, let writerID {
+            let candidates: [String]
+            if let runID {
+                let runCandidate = RemoteFileNaming.writerIDRunIDSuffixedName(baseName: baseFileName, writerID: writerID, runID: runID)
+                candidates = [
+                    runCandidate,
+                    RemoteFileNaming.writerIDSuffixedName(baseName: baseFileName, writerID: writerID)
+                ]
+            } else {
+                candidates = [RemoteFileNaming.writerIDSuffixedName(baseName: baseFileName, writerID: writerID)]
+            }
+            for candidate in candidates {
+                let key = nameKey(candidate)
+                if occupiedNameKeys.contains(key) {
+                    let manifestSize = monthStore.findByFileName(candidate)?.fileSize
+                        ?? monthStore.remoteFileSize(named: candidate)
+                    appendClaimCandidate(candidate, knownSize: manifestSize)
+                    continue
                 }
-            }
-            if skipReason == nil {
-                targetFileName = RemoteFileNaming.resolveNextAvailableName(
-                    baseName: baseFileName,
-                    collisionKeys: existingCollisionKeys
+                let probePath = RemotePathBuilder.absolutePath(
+                    basePath: profile.basePath,
+                    remoteRelativePath: monthStore.monthRelativePath + "/" + candidate
                 )
-                attemptedFileNames.insert(targetFileName)
+                let probe = try await probeRemoteExistence(
+                    client: client,
+                    profile: profile,
+                    path: probePath,
+                    cancellationController: cancellationController
+                )
+                let remoteSize: Int64?
+                switch probe {
+                case .absent: continue
+                case .present(let size): remoteSize = size
+                }
+                // Block from target selection — different content at this path must not be overwritten.
+                occupiedNameKeys.insert(key)
+                attemptedFileNames.insert(candidate)
+                appendClaimCandidate(candidate, knownSize: remoteSize)
             }
+            let writerMarker = "~\(RepoLayout.writerIDShort(writerID))"
+            let baseExt = (baseFileName as NSString).pathExtension
+            let baseStem = (baseFileName as NSString).deletingPathExtension
+            var addedFallbackCandidates = 0
+            for existingName in monthStore.existingFileNames().sorted() {
+                guard addedFallbackCandidates < 32 else { break }
+                let candidateExt = (existingName as NSString).pathExtension
+                if !baseExt.isEmpty, candidateExt.caseInsensitiveCompare(baseExt) != .orderedSame {
+                    continue
+                }
+                let candidateStem = (existingName as NSString).deletingPathExtension
+                guard let markerRange = candidateStem.range(of: writerMarker) else { continue }
+                let prefix = String(candidateStem[..<markerRange.lowerBound])
+                guard !prefix.isEmpty,
+                      baseStem.hasPrefix(prefix) || prefix.hasPrefix(baseStem) else { continue }
+                let manifestSize = monthStore.findByFileName(existingName)?.fileSize
+                    ?? monthStore.remoteFileSize(named: existingName)
+                appendClaimCandidate(existingName, knownSize: manifestSize)
+                addedFallbackCandidates += 1
+            }
+        }
+
+        for candidate in claimCandidates {
+            let sizesMatchOrUnknown = candidate.knownSize == nil || candidate.knownSize == localFileSize
+            guard sizesMatchOrUnknown else { continue }
+            try cancellationController?.throwIfCancelled()
+            try Task.checkCancellation()
+            let remoteHash = try await downloadAndHashRemoteFileForConflictCheck(
+                profile: profile,
+                client: client,
+                monthStore: monthStore,
+                fileName: candidate.name,
+                displayName: displayName,
+                eventStream: eventStream,
+                cancellationController: cancellationController
+            )
+            if let remoteHash, remoteHash == localHash {
+                skipReason = "name_same_hash"
+                targetFileName = candidate.name
+                break
+            }
+        }
+
+        if skipReason == nil && (forceWriterIDSuffix || baseCollides) {
+            let baseAbsolutePath = RemotePathBuilder.absolutePath(
+                basePath: profile.basePath,
+                remoteRelativePath: monthStore.monthRelativePath + "/" + baseFileName
+            )
+            let sizeGuarantee = client.atomicCreateGuarantee(forFileSize: localFileSize, remotePath: baseAbsolutePath)
+            if forceWriterIDSuffix, sizeGuarantee == .overwritePossible,
+               let writerID, let runID {
+                let runCandidate = RemoteFileNaming.writerIDRunIDSuffixedName(baseName: baseFileName, writerID: writerID, runID: runID)
+                retryBaseFileName = runCandidate
+                if occupiedNameKeys.contains(nameKey(runCandidate)) {
+                    targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
+                        baseName: runCandidate,
+                        occupiedKeys: occupiedNameKeys,
+                        caseSensitivity: nameCaseSensitivity
+                    )
+                } else {
+                    targetFileName = runCandidate
+                }
+            } else {
+                targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
+                    baseName: baseFileName,
+                    occupiedKeys: occupiedNameKeys,
+                    caseSensitivity: nameCaseSensitivity,
+                    writerID: writerID,
+                    forceWriterIDSuffix: forceWriterIDSuffix
+                )
+            }
+            attemptedFileNames.insert(targetFileName)
         }
 
         let remoteRelativePath = monthStore.monthRelativePath + "/" + targetFileName
@@ -169,13 +283,16 @@ extension AssetProcessor {
             targetFileName: targetFileName,
             remoteAbsolutePath: remoteAbsolutePath,
             attemptedFileNames: attemptedFileNames,
-            skipReason: skipReason
+            skipReason: skipReason,
+            forceWriterIDSuffix: forceWriterIDSuffix,
+            retryBaseFileName: retryBaseFileName,
+            nameCaseSensitivity: nameCaseSensitivity
         )
     }
 
     func recordSkippedResource(
         prepared: PreparedResource,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         targetFileName: String
     ) throws {
         let local = prepared.local
@@ -184,7 +301,7 @@ extension AssetProcessor {
         let manifestItem = RemoteManifestResource(
             year: monthStore.year,
             month: monthStore.month,
-            fileName: targetFileName,
+            physicalRemotePath: monthStore.monthRelativePath + "/" + targetFileName,
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
@@ -192,17 +309,15 @@ extension AssetProcessor {
             backedUpAtMs: Date().millisecondsSinceEpoch
         )
 
-        if monthStore.findResourceByHash(localHash) == nil {
-            let inserted = try monthStore.upsertResource(manifestItem)
-            remoteIndexService.upsertCachedResource(inserted)
-        }
+        let inserted = try monthStore.upsertResource(manifestItem)
+        optimisticWriter.appendResource(inserted)
 
         monthStore.markRemoteFile(name: targetFileName, size: localFileSize)
     }
 
     func performUploadWithRetry(
         prepared: PreparedResource,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
         uploadPreparation: inout UploadPreparation,
@@ -271,16 +386,62 @@ extension AssetProcessor {
                 } else {
                     onProgress = nil
                 }
+                let createResult: AtomicCreateResult
                 do {
-                    try await client.upload(
+                    createResult = try await client.atomicCreate(
                         localURL: prepared.tempFileURL,
                         remotePath: uploadPreparation.remoteAbsolutePath,
                         respectTaskCancellation: true,
                         onProgress: onProgress
                     )
+                    onProgress?(1.0)
                 } catch {
                     assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
                     throw error
+                }
+                if case .alreadyExists = createResult {
+                    let differs = try await Self.detectRemoteContentRaceOrFallbackToRename(
+                        client: client,
+                        profile: profile,
+                        remotePath: uploadPreparation.remoteAbsolutePath,
+                        expectedSize: prepared.fileSize,
+                        expectedHash: prepared.contentHash,
+                        cancellationController: cancellationController
+                    )
+                    if differs {
+                        let previousFileName = uploadPreparation.targetFileName
+                        try advanceUploadPreparationToNextName(
+                            &uploadPreparation,
+                            monthStore: monthStore,
+                            profile: profile
+                        )
+                        assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
+                        print("[BackupUpload] atomicCreate already-exists RETRY: asset=\(displayName), resource=\(local.originalFilename), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
+                        continue
+                    }
+                    print("[BackupUpload] atomicCreate already-exists MATCHED: asset=\(displayName), resource=\(local.originalFilename), file=\(uploadPreparation.targetFileName)")
+                }
+                if case .bestEffortRetry = createResult {
+                    // Ambiguous create must prove bytes before manifest binding.
+                    let raceDetected = try await Self.detectRemoteContentRaceOrFallbackToRename(
+                        client: client,
+                        profile: profile,
+                        remotePath: uploadPreparation.remoteAbsolutePath,
+                        expectedSize: prepared.fileSize,
+                        expectedHash: prepared.contentHash,
+                        cancellationController: cancellationController
+                    )
+                    if raceDetected {
+                        let previousFileName = uploadPreparation.targetFileName
+                        try advanceUploadPreparationToNextName(
+                            &uploadPreparation,
+                            monthStore: monthStore,
+                            profile: profile
+                        )
+                        assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
+                        print("[BackupUpload] bestEffort race RETRY: asset=\(displayName), resource=\(local.originalFilename), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
+                        continue
+                    }
                 }
                 assetTiming.uploadBodySeconds += Self.elapsedSeconds(since: uploadBodyStart)
                 try cancellationController?.throwIfCancelled()
@@ -288,9 +449,14 @@ extension AssetProcessor {
                 if let shotDate = prepared.shotDate {
                     let setDateStart = CFAbsoluteTimeGetCurrent()
                     if client.shouldSetModificationDate() {
+                        try cancellationController?.throwIfCancelled()
+                        try Task.checkCancellation()
                         do {
                             try await client.setModificationDate(shotDate, forPath: uploadPreparation.remoteAbsolutePath)
                         } catch {
+                            if Self.isCancellationError(error) || cancellationController?.isCancelled == true {
+                                throw CancellationError()
+                            }
                             // keep upload success even if metadata write failed
                         }
                     }
@@ -304,6 +470,9 @@ extension AssetProcessor {
                 if cancellationController?.isCancelled == true {
                     throw CancellationError()
                 }
+                if error is RemoteFileNaming.ResolutionError {
+                    throw error
+                }
                 if profile.isConnectionUnavailableError(error) {
                     throw error
                 }
@@ -312,19 +481,11 @@ extension AssetProcessor {
                 let retryLimit = shouldLimitUploadRetries ? min(maxRetry, 2) : maxRetry
 
                 if SMBErrorClassifier.isNameCollision(error) {
-                    var occupiedNames = monthStore.existingFileNames()
-                    occupiedNames.formUnion(uploadPreparation.attemptedFileNames)
-                    occupiedNames.insert(uploadPreparation.targetFileName)
                     let previousFileName = uploadPreparation.targetFileName
-                    uploadPreparation.targetFileName = RemoteFileNaming.resolveNextAvailableName(
-                        baseName: uploadPreparation.baseFileName,
-                        occupiedNames: occupiedNames
-                    )
-                    uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
-                    let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
-                    uploadPreparation.remoteAbsolutePath = RemotePathBuilder.absolutePath(
-                        basePath: profile.basePath,
-                        remoteRelativePath: retryRelativePath
+                    try advanceUploadPreparationToNextName(
+                        &uploadPreparation,
+                        monthStore: monthStore,
+                        profile: profile
                     )
                     print("[BackupUpload] collision RETRY: asset=\(displayName), resource=\(local.originalFilename), previous=\(previousFileName), next=\(uploadPreparation.targetFileName)")
                     continue
@@ -357,12 +518,64 @@ extension AssetProcessor {
             }
         }
 
+        // Collision-rename burns retries without throwing; lastError stays nil and would surface as "Unknown".
+        if lastError == nil {
+            lastError = NSError(
+                domain: "AssetProcessor.Upload",
+                code: -120,
+                userInfo: [NSLocalizedDescriptionKey: String.localizedStringWithFormat(
+                    String(localized: "backup.upload.error.collisionExhausted"),
+                    maxRetry
+                )]
+            )
+        }
         return UploadRetryOutcome(fileName: nil, lastError: lastError)
+    }
+
+    func advanceUploadPreparationToNextName(
+        _ uploadPreparation: inout UploadPreparation,
+        monthStore: any BackupMonthStore,
+        profile: ServerProfileRecord
+    ) throws {
+        let nameCaseSensitivity = uploadPreparation.nameCaseSensitivity
+        var occupiedNameKeys = RemoteFileNaming.nameKeySet(
+            from: monthStore.existingFileNames(),
+            caseSensitivity: nameCaseSensitivity
+        )
+        occupiedNameKeys.formUnion(RemoteFileNaming.nameKeySet(
+            from: uploadPreparation.attemptedFileNames,
+            caseSensitivity: nameCaseSensitivity
+        ))
+        occupiedNameKeys.insert(RemoteFileNaming.nameKey(
+            for: uploadPreparation.targetFileName,
+            caseSensitivity: nameCaseSensitivity
+        ))
+        if uploadPreparation.retryBaseFileName != uploadPreparation.baseFileName {
+            uploadPreparation.targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
+                baseName: uploadPreparation.retryBaseFileName,
+                occupiedKeys: occupiedNameKeys,
+                caseSensitivity: nameCaseSensitivity
+            )
+        } else {
+            uploadPreparation.targetFileName = try RemoteFileNaming.resolveNextAvailableNameOrThrow(
+                baseName: uploadPreparation.baseFileName,
+                occupiedKeys: occupiedNameKeys,
+                caseSensitivity: nameCaseSensitivity,
+                writerID: monthStore.v2Services?.writerID,
+                forceWriterIDSuffix: uploadPreparation.forceWriterIDSuffix
+            )
+        }
+        uploadPreparation.attemptedFileNames.insert(uploadPreparation.targetFileName)
+        let retryRelativePath = monthStore.monthRelativePath + "/" + uploadPreparation.targetFileName
+        uploadPreparation.remoteAbsolutePath = RemotePathBuilder.absolutePath(
+            basePath: profile.basePath,
+            remoteRelativePath: retryRelativePath
+        )
     }
 
     func recordUploadedResource(
         prepared: PreparedResource,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         targetFileName: String
     ) throws {
         let local = prepared.local
@@ -372,7 +585,7 @@ extension AssetProcessor {
         let manifestItem = RemoteManifestResource(
             year: monthStore.year,
             month: monthStore.month,
-            fileName: targetFileName,
+            physicalRemotePath: monthStore.monthRelativePath + "/" + targetFileName,
             contentHash: localHash,
             fileSize: localFileSize,
             resourceType: local.resourceTypeCode,
@@ -381,13 +594,13 @@ extension AssetProcessor {
         )
         let inserted = try monthStore.upsertResource(manifestItem)
         monthStore.markRemoteFile(name: targetFileName, size: localFileSize)
-        remoteIndexService.upsertCachedResource(inserted)
+        optimisticWriter.appendResource(inserted)
     }
 
     func downloadAndHashRemoteFile(
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         fileName: String,
         cancellationController: BackupCancellationController?
     ) async throws -> Data {
@@ -410,7 +623,7 @@ extension AssetProcessor {
     func downloadAndHashRemoteFileForConflictCheck(
         profile: ServerProfileRecord,
         client: RemoteStorageClientProtocol,
-        monthStore: MonthManifestStore,
+        monthStore: any BackupMonthStore,
         fileName: String,
         displayName: String,
         eventStream: BackupEventStream,
@@ -447,6 +660,202 @@ extension AssetProcessor {
                 level: .warning
             )
             return nil
+        }
+    }
+
+    enum RemoteProbeResult {
+        case absent
+        case present(size: Int64?)
+    }
+
+    /// Unknown probe state reports `.present(size: nil)` so resolveNextAvailableName won't pick the path.
+    func probeRemoteExistence(
+        client: RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        path: String,
+        cancellationController: BackupCancellationController?
+    ) async throws -> RemoteProbeResult {
+        do {
+            if let meta = try await client.metadata(path: path), !meta.isDirectory {
+                return .present(size: meta.size)
+            }
+            return .absent
+        } catch {
+            if error is CancellationError { throw error }
+            if cancellationController?.isCancelled == true { throw CancellationError() }
+            if profile.isConnectionUnavailableError(error) { throw error }
+            if isStorageNotFoundError(error) { return .absent }
+            if Self.metadataProbeShouldPropagate(error) { throw error }
+            if Self.metadataProbeCanRetryAtCreateBoundary(error) { return .absent }
+            uploadLog.warning("metadata probe ambiguous for \(path, privacy: .public): \(String(describing: error), privacy: .public)")
+            return .present(size: nil)
+        }
+    }
+
+    private static func metadataProbeShouldPropagate(_ error: Error) -> Bool {
+        for nsError in nsErrorChain(error) {
+            if nsError.domain == WebDAVClient.errorDomain,
+               nsError.code == 401 || nsError.code == 403 {
+                return true
+            }
+            if nsError.domain == S3ErrorClassifier.errorDomain {
+                if let status = nsError.userInfo[S3ErrorClassifier.userInfoStatusCodeKey] as? Int,
+                   status == 401 || status == 403 {
+                    return true
+                }
+                if let serverCode = nsError.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String {
+                    switch serverCode {
+                    case "AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch", "AuthorizationHeaderMalformed":
+                        return true
+                    default:
+                        break
+                    }
+                }
+            }
+            if nsError.domain == NSCocoaErrorDomain,
+               nsError.code == NSFileReadNoPermissionError || nsError.code == NSFileWriteNoPermissionError {
+                return true
+            }
+            if nsError.domain == NSPOSIXErrorDomain,
+               nsError.code == Int(EACCES) || nsError.code == Int(EPERM) {
+                return true
+            }
+            let description = nsError.localizedDescription.uppercased()
+            if description.contains("STATUS_ACCESS_DENIED") || description.contains("0XC0000022") {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func metadataProbeCanRetryAtCreateBoundary(_ error: Error) -> Bool {
+        for nsError in nsErrorChain(error) {
+            if nsError.domain == WebDAVClient.errorDomain {
+                switch nsError.code {
+                case 408, 429, 500:
+                    return true
+                default:
+                    break
+                }
+            }
+            if nsError.domain == S3ErrorClassifier.errorDomain {
+                if let status = nsError.userInfo[S3ErrorClassifier.userInfoStatusCodeKey] as? Int,
+                   status == 408 || status == 429 || status == 500 {
+                    return true
+                }
+                if let serverCode = nsError.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String,
+                   serverCode == "InternalError" {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private static func nsErrorChain(_ error: Error) -> [NSError] {
+        var pending: [Error] = [error]
+        var seen: Set<String> = []
+        var result: [NSError] = []
+        while let next = pending.popLast() {
+            if let storage = next as? RemoteStorageClientError,
+               case .underlying(let inner) = storage {
+                pending.append(inner)
+                continue
+            }
+            let nsError = next as NSError
+            let key = "\(nsError.domain)#\(nsError.code)"
+            guard seen.insert(key).inserted else { continue }
+            result.append(nsError)
+            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                pending.append(underlying)
+            }
+        }
+        return result
+    }
+
+    private static func isCancellationError(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        var pending: [Error] = [error]
+        var seen: Set<String> = []
+        while let next = pending.popLast() {
+            if next is CancellationError { return true }
+            if let storage = next as? RemoteStorageClientError,
+               case .underlying(let inner) = storage {
+                pending.append(inner)
+                continue
+            }
+            let nsError = next as NSError
+            let key = "\(nsError.domain)#\(nsError.code)"
+            guard seen.insert(key).inserted else { continue }
+            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                pending.append(underlying)
+            }
+        }
+        return false
+    }
+
+    private static func detectRemoteContentRaceOrFallbackToRename(
+        client: RemoteStorageClientProtocol,
+        profile: ServerProfileRecord,
+        remotePath: String,
+        expectedSize: Int64,
+        expectedHash: Data,
+        cancellationController: BackupCancellationController?
+    ) async throws -> Bool {
+        try await Self.detectRemoteContentRace(
+            client: client,
+            remotePath: remotePath,
+            expectedSize: expectedSize,
+            expectedHash: expectedHash,
+            cancellationController: cancellationController,
+            isConnectionUnavailable: profile.isConnectionUnavailableError
+        )
+    }
+
+    /// Semantics are inverted from "trusting": any non-cancellation failure → race assumed
+    /// so the caller falls back to collision rename. Cancellation propagates as `CancellationError`.
+    /// `isConnectionUnavailable` lets callers (wrapper) re-throw transport errors that should
+    /// kill the session instead of being treated as "race".
+    static func detectRemoteContentRace(
+        client: RemoteStorageClientProtocol,
+        remotePath: String,
+        expectedSize: Int64,
+        expectedHash: Data,
+        cancellationController: BackupCancellationController?,
+        isConnectionUnavailable: (Error) -> Bool = { _ in false }
+    ) async throws -> Bool {
+        try cancellationController?.throwIfCancelled()
+        try Task.checkCancellation()
+        let entry: RemoteStorageEntry?
+        do {
+            entry = try await client.metadata(path: remotePath)
+        } catch {
+            if error is CancellationError || Task.isCancelled || cancellationController?.isCancelled == true {
+                throw CancellationError()
+            }
+            if isConnectionUnavailable(error) { throw error }
+            return true
+        }
+        guard let entry else { return true }
+        guard !entry.isDirectory else { return true }
+        if entry.size != expectedSize { return true }
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("upload-verify-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        do {
+            try cancellationController?.throwIfCancelled()
+            try Task.checkCancellation()
+            try await client.download(remotePath: remotePath, localURL: tempURL)
+            try cancellationController?.throwIfCancelled()
+            try Task.checkCancellation()
+            let actualHash = try Self.contentHash(of: tempURL, cancellationController: cancellationController)
+            return actualHash != expectedHash
+        } catch {
+            if error is CancellationError || Task.isCancelled || cancellationController?.isCancelled == true {
+                throw CancellationError()
+            }
+            if isConnectionUnavailable(error) { throw error }
+            return true
         }
     }
 

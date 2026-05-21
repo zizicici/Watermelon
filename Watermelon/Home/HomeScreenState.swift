@@ -111,23 +111,98 @@ enum MonthEvent {
     case uploadPaused
     case uploadResumed
     case uploadCompleted
-    case partiallyFailed(count: Int)
     case downloadStarted
     case downloadPaused
     case downloadResumed
     case downloadCompleted
-    case failed(reason: String)
+    case downloadAttemptFinished
     case completed
+    case recordUploadFailures(observedFailedItemCount: Int)
+    case recordIncomplete(BackupMonthIncompleteSummary)
+    case recordTerminalFailure(MonthTerminalFailure)
 }
 
 // MARK: - Execution State
+
+struct MonthFailureFacts: Equatable, Sendable {
+    var uploadFailedItemCount: Int = 0
+    var incomplete: BackupMonthIncompleteSummary = .init()
+    var terminalFailure: MonthTerminalFailure?
+
+    var isEmpty: Bool {
+        uploadFailedItemCount == 0 && incomplete.isEmpty && terminalFailure == nil
+    }
+
+    var hasTerminalFailure: Bool { terminalFailure != nil }
+    var hasNonFatalIssues: Bool {
+        uploadFailedItemCount > 0 || !incomplete.isEmpty
+    }
+    var hasUserVisibleFailure: Bool {
+        hasTerminalFailure || hasNonFatalIssues
+    }
+
+    mutating func recordUploadFailures(observedFailedItemCount: Int) {
+        uploadFailedItemCount = max(uploadFailedItemCount, max(observedFailedItemCount, 0))
+    }
+
+    mutating func recordIncomplete(_ summary: BackupMonthIncompleteSummary) {
+        incomplete.mergeObserved(summary)
+    }
+
+    mutating func recordTerminalFailure(_ failure: MonthTerminalFailure) {
+        terminalFailure = failure
+    }
+
+    func displayMessage(for month: LibraryMonthKey) -> String {
+        var parts: [String] = []
+        if uploadFailedItemCount > 0 {
+            parts.append(String.localizedStringWithFormat(
+                String(localized: "home.execution.failedItems"),
+                uploadFailedItemCount
+            ))
+        }
+        parts.append(contentsOf: BackupMonthIncompleteSummaryRenderer.messageParts(
+            for: incomplete,
+            month: month
+        ))
+        if let message = terminalFailure?.message, !message.isEmpty {
+            parts.append(message)
+        }
+        return parts.isEmpty ? String(localized: "home.execution.failed") : parts.joined(separator: ". ")
+    }
+}
+
+struct MonthWorkFacts: Equatable, Sendable {
+    var uploadFinished = false
+    var downloadStarted = false
+    var downloadFinished = false
+
+    var hasActiveDownloadAttempt: Bool {
+        downloadStarted && !downloadFinished
+    }
+}
+
+struct MonthTerminalFailure: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        case missingConnection
+        case localIndexIncomplete
+        case backupStartFailed
+        case uploadRunFailed
+        case downloadRunFailed
+        case compatibility
+        case generic
+    }
+
+    let kind: Kind
+    let message: String
+}
 
 struct MonthPlan {
     let needsUpload: Bool
     let needsDownload: Bool
     var phase: Phase = .pending
-    var failedItemCount: Int = 0
-    var failureMessage: String?
+    var failureFacts = MonthFailureFacts()
+    var workFacts = MonthWorkFacts()
 
     enum Phase {
         case pending
@@ -145,7 +220,15 @@ struct MonthPlan {
     var isFullyCompleted: Bool { phase == .completed }
     var isDone: Bool { phase == .completed || phase == .partiallyFailed }
     var isFailed: Bool { phase == .failed }
+    var hasTerminalFailure: Bool { failureFacts.hasTerminalFailure }
+    var hasUserVisibleFailure: Bool { failureFacts.hasUserVisibleFailure }
     var isActive: Bool { phase == .uploading || phase == .downloading }
+    var hasPendingDownloadWork: Bool {
+        needsDownload && !workFacts.downloadFinished && !failureFacts.hasTerminalFailure
+    }
+    var canStartInlineComplementDownload: Bool {
+        needsUpload && needsDownload && hasPendingDownloadWork
+    }
     var intent: MonthIntent? {
         switch (needsUpload, needsDownload) {
         case (true, false): return .backup
@@ -156,42 +239,91 @@ struct MonthPlan {
     }
 
     mutating func apply(_ event: MonthEvent) {
-        switch (phase, event) {
-        case (.pending, .uploadStarted):
-            phase = .uploading
-        case (.uploading, .uploadPaused):
-            phase = .uploadPaused
-        case (.uploadPaused, .uploadResumed):
-            phase = .uploading
-        case (.uploading, .uploadCompleted),
-             (.pending, .uploadCompleted):
-            phase = needsDownload ? .uploadDone : .completed
-        case (.uploading, .partiallyFailed(let count)),
-             (.uploadDone, .partiallyFailed(let count)),
-             (.completed, .partiallyFailed(let count)):
-            // partiallyFailed can override uploadDone/completed because
-            // failedCountByMonth is only available at session completion,
-            // after individual month completions have already been reported
-            // by progress snapshots.
-            phase = .partiallyFailed
-            failedItemCount = count
-            failureMessage = String(format: String(localized: "home.execution.failedItems"), count)
-        case (.uploadDone, .downloadStarted),
-             (.pending, .downloadStarted):
-            phase = .downloading
-        case (.downloading, .downloadPaused):
-            phase = .downloadPaused
-        case (.downloadPaused, .downloadResumed):
-            phase = .downloading
-        case (.downloading, .downloadCompleted):
-            phase = .completed
-        case (_, .failed(let reason)) where !isTerminal:
+        switch event {
+        case .recordUploadFailures(let observedFailedItemCount):
+            failureFacts.recordUploadFailures(observedFailedItemCount: observedFailedItemCount)
+            refreshTerminalPhaseProjection()
+        case .recordIncomplete(let summary):
+            failureFacts.recordIncomplete(summary)
+            refreshTerminalPhaseProjection()
+        case .recordTerminalFailure(let failure):
+            failureFacts.recordTerminalFailure(failure)
+            refreshTerminalPhaseProjection()
+        case .uploadStarted:
+            if phase == .pending {
+                phase = .uploading
+            }
+            refreshTerminalPhaseProjection()
+        case .uploadPaused:
+            if phase == .uploading {
+                phase = .uploadPaused
+            }
+            refreshTerminalPhaseProjection()
+        case .uploadResumed:
+            if phase == .uploadPaused {
+                phase = .uploading
+            }
+            refreshTerminalPhaseProjection()
+        case .uploadCompleted:
+            workFacts.uploadFinished = true
+            if phase == .uploading || phase == .pending {
+                phase = needsDownload ? .uploadDone : .completed
+            }
+            refreshTerminalPhaseProjection(defaultWhenNoFacts: phase == .completed ? .completed : nil)
+        case .downloadStarted:
+            guard hasPendingDownloadWork else {
+                refreshTerminalPhaseProjection(defaultWhenNoFacts: phase == .completed ? .completed : nil)
+                break
+            }
+            workFacts.downloadStarted = true
+            if phase == .uploadDone || phase == .pending || phase == .partiallyFailed {
+                phase = .downloading
+            }
+        case .downloadPaused:
+            if phase == .downloading {
+                phase = .downloadPaused
+            }
+            if failureFacts.hasTerminalFailure {
+                refreshTerminalPhaseProjection()
+            }
+        case .downloadResumed:
+            if phase == .downloadPaused {
+                phase = .downloading
+            }
+            if failureFacts.hasTerminalFailure {
+                refreshTerminalPhaseProjection()
+            }
+        case .downloadCompleted:
+            if phase == .downloading {
+                phase = .completed
+            }
+            refreshTerminalPhaseProjection(defaultWhenNoFacts: phase == .completed ? .completed : nil)
+        case .downloadAttemptFinished:
+            guard workFacts.downloadStarted else { break }
+            workFacts.downloadFinished = true
+            refreshTerminalPhaseProjection(defaultWhenNoFacts: .completed)
+        case .completed:
+            refreshTerminalPhaseProjection(defaultWhenNoFacts: .completed)
+        }
+    }
+
+    mutating func finalizeIfOpen() {
+        workFacts.uploadFinished = true
+        workFacts.downloadFinished = true
+        guard !isTerminal else {
+            refreshTerminalPhaseProjection()
+            return
+        }
+        refreshTerminalPhaseProjection(defaultWhenNoFacts: .completed)
+    }
+
+    private mutating func refreshTerminalPhaseProjection(defaultWhenNoFacts: Phase? = nil) {
+        if failureFacts.hasTerminalFailure {
             phase = .failed
-            failureMessage = reason
-        case (_, .completed) where !isTerminal:
-            phase = .completed
-        default:
-            break
+        } else if failureFacts.hasNonFatalIssues {
+            phase = .partiallyFailed
+        } else if let defaultWhenNoFacts {
+            phase = defaultWhenNoFacts
         }
     }
 }
@@ -233,14 +365,8 @@ struct HomeExecutionState {
 
     var failedMonthInfos: [MonthFailureInfo] {
         monthPlans.compactMap { month, plan in
-            switch plan.phase {
-            case .failed:
-                return MonthFailureInfo(month: month, message: plan.failureMessage ?? String(localized: "home.execution.failed"))
-            case .partiallyFailed:
-                return MonthFailureInfo(month: month, message: plan.failureMessage ?? String(format: String(localized: "home.execution.failedItems"), plan.failedItemCount))
-            default:
-                return nil
-            }
+            guard plan.failureFacts.hasUserVisibleFailure else { return nil }
+            return MonthFailureInfo(month: month, message: plan.failureFacts.displayMessage(for: month))
         }.sorted { $0.month < $1.month }
     }
 

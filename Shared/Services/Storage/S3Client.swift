@@ -1,6 +1,19 @@
 import Foundation
 
 final actor S3Client: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    // Multipart `CompleteMultipartUpload` historically doesn't honor If-None-Match across S3 vendors → concurrent multipart writers can clobber.
+    nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    // PUT is atomic replace at the object level — peers see old XOR new, never neither.
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
+    // `move` is CopyObject + DeleteObject; destination is atomically replaced per-key, source orphan is irrelevant to renewal.
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    // S3 keys are byte-exact; `IMG.JPG` and `img.jpg` are distinct objects.
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    // Conditional CopyObject support is endpoint-specific and probed asynchronously.
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
+    // Covers R2/MinIO/B2 and other non-strongly-consistent S3-compatible endpoints; AWS S3 itself is strong-consistent since 2020 but conservative grace is cheap.
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 30 }
     static let errorDomain = S3ErrorClassifier.errorDomain
 
     struct Config: Sendable {
@@ -30,6 +43,12 @@ final actor S3Client: RemoteStorageClientProtocol {
     // Buffer below the 10000-part hard ceiling.
     private static let multipartTargetParts: Int64 = 9_000
     private static let probeKeyPrefix = ".watermelon_probe_"
+    private static let conditionalCopyProbeAttemptCount = 8
+    private static let conditionalCopyProbePrefix = ".watermelon_probe_copyIfAbsent_"
+    private static let conditionalCopyProbeCleanupAge: TimeInterval = 3600
+    private static func conditionalCopyProbeName(runID: String, suffix: String) -> String {
+        "\(conditionalCopyProbePrefix)\(runID)_\(suffix)"
+    }
 
     static func partSize(forFileSize size: Int64) -> Int64 {
         let baseline = multipartPartSize
@@ -60,7 +79,14 @@ final actor S3Client: RemoteStorageClientProtocol {
     private let config: Config
     private let session: URLSession
     private let transferSession: URLSession
+    private enum ConditionalCopyIfAbsentSupport: Equatable, Sendable {
+        case unknown
+        case supported
+        case unsupported
+    }
+
     private var activeMultipartUploads: Set<MultipartUploadHandle> = []
+    private var conditionalCopyIfAbsentSupport: ConditionalCopyIfAbsentSupport = .unknown
 
     init(config: Config) {
         self.config = config
@@ -87,10 +113,6 @@ final actor S3Client: RemoteStorageClientProtocol {
     }
 
     // MARK: - RemoteStorageClientProtocol
-
-    nonisolated func shouldSetModificationDate() -> Bool {
-        false
-    }
 
     nonisolated func shouldLimitUploadRetries(for error: Error) -> Bool {
         S3ErrorClassifier.shouldLimitUploadRetries(error)
@@ -159,9 +181,46 @@ final actor S3Client: RemoteStorageClientProtocol {
         return key(forPath: absolute)
     }
 
+    nonisolated private func makeProbeKey(named name: String) -> String {
+        let absolute = RemotePathBuilder.absolutePath(
+            basePath: config.basePath,
+            remoteRelativePath: name
+        )
+        return key(forPath: absolute)
+    }
+
     private func putEmptyObject(at url: URL) async throws {
         let req = signedRequest(method: "PUT", url: url, bodyHash: .empty)
         _ = try await performMetadata(req, from: Data())
+    }
+
+    private func putEmptyObjectIfAbsent(at url: URL) async throws -> AtomicCreateResult {
+        let req = signedRequest(
+            method: "PUT",
+            url: url,
+            additionalHeaders: ["If-None-Match": "*"],
+            bodyHash: .empty
+        )
+        do {
+            _ = try await performMetadata(req, from: Data())
+            return .created
+        } catch {
+            if Self.isPreconditionFailed(error) {
+                return .alreadyExists
+            }
+            throw error
+        }
+    }
+
+    private func objectExists(at url: URL) async throws -> Bool {
+        let req = signedRequest(method: "HEAD", url: url, bodyHash: .empty)
+        do {
+            _ = try await performMetadata(req)
+            return true
+        } catch {
+            if Self.isNotFoundError(error) { return false }
+            throw error
+        }
     }
 
     private func serverSideCopy(sourceKey: String, destinationURL: URL) async throws {
@@ -175,9 +234,151 @@ final actor S3Client: RemoteStorageClientProtocol {
         try throwIfEmbeddedError(method: "PUT", url: destinationURL, body: body)
     }
 
+    private func serverSideCopyIfAbsent(sourceKey: String, destinationKey: String) async throws -> AtomicCreateResult {
+        let destinationURL = try makeURL(key: destinationKey, query: [])
+        let req = signedRequest(
+            method: "PUT",
+            url: destinationURL,
+            additionalHeaders: [
+                "x-amz-copy-source": Self.copySourceHeader(bucket: config.bucket, key: sourceKey),
+                "If-None-Match": "*"
+            ],
+            bodyHash: .empty
+        )
+        do {
+            let (body, _) = try await performTransferData(req)
+            try throwIfEmbeddedError(method: "PUT", url: destinationURL, body: body)
+            return .created
+        } catch {
+            if Self.isPreconditionFailed(error) {
+                return .alreadyExists
+            }
+            throw error
+        }
+    }
+
+    func supportsExclusiveMoveIfAbsent(forDestinationPath _: String) async throws -> Bool {
+        try await conditionalCopyIfAbsentSupported()
+    }
+
+    private func conditionalCopyIfAbsentSupported() async throws -> Bool {
+        switch conditionalCopyIfAbsentSupport {
+        case .supported:
+            return true
+        case .unsupported:
+            return false
+        case .unknown:
+            break
+        }
+        try await cleanupOrphanedConditionalCopyProbes()
+        for _ in 0..<Self.conditionalCopyProbeAttemptCount {
+            try Task.checkCancellation()
+            let runID = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            let sourceKey = makeProbeKey(named: Self.conditionalCopyProbeName(runID: runID, suffix: "source"))
+            let destinationKey = makeProbeKey(named: Self.conditionalCopyProbeName(runID: runID, suffix: "destination"))
+            let sourceURL = try makeURL(key: sourceKey, query: [])
+            let destinationURL = try makeURL(key: destinationKey, query: [])
+            var orphans: Set<URL> = []
+            do {
+                guard try await objectExists(at: sourceURL) == false else {
+                    continue
+                }
+                guard case .created = try await putEmptyObjectIfAbsent(at: sourceURL) else {
+                    continue
+                }
+                orphans.insert(sourceURL)
+                try Task.checkCancellation()
+
+                guard try await objectExists(at: destinationURL) == false else {
+                    await deleteProbeObjects(orphans)
+                    continue
+                }
+                try Task.checkCancellation()
+
+                let firstCopy = try await serverSideCopyIfAbsent(
+                    sourceKey: sourceKey,
+                    destinationKey: destinationKey
+                )
+                try Task.checkCancellation()
+                switch firstCopy {
+                case .created, .bestEffortRetry:
+                    orphans.insert(destinationURL)
+                case .alreadyExists:
+                    await deleteProbeObjects(orphans)
+                    continue
+                }
+
+                let secondCopy = try await serverSideCopyIfAbsent(
+                    sourceKey: sourceKey,
+                    destinationKey: destinationKey
+                )
+                try Task.checkCancellation()
+                switch secondCopy {
+                case .alreadyExists:
+                    conditionalCopyIfAbsentSupport = .supported
+                case .created, .bestEffortRetry:
+                    conditionalCopyIfAbsentSupport = .unsupported
+                }
+                await deleteProbeObjects(orphans)
+                return conditionalCopyIfAbsentSupport == .supported
+            } catch {
+                await deleteProbeObjects(orphans)
+                if Self.isConditionalCopyUnsupported(error) {
+                    conditionalCopyIfAbsentSupport = .unsupported
+                    return false
+                }
+                throw error
+            }
+        }
+        throw Self.internalError("could not allocate temporary S3 conditional-copy probe objects")
+    }
+
+    private func cleanupOrphanedConditionalCopyProbes() async throws {
+        try Task.checkCancellation()
+        let entries: [RemoteStorageEntry]
+        do {
+            entries = try await list(path: config.basePath)
+        } catch {
+            if Task.isCancelled || error is CancellationError {
+                throw error
+            }
+            return
+        }
+        let cutoff = Date().addingTimeInterval(-Self.conditionalCopyProbeCleanupAge)
+        for entry in entries where Self.isConditionalCopyProbeEntry(entry, olderThan: cutoff) {
+            try Task.checkCancellation()
+            do {
+                try await delete(path: entry.path)
+            } catch {
+                if Task.isCancelled || error is CancellationError {
+                    throw error
+                }
+            }
+        }
+    }
+
+    nonisolated private static func isConditionalCopyProbeEntry(_ entry: RemoteStorageEntry, olderThan cutoff: Date) -> Bool {
+        guard !entry.isDirectory, entry.size == 0 else { return false }
+        guard let modificationDate = entry.modificationDate, modificationDate <= cutoff else { return false }
+        guard entry.name.hasPrefix(conditionalCopyProbePrefix) else { return false }
+        return entry.name.hasSuffix("_source") || entry.name.hasSuffix("_destination")
+    }
+
     private func deleteObject(at url: URL) async throws {
         let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
         _ = try await performMetadata(req)
+    }
+
+    private func deleteProbeObjects(_ urls: Set<URL>) async {
+        guard !urls.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            for url in urls {
+                group.addTask { [self] in
+                    let req = signedRequest(method: "DELETE", url: url, bodyHash: .empty)
+                    _ = try? await performMetadata(req)
+                }
+            }
+        }
     }
 
     func storageCapacity() async throws -> RemoteStorageCapacity? {
@@ -268,6 +469,31 @@ final actor S3Client: RemoteStorageClientProtocol {
             bodyHash: .unsigned
         )
         _ = try await performTransfer(request, fromFile: localURL)
+    }
+
+    private func singlePartCreateIfAbsent(localURL: URL, key: String, size: Int64) async throws -> AtomicCreateResult {
+        if size > Self.singlePartMaxSize {
+            throw Self.internalError("File exceeds 5 GiB single-part limit")
+        }
+        let url = try makeURL(key: key, query: [])
+        let request = signedRequest(
+            method: "PUT",
+            url: url,
+            additionalHeaders: [
+                "Content-Type": "application/octet-stream",
+                "If-None-Match": "*"
+            ],
+            bodyHash: .unsigned
+        )
+        do {
+            _ = try await performTransfer(request, fromFile: localURL)
+            return .created
+        } catch {
+            if Self.isPreconditionFailed(error) {
+                return .alreadyExists
+            }
+            throw error
+        }
     }
 
     typealias PartUploader = @Sendable (_ uploadId: String, _ partNumber: Int, _ offset: Int64, _ length: Int64) async throws -> UploadedPart
@@ -411,10 +637,18 @@ final actor S3Client: RemoteStorageClientProtocol {
     nonisolated static func buildCompleteMultipartXML(parts: [UploadedPart]) -> String {
         var xml = "<CompleteMultipartUpload>"
         for part in parts {
-            xml += "<Part><PartNumber>\(part.partNumber)</PartNumber><ETag>\(part.etag)</ETag></Part>"
+            xml += "<Part><PartNumber>\(part.partNumber)</PartNumber><ETag>\(xmlEscaped(part.etag))</ETag></Part>"
         }
         xml += "</CompleteMultipartUpload>"
         return xml
+    }
+
+    private nonisolated static func xmlEscaped(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     nonisolated private func readFileSlice(at url: URL, offset: Int64, length: Int64) throws -> Data {
@@ -422,6 +656,77 @@ final actor S3Client: RemoteStorageClientProtocol {
         defer { try? handle.close() }
         try handle.seek(toOffset: UInt64(offset))
         return try handle.read(upToCount: Int(length)) ?? Data()
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        // Multipart completion cannot enforce If-None-Match, so stage through exclusive metadata moves.
+        if size > Self.multipartThreshold {
+            return .overwritePossible
+        }
+        return .exclusive
+    }
+
+    func atomicCreate(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws -> AtomicCreateResult {
+        let key = key(forPath: remotePath)
+        if key.isEmpty {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+        let size = try fileSize(at: localURL)
+        if respectTaskCancellation { try Task.checkCancellation() }
+
+        if size > Self.multipartThreshold {
+            // AWS only honors If-None-Match on CompleteMultipartUpload; large objects
+            // fall back to exists+upload — there IS a TOCTOU race window. Callers MUST
+            // ensure path uniqueness (MetadataCreateGate staging path or AssetProcessor
+            // forceWriterIDSuffix) so a peer can't write the same key concurrently.
+            // `.bestEffortRetry` signals that verification is the caller's responsibility.
+            if try await exists(path: remotePath) {
+                return .alreadyExists
+            }
+            try await multipartUpload(localURL: localURL, key: key, size: size, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+            return .bestEffortRetry
+        }
+        return try await singlePartCreateIfAbsent(localURL: localURL, key: key, size: size)
+    }
+
+    nonisolated private static func isPreconditionFailed(_ error: Error) -> Bool {
+        if let storage = error as? RemoteStorageClientError, case .underlying(let inner) = storage {
+            return isPreconditionFailed(inner)
+        }
+        let ns = error as NSError
+        if ns.domain == errorDomain {
+            if ns.code == 412 { return true }
+            let serverCode = ns.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String
+            if serverCode == "PreconditionFailed" { return true }
+            // Conditional-write loser can land as 409 instead of 412 on some S3 vendors.
+            if ns.code == 409, serverCode == "ConditionalRequestConflict" { return true }
+        }
+        return false
+    }
+
+    nonisolated private static func isConditionalCopyUnsupported(_ error: Error) -> Bool {
+        if let storage = error as? RemoteStorageClientError, case .underlying(let inner) = storage {
+            return isConditionalCopyUnsupported(inner)
+        }
+        let ns = error as NSError
+        guard ns.domain == errorDomain else { return false }
+        if ns.code == 501 { return true }
+        let serverCode = ns.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String
+        if let serverCode,
+           ["InvalidArgument", "InvalidRequest", "NotImplemented", "NotSupported", "UnsupportedHeader"].contains(serverCode) {
+            return true
+        }
+        let serverMessage = ns.userInfo[S3ErrorClassifier.userInfoServerMessageKey] as? String
+        if ns.code == 400,
+           serverMessage?.range(of: "If-None-Match", options: [.caseInsensitive, .diacriticInsensitive]) != nil {
+            return true
+        }
+        return false
     }
 
     func setModificationDate(_: Date, forPath _: String) async throws {}
@@ -462,6 +767,33 @@ final actor S3Client: RemoteStorageClientProtocol {
     func move(from sourcePath: String, to destinationPath: String) async throws {
         try await copy(from: sourcePath, to: destinationPath)
         try await delete(path: sourcePath)
+    }
+
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        let sourceKey = key(forPath: sourcePath)
+        let destinationKey = key(forPath: destinationPath)
+        if sourceKey.isEmpty || destinationKey.isEmpty {
+            throw RemoteStorageClientError.invalidConfiguration
+        }
+
+        if let sourceMeta = try await metadata(path: sourcePath),
+           sourceMeta.size > Self.singlePartMaxSize {
+            throw Self.internalError("S3 moveIfAbsent is unsupported for objects larger than 5 GiB")
+        }
+
+        guard try await conditionalCopyIfAbsentSupported() else {
+            throw Self.internalError("S3 endpoint does not support safe moveIfAbsent via conditional CopyObject")
+        }
+        let result = try await serverSideCopyIfAbsent(sourceKey: sourceKey, destinationKey: destinationKey)
+        guard case .created = result else {
+            return result
+        }
+        do {
+            try await delete(path: sourcePath)
+        } catch {
+            // Destination is durable; orphan cleanup reaps the source if delete failed.
+        }
+        return .created
     }
 
     func copy(from sourcePath: String, to destinationPath: String) async throws {

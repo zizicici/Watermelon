@@ -27,7 +27,30 @@ enum BackupAssetResourcePlanner {
         return Data(digest)
     }
 
+    /// Bump when `orderedResourcesWithRoleSlot` selection rules change so the skip predicate refuses cached rows under the older rules.
+    static let currentSelectionVersion: Int = 1
+
+    /// Signature over (role, slot) tuples so the skip predicate notices a PHAsset edit that changed the resource shape but not mtime.
+    static func resourceSignature(roleSlots: [(role: Int, slot: Int)]) -> Data {
+        let sorted = roleSlots
+            .map { (role: $0.role, slot: $0.slot) }
+            .sorted { lhs, rhs in
+                if lhs.role != rhs.role { return lhs.role < rhs.role }
+                return lhs.slot < rhs.slot
+            }
+        var hasher = SHA256()
+        for entry in sorted {
+            hasher.update(data: Data("\(entry.role)|\(entry.slot)\n".utf8))
+        }
+        hasher.update(data: Data("count=\(sorted.count)".utf8))
+        return Data(hasher.finalize())
+    }
+
     #if os(iOS)
+    static func resourceSignature(orderedResources: [BackupSelectedResource]) -> Data {
+        resourceSignature(roleSlots: orderedResources.map { (role: $0.role, slot: $0.slot) })
+    }
+
     static func orderedResourcesWithRoleSlot(from resources: [PHAssetResource]) -> [BackupSelectedResource] {
         let filtered = resources.enumerated().filter { _, resource in
             !shouldExcludeFromBackup(resource: resource)

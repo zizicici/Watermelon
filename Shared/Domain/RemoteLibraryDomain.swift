@@ -11,6 +11,28 @@ struct RemoteManifestAsset: Hashable, Identifiable {
     let backedUpAtMs: Int64
     let resourceCount: Int
     let totalFileSizeBytes: Int64
+    /// nil for legacy entries or in-flight session entries before flush.
+    let stamp: OpStamp?
+
+    init(
+        year: Int,
+        month: Int,
+        assetFingerprint: Data,
+        creationDateMs: Int64?,
+        backedUpAtMs: Int64,
+        resourceCount: Int,
+        totalFileSizeBytes: Int64,
+        stamp: OpStamp? = nil
+    ) {
+        self.year = year
+        self.month = month
+        self.assetFingerprint = assetFingerprint
+        self.creationDateMs = creationDateMs
+        self.backedUpAtMs = backedUpAtMs
+        self.resourceCount = resourceCount
+        self.totalFileSizeBytes = totalFileSizeBytes
+        self.stamp = stamp
+    }
 
     var id: String {
         monthKey + "/" + assetFingerprintHex
@@ -39,6 +61,7 @@ struct RemoteAssetResourceLink: Hashable {
     let resourceHash: Data
     let role: Int
     let slot: Int
+    let logicalName: String
 
     var monthKey: String {
         String(format: "%04d-%02d", year, month)
@@ -49,26 +72,59 @@ struct RemoteAssetResourceLink: Hashable {
     }
 }
 
+struct ResourceCryptoMetadata: Hashable, Sendable, Codable {
+    let scheme: String
+    let payload: [String: String]
+
+    init(scheme: String, payload: [String: String] = [:]) {
+        self.scheme = scheme
+        self.payload = payload
+    }
+}
+
 struct RemoteManifestResource: Hashable, Identifiable {
     let year: Int
     let month: Int
-    let fileName: String
+    let physicalRemotePath: String
     let contentHash: Data
     let fileSize: Int64
     let resourceType: Int
     let creationDateMs: Int64?
     let backedUpAtMs: Int64
+    let crypto: ResourceCryptoMetadata?
+
+    init(
+        year: Int,
+        month: Int,
+        physicalRemotePath: String,
+        contentHash: Data,
+        fileSize: Int64,
+        resourceType: Int,
+        creationDateMs: Int64?,
+        backedUpAtMs: Int64,
+        crypto: ResourceCryptoMetadata? = nil
+    ) {
+        self.year = year
+        self.month = month
+        self.physicalRemotePath = physicalRemotePath
+        self.contentHash = contentHash
+        self.fileSize = fileSize
+        self.resourceType = resourceType
+        self.creationDateMs = creationDateMs
+        self.backedUpAtMs = backedUpAtMs
+        self.crypto = crypto
+    }
 
     var id: String {
-        monthKey + "/" + fileName
+        physicalRemotePath
     }
 
     var monthKey: String {
         String(format: "%04d-%02d", year, month)
     }
 
-    var remoteRelativePath: String {
-        String(format: "%04d/%02d/%@", year, month, fileName)
+    var logicalName: String {
+        (physicalRemotePath as NSString).lastPathComponent
     }
 
     var contentHashHex: String {
@@ -83,7 +139,30 @@ struct RemoteAssetResourceInstance: Hashable, Identifiable, Sendable {
     let fileName: String
     let fileSize: Int64
     let remoteRelativePath: String
+    /// Other physical paths that hold the same content hash (multi-writer collision-rename).
+    /// Restore tries `remoteRelativePath` first, falls back to these on download failure.
+    let alternateRemoteRelativePaths: [String]
     let creationDateMs: Int64?
+
+    init(
+        role: Int,
+        slot: Int,
+        resourceHash: Data,
+        fileName: String,
+        fileSize: Int64,
+        remoteRelativePath: String,
+        alternateRemoteRelativePaths: [String] = [],
+        creationDateMs: Int64?
+    ) {
+        self.role = role
+        self.slot = slot
+        self.resourceHash = resourceHash
+        self.fileName = fileName
+        self.fileSize = fileSize
+        self.remoteRelativePath = remoteRelativePath
+        self.alternateRemoteRelativePaths = alternateRemoteRelativePaths
+        self.creationDateMs = creationDateMs
+    }
 
     var id: String {
         "\(role)|\(slot)|\(resourceHash.hexString)"
@@ -117,15 +196,19 @@ struct RemoteLibrarySnapshot {
     let resources: [RemoteManifestResource]
     let assets: [RemoteManifestAsset]
     let assetResourceLinks: [RemoteAssetResourceLink]
+    /// Subtract from classifier inputs — commit log keeps the row but the file is gone.
+    let physicallyMissingHashesByMonth: [LibraryMonthKey: Set<Data>]
 
     init(
         resources: [RemoteManifestResource],
         assets: [RemoteManifestAsset],
-        assetResourceLinks: [RemoteAssetResourceLink] = []
+        assetResourceLinks: [RemoteAssetResourceLink] = [],
+        physicallyMissingHashesByMonth: [LibraryMonthKey: Set<Data>] = [:]
     ) {
         self.resources = resources
         self.assets = assets
         self.assetResourceLinks = assetResourceLinks
+        self.physicallyMissingHashesByMonth = physicallyMissingHashesByMonth
     }
 
     var totalCount: Int {
@@ -180,6 +263,22 @@ struct RemoteLibraryMonthDelta {
     let resources: [RemoteManifestResource]
     let assets: [RemoteManifestAsset]
     let assetResourceLinks: [RemoteAssetResourceLink]
+    /// See `RemoteLibrarySnapshot.physicallyMissingHashesByMonth`.
+    let physicallyMissingHashes: Set<Data>
+
+    init(
+        month: LibraryMonthKey,
+        resources: [RemoteManifestResource],
+        assets: [RemoteManifestAsset],
+        assetResourceLinks: [RemoteAssetResourceLink],
+        physicallyMissingHashes: Set<Data> = []
+    ) {
+        self.month = month
+        self.resources = resources
+        self.assets = assets
+        self.assetResourceLinks = assetResourceLinks
+        self.physicallyMissingHashes = physicallyMissingHashes
+    }
 }
 
 struct RemoteMonthManifestDigest: Hashable {
@@ -225,4 +324,12 @@ enum ResourceTypeCode {
     static func isVideoLike(_ code: Int) -> Bool {
         code == video || code == fullSizeVideo || code == pairedVideo || code == fullSizePairedVideo || code == adjustmentBasePairedVideo || code == adjustmentBaseVideo
     }
+
+    /// Metadata-only edit resources are not restorable without a primary photo/video resource.
+    static let metadataOnlyRoles: Set<Int> = [
+        adjustmentData,
+        adjustmentBasePhoto,
+        adjustmentBasePairedVideo,
+        adjustmentBaseVideo
+    ]
 }

@@ -350,7 +350,7 @@ extension ServerProfileRecord {
         case .smb:
             return SMBErrorClassifier.isConnectionUnavailable(error)
         case .webdav:
-            return false
+            return WebDAVErrorClassifier.isConnectionUnavailable(error)
         case .s3:
             return S3ErrorClassifier.isConnectionUnavailable(error)
         case .sftp:
@@ -361,6 +361,9 @@ extension ServerProfileRecord {
     func userFacingStorageErrorMessage(_ error: Error) -> String {
         if let compat = error as? BackupCompatibilityError {
             return compat.errorDescription ?? error.localizedDescription
+        }
+        if let remoteView = error as? RemoteViewHandleError {
+            return remoteView.errorDescription ?? error.localizedDescription
         }
         if isExternalStorageUnavailableError(error) {
             return String(localized: "storage.error.externalUnavailable")

@@ -13,7 +13,10 @@ final class BackupSessionAsyncBridge {
     }
 
     enum UploadResult {
-        case completed(failedCountByMonth: [LibraryMonthKey: Int])
+        case completed(
+            failedCountByMonth: [LibraryMonthKey: Int],
+            incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary]
+        )
         case paused
         case stopped
         case failed(String)
@@ -138,7 +141,11 @@ final class BackupSessionAsyncBridge {
 
         let result: UploadResult?
         switch snapshot.state {
-        case .completed: result = .completed(failedCountByMonth: snapshot.failedCountByMonth)
+        case .completed:
+            result = .completed(
+                failedCountByMonth: snapshot.failedCountByMonth,
+                incompleteSummaryByMonth: snapshot.incompleteSummaryByMonth
+            )
         case .paused:    result = .paused
         case .stopped:   result = .stopped
         case .failed:    result = .failed(snapshot.statusText)

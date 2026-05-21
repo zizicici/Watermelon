@@ -5,7 +5,18 @@ import NIOCore
 import NIOSSH
 
 final actor SFTPClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
+    nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .none }
+    // openFile(.truncate) destroys the original immediately, and the failure path
+    // calls remove(at:) — partial write loses the existing heartbeat.
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { false }
+    // SFTP v3 rejects rename-overwrite without the posix-rename@openssh.com extension.
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    // POSIX-style: case-sensitive on the wire; the server FS may differ but we can't probe that cheaply.
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
     private nonisolated static let chunkSize = 32 * 1024
+    private nonisolated static let renameOverwriteFlag: UInt32 = 0x00000001
     // Citadel 0.12.1's listDirectory leaks server-side directory handles; recycle
     // the channel after N lists so the leak can't exhaust the server's budget.
     private nonisolated static let listReconnectThreshold = 32
@@ -161,6 +172,60 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         }
     }
 
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        // SSH_FXF_EXCL via Citadel's `.forceCreate` — server-enforced exclusive open;
+        // returns "already exists" rather than overwriting.
+        .exclusive
+    }
+
+    func atomicCreate(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws -> AtomicCreateResult {
+        let client = try ensureClient()
+        let resolved = RemotePathBuilder.normalizePath(remotePath)
+
+        let handle = try FileHandle(forReadingFrom: localURL)
+        defer { try? handle.close() }
+        let totalSize = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? Int64) ?? 0
+
+        let file: Citadel.SFTPFile
+        do {
+            file = try await client.openFile(filePath: resolved, flags: [.write, .create, .forceCreate])
+        } catch {
+            if Self.isAlreadyExists(error) {
+                return .alreadyExists
+            }
+            throw error
+        }
+
+        var offset: UInt64 = 0
+        let allocator = ByteBufferAllocator()
+        do {
+            while true {
+                if respectTaskCancellation { try Task.checkCancellation() }
+                let chunk = try handle.read(upToCount: Self.chunkSize) ?? Data()
+                if chunk.isEmpty { break }
+                var buffer = allocator.buffer(capacity: chunk.count)
+                buffer.writeBytes(chunk)
+                try await file.write(buffer, at: offset)
+                offset += UInt64(chunk.count)
+                if let onProgress, totalSize > 0 {
+                    onProgress(min(1.0, Double(offset) / Double(totalSize)))
+                }
+            }
+            try await file.close()
+            onProgress?(1.0)
+        } catch {
+            try? await file.close()
+            try? await client.remove(at: resolved)
+            throw error
+        }
+        return .created
+    }
+
     func setModificationDate(_ date: Date, forPath path: String) async throws {
         let client = try ensureClient()
         let attrs = SFTPFileAttributes(
@@ -170,6 +235,19 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             )
         )
         try await client.setAttributes(at: RemotePathBuilder.normalizePath(path), to: attrs)
+    }
+
+    private static func isAlreadyExists(_ error: Error) -> Bool {
+        // Citadel folds SSH_FX_FILE_ALREADY_EXISTS (v4, 11) into `.unknown(11)`; v3 servers
+        // usually return SSH_FX_FAILURE on O_EXCL collisions, so also probe the server message.
+        guard let sftpError = error as? SFTPError,
+              case .errorStatus(let status) = sftpError else {
+            return false
+        }
+        if case .unknown(11) = status.errorCode {
+            return true
+        }
+        return status.message.lowercased().contains("exists")
     }
 
     func download(remotePath: String, localURL: URL) async throws {
@@ -270,14 +348,42 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         }
     }
 
-    // SFTP v3 rename fails when target exists; surface verbatim so the caller's
-    // .bak-dance recovery can run instead of a delete-then-rename masking layer.
+    // SSH_FXP_RENAME_OVERWRITE flag — honored by SFTPv4+ / posix-rename extension;
+    // plain v3 servers reject when destination exists (see supportsLivenessSafeOverwriteMove).
     func move(from sourcePath: String, to destinationPath: String) async throws {
         let client = try ensureClient()
         try await client.rename(
             at: RemotePathBuilder.normalizePath(sourcePath),
-            to: RemotePathBuilder.normalizePath(destinationPath)
+            to: RemotePathBuilder.normalizePath(destinationPath),
+            flags: Self.renameOverwriteFlag
         )
+    }
+
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        let client = try ensureClient()
+        if try await metadata(path: destinationPath) != nil {
+            return .alreadyExists
+        }
+        try Task.checkCancellation()
+        do {
+            try await client.rename(
+                at: RemotePathBuilder.normalizePath(sourcePath),
+                to: RemotePathBuilder.normalizePath(destinationPath)
+            )
+            return .bestEffortRetry
+        } catch {
+            if Self.isAlreadyExists(error) {
+                return .alreadyExists
+            }
+            do {
+                if try await metadata(path: destinationPath) != nil {
+                    return .alreadyExists
+                }
+            } catch {
+                // Preserve the rename failure; the re-check only closes missed collision classifiers.
+            }
+            throw error
+        }
     }
 
     // SFTP has no native server-side copy — fall back to download+upload through a local temp.

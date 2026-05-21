@@ -1,18 +1,19 @@
 import Foundation
 import GRDB
 
-final class DatabaseManager {
+// DatabaseQueue is internally serialized; everything else here is set once in init.
+final class DatabaseManager: @unchecked Sendable {
     let dbQueue: DatabaseQueue
 
     init(databaseURL: URL? = nil) throws {
         let url = databaseURL ?? Self.defaultDatabaseURL()
         try Self.prepareDatabaseLocation(at: url)
         dbQueue = try DatabaseQueue(path: url.path)
-        try migrator.migrate(dbQueue)
+        try Self.makeMigrator().migrate(dbQueue)
         Self.enableBackgroundAccessForDatabaseFiles(at: url)
     }
 
-    private var migrator: DatabaseMigrator {
+    static func makeMigrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1_initial") { db in
             try db.create(table: ServerProfileRecord.databaseTableName) { table in
@@ -83,6 +84,24 @@ final class DatabaseManager {
                 WHERE modificationDateMs IS NOT NULL
                 """
             )
+        }
+
+        migrator.registerMigration("v3_repo_local_state") { db in
+            try db.execute(sql: "ALTER TABLE \(ServerProfileRecord.databaseTableName) ADD COLUMN writerID TEXT")
+
+            try db.create(table: RepoStateRecord.databaseTableName) { table in
+                table.column("profileID", .integer).notNull()
+                table.column("repoID", .text).notNull()
+                table.column("writerID", .text).notNull()
+                table.column("lastClock", .integer).notNull().defaults(to: 0)
+                table.column("lastSeq", .integer).notNull().defaults(to: 0)
+                table.column("migrationCompleted", .integer).notNull().defaults(to: 0)
+                table.primaryKey(["profileID", "repoID"])
+            }
+
+            // Default 0 forces a re-hash on next index build before the skip predicate trusts the row.
+            try db.execute(sql: "ALTER TABLE local_assets ADD COLUMN selectionVersion INTEGER NOT NULL DEFAULT 0")
+            try db.execute(sql: "ALTER TABLE local_assets ADD COLUMN resourceSignature BLOB")
         }
 
         return migrator
@@ -167,6 +186,10 @@ final class DatabaseManager {
 
     func deleteServerProfile(id: Int64) throws {
         try write { db in
+            try db.execute(
+                sql: "DELETE FROM \(RepoStateRecord.databaseTableName) WHERE profileID = ?",
+                arguments: [id]
+            )
             _ = try ServerProfileRecord.deleteOne(db, key: id)
         }
     }

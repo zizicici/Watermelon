@@ -5,6 +5,13 @@ import AMSMB2
 #endif
 
 final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
+    nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    // libsmb2 hard-codes `replace_if_exist=0` in `smb2_rename_async`; move to an existing destination fails.
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseInsensitive }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+
     private let config: SMBServerConfig
 
     #if canImport(AMSMB2)
@@ -39,6 +46,10 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func shouldSetModificationDate() -> Bool {
         true
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        .overwritePossible
     }
 
     func connect() async throws {
@@ -152,12 +163,6 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
                     return !Task.isCancelled
                 }
             )
-            if respectTaskCancellation, Task.isCancelled {
-                await cleanupCancelledUploadIfNeeded(
-                    remotePath: normalizedRemotePath
-                )
-                throw CancellationError()
-            }
         } catch {
             if respectTaskCancellation, Task.isCancelled {
                 await cleanupCancelledUploadIfNeeded(
@@ -298,15 +303,20 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         let components = normalized.split(separator: "/")
         for component in components {
             runningPath += "/\(component)"
-            if try await exists(path: runningPath) {
-                continue
+            if let existing = try await metadata(path: runningPath) {
+                // exists() can't tell a regular file from a dir; require a real directory or fail.
+                if existing.isDirectory {
+                    continue
+                }
+                throw RemoteStorageClientError.invalidConfiguration
             }
             do {
                 try await manager.createDirectory(atPath: runningPath)
             } catch {
-                if !(try await exists(path: runningPath)) {
-                    throw error
+                if let recheck = try? await metadata(path: runningPath), recheck.isDirectory {
+                    continue
                 }
+                throw error
             }
         }
         #else
@@ -317,6 +327,36 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
     func move(from sourcePath: String, to destinationPath: String) async throws {
         #if canImport(AMSMB2)
         try await manager.moveItem(atPath: RemotePathBuilder.normalizePath(sourcePath), toPath: RemotePathBuilder.normalizePath(destinationPath))
+        #else
+        throw RemoteStorageClientError.unavailable
+        #endif
+    }
+
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        #if canImport(AMSMB2)
+        if try await metadata(path: destinationPath) != nil {
+            return .alreadyExists
+        }
+        try Task.checkCancellation()
+        do {
+            try await manager.moveItem(
+                atPath: RemotePathBuilder.normalizePath(sourcePath),
+                toPath: RemotePathBuilder.normalizePath(destinationPath)
+            )
+            return .created
+        } catch {
+            if SMBErrorClassifier.isNameCollision(error) {
+                return .alreadyExists
+            }
+            do {
+                if try await metadata(path: destinationPath) != nil {
+                    return .alreadyExists
+                }
+            } catch {
+                // Preserve the rename failure; the re-check only closes missed collision classifiers.
+            }
+            throw error
+        }
         #else
         throw RemoteStorageClientError.unavailable
         #endif

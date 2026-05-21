@@ -206,19 +206,43 @@ final class LocalIndexBuildCoordinator {
             let cached = (try? repository.fetchAssetHashCaches(assetIDs: assetIDs)) ?? [:]
             let unfingerprinted = assetIDs.subtracting(cached.keys)
 
-            var modified = Set<String>()
+            var invalidated = Set<String>()
             if !cached.isEmpty {
                 let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(cached.keys))
                 for asset in phAssets {
-                    guard let cache = cached[asset.localIdentifier],
-                          let modificationDate = asset.modificationDate,
-                          modificationDate > cache.updatedAt
-                    else { continue }
-                    modified.insert(asset.localIdentifier)
+                    guard let cache = cached[asset.localIdentifier] else { continue }
+                    if Self.shouldProcessIncrementalAsset(asset, cache: cache) {
+                        invalidated.insert(asset.localIdentifier)
+                    }
                 }
             }
 
-            return unfingerprinted.union(modified)
+            return unfingerprinted.union(invalidated)
         }
+    }
+
+    private nonisolated static func shouldProcessIncrementalAsset(
+        _ asset: PHAsset,
+        cache: LocalAssetHashCache
+    ) -> Bool {
+        if let modificationDate = asset.modificationDate, modificationDate > cache.updatedAt {
+            return true
+        }
+        if cache.selectionVersion < BackupAssetResourcePlanner.currentSelectionVersion {
+            return true
+        }
+        guard let cachedSignature = cache.resourceSignature else { return true }
+        let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
+            from: PHAssetResource.assetResources(for: asset)
+        )
+        if cache.resourceCount != ordered.count { return true }
+        if cachedSignature != BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered) {
+            return true
+        }
+        for selected in ordered {
+            let key = AssetResourceRoleSlot(role: selected.role, slot: selected.slot)
+            if cache.hashesByRoleSlot[key] == nil { return true }
+        }
+        return false
     }
 }

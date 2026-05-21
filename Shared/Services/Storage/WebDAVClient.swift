@@ -1,6 +1,14 @@
 import Foundation
 
 final actor WebDAVClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
+    // RFC 4918 MOVE with `Overwrite: T` is implemented as rename(2) on common WebDAV servers; soft claim for typical deployments.
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .unknown }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
+    // Reverse-proxy / CDN caching can stale-cache `PROPFIND` / `GET` responses past a peer's tick interval.
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 30 }
     static let errorDomain = "WebDAVClient"
 
     struct Config {
@@ -197,6 +205,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     private let endpointPathPrefix: String
     private var isConnected = false
     private var pendingCancelledUploadCleanupPaths: [String] = []
+    private var exclusiveMoveIfAbsentSupported: Bool?
 
     private final class TransferDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         private let lock = NSLock()
@@ -678,18 +687,74 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             guard (200 ... 299).contains(response.statusCode) else {
                 throw Self.statusError(response.statusCode, method: "PUT", url: request.url)
             }
-            if respectTaskCancellation {
-                try Task.checkCancellation()
-            }
             onProgress?(1)
         } catch {
-            if Self.shouldCleanupPartialUpload(error) {
-                enqueueCancelledUploadCleanup(for: remotePath)
-            }
             if Self.isCancellationError(error) {
                 throw CancellationError()
             }
             throw error
+        }
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        // RFC 7232 compliance varies across WebDAV servers — we always send
+        // `If-None-Match: *` but a non-compliant peer could ignore it and let
+        // the upload overwrite. Report `.overwritePossible` so the gate stages
+        // via UUID + verify rather than trusting the conditional end-to-end.
+        .overwritePossible
+    }
+
+    func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool {
+        try requireConnected()
+        if let exclusiveMoveIfAbsentSupported {
+            return exclusiveMoveIfAbsentSupported
+        }
+        let supported = try await probeMoveIfAbsentExclusivity(near: destinationPath)
+        exclusiveMoveIfAbsentSupported = supported
+        return supported
+    }
+
+    func atomicCreate(
+        localURL: URL,
+        remotePath: String,
+        respectTaskCancellation: Bool,
+        onProgress: ((Double) -> Void)?
+    ) async throws -> AtomicCreateResult {
+        try requireConnected()
+        await drainPendingCancelledUploadCleanup()
+        if respectTaskCancellation { try Task.checkCancellation() }
+
+        let targetURL = try remoteURL(forRemotePath: remotePath)
+        var request = makeRequest(url: targetURL, method: "PUT")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue("*", forHTTPHeaderField: "If-None-Match")
+        do {
+            let (_, response) = try await sendUpload(request, fromFile: localURL, onProgress: onProgress)
+            if response.statusCode == 412 {
+                return .alreadyExists
+            }
+            guard (200 ... 299).contains(response.statusCode) else {
+                throw Self.statusError(response.statusCode, method: "PUT", url: request.url)
+            }
+            // 200/201/204 on .overwritePossible backends does NOT prove If-None-Match
+            // was honored — some Nextcloud versions and self-implemented WebDAV servers
+            // silently overwrite. Return .bestEffortRetry so callers (MetadataCreateGate,
+            // CommitLogWriter, ensureVersionJSON) activate their post-write verify path.
+            return .bestEffortRetry
+        } catch let storageError as RemoteStorageClientError {
+            if case .underlying(let inner) = storageError,
+               (inner as NSError).domain == WebDAVClient.errorDomain,
+               (inner as NSError).code == 412 {
+                return .alreadyExists
+            }
+            throw storageError
+        } catch {
+            if Self.isCancellationError(error) {
+                throw CancellationError()
+            }
+            // Generic transport errors stay errors — surface the actual failure to the caller
+            // instead of degrading to `.bestEffortRetry`, which would mask non-conflict faults.
+            throw RemoteStorageClientError.underlying(error)
         }
     }
 
@@ -856,6 +921,119 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
     }
 
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try requireConnected()
+        await drainPendingCancelledUploadCleanup()
+        guard try await supportsExclusiveMoveIfAbsent(forDestinationPath: destinationPath) else {
+            throw Self.nonExclusiveMoveIfAbsentError(destinationPath: destinationPath)
+        }
+
+        let sourceURL = try remoteURL(forRemotePath: sourcePath)
+        let destinationURL = try remoteURL(forRemotePath: destinationPath)
+        let request = makeRequest(
+            url: sourceURL,
+            method: "MOVE",
+            headers: [
+                "Destination": destinationURL.absoluteString,
+                "Overwrite": "F"
+            ]
+        )
+        let status = try await sendStatus(request)
+        if status == 412 {
+            return .alreadyExists
+        }
+        if status == 409 {
+            do {
+                if let metadata = try await metadata(path: destinationPath), !metadata.isDirectory {
+                    return .alreadyExists
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Surface the original MOVE status; metadata is only a compatibility re-check.
+            }
+        }
+        guard (200 ... 299).contains(status) else {
+            throw Self.statusError(status, method: "MOVE", url: request.url)
+        }
+        return .created
+    }
+
+    private func probeMoveIfAbsentExclusivity(near destinationPath: String) async throws -> Bool {
+        let token = UUID().uuidString
+        let parentPath = Self.parentPath(of: destinationPath)
+        let sourcePath = RemotePathBuilder.absolutePath(
+            basePath: parentPath,
+            remoteRelativePath: ".watermelon-move-probe-source-\(token)"
+        )
+        let existingPath = RemotePathBuilder.absolutePath(
+            basePath: parentPath,
+            remoteRelativePath: ".watermelon-move-probe-existing-\(token)"
+        )
+        let sourceBytes = Data("source-\(token)".utf8)
+        let existingBytes = Data("existing-\(token)".utf8)
+        let sourceTemp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("webdav-move-probe-source-\(token).bin")
+        let existingTemp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("webdav-move-probe-existing-\(token).bin")
+        try sourceBytes.write(to: sourceTemp, options: .atomic)
+        try existingBytes.write(to: existingTemp, options: .atomic)
+        defer {
+            try? FileManager.default.removeItem(at: sourceTemp)
+            try? FileManager.default.removeItem(at: existingTemp)
+        }
+
+        do {
+            try await upload(localURL: sourceTemp, remotePath: sourcePath, respectTaskCancellation: true, onProgress: nil)
+            try await upload(localURL: existingTemp, remotePath: existingPath, respectTaskCancellation: true, onProgress: nil)
+            let sourceURL = try remoteURL(forRemotePath: sourcePath)
+            let existingURL = try remoteURL(forRemotePath: existingPath)
+            let request = makeRequest(
+                url: sourceURL,
+                method: "MOVE",
+                headers: [
+                    "Destination": existingURL.absoluteString,
+                    "Overwrite": "F"
+                ]
+            )
+            let status = try await sendStatus(request)
+            let supported: Bool
+            if status == 412 || status == 409 {
+                let sourceUnchanged = try await remoteFileMatchesData(remotePath: sourcePath, expected: sourceBytes)
+                let existingUnchanged = try await remoteFileMatchesData(remotePath: existingPath, expected: existingBytes)
+                supported = sourceUnchanged && existingUnchanged
+            } else if (200 ... 299).contains(status) {
+                supported = false
+            } else {
+                throw Self.statusError(status, method: "MOVE", url: request.url)
+            }
+            try? await delete(path: sourcePath)
+            try? await delete(path: existingPath)
+            return supported
+        } catch is CancellationError {
+            try? await delete(path: sourcePath)
+            try? await delete(path: existingPath)
+            throw CancellationError()
+        } catch {
+            try? await delete(path: sourcePath)
+            try? await delete(path: existingPath)
+            throw error
+        }
+    }
+
+    private func remoteFileMatchesData(remotePath: String, expected: Data) async throws -> Bool {
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("webdav-move-probe-verify-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        do {
+            try await download(remotePath: remotePath, localURL: temp)
+        } catch {
+            if isStorageNotFoundError(error) { return false }
+            throw error
+        }
+        return (try? Data(contentsOf: temp)) == expected
+    }
+
     func copy(from sourcePath: String, to destinationPath: String) async throws {
         try requireConnected()
         await drainPendingCancelledUploadCleanup()
@@ -947,6 +1125,15 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         guard isConnected else {
             throw RemoteStorageClientError.notConnected
         }
+    }
+
+    private static func parentPath(of path: String) -> String {
+        let normalized = RemotePathBuilder.normalizePath(path)
+        guard let slash = normalized.lastIndex(of: "/"),
+              slash != normalized.startIndex else {
+            return "/"
+        }
+        return String(normalized[..<slash])
     }
 
     private func makeRequest(
@@ -1589,6 +1776,18 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                         statusCode,
                         target
                     )
+                ]
+            )
+        )
+    }
+
+    private static func nonExclusiveMoveIfAbsentError(destinationPath: String) -> RemoteStorageClientError {
+        .underlying(
+            NSError(
+                domain: WebDAVClient.errorDomain,
+                code: -1200,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "WebDAV MOVE Overwrite:F does not protect \(destinationPath) from overwrite"
                 ]
             )
         )

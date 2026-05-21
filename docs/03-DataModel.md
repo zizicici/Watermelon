@@ -1,4 +1,4 @@
-# 数据模型（本地 SQLite + 远端月 manifest + 内存快照）
+# 数据模型（本地 SQLite + 远端 V1/V2 元数据 + 内存快照）
 
 ## 1. 本地数据库（`DatabaseManager`）
 
@@ -6,6 +6,7 @@
 
 1. `v1_initial`
 2. `v2_ms_timestamps`
+3. `v3_repo_local_state`
 
 ### `server_profiles`
 
@@ -31,6 +32,9 @@ CREATE TABLE server_profiles (
 CREATE UNIQUE INDEX idx_server_profiles_unique_smb
 ON server_profiles(host, port, shareName, basePath, username, IFNULL(domain, ''))
 WHERE storageType = 'smb';
+
+-- v3_repo_local_state
+ALTER TABLE server_profiles ADD COLUMN writerID TEXT;
 ```
 
 说明：
@@ -39,6 +43,29 @@ WHERE storageType = 'smb';
 2. SMB 唯一性由 host/port/shareName/basePath/username/domain 决定
 3. WebDAV / S3 / SFTP / 外接存储的类型特定参数放在 `connectionParams`，结构化字段（host / port / shareName / basePath / username）尽量复用通用列
 4. SFTP 唯一性由调用方通过 `(host, port, basePath, username)` 在保存时校验（`AddSFTPStorageViewController.findExistingProfile`）；DB 层没有像 SMB 那样的部分唯一索引
+5. `writerID` 由 V2 repo 写入路径 lazy ensure；同一个 profile 跨 run 复用，作为 commit / snapshot / liveness / 迁移 marker 的 writer identity
+
+### `repo_state`
+
+`v3_repo_local_state` 新增。它把 profile 与远端 repo identity 绑定，并持久化本 writer 的 Lamport clock / commit seq 高水位。
+
+```sql
+CREATE TABLE repo_state (
+  profileID INTEGER NOT NULL,
+  repoID TEXT NOT NULL,
+  writerID TEXT NOT NULL,
+  lastClock INTEGER NOT NULL DEFAULT 0,
+  lastSeq INTEGER NOT NULL DEFAULT 0,
+  migrationCompleted INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(profileID, repoID)
+);
+```
+
+说明：
+
+1. `repoID` 来自 identity claim election / `repo-identity.json` finalization；`.watermelon/repo.json` 是 read-cache，`BackupV2RuntimeBuilder` 会拒绝本地记录与远端 observed repoID 不一致的情况
+2. `lastClock` / `lastSeq` 在 cold start 时会先与远端 materialize 的 observed clock / own-writer max seq 对齐，再继续分配
+3. `migrationCompleted` 用于 V1→V2 迁移重入；删除 profile 时会同时删除对应 `repo_state`
 
 ### `sync_state`
 
@@ -53,6 +80,7 @@ CREATE TABLE sync_state (
 当前主要用途：
 
 1. 记录 `active_server_profile_id`
+2. 按 profile 记录远端校验时间：`remote_verified_at_<profileID>`
 
 ### `local_assets`
 
@@ -77,13 +105,18 @@ WHERE modificationDateMs IS NOT NULL;
 CREATE INDEX idx_local_assets_has_fingerprint
 ON local_assets(assetLocalIdentifier)
 WHERE assetFingerprint IS NOT NULL;
+
+-- v3_repo_local_state
+ALTER TABLE local_assets ADD COLUMN selectionVersion INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE local_assets ADD COLUMN resourceSignature BLOB;
 ```
 
 说明：
 
 1. `assetFingerprint` 可为 `NULL`，表示该资产尚未完成资源级 hash 建索引（比如仅存于 iCloud 的资产）
 2. `modificationDateMs` 用来做体积缓存失效判断，上传 / 体积扫描路径都会复用（Int64 毫秒；窗口 ±2.9 亿年，足够覆盖任何 `PHAsset` 时间戳）
-3. 从老版本升上来的设备会在第一次启动 `v2_ms_timestamps` 自动完成迁移；不需要重新建索引
+3. `selectionVersion` / `resourceSignature` 由 `BackupAssetResourcePlanner` 写入，用来判断既有 hash 是否仍匹配当前资源选择规则；默认 `0` 会强制下次索引构建重新校验
+4. 从老版本升上来的设备会在第一次启动迁移时自动补齐 schema；不需要人工处理
 
 ### `local_asset_resources`
 
@@ -132,7 +165,7 @@ struct S3ConnectionParams: Codable {
 说明：
 
 1. `host` 是 S3 endpoint host（如 `s3.amazonaws.com` / `play.min.io` / 自部署 `minio.lan`）
-2. `port` 0 / 80 / 443 都视为默认端口，不会出现在 display URL 里
+2. `port = 0` 视为未指定；display URL 只隐藏当前 scheme 的默认端口（`https:443` / `http:80`），非当前 scheme 默认端口会显示
 3. `shareName` 复用为 bucket 名
 4. `basePath` 为 bucket 内的 key 前缀（默认 `/`）
 5. `username` 是 access key ID；secret access key 落 Keychain
@@ -205,7 +238,17 @@ struct ExternalVolumeConnectionParams: Codable {
 2. `contentHash` 是资源级 SHA-256
 3. `fileSize` 是资源级文件大小缓存
 
-## 4. 远端月 manifest（`MonthManifestStore`）
+## 4. 远端元数据格式
+
+当前写入路径已 cutover 到 V2。V1 per-month sqlite manifest 仍用于：
+
+1. 识别 / 迁移旧仓库
+2. `RemoteIndexSyncService` 兼容读取尚未迁移的 V1 仓库
+3. `MonthManifestStore` 的 V1 verify / 迁移辅助路径
+
+V2 仓库的 canonical metadata 位于 `.watermelon/`，由 `RepoBootstrap`、`CommitLogWriter`、`SnapshotWriter`、`RepoMaterializer` 与 `V2MonthSession` 维护；主流程不再把 `.watermelon_manifest.sqlite` 作为 V2 月份状态源。
+
+## 5. V1 远端月 manifest（`MonthManifestStore`）
 
 实现位于 `Shared/Services/Backup/`：核心入口在 `MonthManifestStore.swift`，初始化 / seed 在 `+Loading.swift`，schema 与迁移在 `+Schema.swift`。
 
@@ -261,7 +304,7 @@ CREATE INDEX idx_asset_resources_hash
 ON asset_resources(resourceHash);
 ```
 
-## 5. 远端 manifest 字段语义
+## 6. V1 manifest 字段语义
 
 ### `resources`
 
@@ -281,7 +324,20 @@ ON asset_resources(resourceHash);
 1. 连接逻辑资产与资源 hash
 2. 保留 `role / slot`，方便重建资源实例与媒体类型判定
 
-## 6. `assetFingerprint` 计算规则
+## 7. V2 repo 元数据
+
+V2 详细设计和残留项见 `docs/06-RepoV2.md`。数据模型层面只需要记住：
+
+1. `.watermelon/version.json` 声明远端格式版本和最低客户端版本
+2. `.watermelon/identity/*.json` / `.watermelon/repo-identity.json` 决定 canonical `repoID`；`.watermelon/repo.json` 是 read-cache
+3. `.watermelon/commits/{YYYY-MM}--{writerID}--{seq16}.jsonl` 记录 asset/resource upsert 与 tombstone op
+4. `.watermelon/snapshots/{YYYY-MM}--{lamport16}--{writerID}--{runIDPrefix}.jsonl` 保存月级 materialized snapshot 和 covered commit ranges
+5. `.watermelon/liveness/{writerID}.json` 用于 active writer 判断与 orphan metadata cleanup gate
+6. `.watermelon/migrations/*.json` 记录 V1→V2 迁移阶段；迁移完成后仅可能留下 cleanup residue，`RemoteFormatInspection.v2WithPendingMigrationCleanup` 会驱动前台清理
+
+`V2MonthSession` 是 V2 worker 的月份状态容器：启动时按 repoID 过滤 materialize 单月，再叠加真实月份目录 listing；flush 时先写 commit，再写 snapshot，并通过 `FlushDelta` 告诉 `RemoteIndexSyncService` 哪些 optimistic fingerprints 已 durable。
+
+## 8. `assetFingerprint` 计算规则
 
 当前规则：
 
@@ -290,7 +346,7 @@ ON asset_resources(resourceHash);
 3. 用 `\n` 连接
 4. 对最终字符串做 SHA-256
 
-## 7. 内存态远端快照
+## 9. 内存态远端快照
 
 类型都定义在 `Shared/Domain/RemoteLibraryDomain.swift`。Home 当前不直接反复扫远端文件系统，而是消费 `RemoteLibrarySnapshotCache`（`Shared/Services/Backup/`）暴露的状态。
 
@@ -301,6 +357,7 @@ struct RemoteLibrarySnapshot {
     let resources: [RemoteManifestResource]
     let assets: [RemoteManifestAsset]
     let assetResourceLinks: [RemoteAssetResourceLink]
+    let physicallyMissingHashesByMonth: [LibraryMonthKey: Set<Data>]
 }
 ```
 
@@ -318,6 +375,27 @@ struct RemoteLibraryMonthDelta {
     let resources: [RemoteManifestResource]
     let assets: [RemoteManifestAsset]
     let assetResourceLinks: [RemoteAssetResourceLink]
+    let physicallyMissingHashes: Set<Data>
+}
+```
+
+核心远端 row 里还有 V2 字段：
+
+```swift
+struct RemoteManifestAsset {
+    let assetFingerprint: Data
+    let stamp: OpStamp? // legacy / in-flight 时为 nil
+}
+
+struct RemoteManifestResource {
+    let physicalRemotePath: String
+    let contentHash: Data
+    let crypto: ResourceCryptoMetadata?
+}
+
+struct RemoteAssetResourceInstance {
+    let remoteRelativePath: String
+    let alternateRemoteRelativePaths: [String]
 }
 ```
 
@@ -337,9 +415,11 @@ struct RemoteIndexSyncDigest: Sendable {
 1. `revision` 用来让 Home 只消费“上次之后的变化”
 2. `monthDeltas` 是月级增量，不是整库重建
 3. `RemoteIndexSyncDigest` 是远端同步的廉价摘要，避免每次都把 per-asset 数组拷一份给只想看总数的调用方
-4. 这部分是内存状态，不写回 SQLite
+4. `physicallyMissingHashes*` 来自 physical-presence overlay；Home / restore 分类时要从 commit/snapshot 的逻辑行里扣掉这些已缺失资源
+5. `alternateRemoteRelativePaths` 记录同 hash 的备用物理路径，`RestoreService` 下载 primary 失败时会 fallback
+6. 这部分是内存状态，不写回 SQLite
 
-## 8. Keychain 与会话密码
+## 10. Keychain 与会话密码
 
 1. 密码不写入 SQLite
 2. 通过 `KeychainService`（`Shared/Data/Security/KeychainService.swift`）保存

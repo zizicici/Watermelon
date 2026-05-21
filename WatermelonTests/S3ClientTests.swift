@@ -306,7 +306,15 @@ final class S3ClientTests: XCTestCase {
             .init(partNumber: 3, etag: "\"ghi\"", size: 512)
         ]
         let xml = S3Client.buildCompleteMultipartXML(parts: parts)
-        XCTAssertEqual(xml, "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>\"abc\"</ETag></Part><Part><PartNumber>2</PartNumber><ETag>\"def\"</ETag></Part><Part><PartNumber>3</PartNumber><ETag>\"ghi\"</ETag></Part></CompleteMultipartUpload>")
+        XCTAssertEqual(xml, "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>&quot;abc&quot;</ETag></Part><Part><PartNumber>2</PartNumber><ETag>&quot;def&quot;</ETag></Part><Part><PartNumber>3</PartNumber><ETag>&quot;ghi&quot;</ETag></Part></CompleteMultipartUpload>")
+    }
+
+    func testCompleteMultipartXMLEscapesSpecialCharacters() {
+        let parts: [S3Client.UploadedPart] = [
+            .init(partNumber: 1, etag: "a&b<c>d'e\"f", size: 10)
+        ]
+        let xml = S3Client.buildCompleteMultipartXML(parts: parts)
+        XCTAssertEqual(xml, "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>a&amp;b&lt;c&gt;d&apos;e&quot;f</ETag></Part></CompleteMultipartUpload>")
     }
 
     func testMultipartThresholdConstantsMatchAWSBounds() {
