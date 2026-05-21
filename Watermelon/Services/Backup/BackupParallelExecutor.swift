@@ -696,7 +696,7 @@ struct BackupParallelExecutor: Sendable {
                                 ),
                                 unless: error
                             )
-                            if isSnapshotWriteFailed {
+                            if isSnapshotWriteFailed && shouldFinishMonth {
                                 // Commit durable; snapshot deferred. Month must not emit `.completed`.
                                 eventStream.emit(.monthChanged(MonthChangeEvent(
                                     year: monthKey.year,
@@ -705,7 +705,7 @@ struct BackupParallelExecutor: Sendable {
                                         metadataSnapshotDeferredMessage: profile.userFacingStorageErrorMessage(error)
                                     ))
                                 )))
-                            } else {
+                            } else if !isSnapshotWriteFailed {
                                 throw error
                             }
                         }

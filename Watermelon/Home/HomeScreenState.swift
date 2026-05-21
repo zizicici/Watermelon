@@ -245,6 +245,9 @@ struct MonthPlan {
             refreshTerminalPhaseProjection()
         case .recordIncomplete(let summary):
             failureFacts.recordIncomplete(summary)
+            if summary.metadataSnapshotDeferredMessage != nil {
+                workFacts.uploadFinished = true
+            }
             refreshTerminalPhaseProjection()
         case .recordTerminalFailure(let failure):
             failureFacts.recordTerminalFailure(failure)

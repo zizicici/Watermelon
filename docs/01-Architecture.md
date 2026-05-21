@@ -290,7 +290,7 @@
 - `supportsLivenessSafeOverwriteMove` —— `client.move` 到既有路径是否在目的地做原子替换（同伴永不观察到路径缺失）。LocalVolume（POSIX `rename(2)`）/ S3（CopyObject + DeleteObject，目的地按对象原子替换）/ WebDAV（RFC 4918 `MOVE` + `Overwrite: T`，主流实现走 `rename(2)`）为 `true`；SMB（libsmb2 `smb2_rename_async` 硬编码 `replace_if_exist=0`）/ SFTP（v3 `rename` 拒绝既有目的地）为 `false`。无默认 —— 协议强制每个后端显式声明
 - `supportsLivenessSafeRenewal` —— 派生自 `supportsLivenessSafeOverwriteUpload || supportsLivenessSafeOverwriteMove`：至少一条续期路径安全则为 `true`。SMB 与 SFTP 两路均不安全，因此为 `false`；为 `false` 时 `BackupV2RuntimeBuilder` 必须跳过 orphan sweep（心跳一旦失活，同伴会把我们的 writerID 判为陈旧，进而删除正在写入的 staging）。`BackupV2RuntimeBuilder` 消费
 - `readAfterWriteGraceSeconds` —— 共享 read-after-write 容忍预算，被 `MetadataCreateGate.metadataReadAfterWriteDeadline` 与 `LivenessTracker.snapshotPeerStatuses` 共同消费。S3 / WebDAV `30`（R2 / MinIO / B2 / CDN 反代场景）；其他后端 `0`
-- `backendNameCaseSensitivity` —— `.caseSensitive` / `.caseInsensitive` / `.unknown`，`presenceKey(for:)` extension 折叠
+- `backendNameCaseSensitivity` —— `.caseSensitive` / `.caseInsensitive` / `.unknown`，`presenceKey(for:)` exact for `.caseSensitive` / `.unknown`，folded for `.caseInsensitive`
 - `concurrencyMode` —— `.concurrent` vs `.serialOnly`（SMB / SFTP），`SerialOperationsClient` 包裹
 
 新增能力位必须按其实际承载的语义命名（原语 vs coordination 安全），避免出现"原语命名 + coordination 取值"的错位。

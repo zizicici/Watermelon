@@ -258,7 +258,7 @@ struct HomeExecutionSession {
         let message = String(localized: "home.execution.notConnected")
         applyEvent(
             .recordTerminalFailure(MonthTerminalFailure(kind: .missingConnection, message: message)),
-            where: { !$0.isTerminal }
+            where: { !$0.isFullyCompleted && !$0.failureFacts.hasTerminalFailure && ($0.hasPendingDownloadWork || $0.needsUpload && !$0.workFacts.uploadFinished) }
         )
         phase = .failed(message)
         return AlertMessage(title: String(localized: "common.error"), message: message)
@@ -336,7 +336,7 @@ struct HomeExecutionSession {
     ) -> AlertMessage {
         applyEvent(
             .recordTerminalFailure(MonthTerminalFailure(kind: kind, message: reason)),
-            where: { !$0.isTerminal }
+            where: { !$0.isFullyCompleted && !$0.failureFacts.hasTerminalFailure && ($0.hasPendingDownloadWork || $0.needsUpload && !$0.workFacts.uploadFinished) }
         )
         phase = .failed(reason)
         return AlertMessage(title: String(localized: "common.error"), message: reason)

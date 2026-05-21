@@ -620,7 +620,7 @@ enum RemoteFileNaming {
 
 extension BackendNameCaseSensitivity {
     /// Key callers compare for "is this leaf present on the remote".
-    /// Case-insensitive and unknown backends fold; case-sensitive backends use the raw name.
+    /// Case-insensitive backends fold; case-sensitive and unknown backends use the raw name.
     func presenceKey(for fileName: String) -> String {
         usesExactNameMatchingForPresence ? fileName : RemoteFileNaming.collisionKey(for: fileName)
     }
