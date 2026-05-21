@@ -24,6 +24,11 @@ struct RemoteAlbumItem {
     var isRestorable: Bool {
         integrityState.allowsRestore
     }
+
+    var isFingerprintMismatch: Bool {
+        if case .fingerprintMismatch = integrityState { return true }
+        return false
+    }
 }
 
 enum HomeAlbumMatching {

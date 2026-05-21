@@ -740,14 +740,21 @@ final class HomeExecutionCoordinator {
         phaseLabel: String
     ) -> BackupMonthFinalizationResult {
         switch result {
-        case .success(_, let skippedIncompleteCount, let unverifiedFingerprintCount):
-            if skippedIncompleteCount > 0 || unverifiedFingerprintCount > 0 {
+        case .success(_, let skippedIncompleteCount, let fingerprintMismatchCount, let unverifiedFingerprintCount):
+            if skippedIncompleteCount > 0 || fingerprintMismatchCount > 0 || unverifiedFingerprintCount > 0 {
                 var parts: [String] = []
                 if skippedIncompleteCount > 0 {
                     parts.append(String.localizedStringWithFormat(
                         String(localized: "restore.log.skippedIncomplete"),
                         month.displayText,
                         skippedIncompleteCount
+                    ))
+                }
+                if fingerprintMismatchCount > 0 {
+                    parts.append(String.localizedStringWithFormat(
+                        String(localized: "restore.log.fingerprintMismatch"),
+                        month.displayText,
+                        fingerprintMismatchCount
                     ))
                 }
                 if unverifiedFingerprintCount > 0 {

@@ -25,10 +25,11 @@ final class DownloadWorkflowHelper {
         onItemRestored: @MainActor @escaping (String) async -> Void
     ) async -> DownloadMonthResult {
         let toRestore = remoteItems.filter(\.isRestorable)
-        let skippedIncompleteCount = remoteItems.count - toRestore.count
+        let fingerprintMismatchCount = remoteItems.filter(\.isFingerprintMismatch).count
+        let skippedIncompleteCount = remoteItems.count - toRestore.count - fingerprintMismatchCount
 
         guard !toRestore.isEmpty else {
-            return .success(restoredCount: 0, skippedIncompleteCount: skippedIncompleteCount, unverifiedFingerprintCount: 0)
+            return .success(restoredCount: 0, skippedIncompleteCount: skippedIncompleteCount, fingerprintMismatchCount: fingerprintMismatchCount, unverifiedFingerprintCount: 0)
         }
 
         let verifier = dependencies.restoredAssetFingerprintVerifier
@@ -82,6 +83,7 @@ final class DownloadWorkflowHelper {
             return .success(
                 restoredCount: restored.count,
                 skippedIncompleteCount: skippedIncompleteCount,
+                fingerprintMismatchCount: fingerprintMismatchCount,
                 unverifiedFingerprintCount: await unverifiedTracker.count
             )
         } catch {
@@ -103,7 +105,7 @@ final class DownloadWorkflowHelper {
 }
 
 enum DownloadMonthResult {
-    case success(restoredCount: Int, skippedIncompleteCount: Int, unverifiedFingerprintCount: Int)
+    case success(restoredCount: Int, skippedIncompleteCount: Int, fingerprintMismatchCount: Int, unverifiedFingerprintCount: Int)
     case failed(DownloadMonthFailure)
     case cancelled
 }

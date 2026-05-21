@@ -193,4 +193,29 @@ final class MonthPlanStateMachineTests: XCTestCase {
         XCTAssertTrue(combined.contains(skippedPart), "combined reason should include skipped part")
         XCTAssertTrue(combined.contains(unverifiedPart), "combined reason should include unverified part")
     }
+
+    func testFingerprintMismatchStringDiffersFromOtherDownloadStrings() {
+        let mismatch = String(localized: "restore.log.fingerprintMismatch")
+        let skipped = String(localized: "restore.log.skippedIncomplete")
+        let unverified = String(localized: "restore.log.unverifiedFingerprint")
+        XCTAssertNotEqual(mismatch, skipped)
+        XCTAssertNotEqual(mismatch, unverified)
+    }
+
+    func testCombinedReasonIncludesFingerprintMismatchPart() {
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        let skippedPart = String.localizedStringWithFormat(
+            String(localized: "restore.log.skippedIncomplete"),
+            month.displayText,
+            1
+        )
+        let mismatchPart = String.localizedStringWithFormat(
+            String(localized: "restore.log.fingerprintMismatch"),
+            month.displayText,
+            2
+        )
+        let combined = [skippedPart, mismatchPart].joined(separator: ". ")
+        XCTAssertTrue(combined.contains(skippedPart), "combined reason should include skipped part")
+        XCTAssertTrue(combined.contains(mismatchPart), "combined reason should include mismatch part")
+    }
 }
