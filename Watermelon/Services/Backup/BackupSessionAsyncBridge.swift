@@ -19,7 +19,7 @@ final class BackupSessionAsyncBridge {
         )
         case paused
         case stopped
-        case failed(String)
+        case failed(String, failedCountByMonth: [LibraryMonthKey: Int], incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary])
         case startFailed
     }
 
@@ -148,7 +148,11 @@ final class BackupSessionAsyncBridge {
             )
         case .paused:    result = .paused
         case .stopped:   result = .stopped
-        case .failed:    result = .failed(snapshot.statusText)
+        case .failed:    result = .failed(
+                snapshot.statusText,
+                failedCountByMonth: snapshot.failedCountByMonth,
+                incompleteSummaryByMonth: snapshot.incompleteSummaryByMonth
+            )
         default:         result = nil
         }
 

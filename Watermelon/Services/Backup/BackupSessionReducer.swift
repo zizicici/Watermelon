@@ -204,9 +204,7 @@ struct BackupSessionState {
         controlPhase = .resuming
         currentRunMode = pausedDisplayMode
         statusText = String(localized: "backup.session.resuming")
-        incompleteSummaryByMonth.removeAll()
         processedCountByMonth.removeAll()
-        failedCountByMonth.removeAll()
         return BackupSessionResumeContext(pausedMode: pausedMode, pausedDisplayMode: pausedDisplayMode)
     }
 
@@ -303,6 +301,7 @@ struct BackupSessionState {
                 startedMonths.insert(monthKey)
                 completedMonths.remove(monthKey)
                 incompleteSummaryByMonth.removeValue(forKey: monthKey)
+                failedCountByMonth.removeValue(forKey: monthKey)
             case .completed:
                 completedMonths.insert(monthKey)
                 incompleteSummaryByMonth.removeValue(forKey: monthKey)
@@ -414,7 +413,8 @@ struct BackupSessionState {
         pendingRunConfiguration = nil
         state = .completed
         completedAssetIDsForResume.removeAll()
-        statusText = completedStatusText(runMode: runMode, failedCount: result.failed)
+        let effectiveFailed = max(result.failed, failedCountByMonth.values.reduce(0, +))
+        statusText = completedStatusText(runMode: runMode, failedCount: effectiveFailed)
     }
 
     private func completedStatusText(runMode: BackupRunMode, failedCount: Int) -> String {

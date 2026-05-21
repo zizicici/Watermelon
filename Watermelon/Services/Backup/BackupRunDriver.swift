@@ -92,6 +92,8 @@ final class BackupRunDriver {
                 )
                 _ = try await self.backupCoordinator.runBackup(request: request, eventStream: eventStream)
             } catch {
+                eventStream.finish()
+                await self.drainActiveEventListener()
                 await onError(
                     error,
                     capturedRunToken,
@@ -107,6 +109,10 @@ final class BackupRunDriver {
 
     func cancelRunTask() {
         runTask?.cancel()
+    }
+
+    func drainActiveEventListener() async {
+        await eventListenerTask?.value
     }
 
     func clearActiveRunState() {

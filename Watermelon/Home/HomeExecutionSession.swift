@@ -226,8 +226,12 @@ struct HomeExecutionSession {
             pauseUploadPhaseMonths()
             return .paused
 
-        case .failed(let message):
+        case .failed(let message, let failedCountByMonth, let incompleteSummaryByMonth):
             recordUploadTargetsTerminalFailure(kind: .uploadRunFailed, message: message)
+            for (month, failedCount) in failedCountByMonth where failedCount > 0 {
+                monthPlans[month]?.apply(.recordUploadFailures(observedFailedItemCount: failedCount))
+            }
+            recordMonthIncompleteSummaries(incompleteSummaryByMonth)
             phase = .failed(message)
             return .failed(AlertMessage(title: String(localized: "home.execution.uploadFailed"), message: message))
 
@@ -370,8 +374,7 @@ struct HomeExecutionSession {
     ) {
         let uploadTargets = Set(backupMonths).union(complementMonths)
         for month in uploadTargets {
-            let phase = monthPlans[month]?.phase
-            guard phase != .uploadDone && phase != .completed && phase != .partiallyFailed else { continue }
+            guard let plan = monthPlans[month], !plan.isTerminal, plan.phase != .uploadDone else { continue }
             monthPlans[month]?.apply(.recordTerminalFailure(MonthTerminalFailure(kind: kind, message: message)))
         }
     }

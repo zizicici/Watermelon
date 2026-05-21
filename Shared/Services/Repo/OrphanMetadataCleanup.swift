@@ -60,6 +60,10 @@ enum OrphanMetadataCleanup {
             SweepDirectory(
                 path: RepoLayout.migrationsDirectoryPath(base: basePath),
                 parseWriter: { RepoLayout.parseMigrationMarkerFilename($0)?.writerID }
+            ),
+            SweepDirectory(
+                path: RepoLayout.retentionDirectoryPath(base: basePath),
+                parseWriter: { RetentionManifestStore.parseFilename($0)?.writerID }
             )
         ]
     }

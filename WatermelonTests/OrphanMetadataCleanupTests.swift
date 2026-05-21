@@ -104,7 +104,7 @@ final class OrphanMetadataCleanupTests: XCTestCase {
     /// fails loud.
     func testStandardSweepDirectories_parsersMatchFilenameShapes() {
         let dirs = OrphanMetadataCleanup.standardSweepDirectories(basePath: basePath)
-        XCTAssertEqual(dirs.count, 6, "standardSweepDirectories shape changed; update test cases too")
+        XCTAssertEqual(dirs.count, 7, "standardSweepDirectories shape changed; update test cases too")
 
         let cases: [(dirPath: String, sampleName: String, expectedWriter: String?)] = [
             (
@@ -136,6 +136,16 @@ final class OrphanMetadataCleanupTests: XCTestCase {
                 RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]),
                 "repo.json",
                 nil   // root .watermelon/ pairing is mtime-only (nil parser)
+            ),
+            (
+                RepoLayout.retentionDirectoryPath(base: basePath),
+                RetentionManifestStore.filename(for: RetentionManifestRef(
+                    month: LibraryMonthKey(year: 2025, month: 6),
+                    lamport: 1,
+                    writerID: writerA,
+                    runIDPrefix: "a1b2c3"
+                )),
+                writerA
             )
         ]
         for testCase in cases {

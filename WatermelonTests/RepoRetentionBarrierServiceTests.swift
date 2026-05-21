@@ -257,7 +257,7 @@ final class RepoRetentionBarrierServiceTests: XCTestCase {
         XCTAssertEqual(retention, [:])
     }
 
-    func testNoRetentionRuntimeHookOrOrphanSweepIntegration() throws {
+    func testRetentionSweepIntegrationLivesInCorrectModules() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -284,8 +284,7 @@ final class RepoRetentionBarrierServiceTests: XCTestCase {
 
         let cleanup = root.appendingPathComponent("Shared/Services/Repo/OrphanMetadataCleanup.swift")
         let cleanupSource = try String(contentsOf: cleanup, encoding: .utf8)
-        XCTAssertFalse(cleanupSource.contains("retentionDirectory"))
-        XCTAssertFalse(cleanupSource.contains(".watermelon/retention"))
+        XCTAssertTrue(cleanupSource.contains("retentionDirectory"))
     }
 
     private func makeClient() async throws -> InMemoryRemoteStorageClient {

@@ -132,6 +132,7 @@ enum MetadataCreateGate {
                     respectTaskCancellation: respectTaskCancellation
                 )
             } catch {
+                try? await client.delete(path: stagingPath)
                 if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 throw error
             }

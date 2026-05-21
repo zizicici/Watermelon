@@ -65,11 +65,122 @@ final class BackupSessionReducerTests: XCTestCase {
 
         _ = state.prepareForResume()
 
-        XCTAssertTrue(state.failedCountByMonth.isEmpty)
+        XCTAssertEqual(state.failedCountByMonth[month], 3)
         XCTAssertTrue(state.processedCountByMonth.isEmpty)
-        XCTAssertTrue(state.incompleteSummaryByMonth.isEmpty)
+        XCTAssertNotNil(state.incompleteSummaryByMonth[month])
         XCTAssertEqual(state.state, .running)
         XCTAssertEqual(state.controlPhase, .resuming)
+    }
+
+    // MARK: - resume preserves incomplete summaries
+
+    func testResumePreservesIncompleteSummaryAndFinishedRunReportsPartial() {
+        var state = BackupSessionState()
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        state.incompleteSummaryByMonth[month] = BackupMonthIncompleteSummary(
+            downloadIssues: DownloadIssueSummary(skippedIncompleteCount: 1)
+        )
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+
+        _ = state.prepareForResume()
+
+        XCTAssertNotNil(state.incompleteSummaryByMonth[month])
+
+        let _ = state.reduce(
+            event: .finished(BackupExecutionResult(
+                total: 1, succeeded: 1, failed: 0, skipped: 0, paused: false
+            )),
+            runMode: .full,
+            displayMode: .full,
+            terminalIntent: .none
+        )
+
+        XCTAssertEqual(state.state, .completed)
+        XCTAssertEqual(state.statusText, String(localized: "backup.session.backupCompletedPartial"))
+    }
+
+    func testResumeStartedMonthClearsIncompleteSummary() {
+        var state = BackupSessionState()
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        state.incompleteSummaryByMonth[month] = BackupMonthIncompleteSummary(
+            downloadIssues: DownloadIssueSummary(skippedIncompleteCount: 2)
+        )
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+
+        _ = state.prepareForResume()
+
+        XCTAssertNotNil(state.incompleteSummaryByMonth[month])
+
+        let _ = state.reduce(
+            event: .monthChanged(MonthChangeEvent(
+                year: month.year, month: month.month, action: .started
+            )),
+            runMode: .full,
+            displayMode: .full,
+            terminalIntent: .none
+        )
+
+        XCTAssertNil(state.incompleteSummaryByMonth[month])
+    }
+
+    func testResumeFinishedRunWithPreservedFailedCountReportsPartial() {
+        var state = BackupSessionState()
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        state.failedCountByMonth[month] = 1
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+
+        _ = state.prepareForResume()
+
+        XCTAssertNotNil(state.failedCountByMonth[month])
+
+        let _ = state.reduce(
+            event: .finished(BackupExecutionResult(
+                total: 1, succeeded: 1, failed: 0, skipped: 0, paused: false
+            )),
+            runMode: .full,
+            displayMode: .full,
+            terminalIntent: .none
+        )
+
+        XCTAssertEqual(state.state, .completed)
+        XCTAssertEqual(state.statusText, String(localized: "backup.session.backupCompletedPartial"))
+    }
+
+    func testResumeStartedMonthClearsFailedCountByMonth() {
+        var state = BackupSessionState()
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        state.failedCountByMonth[month] = 5
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+
+        _ = state.prepareForResume()
+
+        XCTAssertEqual(state.failedCountByMonth[month], 5)
+
+        reduce(&state, .monthChanged(MonthChangeEvent(
+            year: month.year, month: month.month, action: .started
+        )))
+
+        XCTAssertNil(state.failedCountByMonth[month])
+    }
+
+    func testResumeNoPendingWorkPreservesFailedCountByMonthInSnapshot() {
+        var state = BackupSessionState()
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        state.failed = 1
+        state.failedCountByMonth[month] = 1
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+
+        _ = state.prepareForResume()
+        state.completeResumeWithoutPendingWork()
+
+        XCTAssertEqual(state.state, .completed)
+        let snapshot = state.snapshot()
+        XCTAssertEqual(snapshot.failedCountByMonth[month], 1)
     }
 
     // MARK: - cancelResume
