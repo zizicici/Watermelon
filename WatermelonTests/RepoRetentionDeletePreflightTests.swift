@@ -243,6 +243,66 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
             return false
         })
 
+        let agedMaskedByFresh = try await makeClient()
+        try await writeCommits(client: agedMaskedByFresh, seqs: 1...2)
+        let oldCovered = coveredRanges([(1, 1)])
+        let oldSnapshot = try await writeSnapshot(client: agedMaskedByFresh, covered: oldCovered, lamport: 10)
+        try await writeBarrier(
+            client: agedMaskedByFresh,
+            covered: oldCovered,
+            lamport: 10,
+            checkpointSHA256Hex: oldSnapshot.sha256Hex
+        )
+        let freshCovered = coveredRanges([(1, 2)])
+        let freshSnapshot = try await writeSnapshot(client: agedMaskedByFresh, covered: freshCovered, lamport: 11)
+        try await writeBarrier(
+            client: agedMaskedByFresh,
+            covered: freshCovered,
+            lamport: 11,
+            createdAtMs: nowMs - 1_000,
+            checkpointSHA256Hex: freshSnapshot.sha256Hex
+        )
+
+        result = try await service(client: agedMaskedByFresh).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+        let plan = try requirePlan(result)
+        XCTAssertEqual(plan.deletePrefixByWriter, [writerA: 1])
+        XCTAssertEqual(plan.preDeleteEvidence.retainedBarrierUnionCovered, oldCovered)
+        XCTAssertEqual(plan.commitFiles.map(\.seq), [1])
+
+        let agedMaskedByFuture = try await makeClient()
+        try await writeCommits(client: agedMaskedByFuture, seqs: 1...2)
+        let oldFutureSnapshot = try await writeSnapshot(client: agedMaskedByFuture, covered: oldCovered, lamport: 10)
+        try await writeBarrier(
+            client: agedMaskedByFuture,
+            covered: oldCovered,
+            lamport: 10,
+            checkpointSHA256Hex: oldFutureSnapshot.sha256Hex
+        )
+        let futureMaskedSnapshot = try await writeSnapshot(client: agedMaskedByFuture, covered: freshCovered, lamport: 11)
+        try await writeBarrier(
+            client: agedMaskedByFuture,
+            covered: freshCovered,
+            lamport: 11,
+            createdAtMs: nowMs + 10 * 60 * 1_000,
+            checkpointSHA256Hex: futureMaskedSnapshot.sha256Hex
+        )
+
+        result = try await service(client: agedMaskedByFuture).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+        XCTAssertTrue(blockers(in: result).contains { blocker in
+            if case .barrierCreatedInFuture = blocker { return true }
+            return false
+        })
+
         let activePeer = try await makeClient()
         try await writeCommits(client: activePeer, seqs: 1...1)
         let activeSnapshot = try await writeSnapshot(client: activePeer, covered: covered)
@@ -946,6 +1006,7 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
         month: LibraryMonthKey? = nil,
         repoID: String? = nil,
         covered: CoveredRanges,
+        lamport: UInt64? = nil,
         deletePrefixByWriter: [String: UInt64]? = nil,
         createdAtMs: Int64? = nil,
         checkpointSHA256Hex: String = String(repeating: "a", count: 64),
@@ -954,6 +1015,7 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
     ) async throws {
         let targetMonth = month ?? self.month
         let targetRepoID = repoID ?? self.repoID
+        let targetLamport = lamport ?? snapshotLamport
         let manifest = RetentionManifest(
             version: RetentionManifest.currentVersion,
             repoID: targetRepoID,
@@ -961,10 +1023,10 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
             createdByWriterID: writerA,
             runID: UUID(uuidString: runID)!,
             createdAtMs: createdAtMs ?? oldBarrierCreatedAtMs,
-            barrierLamport: snapshotLamport,
+            barrierLamport: targetLamport,
             checkpointSnapshotName: RepoLayout.snapshotFileName(
                 month: targetMonth,
-                lamport: snapshotLamport,
+                lamport: targetLamport,
                 writerID: writerA,
                 runID: runID
             ),

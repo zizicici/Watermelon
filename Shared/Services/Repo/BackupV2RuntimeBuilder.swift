@@ -22,7 +22,7 @@ enum BackupV2RuntimeBuilder {
         onMigrationStart: (() async -> Void)? = nil,
         onMigrationComplete: ((Int) async -> Void)? = nil,
         onBootstrap: (() async -> Void)? = nil,
-        retentionRuntimeMode: RepoRetentionRuntimeMode = .disabled
+        compactionPolicy: RepoCompactionPolicy = .default
     ) async throws -> BackupV2RuntimeServices {
         guard let profileID = profile.id else {
             throw BackupV2RuntimeBuildError.profileMissingID
@@ -182,13 +182,14 @@ enum BackupV2RuntimeBuilder {
         try await lamport.repairPoisonedDBIfNeeded()
         let initialMaterialize: RepoMaterializer.MaterializeOutput? = output
 
+        let isLocalVolume = profile.resolvedStorageType == .externalVolume
         let liveness = LivenessTracker(
             client: metadataClient,
             basePath: profile.basePath,
             writerID: writerID,
-            isLocalVolume: profile.resolvedStorageType == .externalVolume,
+            isLocalVolume: isLocalVolume,
             retentionCapability: metadataClient.supportsLivenessSafeRenewal
-                ? retentionRuntimeMode.retentionPeerCapability
+                ? RepoRetentionRuntimeDefaults.peerCapability
                 : nil
         )
         var sweepTask: Task<Void, Never>? = nil
@@ -225,7 +226,7 @@ enum BackupV2RuntimeBuilder {
             }
         }
 
-        return BackupV2RuntimeServices(
+        let services = BackupV2RuntimeServices(
             writerID: writerID,
             repoID: resolvedRepoID,
             runID: runID,
@@ -237,12 +238,23 @@ enum BackupV2RuntimeBuilder {
             commitWriter: commitWriter,
             snapshotWriter: snapshotWriter,
             liveness: liveness,
-            retentionRuntimeMode: retentionRuntimeMode,
+            compactionPolicy: compactionPolicy,
+            isLocalVolume: isLocalVolume,
             metadataClient: metadataClient,
             ownsMetadataClient: ownsMetadataClient,
             initialMaterializeOutput: InitialMaterializeOutputBox(initialMaterialize),
             sweepTask: sweepTask
         )
+        if runMaintenanceTasks {
+            do {
+                _ = try await RepoRetentionStartupMaintenance(services: services).run()
+            } catch is CancellationError {
+                await services.shutdown()
+                throw CancellationError()
+            } catch {
+            }
+        }
+        return services
     }
 
     private static func resolveAndPublishIdentityForShapedRepo(

@@ -211,17 +211,22 @@ struct RepoRetentionDeletePreflightService: Sendable {
         if !barrierLoad.isComplete {
             blockers.append(.invalidBarrierSet(barrierLoad.invalid))
         }
-        if barrierLoad.barrierSet.unsuperseded.isEmpty {
+        let allBarrierSet = barrierLoad.barrierSet
+        if allBarrierSet.unsuperseded.isEmpty {
             blockers.append(.emptyBarrierSet)
+        }
+        blockers.append(contentsOf: barrierFutureBlockers(barrierSet: allBarrierSet, nowMs: nowMs))
+        let barrierSet = deletionEligibleBarrierSet(validManifests: barrierLoad.valid, nowMs: nowMs)
+        if barrierSet.unsuperseded.isEmpty {
+            blockers.append(contentsOf: barrierTooYoungBlockers(barrierSet: allBarrierSet, nowMs: nowMs))
         }
         if !blockers.isEmpty {
             return .blocked(blockers: blockers, report: report)
         }
 
-        let composedLivenessGate = barrierLoad.barrierSet.composedLivenessGate
+        let composedLivenessGate = barrierSet.composedLivenessGate
         report.composedLivenessGate = composedLivenessGate
-        blockers.append(contentsOf: try await barrierCheckpointEvidenceBlockers(barrierSet: barrierLoad.barrierSet))
-        blockers.append(contentsOf: barrierAgeBlockers(barrierSet: barrierLoad.barrierSet, nowMs: nowMs))
+        blockers.append(contentsOf: try await barrierCheckpointEvidenceBlockers(barrierSet: barrierSet))
         blockers.append(contentsOf: try await livenessBlockers(
             composedGate: composedLivenessGate,
             nowMs: nowMs,
@@ -267,10 +272,10 @@ struct RepoRetentionDeletePreflightService: Sendable {
         report.acceptedSnapshot = acceptedSnapshot
         report.materializedCovered = materializedCovered
         report.observedSeqByWriter = materialized.observedSeqByWriter
-        guard acceptedSnapshot.covered.superset(of: barrierLoad.barrierSet.unionCovered) else {
+        guard acceptedSnapshot.covered.superset(of: barrierSet.unionCovered) else {
             return .blocked(blockers: [.acceptedSnapshotMissingBarrierCoverage], report: report)
         }
-        let barrierObservedSeq = barrierObservedSeqHighByWriter(barrierSet: barrierLoad.barrierSet)
+        let barrierObservedSeq = barrierObservedSeqHighByWriter(barrierSet: barrierSet)
         let observedRegressionBlockers = observedSeqRegressionBlockers(
             required: barrierObservedSeq,
             observed: materialized.observedSeqByWriter
@@ -296,7 +301,7 @@ struct RepoRetentionDeletePreflightService: Sendable {
 
         let deletePrefix = deletePrefixByWriter(
             acceptedSnapshot: acceptedSnapshot,
-            barrierSet: barrierLoad.barrierSet,
+            barrierSet: barrierSet,
             plannerPrefix: monthReport?.deletePrefixByWriter ?? [:]
         )
         report.deletePrefixByWriter = deletePrefix
@@ -335,12 +340,12 @@ struct RepoRetentionDeletePreflightService: Sendable {
             materializedCovered: materializedCovered,
             observedSeqByWriter: materialized.observedSeqByWriter,
             acceptedSnapshot: acceptedSnapshot,
-            retainedBarrierUnionCovered: barrierLoad.barrierSet.unionCovered,
+            retainedBarrierUnionCovered: barrierSet.unionCovered,
             postDeleteEquivalenceContract: RepoRetentionPostDeleteEquivalenceContract(
                 mode: .retentionSuperset,
                 acceptedSnapshotFilename: acceptedSnapshot.filename,
                 acceptedSnapshotCovered: acceptedSnapshot.covered,
-                retainedBarrierUnionCovered: barrierLoad.barrierSet.unionCovered,
+                retainedBarrierUnionCovered: barrierSet.unionCovered,
                 requiredObservedSeqByWriter: requiredObservedSeqByWriter,
                 expectedDeletePrefixByWriter: deletePrefix,
                 preDeleteCovered: materializedCovered,
@@ -351,7 +356,7 @@ struct RepoRetentionDeletePreflightService: Sendable {
             month: month,
             repoID: repoID,
             acceptedSnapshot: acceptedSnapshot,
-            barrierSet: barrierLoad.barrierSet,
+            barrierSet: barrierSet,
             composedLivenessGate: composedLivenessGate,
             livenessDecision: report.livenessDecision ?? RetentionDeletionSafetyDecision(blockers: [], evaluatedAtMs: nowMs),
             deletePrefixByWriter: deletePrefix,
@@ -360,6 +365,16 @@ struct RepoRetentionDeletePreflightService: Sendable {
             preDeleteEvidence: evidence
         )
         return .planned(plan: plan, report: report)
+    }
+
+    private func deletionEligibleBarrierSet(
+        validManifests: [RetentionManifest],
+        nowMs: Int64
+    ) -> RetentionBarrierSet {
+        let minAgeMs = Int64(policy.retentionStalenessThresholdSeconds) * 1000
+        return RetentionBarrierSet.unsuperseded(manifests: validManifests.filter { manifest in
+            nowMs - manifest.createdAtMs >= minAgeMs
+        })
     }
 
     private func barrierCheckpointEvidenceBlockers(
@@ -453,7 +468,21 @@ struct RepoRetentionDeletePreflightService: Sendable {
         }
     }
 
-    private func barrierAgeBlockers(
+    private func barrierFutureBlockers(
+        barrierSet: RetentionBarrierSet,
+        nowMs: Int64
+    ) -> [RepoRetentionDeletePreflightBlocker] {
+        var blockers: [RepoRetentionDeletePreflightBlocker] = []
+        for manifest in barrierSet.unsuperseded {
+            let filename = RetentionManifestStore.filename(for: manifest.ref)
+            if manifest.createdAtMs > nowMs + barrierClockSkewToleranceMs {
+                blockers.append(.barrierCreatedInFuture(filename: filename, createdAtMs: manifest.createdAtMs))
+            }
+        }
+        return blockers
+    }
+
+    private func barrierTooYoungBlockers(
         barrierSet: RetentionBarrierSet,
         nowMs: Int64
     ) -> [RepoRetentionDeletePreflightBlocker] {
@@ -461,9 +490,8 @@ struct RepoRetentionDeletePreflightService: Sendable {
         var blockers: [RepoRetentionDeletePreflightBlocker] = []
         for manifest in barrierSet.unsuperseded {
             let filename = RetentionManifestStore.filename(for: manifest.ref)
-            if manifest.createdAtMs > nowMs + barrierClockSkewToleranceMs {
-                blockers.append(.barrierCreatedInFuture(filename: filename, createdAtMs: manifest.createdAtMs))
-            } else if nowMs - manifest.createdAtMs < minAgeMs {
+            if manifest.createdAtMs <= nowMs + barrierClockSkewToleranceMs,
+               nowMs - manifest.createdAtMs < minAgeMs {
                 blockers.append(.barrierTooYoung(filename: filename, createdAtMs: manifest.createdAtMs))
             }
         }

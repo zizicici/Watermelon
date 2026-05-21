@@ -2,25 +2,11 @@ import XCTest
 @testable import Watermelon
 
 final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
-    func testDisabledModePerformsZeroIO() async throws {
-        let inner = InMemoryRemoteStorageClient()
-        let spy = ExecutorSpyClient(inner: inner, basePath: basePath)
-
-        let result = try await executor(client: spy, mode: .disabled).execute(
-            month: month,
-            expectedRepoID: repoID.uppercased(),
-            nowMs: nowMs
-        )
-
-        XCTAssertEqual(result, .disabled)
-        XCTAssertEqual(spy.totalCallCount, 0)
-    }
-
     func testBlockedPreflightPerformsNoDelete() async throws {
         let inner = try await makeClient()
         let spy = ExecutorSpyClient(inner: inner, basePath: basePath)
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
                 month: month,
                 expectedRepoID: repoID,
                 nowMs: nowMs
@@ -55,7 +41,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
         }
         let spy = ExecutorSpyClient(inner: inner, basePath: basePath)
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -92,7 +78,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
             try await inner.delete(path: deletePath)
         }
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -128,7 +114,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
             }
         }
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -157,7 +143,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
             }
         }
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -182,7 +168,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
         let spy = ExecutorSpyClient(inner: inner, basePath: basePath)
         spy.setDeleteHook { _ in throw Self.transportError() }
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -214,7 +200,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
             try await inner.delete(path: path)
         }
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -255,7 +241,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
             }
         }
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -291,7 +277,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
             try await inner.delete(path: path)
         }
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -316,7 +302,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
     func testCancellationBeforeFirstDeleteIsCleanAndZeroMutation() async throws {
         let inner = try await makeReadyClient(seqs: 1...1, covered: coveredRanges([(1, 1)]))
         let spy = ExecutorSpyClient(inner: inner, basePath: basePath)
-        let service = executor(client: spy, mode: .commitPrefixDeletionEnabled)
+        let service = executor(client: spy)
 
         let task = Task {
             try await service.execute(month: month, expectedRepoID: repoID, nowMs: nowMs)
@@ -336,7 +322,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
         let spy = ExecutorSpyClient(inner: inner, basePath: basePath)
         spy.setDeleteHook { _ in throw CancellationError() }
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -368,7 +354,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
             }
         }
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -399,7 +385,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
             )
         }
 
-        let result = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        let result = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -417,7 +403,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
         let inner = try await makeReadyClient(seqs: 1...1, covered: coveredRanges([(1, 1)]))
         let spy = ExecutorSpyClient(inner: inner, basePath: basePath)
 
-        _ = try await executor(client: spy, mode: .commitPrefixDeletionEnabled).execute(
+        _ = try await executor(client: spy).execute(
             month: month,
             expectedRepoID: repoID,
             nowMs: nowMs
@@ -432,7 +418,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
         })
     }
 
-    func testNoProductionCallerOrRuntimeWiring() throws {
+    func testProductionWiringOnlyUsesCheckpointBarrierHook() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -448,13 +434,12 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
         let callSites = try productionFiles.filter { $0.path != executorPath }.compactMap { url -> String? in
             let text = try String(contentsOf: url, encoding: .utf8)
             let constructsExecutor = text.contains("RepoRetentionCommitDeleteExecutor(")
-            let enablesMode = text.contains("commitPrefixDeletionEnabled")
             let constructsPreflight = text.contains("RepoRetentionDeletePreflightService(")
-            return constructsExecutor || enablesMode || constructsPreflight
+            return constructsExecutor || constructsPreflight
                 ? relativePath(root: root, url: url)
                 : nil
         }.sorted()
-        XCTAssertEqual(callSites, [])
+        XCTAssertEqual(callSites, ["Shared/Services/Repo/RepoCheckpointBarrierHook.swift"])
     }
 
     private func makeReadyClient(seqs: ClosedRange<UInt64>, covered: CoveredRanges) async throws -> InMemoryRemoteStorageClient {
@@ -494,13 +479,11 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
     }
 
     private func executor(
-        client: any RemoteStorageClientProtocol,
-        mode: RepoRetentionDeleteExecutionMode
+        client: any RemoteStorageClientProtocol
     ) -> RepoRetentionCommitDeleteExecutor {
         RepoRetentionCommitDeleteExecutor(
             client: client,
             basePath: basePath,
-            mode: mode,
             policy: policy,
             isLocalVolume: false,
             peerStatusProvider: { .empty }

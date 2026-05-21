@@ -28,7 +28,8 @@ struct BackupV2RuntimeServices: Sendable {
     let commitWriter: CommitLogWriter
     let snapshotWriter: SnapshotWriter
     let liveness: LivenessTracker
-    let retentionRuntimeMode: RepoRetentionRuntimeMode
+    let compactionPolicy: RepoCompactionPolicy
+    let isLocalVolume: Bool
     /// Dedicated connection for V2 metadata writes — sharing with worker uploads would
     /// serialize them at the wire, breaking the pool's "1 worker = 1 connection" invariant.
     let metadataClient: any RemoteStorageClientProtocol

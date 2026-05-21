@@ -1,12 +1,6 @@
 import Foundation
 
-enum RepoRetentionDeleteExecutionMode: Equatable, Sendable {
-    case disabled
-    case commitPrefixDeletionEnabled
-}
-
 enum RepoRetentionCommitDeleteResult: Equatable, Sendable {
-    case disabled
     case preflightBlocked(blockers: [RepoRetentionDeletePreflightBlocker], report: RepoRetentionDeletePreflightReport)
     case completed(
         summary: RepoRetentionCommitDeleteSummary,
@@ -80,7 +74,6 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
 
     let client: any RemoteStorageClientProtocol
     let basePath: String
-    let mode: RepoRetentionDeleteExecutionMode
     private let policy: RepoCompactionPolicy
     private let isLocalVolume: Bool
     private let barrierClockSkewToleranceMs: Int64
@@ -89,7 +82,6 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        mode: RepoRetentionDeleteExecutionMode = .disabled,
         policy: RepoCompactionPolicy = .default,
         isLocalVolume: Bool,
         barrierClockSkewToleranceMs: Int64 = 5 * 60 * 1000,
@@ -100,7 +92,6 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         let effectiveClient = wrapIfSerial(client)
         self.client = effectiveClient
         self.basePath = basePath
-        self.mode = mode
         self.policy = policy
         self.isLocalVolume = isLocalVolume
         self.barrierClockSkewToleranceMs = barrierClockSkewToleranceMs
@@ -112,9 +103,6 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         expectedRepoID: String,
         nowMs: Int64
     ) async throws -> RepoRetentionCommitDeleteResult {
-        guard mode == .commitPrefixDeletionEnabled else {
-            return .disabled
-        }
         try Task.checkCancellation()
 
         let repoID = canonicalRepoIDForRetentionDelete(expectedRepoID)

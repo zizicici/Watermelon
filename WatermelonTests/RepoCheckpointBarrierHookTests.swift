@@ -3,24 +3,17 @@ import XCTest
 @testable import Watermelon
 
 final class RepoCheckpointBarrierHookTests: XCTestCase {
-    func testRuntimeModeFactoriesDefaultOff() {
-        XCTAssertFalse(RepoRetentionRuntimeMode.disabled.barrierAwareSessionRefresh)
-        XCTAssertFalse(RepoRetentionRuntimeMode.disabled.checkpointBarrierHook)
-        XCTAssertEqual(RepoRetentionRuntimeMode.disabled.compactionPolicy, .default)
-
-        XCTAssertTrue(RepoRetentionRuntimeMode.barrierAwareSessionRefreshOnly.barrierAwareSessionRefresh)
-        XCTAssertFalse(RepoRetentionRuntimeMode.barrierAwareSessionRefreshOnly.checkpointBarrierHook)
-
-        let hookMode = RepoRetentionRuntimeMode.checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 0))
-        XCTAssertTrue(hookMode.barrierAwareSessionRefresh)
-        XCTAssertTrue(hookMode.checkpointBarrierHook)
-        XCTAssertEqual(hookMode.compactionPolicy.checkpointCommitThreshold, 0)
+    func testRuntimeDefaultsAdvertiseFullRetentionCapability() {
+        XCTAssertEqual(
+            RepoRetentionRuntimeDefaults.peerCapability,
+            RetentionPeerCapability(barrierAwareSessionRefresh: true, checkpointBarrierHook: true)
+        )
     }
 
     func testDirectHookSkipsWithoutRetentionWrite() async throws {
         let empty = try await makeClient()
         let emptyResult = try await RepoCheckpointBarrierHook(
-            services: try await makeServices(client: empty, mode: .checkpointBarrierHookOnly(policy: policy())),
+            services: try await makeServices(client: empty, policy: policy()),
             month: month
         ).run()
         XCTAssertEqual(emptyResult.outcome, .skippedEmptyFold)
@@ -32,12 +25,16 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         let belowResult = try await RepoCheckpointBarrierHook(
             services: try await makeServices(
                 client: below,
-                mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 10))
+                policy: policy(checkpointCommitThreshold: 10)
             ),
             month: month
         ).run()
         XCTAssertEqual(belowResult.outcome, .skippedBelowThreshold)
         XCTAssertNil(belowResult.barrier)
+        guard case .preflightBlocked(let blockers, _)? = belowResult.deleteResult else {
+            return XCTFail("expected empty retention preflight block, got \(String(describing: belowResult.deleteResult))")
+        }
+        XCTAssertTrue(blockers.contains(.emptyBarrierSet))
         let belowRetentionCount = await retentionFiles(below).count
         XCTAssertEqual(belowRetentionCount, 0)
     }
@@ -50,7 +47,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         let result = try await RepoCheckpointBarrierHook(
             services: try await makeServices(
                 client: client,
-                mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 1))
+                policy: policy(checkpointCommitThreshold: 1)
             ),
             month: month
         ).run()
@@ -67,6 +64,13 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         let retentionCount = await retentionFiles(inner).count
         XCTAssertEqual(retentionCount, 1)
         XCTAssertEqual(client.deleteCount(), 0)
+        guard case .preflightBlocked(let blockers, _)? = result.deleteResult else {
+            return XCTFail("expected fresh barrier preflight block, got \(String(describing: result.deleteResult))")
+        }
+        XCTAssertTrue(blockers.contains {
+            if case .barrierTooYoung = $0 { return true }
+            return false
+        })
 
         let materialized = try await RepoMaterializer(client: inner, basePath: basePath)
             .materializeMonth(month, expectedRepoID: repoID)
@@ -87,7 +91,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         let result = try await RepoCheckpointBarrierHook(
             services: try await makeServices(
                 client: client,
-                mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 1))
+                policy: policy(checkpointCommitThreshold: 1)
             ),
             month: month
         ).run()
@@ -96,6 +100,102 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         XCTAssertEqual(result.barrier?.writeOutcome, .alreadyExistedSameBytes)
         let retentionCount = await retentionFiles(inner).count
         XCTAssertEqual(retentionCount, 1)
+    }
+
+    func testProductionDefaultHookDeletesAuthorizedCommitPrefixAfterBarrier() async throws {
+        let client = try await makeClient()
+        try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xB3)
+
+        let result = try await RepoCheckpointBarrierHook(
+            services: try await makeServices(
+                client: client,
+                policy: policy(
+                    checkpointCommitThreshold: 0,
+                    retentionStalenessThresholdSeconds: 0
+                )
+            ),
+            month: month
+        ).run()
+
+        XCTAssertEqual(result.outcome, .checkpointWrittenBarrierPublished)
+        guard case .completed(let summary, _, .passed(_))? = result.deleteResult else {
+            return XCTFail("expected completed commit-prefix deletion, got \(String(describing: result.deleteResult))")
+        }
+        XCTAssertEqual(summary.deleted.map(\.seq), [1])
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerID, seq: 1)
+        let commitExists = await client.hasFile(commitPath)
+        XCTAssertFalse(commitExists)
+        let materialized = try await RepoMaterializer(client: client, basePath: basePath)
+            .materializeMonth(month, expectedRepoID: repoID)
+        XCTAssertEqual(materialized.acceptedSnapshotBaselinesByMonth[month]?.filename, result.checkpoint.snapshotName)
+    }
+
+    func testProductionDefaultHookTreatsPreflightBlockedDeletionAsNonFatal() async throws {
+        let inner = try await makeClient()
+        let client = HookTestRemoteClient(inner: inner)
+        try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xB4)
+
+        let result = try await RepoCheckpointBarrierHook(
+            services: try await makeServices(
+                client: client,
+                policy: policy(checkpointCommitThreshold: 0)
+            ),
+            month: month
+        ).run()
+
+        XCTAssertEqual(result.outcome, .checkpointWrittenBarrierPublished)
+        guard case .preflightBlocked(let blockers, _)? = result.deleteResult else {
+            return XCTFail("expected preflight blocked deletion, got \(String(describing: result.deleteResult))")
+        }
+        XCTAssertTrue(blockers.contains {
+            if case .barrierTooYoung = $0 { return true }
+            return false
+        })
+        XCTAssertEqual(client.deleteCount(), 0)
+    }
+
+    func testHookRetriesAgedBarrierDeletionWhenCheckpointBelowThreshold() async throws {
+        let client = try await makeClient()
+        try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xB5)
+        let services = try await makeServices(
+            client: client,
+            policy: policy(checkpointCommitThreshold: 99, retentionStalenessThresholdSeconds: 60)
+        )
+        _ = try await writeCheckpointBarrier(client: client, services: services, createdAtMs: 1)
+
+        let result = try await RepoCheckpointBarrierHook(services: services, month: month).run()
+
+        XCTAssertEqual(result.outcome, .skippedBelowThreshold)
+        guard case .completed(let summary, _, .passed(_))? = result.deleteResult else {
+            return XCTFail("expected aged barrier deletion on skipped checkpoint, got \(String(describing: result.deleteResult))")
+        }
+        XCTAssertEqual(summary.deleted.map(\.seq), [1])
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerID, seq: 1)
+        let commitExists = await client.hasFile(commitPath)
+        XCTAssertFalse(commitExists)
+    }
+
+    func testStartupMaintenanceDeletesInactiveMonthWithAgedBarrier() async throws {
+        let client = try await makeClient()
+        try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xB6)
+        let services = try await makeServices(
+            client: client,
+            policy: policy(checkpointCommitThreshold: 99, retentionStalenessThresholdSeconds: 60)
+        )
+        _ = try await writeCheckpointBarrier(client: client, services: services, createdAtMs: 1)
+
+        let results = try await RepoRetentionStartupMaintenance(
+            services: services,
+            nowMs: { 120_000 }
+        ).run()
+
+        guard case .completed(let summary, _, .passed(_))? = results[month] else {
+            return XCTFail("expected startup maintenance deletion, got \(String(describing: results[month]))")
+        }
+        XCTAssertEqual(summary.deleted.map(\.seq), [1])
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerID, seq: 1)
+        let commitExists = await client.hasFile(commitPath)
+        XCTAssertFalse(commitExists)
     }
 
     func testDirectHookPropagatesCheckpointFailureWithoutBarrier() async throws {
@@ -108,7 +208,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
             _ = try await RepoCheckpointBarrierHook(
                 services: try await makeServices(
                     client: client,
-                    mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 1))
+                    policy: policy(checkpointCommitThreshold: 1)
                 ),
                 month: month
             ).run()
@@ -130,7 +230,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
             _ = try await RepoCheckpointBarrierHook(
                 services: try await makeServices(
                     client: client,
-                    mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 1))
+                    policy: policy(checkpointCommitThreshold: 1)
                 ),
                 month: month
             ).run()
@@ -166,7 +266,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
             _ = try await RepoCheckpointBarrierHook(
                 services: try await makeServices(
                     client: raceClient,
-                    mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 0))
+                    policy: policy(checkpointCommitThreshold: 0)
                 ),
                 month: month
             ).run()
@@ -185,7 +285,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
             _ = try await RepoCheckpointBarrierHook(
                 services: try await makeServices(
                     client: cancelClient,
-                    mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 1))
+                    policy: policy(checkpointCommitThreshold: 1)
                 ),
                 month: month
             ).run()
@@ -194,23 +294,12 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         }
     }
 
-    func testRuntimeDisabledAndEnabledHookBehavior() async throws {
-        let disabledInner = try await makeClient()
-        let disabledClient = HookTestRemoteClient(inner: disabledInner)
-        let disabledSession = try await makeDirtySession(client: disabledClient, mode: .disabled, assetByte: 0xE1)
-        let disabledDelta = try await disabledSession.flushToRemote()
-        XCTAssertTrue(disabledDelta.didFlush)
-        let disabledRetentionCount = await retentionFiles(disabledInner).count
-        let disabledSnapshotCount = await snapshotFiles(disabledInner).count
-        XCTAssertEqual(disabledRetentionCount, 0)
-        XCTAssertEqual(disabledSnapshotCount, 1)
-        XCTAssertEqual(disabledClient.listCount(path: RepoLayout.retentionDirectoryPath(base: basePath)), 0)
-
+    func testRuntimeHookDefaultOnAndCheckpointPolicyControlsBarrierWrites() async throws {
         let skippedInner = try await makeClient()
         let skippedClient = HookTestRemoteClient(inner: skippedInner)
         let skippedSession = try await makeDirtySession(
             client: skippedClient,
-            mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 1)),
+            policy: policy(checkpointCommitThreshold: 1),
             assetByte: 0xE2
         )
         let skippedDelta = try await skippedSession.flushToRemote()
@@ -224,7 +313,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         let enabledClient = HookTestRemoteClient(inner: enabledInner)
         let enabledSession = try await makeDirtySession(
             client: enabledClient,
-            mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 0)),
+            policy: policy(checkpointCommitThreshold: 0),
             assetByte: 0xE3
         )
         let enabledDelta = try await enabledSession.flushToRemote()
@@ -240,7 +329,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         let ignoreClient = HookTestRemoteClient(inner: ignoreInner)
         let ignoreSession = try await makeDirtySession(
             client: ignoreClient,
-            mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 0)),
+            policy: policy(checkpointCommitThreshold: 0),
             assetByte: 0xF1
         )
         _ = try await ignoreSession.flushToRemote(ignoreCancellation: true)
@@ -253,7 +342,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         let commitOnlyClient = HookTestRemoteClient(inner: commitOnlyInner)
         let commitOnlySession = try await makeDirtySession(
             client: commitOnlyClient,
-            mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 0)),
+            policy: policy(checkpointCommitThreshold: 0),
             assetByte: 0xF2
         )
         _ = try await commitOnlySession.commitPendingAssetToRemote(ignoreCancellation: false)
@@ -271,7 +360,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         }
         let (session, fingerprint) = try await makeDirtySessionWithAssetFingerprint(
             client: client,
-            mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 0)),
+            policy: policy(checkpointCommitThreshold: 0),
             assetByte: 0x63,
             logLines: logger
         )
@@ -301,7 +390,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         }
         let failingSession = try await makeDirtySession(
             client: failingClient,
-            mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 0)),
+            policy: policy(checkpointCommitThreshold: 0),
             assetByte: 0x61,
             logLines: logger
         )
@@ -318,7 +407,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         let cancelClient = HookTestRemoteClient(inner: cancelInner)
         let cancelSession = try await makeDirtySession(
             client: cancelClient,
-            mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 0)),
+            policy: policy(checkpointCommitThreshold: 0),
             assetByte: 0x62
         )
         cancelClient.cancelAtomicCreate(containing: RepoLayout.snapshotsDirectoryPath(base: basePath), afterMatches: 1)
@@ -338,7 +427,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         }
         let (session, fingerprint) = try await makeDirtySessionWithAssetFingerprint(
             client: client,
-            mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 0)),
+            policy: policy(checkpointCommitThreshold: 0),
             assetByte: 0x64,
             logLines: logger
         )
@@ -362,7 +451,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         let client = HookTestRemoteClient(inner: inner)
         let firstSession = try await makeDirtySession(
             client: client,
-            mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 0)),
+            policy: policy(checkpointCommitThreshold: 0),
             assetByte: 0x65
         )
         _ = try await firstSession.flushToRemote()
@@ -372,7 +461,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
 
         let secondServices = try await makeServices(
             client: client,
-            mode: .checkpointBarrierHookOnly(policy: policy(checkpointCommitThreshold: 99))
+            policy: policy(checkpointCommitThreshold: 99)
         )
         let secondSession = try await V2MonthSession.loadOrCreate(
             client: client,
@@ -394,13 +483,13 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
 
     private func makeDirtySession(
         client: any RemoteStorageClientProtocol,
-        mode: RepoRetentionRuntimeMode,
+        policy: RepoCompactionPolicy,
         assetByte: UInt8,
         logLines: MonthManifestStepLogger? = nil
     ) async throws -> V2MonthSession {
         try await makeDirtySessionWithAssetFingerprint(
             client: client,
-            mode: mode,
+            policy: policy,
             assetByte: assetByte,
             logLines: logLines
         ).session
@@ -408,11 +497,11 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
 
     private func makeDirtySessionWithAssetFingerprint(
         client: any RemoteStorageClientProtocol,
-        mode: RepoRetentionRuntimeMode,
+        policy: RepoCompactionPolicy,
         assetByte: UInt8,
         logLines: MonthManifestStepLogger? = nil
     ) async throws -> (session: V2MonthSession, fingerprint: Data) {
-        let services = try await makeServices(client: client, mode: mode)
+        let services = try await makeServices(client: client, policy: policy)
         let session = try await V2MonthSession.loadOrCreate(
             client: client,
             basePath: basePath,
@@ -429,7 +518,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
 
     private func makeServices(
         client: any RemoteStorageClientProtocol,
-        mode: RepoRetentionRuntimeMode
+        policy: RepoCompactionPolicy
     ) async throws -> BackupV2RuntimeServices {
         let dbURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("checkpoint-barrier-\(UUID().uuidString).sqlite")
@@ -456,7 +545,8 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
             commitWriter: CommitLogWriter(client: client, basePath: basePath),
             snapshotWriter: SnapshotWriter(client: client, basePath: basePath),
             liveness: LivenessTracker(client: client, basePath: basePath, writerID: writerID, isLocalVolume: true),
-            retentionRuntimeMode: mode,
+            compactionPolicy: policy,
+            isLocalVolume: true,
             metadataClient: client,
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),
@@ -565,12 +655,41 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         return try CommitLogReader.parse(localURL: temp)
     }
 
-    private func policy(checkpointCommitThreshold: Int = 1) -> RepoCompactionPolicy {
+    @discardableResult
+    private func writeCheckpointBarrier(
+        client: InMemoryRemoteStorageClient,
+        services: BackupV2RuntimeServices,
+        createdAtMs: Int64
+    ) async throws -> RepoRetentionBarrierPublishResult {
+        let checkpoint = try await RepoCheckpointService(
+            client: client,
+            basePath: basePath,
+            repoID: repoID,
+            writerID: writerID,
+            runID: runID,
+            clock: services.lamport,
+            policy: services.compactionPolicy
+        ).checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+        return try await RepoRetentionBarrierService(
+            client: client,
+            basePath: basePath,
+            repoID: repoID,
+            writerID: writerID,
+            runID: runID,
+            policy: services.compactionPolicy,
+            nowMs: { createdAtMs }
+        ).publishBarrier(for: checkpoint, respectTaskCancellation: true)
+    }
+
+    private func policy(
+        checkpointCommitThreshold: Int = 1,
+        retentionStalenessThresholdSeconds: Int = 86_400
+    ) -> RepoCompactionPolicy {
         RepoCompactionPolicy(
             checkpointCommitThreshold: checkpointCommitThreshold,
             checkpointByteThreshold: Int64.max,
             minimumCheckpointIntervalSeconds: 0,
-            retentionStalenessThresholdSeconds: 86_400,
+            retentionStalenessThresholdSeconds: retentionStalenessThresholdSeconds,
             legacyClientGraceSeconds: 604_800,
             snapshotFallbackKeepCount: 2
         )

@@ -170,7 +170,7 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         XCTAssertEqual(lhs, rhs)
     }
 
-    func testDeletionDefaultsDisabledAndNoProductionEnablement() throws {
+    func testDeletionProductionEnablementStaysBehindSafetyGateAndHook() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -180,14 +180,16 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         XCTAssertFalse(gateSource.contains("300"))
         XCTAssertFalse(gateSource.contains("300000"))
 
-        // commitPrefixDeletionEnabled must only appear in the executor definition and test code.
+        let hookSource = try source(root, "Shared/Services/Repo/RepoCheckpointBarrierHook.swift")
+        XCTAssertTrue(hookSource.contains("RepoRetentionCommitDeleteExecutor("))
+
         for path in try FileManager.default.subpathsOfDirectory(atPath: root.path)
-        where path.hasSuffix(".swift") && !path.hasPrefix("WatermelonTests/") && path != "Shared/Services/Repo/RepoRetentionDeleteExecutor.swift" {
+        where path.hasSuffix(".swift") && !path.hasPrefix("WatermelonTests/") {
             let text = try source(root, path)
             XCTAssertFalse(text.contains("commitPrefixDeletionEnabled"), "commitPrefixDeletionEnabled unexpectedly present in \(path)")
         }
 
-        // Production callers of BackupV2RuntimeBuilder.build() must not pass retentionRuntimeMode.
+        // Production callers of BackupV2RuntimeBuilder.build() must not carry retention off-mode overrides.
         let productionBuildCallers = [
             "Watermelon/Services/Backup/BackupRunPreparation.swift",
             "Watermelon/Services/Backup/BackgroundBackupRunner.swift"
@@ -195,6 +197,7 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         for path in productionBuildCallers {
             let text = try source(root, path)
             XCTAssertFalse(text.contains("retentionRuntimeMode:"), "retentionRuntimeMode unexpectedly passed in \(path)")
+            XCTAssertFalse(text.contains("RepoRetentionRuntimeMode"), "retention runtime mode unexpectedly referenced in \(path)")
         }
 
         for path in [

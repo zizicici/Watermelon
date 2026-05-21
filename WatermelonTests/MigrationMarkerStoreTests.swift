@@ -515,6 +515,16 @@ final class MigrationMarkerStoreTests: XCTestCase {
         XCTAssertFalse(any)
     }
 
+    func testExistsAny_trueWhenMarkerShapedDirectoryExists() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: validWriterID)
+        try await client.createDirectory(path: markerPath)
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+        let any = try await store.existsAny()
+        XCTAssertTrue(any)
+    }
+
 
     func testWritePhase_unique4AttemptsExhausted_throws43() async throws {
         let client = InMemoryRemoteStorageClient()

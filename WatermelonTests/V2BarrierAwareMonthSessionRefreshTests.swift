@@ -60,7 +60,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
     func testEnabledInvalidBarrierFailsClosedBeforeCommitWrite() async throws {
         let client = try await makeClient()
         try await injectBarrier(client: client, repoID: foreignRepoID, writerID: writerB, runID: runB, seq: 1, lamport: 10)
-        let services = try await makeV2Services(client: client, mode: .barrierAwareSessionRefreshOnly)
+        let services = try await makeV2Services(client: client)
         let session = try await V2MonthSession.loadOrCreate(
             client: client,
             basePath: basePath,
@@ -85,7 +85,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
     func testEnabledInvalidBarrierFailsClosedBeforeSnapshotWrite() async throws {
         let client = try await makeClient()
         try await injectBarrier(client: client, repoID: foreignRepoID, writerID: writerB, runID: runB, seq: 1, lamport: 10)
-        let services = try await makeV2Services(client: client, mode: .barrierAwareSessionRefreshOnly)
+        let services = try await makeV2Services(client: client)
         let session = try await V2MonthSession.loadOrCreate(
             client: client,
             basePath: basePath,
@@ -111,33 +111,10 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         XCTAssertEqual(counts.snapshots, 0)
     }
 
-    func testDisabledModeIgnoresInvalidRetentionBarrier() async throws {
-        let client = try await makeClient()
-        let hooked = HookedRemoteStorageClient(inner: client)
-        try await injectBarrier(client: client, repoID: foreignRepoID, writerID: writerB, runID: runB, seq: 1, lamport: 10)
-        let services = try await makeV2Services(client: hooked, mode: .disabled)
-        let session = try await V2MonthSession.loadOrCreate(
-            client: hooked,
-            basePath: basePath,
-            year: month.year,
-            month: month.month,
-            v2Services: services
-        )
-        let rows = makeAssetRows(hashByte: 0xD1, name: "disabled.jpg")
-        _ = try session.upsertResource(rows.resource)
-        try session.upsertAsset(rows.asset, links: [rows.link])
-
-        let delta = try await session.flushToRemote(ignoreCancellation: false)
-        XCTAssertTrue(delta.didFlush)
-        let counts = await repoMetadataCounts(client)
-        XCTAssertEqual(counts.commits, 1)
-        XCTAssertEqual(hooked.listCount(path: RepoLayout.retentionDirectoryPath(base: basePath)), 0)
-    }
-
     func testInvalidBarrierAfterCommitSurfacesSnapshotWriteFailedWithCommittedFingerprints() async throws {
         let client = try await makeClient()
         let hooked = HookedRemoteStorageClient(inner: client)
-        let services = try await makeV2Services(client: hooked, mode: .barrierAwareSessionRefreshOnly)
+        let services = try await makeV2Services(client: hooked)
         let session = try await V2MonthSession.loadOrCreate(
             client: hooked,
             basePath: basePath,
@@ -190,7 +167,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
             path: "2026/05/old-same-writer.jpg"
         )
         try await injectBarrier(client: client, repoID: repoID, writerID: writerA, runID: runA, seq: 9, lamport: 100)
-        let services = try await makeV2Services(client: client, mode: .barrierAwareSessionRefreshOnly, initialSeq: 1)
+        let services = try await makeV2Services(client: client, initialSeq: 1)
         let session = try await V2MonthSession.loadOrCreate(
             client: client,
             basePath: basePath,
@@ -226,7 +203,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         )
         try await injectBarrier(client: client, repoID: repoID, writerID: writerB, runID: runB, seq: 4, lamport: 80)
         let hooked = HookedRemoteStorageClient(inner: client)
-        let services = try await makeV2Services(client: hooked, mode: .barrierAwareSessionRefreshOnly)
+        let services = try await makeV2Services(client: hooked)
         let session = try await V2MonthSession.loadOrCreate(
             client: hooked,
             basePath: basePath,
@@ -261,7 +238,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         hooked.setListHook(path: RepoLayout.retentionDirectoryPath(base: basePath)) { _, _ in
             throw CancellationError()
         }
-        let services = try await makeV2Services(client: hooked, mode: .barrierAwareSessionRefreshOnly)
+        let services = try await makeV2Services(client: hooked)
         let session = try await V2MonthSession.loadOrCreate(
             client: hooked,
             basePath: basePath,
@@ -298,7 +275,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         )
         try await injectBarrier(client: client, repoID: repoID, writerID: writerB, runID: runB, seq: 3, lamport: 70)
         let hooked = HookedRemoteStorageClient(inner: client)
-        let services = try await makeV2Services(client: hooked, mode: .barrierAwareSessionRefreshOnly)
+        let services = try await makeV2Services(client: hooked)
         let session = try await V2MonthSession.loadOrCreate(
             client: hooked,
             basePath: basePath,
@@ -337,7 +314,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         )
         try await injectBarrier(client: client, repoID: repoID, writerID: writerB, runID: runB, seq: 5, lamport: 90)
         let hooked = HookedRemoteStorageClient(inner: client)
-        let services = try await makeV2Services(client: hooked, mode: .barrierAwareSessionRefreshOnly)
+        let services = try await makeV2Services(client: hooked)
         let session = try await V2MonthSession.loadOrCreate(
             client: hooked,
             basePath: basePath,
@@ -376,7 +353,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
     func testSnapshotFreshCoverageMissingBarrierFailsBeforeSnapshotWrite() async throws {
         let client = try await makeClient()
         try await injectBarrier(client: client, repoID: repoID, writerID: writerB, runID: runB, seq: 44, lamport: 120)
-        let services = try await makeV2Services(client: client, mode: .barrierAwareSessionRefreshOnly)
+        let services = try await makeV2Services(client: client)
         let session = try await V2MonthSession.loadOrCreate(
             client: client,
             basePath: basePath,
@@ -422,7 +399,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
             path: "2026/05/original.jpg"
         )
 
-        let services = try await makeV2Services(client: client, mode: .barrierAwareSessionRefreshOnly, initialSeq: 1)
+        let services = try await makeV2Services(client: client, initialSeq: 1)
         let session = try await V2MonthSession.loadOrCreate(
             client: client,
             basePath: basePath,
@@ -474,7 +451,6 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
 
     private func makeV2Services(
         client: any RemoteStorageClientProtocol,
-        mode: RepoRetentionRuntimeMode,
         initialSeq: UInt64 = 0
     ) async throws -> BackupV2RuntimeServices {
         let profileID = try TestFixtures.insertServerProfile(
@@ -499,7 +475,8 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
             commitWriter: CommitLogWriter(client: client, basePath: basePath),
             snapshotWriter: SnapshotWriter(client: client, basePath: basePath),
             liveness: LivenessTracker(client: client, basePath: basePath, writerID: writerA, isLocalVolume: true),
-            retentionRuntimeMode: mode,
+            compactionPolicy: .default,
+            isLocalVolume: true,
             metadataClient: client,
             ownsMetadataClient: true,
             initialMaterializeOutput: InitialMaterializeOutputBox(nil),

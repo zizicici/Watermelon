@@ -40,6 +40,8 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
             onBootstrap: { bootstrapCalled = true }
         )
         XCTAssertTrue(bootstrapCalled, "fresh path must invoke onBootstrap")
+        XCTAssertEqual(services.compactionPolicy, .default)
+        XCTAssertFalse(services.isLocalVolume)
         XCTAssertFalse(services.repoID.isEmpty)
         XCTAssertFalse(services.writerID.isEmpty)
         let repoExists = await client.hasFile(RepoLayout.repoFilePath(base: basePath))
@@ -731,8 +733,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
             metadataClient: metadataClient,
             profile: profile,
             databaseManager: databaseManager,
-            allowMigration: false,
-            retentionRuntimeMode: .barrierAwareSessionRefreshOnly
+            allowMigration: false
         )
         defer { Task { await services.shutdown() } }
 
@@ -740,7 +741,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         let heartbeat = try LivenessHeartbeat.decode(body)
         XCTAssertEqual(
             heartbeat.retention,
-            RetentionPeerCapability(barrierAwareSessionRefresh: true, checkpointBarrierHook: false)
+            RetentionPeerCapability(barrierAwareSessionRefresh: true, checkpointBarrierHook: true)
         )
     }
 
@@ -760,8 +761,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
             metadataClient: metadataClient,
             profile: profile,
             databaseManager: databaseManager,
-            allowMigration: false,
-            retentionRuntimeMode: .checkpointBarrierHookOnly(policy: .default)
+            allowMigration: false
         )
         defer { Task { await services.shutdown() } }
 

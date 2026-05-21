@@ -2,20 +2,6 @@ import XCTest
 @testable import Watermelon
 
 final class RepoRetentionDeleteExecutorTests: XCTestCase {
-    func testDisabledModeReturnsDisabledAndPerformsZeroStorageCalls() async throws {
-        let inner = try await makeReadyClient()
-        let spy = StorageCallSpyClient(inner: inner)
-
-        let result = try await executor(client: spy, mode: .disabled).execute(
-            month: month,
-            expectedRepoID: repoID,
-            nowMs: nowMs
-        )
-
-        XCTAssertEqual(result, .disabled)
-        XCTAssertEqual(spy.allCalls().count, 0)
-    }
-
     func testSuccessDeletesOnlyFreshAuthorizedCommitCandidatesAndVerifies() async throws {
         let inner = try await makeReadyClient()
         try await writeCommit(client: inner, writerID: writerA, seq: 0, ops: [])
@@ -314,15 +300,13 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
         XCTAssertEqual(verification, .inconclusive(reason: .repoIdentityReadFailed))
     }
 
-    func testNoRuntimeWiringDefaultEnablementOrBroadDeletionAPIs() throws {
+    func testRuntimeWiringOnlyUsesCheckpointBarrierHookAndExecutorDeletes() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let executorPath = "Shared/Services/Repo/RepoRetentionDeleteExecutor.swift"
         let verifierPath = "Shared/Services/Repo/RepoRetentionPostDeleteVerifier.swift"
         let executorSource = try source(root, executorPath)
-        XCTAssertTrue(executorSource.contains("case disabled"))
-        XCTAssertTrue(executorSource.contains("mode: RepoRetentionDeleteExecutionMode = .disabled"))
         XCTAssertTrue(executorSource.contains("client.delete(path: candidate.path)"))
         XCTAssertTrue(executorSource.contains("guard candidate.seq > 0 else"))
         XCTAssertTrue(executorSource.contains("return .failed(.seqZero)"))
@@ -344,21 +328,22 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
             return text.contains("RepoRetentionCommitDeleteExecutor")
                 ? relativePath(root: root, url: url)
                 : nil
-        }
-        XCTAssertEqual(callSites, [])
+        }.sorted()
+        XCTAssertEqual(callSites, ["Shared/Services/Repo/RepoCheckpointBarrierHook.swift"])
 
         for path in [
             "Shared/Services/Repo/BackupV2RuntimeBuilder.swift",
             "Shared/Services/Backup/V2MonthSession.swift",
-            "Shared/Services/Repo/RepoCheckpointBarrierHook.swift",
             "Shared/Services/Backup/V2RetentionBarrierRefresh.swift",
             "Watermelon/Home/HomeScreenStore.swift",
             "Watermelon/Home/HomeExecutionCoordinator.swift"
         ] {
             let text = try source(root, path)
             XCTAssertFalse(text.contains("RepoRetentionCommitDeleteExecutor"), "executor unexpectedly wired in \(path)")
-            XCTAssertFalse(text.contains("RepoRetentionDeleteExecutionMode"), "delete mode unexpectedly wired in \(path)")
         }
+
+        let hook = try source(root, "Shared/Services/Repo/RepoCheckpointBarrierHook.swift")
+        XCTAssertTrue(hook.contains("RepoRetentionCommitDeleteExecutor("))
     }
 
     private func makeReadyClient(includeWriterB: Bool = false) async throws -> InMemoryRemoteStorageClient {
@@ -403,13 +388,11 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
 
     private func executor(
         client: any RemoteStorageClientProtocol,
-        mode: RepoRetentionDeleteExecutionMode = .commitPrefixDeletionEnabled,
         peerStatusProvider: @escaping RepoRetentionCommitDeleteExecutor.PeerStatusProvider = { .empty }
     ) -> RepoRetentionCommitDeleteExecutor {
         RepoRetentionCommitDeleteExecutor(
             client: client,
             basePath: basePath,
-            mode: mode,
             policy: policy,
             isLocalVolume: false,
             peerStatusProvider: peerStatusProvider

@@ -116,16 +116,9 @@ final class RetentionLivenessCapabilityTests: XCTestCase {
         XCTAssertEqual(retention["checkpoint_barrier_hook"] as? Bool, false)
     }
 
-    func testRuntimeModeCapabilityReflectsActiveModeOnly() {
-        let policy = RepoCompactionPolicy.default
-
-        XCTAssertNil(RepoRetentionRuntimeMode.disabled.retentionPeerCapability)
+    func testRuntimeDefaultCapabilityAdvertisesFullRetentionSupport() {
         XCTAssertEqual(
-            RepoRetentionRuntimeMode.barrierAwareSessionRefreshOnly.retentionPeerCapability,
-            RetentionPeerCapability(barrierAwareSessionRefresh: true, checkpointBarrierHook: false)
-        )
-        XCTAssertEqual(
-            RepoRetentionRuntimeMode.checkpointBarrierHookOnly(policy: policy).retentionPeerCapability,
+            RepoRetentionRuntimeDefaults.peerCapability,
             RetentionPeerCapability(barrierAwareSessionRefresh: true, checkpointBarrierHook: true)
         )
     }

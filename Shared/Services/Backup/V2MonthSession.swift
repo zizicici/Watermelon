@@ -327,8 +327,7 @@ final class V2MonthSession: BackupMonthStore {
         }
 
         let didFlush = commitResult != nil || wroteSnapshot
-        if services.retentionRuntimeMode.checkpointBarrierHook,
-           !ignoreCancellation,
+        if !ignoreCancellation,
            didFlush,
            !dirty {
             try await runCheckpointBarrierHook(services: services)
@@ -381,7 +380,7 @@ final class V2MonthSession: BackupMonthStore {
         if !ignoreCancellation { try Task.checkCancellation() }
         let monthKey = LibraryMonthKey(year: year, month: month)
         let barrierAwareBasis: V2MonthCommitFlusher.Basis?
-        if services.retentionRuntimeMode.barrierAwareSessionRefresh, indexes.hasUncommittedOps {
+        if indexes.hasUncommittedOps {
             let localLamportBeforeBarrierObserve = await services.lamport.value()
             let tombstoneBasis = makeTombstoneObservationBasis(
                 sessionWrittenCovered: snapshotFlusher.sessionWrittenCovered,

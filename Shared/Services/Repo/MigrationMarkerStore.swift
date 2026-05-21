@@ -33,7 +33,10 @@ nonisolated struct MigrationMarkerStore: Sendable {
     }
 
     func existsAny() async throws -> Bool {
-        try await migrationsDirectoryEntries().contains { !$0.isDirectory && $0.name.hasSuffix(".json") }
+        try await migrationsDirectoryEntries().contains { entry in
+            guard entry.name.hasSuffix(".json") else { return false }
+            return !entry.isDirectory || RepoLayout.parseMigrationMarkerFilename(entry.name) != nil
+        }
     }
 
     /// Canonical path is seeded unconditionally so short non-UUID writerIDs
