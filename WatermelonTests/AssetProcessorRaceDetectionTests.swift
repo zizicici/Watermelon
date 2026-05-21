@@ -421,6 +421,111 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         XCTAssertEqual(seqValue, 1)
     }
 
+    /// V1 commits eagerly inside upsertAsset, so commitDelta is always `.none`. A
+    /// subset-tombstoning upsert still has to evict the superseded fingerprint from
+    /// the in-memory cache, or Home keeps offering A as a restorable remote-only
+    /// duplicate even though the manifest no longer contains it.
+    func testFinalizeRowWritingAsset_v1SubsetTombstoneEvictsCacheEvenWithEmptyDelta() async throws {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("test.sqlite")
+        try FileManager.default.createDirectory(
+            at: databaseURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: databaseURL.deletingLastPathComponent()) }
+
+        let remoteIndexService = RemoteIndexSyncService()
+        let processor = AssetProcessor(
+            photoLibraryService: PhotoLibraryService(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: try DatabaseManager(databaseURL: databaseURL)),
+            remoteIndexService: remoteIndexService
+        )
+        let month = LibraryMonthKey(year: 2026, month: 1)
+        let photoHash = TestFixtures.fingerprint(0xA2)
+        let videoHash = TestFixtures.fingerprint(0xA3)
+        let supersededFP = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: photoHash)]
+        )
+        let photoResource = RemoteManifestResource(
+            year: month.year, month: month.month,
+            physicalRemotePath: "2026/01/x.jpg",
+            contentHash: photoHash, fileSize: 1,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let videoResource = RemoteManifestResource(
+            year: month.year, month: month.month,
+            physicalRemotePath: "2026/01/x.mov",
+            contentHash: videoHash, fileSize: 1,
+            resourceType: ResourceTypeCode.pairedVideo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let supersededAsset = RemoteManifestAsset(
+            year: month.year, month: month.month, assetFingerprint: supersededFP,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
+        )
+        let supersededLink = RemoteAssetResourceLink(
+            year: month.year, month: month.month, assetFingerprint: supersededFP,
+            resourceHash: photoHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "x.jpg"
+        )
+
+        // Pre-populate the optimistic cache with the photo resource + the superseded
+        // asset A so eviction is observable.
+        let primingWriter = remoteIndexService.makeOptimisticAssetWriter()
+        primingWriter.appendResource(photoResource)
+        primingWriter.appendAsset(supersededAsset, links: [supersededLink])
+        XCTAssertEqual(remoteIndexService.committedAssetFingerprintsByMonth()[month], [supersededFP])
+
+        // The superseding asset B (photo + paired video). A is a strict subset of B's
+        // links — what AssetProcessor would detect via findStrictSubsetAssetFingerprints.
+        let supersedingFP = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [
+                (role: ResourceTypeCode.photo, slot: 0, contentHash: photoHash),
+                (role: ResourceTypeCode.pairedVideo, slot: 0, contentHash: videoHash)
+            ]
+        )
+        let supersedingAsset = RemoteManifestAsset(
+            year: month.year, month: month.month, assetFingerprint: supersedingFP,
+            creationDateMs: nil, backedUpAtMs: 2, resourceCount: 2, totalFileSizeBytes: 2
+        )
+        let supersedingLinks = [
+            RemoteAssetResourceLink(
+                year: month.year, month: month.month, assetFingerprint: supersedingFP,
+                resourceHash: photoHash,
+                role: ResourceTypeCode.photo, slot: 0, logicalName: "x.jpg"
+            ),
+            RemoteAssetResourceLink(
+                year: month.year, month: month.month, assetFingerprint: supersedingFP,
+                resourceHash: videoHash,
+                role: ResourceTypeCode.pairedVideo, slot: 0, logicalName: "x.mov"
+            )
+        ]
+
+        // V1-shaped store: commit returns `.none`, snapshot already reflects post-tombstone
+        // state (B only, with both resources present so B is healthy).
+        let store = ThrowingCommitMonthStore(year: month.year, month: month.month)
+        store.shouldThrowCommit = false
+        store.commitDelta = .none
+        store.snapshotResources = [photoResource, videoResource]
+        store.snapshotAssets = [supersedingAsset]
+        store.snapshotLinks = supersedingLinks
+        var timing = AssetProcessTiming()
+
+        try await processor.finalizeRowWritingAsset(
+            monthStore: store,
+            manifestAsset: supersedingAsset,
+            links: supersedingLinks,
+            timing: &timing,
+            tombstonedSubsetFingerprints: [supersededFP]
+        ) {}
+
+        let committed = remoteIndexService.committedAssetFingerprintsByMonth()[month] ?? []
+        XCTAssertFalse(committed.contains(supersededFP),
+                       "V1 subset-tombstone path must evict the superseded fingerprint from the optimistic cache so remote-only views stop offering it")
+        XCTAssertTrue(committed.contains(supersedingFP),
+                      "the superseding fingerprint must remain in the cache after the upsert")
+    }
+
     private static func sha256(_ data: Data) -> Data {
         Data(SHA256.hash(data: data))
     }

@@ -118,7 +118,12 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                     } else {
                         anyFailure = true
                     }
-                    if monthFresh || !missing.isEmpty {
+                    let priorFallback = fallback[month] ?? []
+                    // Without this, a stale prior-missing hash that the probe just verified present
+                    // would survive in the overlay whenever any unrelated hash stayed inconclusive
+                    // (e.g. budget exhausted on a different hash) — Home would keep treating a
+                    // healthy remote asset as incomplete and queue a repair upload.
+                    if monthFresh || !missing.isEmpty || !priorFallback.isEmpty {
                         missingByMonth[month] = missing
                     }
                 case .failure(let error):

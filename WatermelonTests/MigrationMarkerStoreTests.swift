@@ -505,6 +505,16 @@ final class MigrationMarkerStoreTests: XCTestCase {
         XCTAssertTrue(any)
     }
 
+    func testExistsAny_falseWhenDirectoryNamedJsonExists() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
+        try await client.createDirectory(path: "\(dir)/backup.json")
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+        let any = try await store.existsAny()
+        XCTAssertFalse(any)
+    }
+
 
     func testWritePhase_unique4AttemptsExhausted_throws43() async throws {
         let client = InMemoryRemoteStorageClient()

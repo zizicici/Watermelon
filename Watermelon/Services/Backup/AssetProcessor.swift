@@ -308,7 +308,16 @@ final class AssetProcessor: Sendable {
         )
 
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
-        try context.monthStore.upsertAsset(manifestAsset, links: links)
+        let subsetFingerprints = Set(
+            context.monthStore.findStrictSubsetAssetFingerprints(
+                forResources: links.map { (role: $0.role, slot: $0.slot, hash: $0.resourceHash) }
+            )
+        )
+        try context.monthStore.upsertAsset(
+            manifestAsset,
+            links: links,
+            replacingSubsetFingerprints: subsetFingerprints
+        )
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
 
         let resourceSignature = BackupAssetResourcePlanner.resourceSignature(
@@ -318,7 +327,8 @@ final class AssetProcessor: Sendable {
             monthStore: context.monthStore,
             manifestAsset: manifestAsset,
             links: links,
-            timing: &timing
+            timing: &timing,
+            tombstonedSubsetFingerprints: subsetFingerprints
         ) { [hashIndexRepository] in
             try hashIndexRepository.upsertAssetHashSnapshot(
                 assetLocalIdentifier: context.asset.localIdentifier,
@@ -402,8 +412,14 @@ final class AssetProcessor: Sendable {
         }
 
         // Incomplete asset falls through to the full upload path so missing resources heal.
+        // Subset survivors (older partial assets in the manifest whose links are a strict
+        // subset of this asset's) also force the fall-through so the resources-reused
+        // upsert tombstones them — without this, pre-fix backups never self-heal.
         if context.monthStore.containsAssetFingerprint(cachedFingerprint),
-           !context.monthStore.isAssetIncomplete(cachedFingerprint) {
+           !context.monthStore.isAssetIncomplete(cachedFingerprint),
+           context.monthStore.findStrictSubsetAssetFingerprints(
+               forResources: roleSlotHashes.map { (role: $0.role, slot: $0.slot, hash: $0.contentHash) }
+           ).isEmpty {
             let totalFileSizeBytes = Self.totalSizeBytes(of: context.selectedResources)
             let dbStart = CFAbsoluteTimeGetCurrent()
             try hashIndexRepository.upsertAssetFingerprint(
@@ -474,14 +490,24 @@ final class AssetProcessor: Sendable {
             totalFileSizeBytes: totalFileSizeBytes
         )
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
-        try context.monthStore.upsertAsset(manifestAsset, links: links)
+        let subsetFingerprints = Set(
+            context.monthStore.findStrictSubsetAssetFingerprints(
+                forResources: links.map { (role: $0.role, slot: $0.slot, hash: $0.resourceHash) }
+            )
+        )
+        try context.monthStore.upsertAsset(
+            manifestAsset,
+            links: links,
+            replacingSubsetFingerprints: subsetFingerprints
+        )
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
 
         try await finalizeRowWritingAsset(
             monthStore: context.monthStore,
             manifestAsset: manifestAsset,
             links: links,
-            timing: &timing
+            timing: &timing,
+            tombstonedSubsetFingerprints: subsetFingerprints
         ) { [hashIndexRepository] in
             try hashIndexRepository.upsertAssetFingerprint(
                 assetLocalIdentifier: context.asset.localIdentifier,
@@ -508,12 +534,18 @@ final class AssetProcessor: Sendable {
         manifestAsset: RemoteManifestAsset,
         links: [RemoteAssetResourceLink],
         timing: inout AssetProcessTiming,
+        tombstonedSubsetFingerprints: Set<Data> = [],
         hashIndexWrite: () throws -> Void
     ) async throws {
         let commitStart = CFAbsoluteTimeGetCurrent()
         let delta = try await monthStore.commitPendingAssetToRemote(ignoreCancellation: false)
         timing.databaseSeconds += Self.elapsedSeconds(since: commitStart)
-        publishCommittedSweepIfNeeded(monthStore: monthStore, manifestAsset: manifestAsset, delta: delta)
+        publishCommittedSweepIfNeeded(
+            monthStore: monthStore,
+            manifestAsset: manifestAsset,
+            delta: delta,
+            tombstonedSubsetFingerprints: tombstonedSubsetFingerprints
+        )
         optimisticWriter.appendAsset(manifestAsset, links: links)
 
         let dbStart = CFAbsoluteTimeGetCurrent()
@@ -524,9 +556,14 @@ final class AssetProcessor: Sendable {
     private func publishCommittedSweepIfNeeded(
         monthStore: any BackupMonthStore,
         manifestAsset: RemoteManifestAsset,
-        delta: MonthManifestStore.FlushDelta
+        delta: MonthManifestStore.FlushDelta,
+        tombstonedSubsetFingerprints: Set<Data>
     ) {
+        // V1 commits eagerly inside upsertAsset, so `delta` always reports no tombstones —
+        // the `tombstonedSubsetFingerprints` argument is the only signal that subset rows
+        // were just removed and the cache needs eviction.
         guard !delta.committedV2TombstoneFingerprints.isEmpty ||
+            !tombstonedSubsetFingerprints.subtracting([manifestAsset.assetFingerprint]).isEmpty ||
             delta.committedV2AssetFingerprints.subtracting([manifestAsset.assetFingerprint]).isEmpty == false else {
             return
         }

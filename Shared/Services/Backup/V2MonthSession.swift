@@ -223,6 +223,12 @@ final class V2MonthSession: BackupMonthStore {
         indexes.containsAssetFingerprint(fingerprint)
     }
 
+    func findStrictSubsetAssetFingerprints(
+        forResources resources: [(role: Int, slot: Int, hash: Data)]
+    ) -> [Data] {
+        indexes.findStrictSubsetAssetFingerprints(forResources: resources)
+    }
+
     func isAssetIncomplete(_ fingerprint: Data) -> Bool {
         indexes.isAssetIncomplete(fingerprint)
     }

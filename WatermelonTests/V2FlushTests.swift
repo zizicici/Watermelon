@@ -1645,4 +1645,198 @@ final class V2FlushTests: XCTestCase {
         XCTAssertNil(wrapped.cancellationCause,
                      "nonExclusiveFinalization must not be cancellation")
     }
+
+    // MARK: - Strict-subset finder (BackupMonthStore wiring for production uploads)
+
+    func testFindStrictSubsetAssetFingerprints_returnsOnlySupersededAssets() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let photoHash = TestFixtures.fingerprint(0xA1)
+        let videoHash = TestFixtures.fingerprint(0xA2)
+        let photoPath = "2026/01/photo.jpg"
+        let videoPath = "2026/01/photo.mov"
+
+        let photoResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: photoPath,
+            contentHash: photoHash, fileSize: 100,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let videoResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: videoPath,
+            contentHash: videoHash, fileSize: 200,
+            resourceType: ResourceTypeCode.pairedVideo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        _ = try store.upsertResource(photoResource)
+        _ = try store.upsertResource(videoResource)
+
+        // Asset A — partial (photo only); models an older backup before paired-video support.
+        let partialFP = TestFixtures.fingerprint(0xB1)
+        let partial = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: partialFP,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 100
+        )
+        let partialLink = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: partialFP, resourceHash: photoHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "photo.jpg"
+        )
+        try store.upsertAsset(partial, links: [partialLink])
+
+        // Unrelated asset C — different hash; must NOT show up as a subset.
+        let unrelatedHash = TestFixtures.fingerprint(0xCC)
+        let unrelatedPath = "2026/01/other.jpg"
+        let unrelatedResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: unrelatedPath,
+            contentHash: unrelatedHash, fileSize: 50,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        _ = try store.upsertResource(unrelatedResource)
+        let unrelatedFP = TestFixtures.fingerprint(0xB2)
+        let unrelated = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: unrelatedFP,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 50
+        )
+        let unrelatedLink = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: unrelatedFP, resourceHash: unrelatedHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "other.jpg"
+        )
+        try store.upsertAsset(unrelated, links: [unrelatedLink])
+
+        // Incoming bundle (photo + paired video) — A's links are a strict subset; C's are not.
+        let supersedingTuples: [(role: Int, slot: Int, hash: Data)] = [
+            (role: ResourceTypeCode.photo, slot: 0, hash: photoHash),
+            (role: ResourceTypeCode.pairedVideo, slot: 0, hash: videoHash)
+        ]
+        let subsets = store.findStrictSubsetAssetFingerprints(forResources: supersedingTuples)
+        XCTAssertEqual(Set(subsets), [partialFP],
+                       "strict-subset finder must report the partial asset and only it")
+    }
+
+    func testFindStrictSubsetAssetFingerprints_excludesEqualLinkSet() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        let hash = TestFixtures.fingerprint(0xA1)
+        let resource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: "2026/01/p.jpg",
+            contentHash: hash, fileSize: 1,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        _ = try store.upsertResource(resource)
+        let fp = TestFixtures.fingerprint(0xB1)
+        let asset = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: fp,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
+        )
+        let link = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: fp, resourceHash: hash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "p.jpg"
+        )
+        try store.upsertAsset(asset, links: [link])
+
+        // Equal link set — same (role, slot, hash); must not be flagged as a strict subset.
+        let sameTuples: [(role: Int, slot: Int, hash: Data)] = [
+            (role: ResourceTypeCode.photo, slot: 0, hash: hash)
+        ]
+        XCTAssertTrue(store.findStrictSubsetAssetFingerprints(forResources: sameTuples).isEmpty,
+                      "equal link set is not a strict subset")
+    }
+
+    /// Heal round-trip: pre-fix manifest carries both partial `A` and full `B`. A later
+    /// session running the fixed strict-subset wiring (findStrictSubset → upsertAsset)
+    /// must self-heal — replay the same wiring AssetProcessor uses and verify `A` is
+    /// tombstoned in the materialized state after flush, even though `B` was already
+    /// present before the upsert.
+    func testStrictSubsetHealRoundTrip_priorPartialIsTombstonedOnSubsequentUpsert() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let photoHash = TestFixtures.fingerprint(0xA1)
+        let videoHash = TestFixtures.fingerprint(0xA2)
+        let photoResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: "2026/01/photo.jpg",
+            contentHash: photoHash, fileSize: 1,
+            resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        let videoResource = RemoteManifestResource(
+            year: year, month: month, physicalRemotePath: "2026/01/photo.mov",
+            contentHash: videoHash, fileSize: 2,
+            resourceType: ResourceTypeCode.pairedVideo, creationDateMs: nil, backedUpAtMs: 0
+        )
+        _ = try store.upsertResource(photoResource)
+        _ = try store.upsertResource(videoResource)
+
+        // Partial A (pre-fix backup: photo only). Committed in the initial flush so the
+        // heal step sees A as a baseline asset, not a same-session pending one.
+        let partialFP = TestFixtures.fingerprint(0xB1)
+        let partialAsset = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: partialFP,
+            creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
+        )
+        let partialLink = RemoteAssetResourceLink(
+            year: year, month: month, assetFingerprint: partialFP, resourceHash: photoHash,
+            role: ResourceTypeCode.photo, slot: 0, logicalName: "photo.jpg"
+        )
+        try store.upsertAsset(partialAsset, links: [partialLink])
+
+        // Full B (post-fix backup: photo + paired video) — committed in the same flush.
+        let fullFP = TestFixtures.fingerprint(0xB2)
+        let fullAsset = RemoteManifestAsset(
+            year: year, month: month, assetFingerprint: fullFP,
+            creationDateMs: nil, backedUpAtMs: 2, resourceCount: 2, totalFileSizeBytes: 3
+        )
+        let fullLinks = [
+            RemoteAssetResourceLink(
+                year: year, month: month, assetFingerprint: fullFP, resourceHash: photoHash,
+                role: ResourceTypeCode.photo, slot: 0, logicalName: "photo.jpg"
+            ),
+            RemoteAssetResourceLink(
+                year: year, month: month, assetFingerprint: fullFP, resourceHash: videoHash,
+                role: ResourceTypeCode.pairedVideo, slot: 0, logicalName: "photo.mov"
+            )
+        ]
+        try store.upsertAsset(fullAsset, links: fullLinks)
+        _ = try await store.flushToRemote(ignoreCancellation: false)
+
+        XCTAssertTrue(store.containsAssetFingerprint(partialFP),
+                      "precondition: partial A must be in the manifest before the heal upsert")
+        XCTAssertTrue(store.containsAssetFingerprint(fullFP),
+                      "precondition: full B must be in the manifest before the heal upsert")
+
+        // Replay AssetProcessor's wiring: compute strict subsets from B's links and pass
+        // them into upsertAsset. With the fix, this tombstones A even though the caller
+        // is just re-asserting B against the existing baseline.
+        let fullTuples: [(role: Int, slot: Int, hash: Data)] = fullLinks.map {
+            (role: $0.role, slot: $0.slot, hash: $0.resourceHash)
+        }
+        let subsets = Set(store.findStrictSubsetAssetFingerprints(forResources: fullTuples))
+        XCTAssertEqual(subsets, [partialFP],
+                       "strict-subset finder must surface A given B's full link set")
+        try store.upsertAsset(fullAsset, links: fullLinks, replacingSubsetFingerprints: subsets)
+        let healDelta = try await store.flushToRemote(ignoreCancellation: false)
+        XCTAssertTrue(healDelta.committedV2TombstoneFingerprints.contains(partialFP),
+                      "heal flush must emit a tombstone for A")
+
+        // Materialized state must reflect A being tombstoned and B remaining.
+        let materializer = RepoMaterializer(client: client, basePath: basePath)
+        let output = try await materializer.materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[monthKey])
+        XCTAssertNil(monthState.assets[partialFP],
+                     "strict-subset heal: partial A must be gone from materialized state after flush")
+        XCTAssertNotNil(monthState.assets[fullFP],
+                        "strict-subset heal: full B must remain after flush")
+        XCTAssertTrue(monthState.deletedAssetFingerprints.contains(partialFP),
+                      "strict-subset heal: A must appear as tombstoned for LWW gating against stale peer adds")
+    }
 }

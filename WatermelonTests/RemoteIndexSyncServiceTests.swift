@@ -511,6 +511,64 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        "freshness-aware accessor must publish the same missing set under partial fallback")
     }
 
+    func testRefreshPhysicalPresenceOverlay_preserveFallback_healedHashClearedDespiteUnrelatedInconclusives() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let monthRel = String(format: "%04d/%02d", monthA.year, monthA.month)
+        try await client.createDirectory(path: "\(basePath)/\(monthRel)")
+
+        let service = RemoteIndexSyncService()
+        let writer = service.makeOptimisticAssetWriter()
+
+        // Two resources. The "healed" one downloads cleanly and the probe verifies it
+        // present. The "unrelated" one is listed at the expected size, but downloads
+        // fail with notFound — verifyHashResult returns .inconclusive, so the probe
+        // emits .inconclusive(.probeFailure) for that hash. This is deterministic;
+        // avoids depending on the iteration order of resourcesByHash inside the probe.
+        let healedBytes = Data("overlay-heal-healed".utf8)
+        let healed = Data(SHA256.hash(data: healedBytes))
+        let healedName = "healed.jpg"
+        let healedResource = RemoteManifestResource(
+            year: monthA.year, month: monthA.month,
+            physicalRemotePath: "\(monthRel)/\(healedName)",
+            contentHash: healed, fileSize: Int64(healedBytes.count),
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 0
+        )
+        writer.appendResource(healedResource)
+        await client.injectFile(path: "\(basePath)/\(monthRel)/\(healedName)", data: healedBytes)
+
+        let unrelatedBytes = Data("overlay-heal-unrelated".utf8)
+        let unrelatedHash = Data(SHA256.hash(data: unrelatedBytes))
+        let unrelatedName = "unrelated.jpg"
+        let unrelatedResource = RemoteManifestResource(
+            year: monthA.year, month: monthA.month,
+            physicalRemotePath: "\(monthRel)/\(unrelatedName)",
+            contentHash: unrelatedHash, fileSize: Int64(unrelatedBytes.count),
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil, backedUpAtMs: 0
+        )
+        writer.appendResource(unrelatedResource)
+        await client.injectFile(path: "\(basePath)/\(monthRel)/\(unrelatedName)", data: unrelatedBytes)
+        await client.injectPersistentDownloadError(.notFound, for: "\(basePath)/\(monthRel)/\(unrelatedName)")
+
+        // Prior overlay flagged ONLY the healed hash as missing.
+        service.markPhysicallyMissingV2(month: monthA, hashes: [healed])
+
+        _ = try await service.refreshPhysicalPresenceOverlay(
+            client: client,
+            basePath: basePath,
+            fallback: [monthA: [healed]]
+        )
+
+        let published = service.physicallyMissingHashesForTest(month: monthA)
+        XCTAssertFalse(published.contains(healed),
+                       "probe verified the prior-missing hash is present — overlay must drop it even though an unrelated hash stays inconclusive under preserveFallback")
+        XCTAssertFalse(published.contains(unrelatedHash),
+                       "unrelated inconclusive hash was not in priorFallback, so it must not be promoted into the overlay")
+    }
+
     func testRefreshPhysicalPresenceOverlay_preserveFallback_budgetExhaustedNotFreshEvenWhenCovered() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()

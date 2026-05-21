@@ -28,6 +28,14 @@ protocol BackupMonthStore: AnyObject {
         replacingSubsetFingerprints: Set<Data>
     ) throws
 
+    /// Older partial assets whose links are a strict subset of `resources`'s (role, slot, hash)
+    /// tuples — the incoming bundle supersedes them and the caller should tombstone via
+    /// `upsertAsset(..., replacingSubsetFingerprints:)`. Default returns []; only stores that
+    /// track per-fingerprint links provide a real implementation.
+    func findStrictSubsetAssetFingerprints(
+        forResources resources: [(role: Int, slot: Int, hash: Data)]
+    ) -> [Data]
+
     @discardableResult
     func upsertResource(_ resource: RemoteManifestResource) throws -> RemoteManifestResource
 
@@ -56,6 +64,10 @@ extension BackupMonthStore {
     func upsertAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]) throws {
         try upsertAsset(asset, links: links, replacingSubsetFingerprints: [])
     }
+
+    func findStrictSubsetAssetFingerprints(
+        forResources resources: [(role: Int, slot: Int, hash: Data)]
+    ) -> [Data] { [] }
 
     @discardableResult
     func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta {

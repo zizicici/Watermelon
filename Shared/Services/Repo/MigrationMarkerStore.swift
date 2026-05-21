@@ -33,7 +33,7 @@ nonisolated struct MigrationMarkerStore: Sendable {
     }
 
     func existsAny() async throws -> Bool {
-        try await migrationsDirectoryEntries().contains { $0.name.hasSuffix(".json") }
+        try await migrationsDirectoryEntries().contains { !$0.isDirectory && $0.name.hasSuffix(".json") }
     }
 
     /// Canonical path is seeded unconditionally so short non-UUID writerIDs

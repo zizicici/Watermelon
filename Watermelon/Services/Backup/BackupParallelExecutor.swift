@@ -777,6 +777,14 @@ struct BackupParallelExecutor: Sendable {
             if cachedSignature != currentSignature {
                 return false
             }
+            // Pre-fix manifests may still carry strict-subset survivors of this asset;
+            // force the per-asset path so AssetProcessor tombstones them.
+            let tuples = cache.hashesByRoleSlot.map {
+                (role: $0.key.role, slot: $0.key.slot, hash: $0.value)
+            }
+            if !monthStore.findStrictSubsetAssetFingerprints(forResources: tuples).isEmpty {
+                return false
+            }
         }
         return true
     }
