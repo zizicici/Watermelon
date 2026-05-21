@@ -313,6 +313,36 @@ nonisolated struct IdentityClaimStore: Sendable {
         claimPath: String,
         atomicResult: AtomicCreateResult
     ) async throws {
+        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 0)
+        var attempt = 0
+        while true {
+            do {
+                try await verifyOwnClaimOnce(
+                    client: client,
+                    repoID: repoID,
+                    writerID: writerID,
+                    createdAtMs: createdAtMs,
+                    claimPath: claimPath,
+                    atomicResult: atomicResult
+                )
+                return
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                guard Date() < deadline else { throw error }
+                try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
+                attempt += 1
+            }
+        }
+    }
+
+    private static func verifyOwnClaimOnce(
+        client: any RemoteStorageClientProtocol,
+        repoID: String,
+        writerID: String,
+        createdAtMs: Int64,
+        claimPath: String,
+        atomicResult: AtomicCreateResult
+    ) async throws {
         guard let meta = try await client.metadata(path: claimPath), !meta.isDirectory else {
             throw RepoBootstrap.BootstrapError.ioFailure(NSError(
                 domain: "RepoBootstrap",
@@ -320,7 +350,6 @@ nonisolated struct IdentityClaimStore: Sendable {
                 userInfo: [NSLocalizedDescriptionKey: "identity claim atomicCreate reported \(atomicResult) but file not readable at \(claimPath)"]
             ))
         }
-        // Ambiguous outcomes need byte-level validation; metadata existence alone can be a stale read.
         guard atomicResult == .bestEffortRetry || atomicResult == .alreadyExists else { return }
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("claim-verify-\(UUID().uuidString).json")

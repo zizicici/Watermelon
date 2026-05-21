@@ -58,7 +58,7 @@ enum BackendNameCaseSensitivity: Sendable, Equatable {
     case unknown
 
     var usesExactNameMatchingForPresence: Bool {
-        self != .caseInsensitive
+        self == .caseSensitive
     }
 
     var foldsCaseForCollisionAvoidance: Bool {

@@ -750,14 +750,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                (inner as NSError).code == 412 {
                 return .alreadyExists
             }
-            if Self.shouldCleanupPartialUpload(storageError) {
-                enqueueCancelledUploadCleanup(for: remotePath)
-            }
             throw storageError
         } catch {
-            if Self.shouldCleanupPartialUpload(error) {
-                enqueueCancelledUploadCleanup(for: remotePath)
-            }
             if Self.isCancellationError(error) {
                 throw CancellationError()
             }

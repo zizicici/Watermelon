@@ -434,14 +434,10 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
         let state = try XCTUnwrap(output.state.months[month])
 
-        XCTAssertNotNil(state.assets[assetFP])
-        XCTAssertEqual(state.assets[assetFP]?.resourceCount, 2)
-        XCTAssertEqual(state.resources["2026/01/good.jpg"]?.contentHash, goodHash)
-        XCTAssertNil(state.resources["2026/02/wrong-month.jpg"])
-        XCTAssertEqual(state.assetResources[AssetResourceKey(assetFingerprint: assetFP, role: ResourceTypeCode.photo, slot: 0)]?.resourceHash, goodHash)
-        XCTAssertTrue(state.deletedAssetFingerprints.contains(deletedFP))
-        XCTAssertEqual(state.deletedAssetFingerprints.count, 1)
-        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+        XCTAssertTrue(state.assets.isEmpty)
+        XCTAssertTrue(state.resources.isEmpty)
+        XCTAssertTrue(state.deletedAssetFingerprints.isEmpty)
+        XCTAssertTrue(output.corruptedSnapshotMonths.contains(month))
     }
 
     func testSnapshotMalformedAssetDeletedKeyCandidateFallsBack() async throws {
@@ -506,6 +502,100 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertNil(state.assets[badFP])
         XCTAssertEqual(output.state.observedClock, 2)
         XCTAssertFalse(output.corruptedSnapshotMonths.contains(month))
+    }
+
+    func testOutOfMonthResourceInTopSnapshotFallsBackToOlderCandidate() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+        let olderFP = Self.fingerprint(0x20)
+        let newerFP = Self.fingerprint(0x21)
+        let goodHash = Self.fingerprint(0x22)
+
+        var coveredA = CoveredRanges()
+        coveredA.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+
+        // Older valid snapshot at lamport 2
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerA,
+                repoID: repoID,
+                covered: coveredA
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: olderFP,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 1,
+                totalFileSizeBytes: 1,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)
+            )],
+            resources: [SnapshotResourceRow(
+                physicalRemotePath: "2026/01/valid.jpg",
+                contentHash: goodHash,
+                fileSize: 1,
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                crypto: nil,
+                stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)
+            )],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 2,
+            runID: "older-valid",
+            respectTaskCancellation: false
+        )
+
+        var coveredB = CoveredRanges()
+        coveredB.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
+
+        // Newer snapshot at lamport 5 with an out-of-month resource
+        _ = try await snapshotWriter.write(
+            header: SnapshotHeader(
+                version: SnapshotHeader.currentVersion,
+                scope: CommitHeader.monthScope(month),
+                writerID: writerB,
+                repoID: repoID,
+                covered: coveredB
+            ),
+            assets: [SnapshotAssetRow(
+                assetFingerprint: newerFP,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 1,
+                totalFileSizeBytes: 1,
+                stamp: OpStamp(writerID: writerB, seq: 1, clock: 2)
+            )],
+            resources: [SnapshotResourceRow(
+                physicalRemotePath: "2026/02/wrong-month.jpg",
+                contentHash: Self.fingerprint(0x23),
+                fileSize: 1,
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                crypto: nil,
+                stamp: OpStamp(writerID: writerB, seq: 1, clock: 2)
+            )],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 5,
+            runID: "newer-bad-resource",
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let state = try XCTUnwrap(output.state.months[month])
+
+        XCTAssertNotNil(state.assets[olderFP], "older snapshot's asset should survive")
+        XCTAssertNil(state.assets[newerFP], "newer rejected snapshot's asset should not appear")
+        XCTAssertNotNil(state.resources["2026/01/valid.jpg"], "older snapshot's resource should survive")
+        XCTAssertEqual(output.state.observedClock, 2)
+        XCTAssertFalse(output.corruptedSnapshotMonths.contains(month), "month should not be marked corrupted when a valid older snapshot exists")
     }
 
     func testForeignRepoSnapshotAtTopFallsBackToNextCandidate() async throws {
@@ -904,10 +994,10 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
 
         let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
 
-        XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
+        XCTAssertNil(output.state.months[month]?.assets[goodFP])
         XCTAssertNil(output.state.months[month]?.assets[poisonedFP])
-        XCTAssertTrue((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 9))
-        XCTAssertEqual(output.state.observedClock, 9)
+        XCTAssertFalse((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 9))
+        XCTAssertEqual(output.state.observedClock, 0)
     }
 
     func testSnapshotWithFilenameMismatchingHeader_isSkipped() async throws {

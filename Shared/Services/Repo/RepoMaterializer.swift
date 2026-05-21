@@ -310,7 +310,9 @@ private struct SnapshotTrustPipeline {
                                 materializerLog.warning("skip snapshot with poisoned row stamp: \(candidate.filename, privacy: .public)")
                                 continue
                             }
-                            return SnapshotTaskResult(month: month, baseline: Self.makeBaseline(file: file, reference: candidate))
+                            if let baseline = Self.makeBaseline(file: file, reference: candidate) {
+                                return SnapshotTaskResult(month: month, baseline: baseline)
+                            }
                         } catch let error as SnapshotReader.ReadError {
                             switch error {
                             case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
@@ -365,7 +367,7 @@ private struct SnapshotTrustPipeline {
             && CommitHeader.parseMonthScope(file.header.scope) == reference.month
     }
 
-    private static func makeBaseline(file: SnapshotFile, reference: MaterializerSnapshotReference) -> AcceptedSnapshotBaseline {
+    private static func makeBaseline(file: SnapshotFile, reference: MaterializerSnapshotReference) -> AcceptedSnapshotBaseline? {
         let month = reference.month
         var state = RepoMonthState.empty
         var baselineStamps: [Data: OpStamp] = [:]
@@ -377,8 +379,8 @@ private struct SnapshotTrustPipeline {
         }
         for resource in file.resources {
             guard materializerResourcePath(resource.physicalRemotePath, belongsTo: month) else {
-                materializerLog.warning("skip snapshot resource outside month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
-                continue
+                materializerLog.warning("reject snapshot with out-of-month resource month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
+                return nil
             }
             state.resources[resource.physicalRemotePath] = resource
         }
@@ -388,15 +390,15 @@ private struct SnapshotTrustPipeline {
         }
         for d in file.deletedKeys {
             guard d.keyType == .asset else {
-                materializerLog.warning("skip unsupported deletedKey.keyType=\(String(describing: d.keyType), privacy: .public) for \(month.text, privacy: .public)")
-                continue
+                materializerLog.warning("reject snapshot with unsupported deletedKey.keyType=\(String(describing: d.keyType), privacy: .public) for \(month.text, privacy: .public)")
+                return nil
             }
             let fp: Data
             do {
                 fp = try RepoWireValidator.validateHash(d.keyValue, field: "keyValue")
             } catch {
-                materializerLog.warning("skip malformed deletedKey hash for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
-                continue
+                materializerLog.warning("reject snapshot with malformed deletedKey hash for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
+                return nil
             }
             state.deletedAssetFingerprints.insert(fp)
             if let stamp = d.stamp {
@@ -503,8 +505,8 @@ private struct CommitTrustPipeline {
                         var acceptedOps: [CommitOp] = []
                         for op in file.ops {
                             guard op.clock < LamportClock.maxAdoptableValue else {
-                                materializerLog.warning("skip op with unworkable clock=\(op.clock, privacy: .public) writerID=\(file.header.writerID, privacy: .public) seq=\(file.header.seq, privacy: .public)")
-                                continue
+                                materializerLog.warning("reject commit with unworkable op clock=\(op.clock, privacy: .public) writerID=\(file.header.writerID, privacy: .public) seq=\(file.header.seq, privacy: .public)")
+                                return nil
                             }
                             acceptedOps.append(op)
                         }

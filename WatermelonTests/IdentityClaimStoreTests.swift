@@ -472,6 +472,27 @@ final class IdentityClaimStoreTests: XCTestCase {
     }
 
 
+    /// S3/WebDAV may expose stale metadata immediately after atomicCreate.
+    func testWriteOwn_staleMetadataAfterCreate_retriesAndSucceeds() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        inner.setReadAfterWriteGrace(30)
+        let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        let client = StaleMetadataAfterCreateClient(inner: inner, stalePath: path)
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+        try await store.writeOwnClaim(
+            repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            writerID: selfWriter,
+            createdAtMs: 1_000
+        )
+        let snapshot = await inner.snapshotFiles()
+        let bytes = try XCTUnwrap(snapshot[path])
+        let dict = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+        XCTAssertEqual(dict?["repo_id"] as? String, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        XCTAssertEqual(dict?["writer_id"] as? String, selfWriter)
+    }
+
+
     func testStabilize_noPeerLands_returnsInitial() async throws {
         let (_, store) = await makeStore()
         // Tight rounds keep the test sub-second while still exercising the full loop.
@@ -786,5 +807,81 @@ private actor SerialOnlyWrapperClient: RemoteStorageClientProtocol {
     }
     func copy(from sourcePath: String, to destinationPath: String) async throws {
         try await inner.copy(from: sourcePath, to: destinationPath)
+    }
+}
+
+/// Models one stale metadata read after a successful atomicCreate.
+private actor StaleMetadataAfterCreateClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { inner.readAfterWriteGraceSeconds }
+    private let inner: InMemoryRemoteStorageClient
+    private let stalePath: String
+    private var created = false
+    private var staleMetadataReturned = false
+
+    init(inner: InMemoryRemoteStorageClient, stalePath: String) {
+        self.inner = inner
+        self.stalePath = stalePath
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        inner.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
+    }
+
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        if normalize(path) == normalize(stalePath) && created && !staleMetadataReturned {
+            staleMetadataReturned = true
+            return nil
+        }
+        return try await inner.metadata(path: path)
+    }
+
+    func atomicCreate(
+        localURL: URL, remotePath: String,
+        respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?
+    ) async throws -> AtomicCreateResult {
+        let result = try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+        if normalize(remotePath) == normalize(stalePath) {
+            created = true
+        }
+        return result
+    }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func upload(
+        localURL: URL, remotePath: String,
+        respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?
+    ) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws {
+        try await inner.setModificationDate(date, forPath: path)
+    }
+    func download(remotePath: String, localURL: URL) async throws {
+        try await inner.download(remotePath: remotePath, localURL: localURL)
+    }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws {
+        try await inner.move(from: sourcePath, to: destinationPath)
+    }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws {
+        try await inner.copy(from: sourcePath, to: destinationPath)
+    }
+    nonisolated private func normalize(_ p: String) -> String {
+        let trimmed = p.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard !trimmed.isEmpty, trimmed != "." else { return "/" }
+        let collapsed = trimmed
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .joined(separator: "/")
+        return "/" + collapsed
     }
 }
