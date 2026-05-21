@@ -41,7 +41,11 @@ final class RestoredAssetFingerprintVerifier: @unchecked Sendable {
                 let records = try await Task.detached(priority: .utility) { [fetchRecords] in
                     try fetchRecords([assetLocalIdentifier])
                 }.value
-                return records[assetLocalIdentifier]?.fingerprint == expectedFingerprint
+                if records[assetLocalIdentifier]?.fingerprint == expectedFingerprint {
+                    return true
+                }
+                // PhotoKit may expose a transient resource shape (e.g. Live Photo without
+                // the paired video yet); keep retrying until the settle budget is exhausted.
             }
             if attempt < delays.count {
                 try await Task.sleep(for: delays[attempt])

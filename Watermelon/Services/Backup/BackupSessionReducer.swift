@@ -205,6 +205,8 @@ struct BackupSessionState {
         currentRunMode = pausedDisplayMode
         statusText = String(localized: "backup.session.resuming")
         incompleteSummaryByMonth.removeAll()
+        processedCountByMonth.removeAll()
+        failedCountByMonth.removeAll()
         return BackupSessionResumeContext(pausedMode: pausedMode, pausedDisplayMode: pausedDisplayMode)
     }
 

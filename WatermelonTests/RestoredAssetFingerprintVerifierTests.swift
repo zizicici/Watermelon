@@ -59,11 +59,12 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
         XCTAssertEqual(fetchCalls.value, 1)
     }
 
-    func testReadyButFingerprintMismatch_returnsFalseWithoutFurtherRetries() async throws {
+    func testReadyButFingerprintMismatch_exhaustsRetryBudget() async throws {
         let expected = Data([0x01])
         let actual = Data([0x02])
         let buildCalls = Counter()
         let fetchCalls = Counter()
+        let delays: [Duration] = [.zero, .zero, .zero]
 
         let verifier = RestoredAssetFingerprintVerifier(
             buildIndex: { [assetID] _ in
@@ -74,7 +75,7 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
                 fetchCalls.bump()
                 return [assetID: Self.makeRecord(fingerprint: actual)]
             },
-            delays: [.zero, .zero, .zero]
+            delays: delays
         )
 
         let verified = try await verifier.verifyDurableBinding(
@@ -83,13 +84,42 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
         )
 
         XCTAssertFalse(verified)
-        XCTAssertEqual(buildCalls.value, 1)
-        XCTAssertEqual(fetchCalls.value, 1)
+        XCTAssertEqual(buildCalls.value, delays.count + 1)
+        XCTAssertEqual(fetchCalls.value, delays.count + 1)
     }
 
-    func testReadyButRecordMissing_returnsFalse() async throws {
+    func testReadyButTransientMismatch_eventuallyMatchesAfterRetries() async throws {
+        let expected = Data([0x01])
+        let transient = Data([0x02])
         let buildCalls = Counter()
         let fetchCalls = Counter()
+
+        let verifier = RestoredAssetFingerprintVerifier(
+            buildIndex: { [assetID] _ in
+                buildCalls.bump()
+                return Self.makeBuildResult(ready: [assetID])
+            },
+            fetchRecords: { [assetID] _ in
+                let n = fetchCalls.bump()
+                return [assetID: Self.makeRecord(fingerprint: n >= 3 ? expected : transient)]
+            },
+            delays: [.zero, .zero, .zero, .zero]
+        )
+
+        let verified = try await verifier.verifyDurableBinding(
+            assetLocalIdentifier: assetID,
+            expectedFingerprint: expected
+        )
+
+        XCTAssertTrue(verified)
+        XCTAssertGreaterThanOrEqual(buildCalls.value, 3)
+        XCTAssertGreaterThanOrEqual(fetchCalls.value, 3)
+    }
+
+    func testReadyButRecordMissing_exhaustsRetryBudget() async throws {
+        let buildCalls = Counter()
+        let fetchCalls = Counter()
+        let delays: [Duration] = [.zero, .zero]
 
         let verifier = RestoredAssetFingerprintVerifier(
             buildIndex: { [assetID] _ in
@@ -100,7 +130,7 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
                 fetchCalls.bump()
                 return [:]
             },
-            delays: [.zero, .zero]
+            delays: delays
         )
 
         let verified = try await verifier.verifyDurableBinding(
@@ -109,8 +139,8 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
         )
 
         XCTAssertFalse(verified)
-        XCTAssertEqual(buildCalls.value, 1)
-        XCTAssertEqual(fetchCalls.value, 1)
+        XCTAssertEqual(buildCalls.value, delays.count + 1)
+        XCTAssertEqual(fetchCalls.value, delays.count + 1)
     }
 
     func testBudgetExhausted_returnsFalseAfterAllAttempts() async throws {

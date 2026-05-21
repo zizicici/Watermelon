@@ -50,6 +50,28 @@ final class BackupSessionReducerTests: XCTestCase {
         }
     }
 
+    // MARK: - prepareForResume
+
+    func testPrepareForResumeClearsStaleMonthCounters() {
+        var state = BackupSessionState()
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        state.failedCountByMonth[month] = 3
+        state.processedCountByMonth[month] = 10
+        state.incompleteSummaryByMonth[month] = BackupMonthIncompleteSummary(
+            downloadIssues: DownloadIssueSummary(skippedIncompleteCount: 1)
+        )
+        state.lastPausedRunMode = .full
+        state.lastPausedDisplayRunMode = .full
+
+        _ = state.prepareForResume()
+
+        XCTAssertTrue(state.failedCountByMonth.isEmpty)
+        XCTAssertTrue(state.processedCountByMonth.isEmpty)
+        XCTAssertTrue(state.incompleteSummaryByMonth.isEmpty)
+        XCTAssertEqual(state.state, .running)
+        XCTAssertEqual(state.controlPhase, .resuming)
+    }
+
     // MARK: - cancelResume
 
     func testCancelResume_pausePreservesPendingRunConfiguration() {

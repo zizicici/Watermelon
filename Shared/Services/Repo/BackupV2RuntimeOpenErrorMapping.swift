@@ -64,10 +64,12 @@ enum BackupV2RuntimeOpenErrorMapping {
                 return BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
             case .damagedV2Repo:
                 return BackupV2RuntimeBuildError.damagedV2Repo
-            case .repoIdentityMismatch,
-                 .requiresForegroundMigration,
-                 .repoFormatRegression:
-                return error
+            case .repoIdentityMismatch:
+                return BackupV2RuntimeBuildError.repoIdentityMismatch(stored: "", observed: "")
+            case .requiresForegroundMigration:
+                return BackupV2RuntimeBuildError.requiresForegroundMigration
+            case .repoFormatRegression:
+                return BackupV2RuntimeBuildError.repoFormatRegression(repoID: "")
             }
         }
         return error

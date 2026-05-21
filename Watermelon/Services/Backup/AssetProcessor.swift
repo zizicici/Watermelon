@@ -320,7 +320,7 @@ final class AssetProcessor: Sendable {
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
 
         let resourceSignature = BackupAssetResourcePlanner.resourceSignature(
-            roleSlots: preparedResources.map { (role: $0.local.resourceRole, slot: $0.local.resourceSlot) }
+            orderedResources: context.selectedResources
         )
         try await finalizeRowWritingAsset(
             monthStore: context.monthStore,
@@ -390,7 +390,7 @@ final class AssetProcessor: Sendable {
         }
         guard let cachedSignature = cachedLocalHash.resourceSignature else { return nil }
         let currentSignature = BackupAssetResourcePlanner.resourceSignature(
-            roleSlots: context.selectedResources.map { (role: $0.role, slot: $0.slot) }
+            orderedResources: context.selectedResources
         )
         guard cachedSignature == currentSignature else { return nil }
 
