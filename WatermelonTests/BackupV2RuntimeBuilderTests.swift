@@ -5,6 +5,9 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
     private let basePath = "/repo"
     private var tempDBURL: URL!
     private var databaseManager: DatabaseManager!
+    // Tracked so tearDown awaits shutdown AND releases the services reference
+    // before unlinking the DB file — otherwise SQLite warns "vnode unlinked while in use".
+    private var activeServices: BackupV2RuntimeServices?
 
     override func setUpWithError() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -13,7 +16,11 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         databaseManager = try DatabaseManager(databaseURL: tempDBURL)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
+        if let services = activeServices {
+            await services.shutdown()
+            activeServices = nil
+        }
         databaseManager = nil
         if let url = tempDBURL {
             try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
@@ -884,7 +891,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
             databaseManager: databaseManager,
             allowMigration: false
         )
-        defer { Task { await services.shutdown() } }
+        activeServices = services
 
         let body = try await waitForHeartbeat(client: metadataClient, writerID: services.writerID)
         let heartbeat = try LivenessHeartbeat.decode(body)
@@ -912,7 +919,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
             databaseManager: databaseManager,
             allowMigration: false
         )
-        defer { Task { await services.shutdown() } }
+        activeServices = services
 
         let body = try await waitForHeartbeat(client: metadataClient, writerID: services.writerID)
         let heartbeat = try LivenessHeartbeat.decode(body)
@@ -953,7 +960,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
             databaseManager: databaseManager,
             allowMigration: false
         )
-        defer { Task { await services.shutdown() } }
+        activeServices = services
 
         let reloaded = try await identity.loadRepoState(profileID: profile.id!, repoID: canonicalRepoID)
         let recovered = reloaded.map { UInt64(bitPattern: $0.lastClock) }
