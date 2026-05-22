@@ -32,8 +32,9 @@ enum State {
         let skipped: Int
         let total: Int
         let startedMonths: Set<LibraryMonthKey>
-        let completedMonths: Set<LibraryMonthKey>
+        let uploadCompletedMonths: Set<LibraryMonthKey>
         let incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary]
+        let uploadSnapshotDeferredMessageByMonth: [LibraryMonthKey: String]
         let processedCountByMonth: [LibraryMonthKey: Int]
         let failedCountByMonth: [LibraryMonthKey: Int]
     }
@@ -125,9 +126,9 @@ enum State {
         set { session.startedMonths = newValue }
     }
 
-    private(set) var completedMonths: Set<LibraryMonthKey> {
-        get { session.completedMonths }
-        set { session.completedMonths = newValue }
+    private(set) var uploadCompletedMonths: Set<LibraryMonthKey> {
+        get { session.uploadCompletedMonths }
+        set { session.uploadCompletedMonths = newValue }
     }
 
     private(set) var processedCountByMonth: [LibraryMonthKey: Int] {

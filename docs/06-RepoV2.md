@@ -88,7 +88,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - `V2MonthSession` 内：
   - `V2MonthIndexes` 持有 in-memory resources / assets / links / pending asset+tombstone 集合
   - `flushToRemote` 先写 commit jsonl，再写 snapshot jsonl，不再上传 V1 sqlite manifest
-  - snapshot 写失败时通过 `FlushError.snapshotWriteFailed(committedAssets:committedTombstones:)` 把已落 commit 的 delta 带回调用方
+  - snapshot 写失败时通过 `FlushError.snapshotWriteFailed(committedAssets:committedTombstones:)` 把已落 commit 的 delta 带回调用方；只有最终且非 paused 的月 flush 会映射为 Home 的 durable-upload/snapshot-deferred warning
 - Unit 8 后，row-writing asset 在 result 返回前写 per-asset commit；`BackupParallelExecutor` 与 `BackgroundBackupRunner` 同步采用「每 10 个非 failed 结果 flush 一次」（`flushInterval = 10`）的 snapshot cadence；月末仍有兜底 flush
 - `AssetProcessor+Upload` `client.upload` → `client.atomicCreate`；V2 且 `client.dataPathOverwriteRisk == .perKey` 时强制使用 writerID / runID 后缀候选，避免多 writer 同名覆盖
 - `BackgroundBackupRunner` 加 V1 gate：

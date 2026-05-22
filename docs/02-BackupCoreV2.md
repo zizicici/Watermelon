@@ -26,10 +26,11 @@
 - `needsUpload`
 - `needsDownload`
 - `phase`
-- `failedItemCount`
-- `failureMessage`
+- work facts：upload / download 是否已经关闭
+- failure facts：上传失败数、下载 incomplete、V2 snapshot deferred、terminal failure
 
 `MonthPlan.Phase` 当前枚举：`pending / uploading / uploadPaused / uploadDone / downloading / downloadPaused / completed / partiallyFailed / failed`。
+`phase` 是 UI 投影，不是“是否还有工作”的判断源；abort / resume / progress 使用命名 work-fact predicate。
 
 进入执行时，`HomeExecutionCoordinator` 还会冻结一份本次执行配置快照：
 
@@ -119,7 +120,8 @@
    - 逐 asset 调 `AssetProcessor.process(...)`
 5. 每处理 10 个非 failed 结果，就对当前 `BackupMonthStore` 调一次 batch `flushToRemote(...)`；月末仍兜底 flush
 6. V2 asset row 写入后立刻通过 per-asset commit 落盘；批量 flush 主要写 snapshot，若防御性 commit 了遗留 pending ops，调用方会先 publish 月快照
-7. 最终 flush 成功后若提供了 `onMonthUploaded`，会先执行月级收尾；收尾 `.success` 才发出 `.monthChanged(.completed)`，`.downloadIncomplete` 会发出对应状态，`.failed` 走 fatal failure
+7. 最终 flush 成功后若提供了 `onMonthUploaded`，会先执行月级收尾；收尾 `.success` 才发出 `.monthChanged(.completed)`，`.incomplete` 只表示下载/收尾 incomplete，`.failed` 走 fatal failure
+8. V2 commit durable 但 snapshot 写失败时发出独立 `.uploadDurableSnapshotDeferred(message:)`；它关闭 upload work，但不伪装成通用 incomplete
 
 ## 6. 单 asset 处理
 
@@ -224,7 +226,7 @@ V2 当前主路径：
 2. `commitPendingAssetToRemote(...)` 对 row-writing asset 写 commit jsonl，不写 snapshot
 3. `flushToRemote(...)` 防御性提交遗留 pending ops 后，通过 `V2MonthSnapshotFlusher` 写覆盖当前 durable commits 的 snapshot
 4. 每 10 个非 failed asset 触发一次 snapshot-cadence flush，月末或 pause/connection-loss 收束时再兜底 flush
-5. commit 已落盘但 snapshot 写失败时，错误会携带 `committedAssets / committedTombstones`；调用方先 publish 月快照再继续传播错误
+5. commit 已落盘但 snapshot 写失败时，错误会携带 `committedAssets / committedTombstones`；调用方先 publish 月快照再继续传播错误。只有非 paused、可关闭月份的最终 flush 会向 Home 发 `.uploadDurableSnapshotDeferred(message:)`
 6. `V2MonthSession.loadOrCreate(...)` 会列出真实月份目录，避免“文件已存在但 V2 metadata 未 flush”的 orphan 造成重名冲突
 
 V1 兼容路径仍由 `MonthManifestStore` 维护 sqlite manifest：本地 sqlite 改动先落临时文件，月末 `flushToRemote(...)` 上传 `.watermelon_manifest.sqlite`。`MonthManifestStore` 实现拆为三段：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。

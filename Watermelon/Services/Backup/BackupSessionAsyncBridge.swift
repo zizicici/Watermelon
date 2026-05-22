@@ -8,18 +8,24 @@ final class BackupSessionAsyncBridge {
 
     struct UploadProgress {
         let newlyStartedMonths: Set<LibraryMonthKey>
-        let newlyCompletedMonths: Set<LibraryMonthKey>
+        let newlyUploadCompletedMonths: Set<LibraryMonthKey>
         let processedCountByMonth: [LibraryMonthKey: Int]
     }
 
     enum UploadResult {
         case completed(
             failedCountByMonth: [LibraryMonthKey: Int],
-            incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary]
+            incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary],
+            uploadSnapshotDeferredMessageByMonth: [LibraryMonthKey: String]
         )
         case paused
         case stopped
-        case failed(String, failedCountByMonth: [LibraryMonthKey: Int], incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary])
+        case failed(
+            String,
+            failedCountByMonth: [LibraryMonthKey: Int],
+            incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary],
+            uploadSnapshotDeferredMessageByMonth: [LibraryMonthKey: String]
+        )
         case startFailed
     }
 
@@ -28,7 +34,7 @@ final class BackupSessionAsyncBridge {
     private var pendingUploadContinuation: CheckedContinuation<UploadResult, Never>?
     private var pendingScopedContinuation: CheckedContinuation<Bool, Never>?
     private var reportedStartedMonths = Set<LibraryMonthKey>()
-    private var reportedCompletedMonths = Set<LibraryMonthKey>()
+    private var reportedUploadCompletedMonths = Set<LibraryMonthKey>()
 
     init(backupSessionController: BackupSessionController) {
         self.backupSessionController = backupSessionController
@@ -129,13 +135,13 @@ final class BackupSessionAsyncBridge {
         guard let continuation = pendingUploadContinuation else { return }
 
         let newlyStartedMonths = snapshot.startedMonths.subtracting(reportedStartedMonths)
-        let newlyCompletedMonths = snapshot.completedMonths.subtracting(reportedCompletedMonths)
+        let newlyUploadCompletedMonths = snapshot.uploadCompletedMonths.subtracting(reportedUploadCompletedMonths)
         reportedStartedMonths.formUnion(snapshot.startedMonths)
-        reportedCompletedMonths.formUnion(snapshot.completedMonths)
+        reportedUploadCompletedMonths.formUnion(snapshot.uploadCompletedMonths)
 
         let progress = UploadProgress(
             newlyStartedMonths: newlyStartedMonths,
-            newlyCompletedMonths: newlyCompletedMonths,
+            newlyUploadCompletedMonths: newlyUploadCompletedMonths,
             processedCountByMonth: snapshot.processedCountByMonth
         )
 
@@ -144,14 +150,16 @@ final class BackupSessionAsyncBridge {
         case .completed:
             result = .completed(
                 failedCountByMonth: snapshot.failedCountByMonth,
-                incompleteSummaryByMonth: snapshot.incompleteSummaryByMonth
+                incompleteSummaryByMonth: snapshot.incompleteSummaryByMonth,
+                uploadSnapshotDeferredMessageByMonth: snapshot.uploadSnapshotDeferredMessageByMonth
             )
         case .paused:    result = .paused
         case .stopped:   result = .stopped
         case .failed:    result = .failed(
                 snapshot.statusText,
                 failedCountByMonth: snapshot.failedCountByMonth,
-                incompleteSummaryByMonth: snapshot.incompleteSummaryByMonth
+                incompleteSummaryByMonth: snapshot.incompleteSummaryByMonth,
+                uploadSnapshotDeferredMessageByMonth: snapshot.uploadSnapshotDeferredMessageByMonth
             )
         default:         result = nil
         }
@@ -194,6 +202,6 @@ final class BackupSessionAsyncBridge {
 
     private func resetUploadReporting() {
         reportedStartedMonths.removeAll()
-        reportedCompletedMonths.removeAll()
+        reportedUploadCompletedMonths.removeAll()
     }
 }

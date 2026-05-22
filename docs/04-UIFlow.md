@@ -147,6 +147,7 @@ App 启动后直接进入 `HomeViewController`。
 4. 月份 flush 完成后进入：
    - 上传-only 月份：`completed`
    - sync 月份：`uploadDone`
+5. 若 V2 commit 已 durable 但 snapshot 写失败，月份记录为 partial warning，同时 upload work 已关闭；paused final flush 不会发这个完成信号
 
 ### 6.3 同步月份内联下载
 
@@ -181,6 +182,8 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 5. `completed` — 灰底 + 绿色勾
 6. `partiallyFailed` — 运行态底色 + warning 指示
 7. `failed` — 失败样式
+
+`partiallyFailed` 只表示已有用户可见 warning；它不保证该月所有 upload/download work 已关闭。
 
 ## 8. 进度规则
 

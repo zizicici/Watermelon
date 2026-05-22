@@ -793,10 +793,17 @@ final class HomeExecutionCoordinator {
             case .completed:
                 appendInfoLog(String(format: String(localized: "home.execution.log.uploadDoneMonth"), month.displayText))
             case .incomplete(let summary):
-                let wasTerminal = session.monthPlans[month]?.isTerminal == true
+                let shouldSuppressWarning = session.monthPlans[month]?.hasClosedUserVisibleOutcome == true
                 session.recordMonthIncomplete(month, summary: summary)
-                guard !wasTerminal else { break }
+                guard !shouldSuppressWarning else { break }
                 appendWarningLog(BackupMonthIncompleteSummaryRenderer.message(for: summary, month: month))
+                refreshTerminalStatus(notifyState: false)
+                notifyStateChanged()
+            case .uploadDurableSnapshotDeferred(let message):
+                let shouldSuppressWarning = session.monthPlans[month]?.hasClosedUserVisibleOutcome == true
+                session.recordDurableUploadSnapshotDeferred(month, message: message)
+                guard !shouldSuppressWarning else { break }
+                appendWarningLog(message)
                 refreshTerminalStatus(notifyState: false)
                 notifyStateChanged()
             }

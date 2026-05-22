@@ -144,7 +144,7 @@ struct HomeExecutionSession {
             phase = .uploadPaused
             return .upload
         case .downloading:
-            applyEvent(.downloadPaused, where: { $0.phase == .downloading })
+            applyToMonths(where: { $0.phase == .downloading }) { $0.markDownloadPaused() }
             phase = .downloadPaused
             return .download
         default:
@@ -160,7 +160,7 @@ struct HomeExecutionSession {
             lastSyncTime = 0
             return .upload
         case .downloadPaused:
-            applyEvent(.downloadResumed, where: { $0.phase == .downloadPaused })
+            applyToMonths(where: { $0.phase == .downloadPaused }) { $0.markDownloadResumed() }
             phase = .downloading
             return .download
         default:
@@ -178,21 +178,21 @@ struct HomeExecutionSession {
         now: CFAbsoluteTime,
         syncThrottleInterval: CFAbsoluteTime
     ) -> Bool {
-        let previousDoneCount = monthPlans.values.filter(\.isDone).count
-
         for month in progress.newlyStartedMonths where monthPlans[month] != nil {
-            monthPlans[month]?.apply(.uploadStarted)
+            monthPlans[month]?.markUploadStarted()
         }
 
-        for month in progress.newlyCompletedMonths where monthPlans[month] != nil {
-            monthPlans[month]?.apply(.uploadCompleted)
+        let hasNewUploadCompletions = progress.newlyUploadCompletedMonths.contains {
+            monthPlans[$0]?.needsUpload == true
         }
 
-        let currentDoneCount = monthPlans.values.filter(\.isDone).count
-        let hasNewCompletions = currentDoneCount > previousDoneCount
+        for month in progress.newlyUploadCompletedMonths where monthPlans[month]?.needsUpload == true {
+            monthPlans[month]?.markUploadDurablyCompleted()
+        }
+
         processedCountByMonth = progress.processedCountByMonth
 
-        if hasNewCompletions {
+        if hasNewUploadCompletions {
             lastSyncTime = now
             return true
         }
@@ -206,12 +206,13 @@ struct HomeExecutionSession {
 
     mutating func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) -> UploadResultOutcome {
         switch result {
-        case .completed(let failedCountByMonth, let incompleteSummaryByMonth):
+        case .completed(let failedCountByMonth, let incompleteSummaryByMonth, let uploadSnapshotDeferredMessageByMonth):
             uploadPhaseCompleted = true
             for (month, failedCount) in failedCountByMonth where failedCount > 0 {
-                monthPlans[month]?.apply(.recordUploadFailures(observedFailedItemCount: failedCount))
+                monthPlans[month]?.recordUploadFailures(observedFailedItemCount: failedCount)
             }
             recordMonthIncompleteSummaries(incompleteSummaryByMonth)
+            recordDurableUploadSnapshotDeferredMessages(uploadSnapshotDeferredMessageByMonth)
 
             if pendingDownloadMonths().isEmpty {
                 finishExecution()
@@ -226,10 +227,11 @@ struct HomeExecutionSession {
             pauseUploadPhaseMonths()
             return .paused
 
-        case .failed(let message, let failedCountByMonth, let incompleteSummaryByMonth):
+        case .failed(let message, let failedCountByMonth, let incompleteSummaryByMonth, let uploadSnapshotDeferredMessageByMonth):
+            recordDurableUploadSnapshotDeferredMessages(uploadSnapshotDeferredMessageByMonth)
             recordUploadTargetsTerminalFailure(kind: .uploadRunFailed, message: message)
             for (month, failedCount) in failedCountByMonth where failedCount > 0 {
-                monthPlans[month]?.apply(.recordUploadFailures(observedFailedItemCount: failedCount))
+                monthPlans[month]?.recordUploadFailures(observedFailedItemCount: failedCount)
             }
             recordMonthIncompleteSummaries(incompleteSummaryByMonth)
             phase = .failed(message)
@@ -256,26 +258,24 @@ struct HomeExecutionSession {
 
     mutating func failForMissingConnection() -> AlertMessage {
         let message = String(localized: "home.execution.notConnected")
-        applyEvent(
-            .recordTerminalFailure(MonthTerminalFailure(kind: .missingConnection, message: message)),
-            where: { !$0.isFullyCompleted && !$0.failureFacts.hasTerminalFailure && ($0.hasPendingDownloadWork || $0.needsUpload && !$0.workFacts.uploadFinished) }
-        )
+        let failure = MonthTerminalFailure(kind: .missingConnection, message: message)
+        applyToMonths(where: \.shouldReceiveRunAbortFailure) { $0.recordTerminalFailure(failure) }
         phase = .failed(message)
         return AlertMessage(title: String(localized: "common.error"), message: message)
     }
 
     mutating func beginDownloadMonth(_ month: LibraryMonthKey) {
         if monthPlans[month]?.phase == .downloadPaused {
-            monthPlans[month]?.apply(.downloadResumed)
+            monthPlans[month]?.markDownloadResumed()
         } else {
-            monthPlans[month]?.apply(.downloadStarted)
+            monthPlans[month]?.markDownloadStarted()
         }
         assetCountByMonth.removeValue(forKey: month)
         processedCountByMonth.removeValue(forKey: month)
     }
 
     mutating func completeComplementMonthUpload(_ month: LibraryMonthKey) {
-        monthPlans[month]?.apply(.uploadCompleted)
+        monthPlans[month]?.markUploadDurablyCompleted()
     }
 
     mutating func completeDownloadMonth(_ month: LibraryMonthKey) {
@@ -290,28 +290,29 @@ struct HomeExecutionSession {
     }
 
     mutating func recordMonthIncomplete(_ month: LibraryMonthKey, summary: BackupMonthIncompleteSummary) {
-        monthPlans[month]?.apply(.recordIncomplete(summary))
+        monthPlans[month]?.recordDownloadIncomplete(summary)
+    }
+
+    mutating func recordDurableUploadSnapshotDeferred(_ month: LibraryMonthKey, message: String) {
+        monthPlans[month]?.recordDurableUploadSnapshotDeferred(message: message)
     }
 
     mutating func finishDownloadAttempt(_ month: LibraryMonthKey) {
-        monthPlans[month]?.apply(.downloadCompleted)
-        monthPlans[month]?.apply(.downloadAttemptFinished)
+        monthPlans[month]?.closeDownloadAttemptClean()
     }
 
     mutating func finishDownloadAttemptWithIncomplete(
         _ month: LibraryMonthKey,
         summary: BackupMonthIncompleteSummary
     ) {
-        monthPlans[month]?.apply(.recordIncomplete(summary))
-        monthPlans[month]?.apply(.downloadAttemptFinished)
+        monthPlans[month]?.closeDownloadAttemptIncomplete(summary)
     }
 
     mutating func finishDownloadAttemptWithFailure(
         _ month: LibraryMonthKey,
         failure: MonthTerminalFailure
     ) {
-        monthPlans[month]?.apply(.recordTerminalFailure(failure))
-        monthPlans[month]?.apply(.downloadAttemptFinished)
+        monthPlans[month]?.closeDownloadAttemptFailed(failure)
     }
 
     func phaseLabel(for month: LibraryMonthKey) -> String {
@@ -320,7 +321,7 @@ struct HomeExecutionSession {
 
     mutating func finishExecution() {
         for key in monthPlans.keys {
-            monthPlans[key]?.finalizeIfOpen()
+            closeMonthForFinishedExecutionRollup(key)
         }
         let hasFailure = monthPlans.values.contains(where: \.hasUserVisibleFailure)
         phase = hasFailure ? .failed(String(localized: "home.execution.partialFailed")) : .completed
@@ -334,10 +335,8 @@ struct HomeExecutionSession {
         reason: String,
         kind: MonthTerminalFailure.Kind = .generic
     ) -> AlertMessage {
-        applyEvent(
-            .recordTerminalFailure(MonthTerminalFailure(kind: kind, message: reason)),
-            where: { !$0.isFullyCompleted && !$0.failureFacts.hasTerminalFailure && ($0.hasPendingDownloadWork || $0.needsUpload && !$0.workFacts.uploadFinished) }
-        )
+        let failure = MonthTerminalFailure(kind: kind, message: reason)
+        applyToMonths(where: \.shouldReceiveRunAbortFailure) { $0.recordTerminalFailure(failure) }
         phase = .failed(reason)
         return AlertMessage(title: String(localized: "common.error"), message: reason)
     }
@@ -374,8 +373,8 @@ struct HomeExecutionSession {
     ) {
         let uploadTargets = Set(backupMonths).union(complementMonths)
         for month in uploadTargets {
-            guard let plan = monthPlans[month], !plan.isTerminal, plan.phase != .uploadDone else { continue }
-            monthPlans[month]?.apply(.recordTerminalFailure(MonthTerminalFailure(kind: kind, message: message)))
+            guard let plan = monthPlans[month], plan.shouldReceiveUploadRunFailure else { continue }
+            monthPlans[month]?.recordTerminalFailure(MonthTerminalFailure(kind: kind, message: message))
         }
     }
 
@@ -383,7 +382,15 @@ struct HomeExecutionSession {
         _ summariesByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary]
     ) {
         for (month, summary) in summariesByMonth {
-            monthPlans[month]?.apply(.recordIncomplete(summary))
+            monthPlans[month]?.recordDownloadIncomplete(summary)
+        }
+    }
+
+    private mutating func recordDurableUploadSnapshotDeferredMessages(
+        _ messagesByMonth: [LibraryMonthKey: String]
+    ) {
+        for (month, message) in messagesByMonth {
+            monthPlans[month]?.recordDurableUploadSnapshotDeferred(message: message)
         }
     }
 
@@ -391,9 +398,9 @@ struct HomeExecutionSession {
         for key in monthPlans.keys {
             switch monthPlans[key]?.phase {
             case .uploading:
-                monthPlans[key]?.apply(.uploadPaused)
+                monthPlans[key]?.markUploadPaused()
             case .downloading:
-                monthPlans[key]?.apply(.downloadPaused)
+                monthPlans[key]?.markDownloadPaused()
             default:
                 break
             }
@@ -404,17 +411,32 @@ struct HomeExecutionSession {
         for key in monthPlans.keys {
             switch monthPlans[key]?.phase {
             case .uploadPaused:
-                monthPlans[key]?.apply(.uploadResumed)
+                monthPlans[key]?.markUploadResumed()
             default:
                 break
             }
         }
     }
 
-    private mutating func applyEvent(_ event: MonthEvent, where predicate: (MonthPlan) -> Bool) {
+    private mutating func closeMonthForFinishedExecutionRollup(_ key: LibraryMonthKey) {
+        guard var plan = monthPlans[key] else { return }
+        plan.workFacts.uploadFinished = true
+        plan.workFacts.downloadFinished = true
+        if plan.failureFacts.hasTerminalFailure {
+            plan.phase = .failed
+        } else if plan.failureFacts.hasNonFatalIssues {
+            plan.phase = .partiallyFailed
+        } else {
+            plan.phase = .completed
+        }
+        monthPlans[key] = plan
+    }
+
+    private mutating func applyToMonths(where predicate: (MonthPlan) -> Bool, _ body: (inout MonthPlan) -> Void) {
         for key in monthPlans.keys {
-            if let plan = monthPlans[key], predicate(plan) {
-                monthPlans[key]?.apply(event)
+            if var plan = monthPlans[key], predicate(plan) {
+                body(&plan)
+                monthPlans[key] = plan
             }
         }
     }

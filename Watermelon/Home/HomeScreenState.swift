@@ -116,7 +116,6 @@ enum MonthEvent {
     case downloadResumed
     case downloadCompleted
     case downloadAttemptFinished
-    case completed
     case recordUploadFailures(observedFailedItemCount: Int)
     case recordIncomplete(BackupMonthIncompleteSummary)
     case recordTerminalFailure(MonthTerminalFailure)
@@ -127,15 +126,16 @@ enum MonthEvent {
 struct MonthFailureFacts: Equatable, Sendable {
     var uploadFailedItemCount: Int = 0
     var incomplete: BackupMonthIncompleteSummary = .init()
+    var durableSnapshotDeferredMessage: String?
     var terminalFailure: MonthTerminalFailure?
 
     var isEmpty: Bool {
-        uploadFailedItemCount == 0 && incomplete.isEmpty && terminalFailure == nil
+        uploadFailedItemCount == 0 && incomplete.isEmpty && durableSnapshotDeferredMessage == nil && terminalFailure == nil
     }
 
     var hasTerminalFailure: Bool { terminalFailure != nil }
     var hasNonFatalIssues: Bool {
-        uploadFailedItemCount > 0 || !incomplete.isEmpty
+        uploadFailedItemCount > 0 || !incomplete.isEmpty || durableSnapshotDeferredMessage != nil
     }
     var hasUserVisibleFailure: Bool {
         hasTerminalFailure || hasNonFatalIssues
@@ -147,6 +147,10 @@ struct MonthFailureFacts: Equatable, Sendable {
 
     mutating func recordIncomplete(_ summary: BackupMonthIncompleteSummary) {
         incomplete.mergeObserved(summary)
+    }
+
+    mutating func recordDurableSnapshotDeferred(message: String) {
+        durableSnapshotDeferredMessage = message
     }
 
     mutating func recordTerminalFailure(_ failure: MonthTerminalFailure) {
@@ -165,6 +169,9 @@ struct MonthFailureFacts: Equatable, Sendable {
             for: incomplete,
             month: month
         ))
+        if let message = durableSnapshotDeferredMessage, !message.isEmpty {
+            parts.append(message)
+        }
         if let message = terminalFailure?.message, !message.isEmpty {
             parts.append(message)
         }
@@ -216,15 +223,27 @@ struct MonthPlan {
         case failed
     }
 
-    var isTerminal: Bool { phase == .completed || phase == .failed || phase == .partiallyFailed }
-    var isFullyCompleted: Bool { phase == .completed }
-    var isDone: Bool { phase == .completed || phase == .partiallyFailed }
     var isFailed: Bool { phase == .failed }
     var hasTerminalFailure: Bool { failureFacts.hasTerminalFailure }
     var hasUserVisibleFailure: Bool { failureFacts.hasUserVisibleFailure }
     var isActive: Bool { phase == .uploading || phase == .downloading }
+    private var hasPendingUploadWork: Bool {
+        needsUpload && !workFacts.uploadFinished && !failureFacts.hasTerminalFailure
+    }
     var hasPendingDownloadWork: Bool {
         needsDownload && !workFacts.downloadFinished && !failureFacts.hasTerminalFailure
+    }
+    private var isAllRequiredWorkClosed: Bool {
+        (!needsUpload || workFacts.uploadFinished) && (!needsDownload || workFacts.downloadFinished)
+    }
+    var shouldReceiveRunAbortFailure: Bool {
+        !failureFacts.hasTerminalFailure && !isAllRequiredWorkClosed && (hasPendingUploadWork || hasPendingDownloadWork)
+    }
+    var shouldReceiveUploadRunFailure: Bool {
+        !failureFacts.hasTerminalFailure && !isAllRequiredWorkClosed && phase != .uploadDone && hasPendingUploadWork
+    }
+    var hasClosedUserVisibleOutcome: Bool {
+        phase == .completed || phase == .failed || (phase == .partiallyFailed && isAllRequiredWorkClosed)
     }
     var canStartInlineComplementDownload: Bool {
         needsUpload && needsDownload && hasPendingDownloadWork
@@ -238,16 +257,74 @@ struct MonthPlan {
         }
     }
 
-    mutating func apply(_ event: MonthEvent) {
+    mutating func markUploadStarted() {
+        apply(.uploadStarted)
+    }
+
+    mutating func markUploadPaused() {
+        apply(.uploadPaused)
+    }
+
+    mutating func markUploadResumed() {
+        apply(.uploadResumed)
+    }
+
+    mutating func markUploadDurablyCompleted() {
+        apply(.uploadCompleted)
+    }
+
+    mutating func recordUploadFailures(observedFailedItemCount: Int) {
+        apply(.recordUploadFailures(observedFailedItemCount: observedFailedItemCount))
+    }
+
+    mutating func recordDownloadIncomplete(_ summary: BackupMonthIncompleteSummary) {
+        apply(.recordIncomplete(summary))
+    }
+
+    mutating func recordDurableUploadSnapshotDeferred(message: String) {
+        workFacts.uploadFinished = true
+        failureFacts.recordDurableSnapshotDeferred(message: message)
+        refreshTerminalPhaseProjection()
+    }
+
+    mutating func recordTerminalFailure(_ failure: MonthTerminalFailure) {
+        apply(.recordTerminalFailure(failure))
+    }
+
+    mutating func markDownloadStarted() {
+        apply(.downloadStarted)
+    }
+
+    mutating func markDownloadPaused() {
+        apply(.downloadPaused)
+    }
+
+    mutating func markDownloadResumed() {
+        apply(.downloadResumed)
+    }
+
+    mutating func closeDownloadAttemptClean() {
+        apply(.downloadCompleted)
+        apply(.downloadAttemptFinished)
+    }
+
+    mutating func closeDownloadAttemptIncomplete(_ summary: BackupMonthIncompleteSummary) {
+        apply(.recordIncomplete(summary))
+        apply(.downloadAttemptFinished)
+    }
+
+    mutating func closeDownloadAttemptFailed(_ failure: MonthTerminalFailure) {
+        apply(.recordTerminalFailure(failure))
+        apply(.downloadAttemptFinished)
+    }
+
+    fileprivate mutating func apply(_ event: MonthEvent) {
         switch event {
         case .recordUploadFailures(let observedFailedItemCount):
             failureFacts.recordUploadFailures(observedFailedItemCount: observedFailedItemCount)
             refreshTerminalPhaseProjection()
         case .recordIncomplete(let summary):
             failureFacts.recordIncomplete(summary)
-            if summary.metadataSnapshotDeferredMessage != nil {
-                workFacts.uploadFinished = true
-            }
             refreshTerminalPhaseProjection()
         case .recordTerminalFailure(let failure):
             failureFacts.recordTerminalFailure(failure)
@@ -305,19 +382,7 @@ struct MonthPlan {
             guard workFacts.downloadStarted else { break }
             workFacts.downloadFinished = true
             refreshTerminalPhaseProjection(defaultWhenNoFacts: .completed)
-        case .completed:
-            refreshTerminalPhaseProjection(defaultWhenNoFacts: .completed)
         }
-    }
-
-    mutating func finalizeIfOpen() {
-        workFacts.uploadFinished = true
-        workFacts.downloadFinished = true
-        guard !isTerminal else {
-            refreshTerminalPhaseProjection()
-            return
-        }
-        refreshTerminalPhaseProjection(defaultWhenNoFacts: .completed)
     }
 
     private mutating func refreshTerminalPhaseProjection(defaultWhenNoFacts: Phase? = nil) {
@@ -385,7 +450,7 @@ struct HomeExecutionState {
         )
 
         if monthPlans[month] != nil {
-            if monthPlans[month]?.isFullyCompleted == true {
+            if monthPlans[month]?.phase == .completed {
                 return 100.0
             }
             if let total = assetCountByMonth[month], total > 0,

@@ -18,5 +18,6 @@ struct MonthChangeEvent: Sendable {
         case started
         case completed
         case incomplete(BackupMonthIncompleteSummary)
+        case uploadDurableSnapshotDeferred(message: String)
     }
 }

@@ -163,6 +163,8 @@
 4. 汇总 `assetCountByMonth / processedCountByMonth`
 5. 维护上传阶段 remote sync 节流时间
 
+`MonthPlan` 是 Home 跨 upload / inline download / pure download 的月份执行契约；生产代码通过命名方法和 predicate 变更它，不直接套用 raw event。
+
 ## 4. 备份控制面
 
 ### `BackupSessionController`
@@ -178,9 +180,10 @@
 说明：
 
 1. 首页不会复用旧 controller；每次执行都会新建一份 `BackupSessionController`。
-2. `BackupSessionAsyncBridge` 把控制器适配为 `async/await` 接口，给 `HomeExecutionCoordinator` 使用。
-3. `BackupSessionReducer` 是控制器内部的状态机推导器。
-4. `BackupResumePlanner` 负责从历史 monthPlan / manifest 推导可恢复的执行计划。
+2. `uploadCompletedMonths` 只表示上传引擎的月度完成，不等于 Home sync 月份的最终完成。
+3. `BackupSessionAsyncBridge` 把控制器适配为 `async/await` 接口，给 `HomeExecutionCoordinator` 使用。
+4. `BackupSessionReducer` 是控制器内部的状态机推导器。
+5. `BackupResumePlanner` 负责从历史 monthPlan / manifest 推导可恢复的执行计划。
 
 ## 5. 备份执行面
 

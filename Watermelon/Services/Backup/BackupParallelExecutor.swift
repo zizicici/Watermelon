@@ -696,15 +696,15 @@ struct BackupParallelExecutor: Sendable {
                                 ),
                                 unless: error
                             )
-                            if isSnapshotWriteFailed && shouldFinishMonth {
-                                // Commit durable; snapshot deferred. Month must not emit `.completed`.
-                                eventStream.emit(.monthChanged(MonthChangeEvent(
-                                    year: monthKey.year,
-                                    month: monthKey.month,
-                                    action: .incomplete(BackupMonthIncompleteSummary(
-                                        metadataSnapshotDeferredMessage: profile.userFacingStorageErrorMessage(error)
-                                    ))
-                                )))
+                            if Self.shouldEmitUploadDurableSnapshotDeferred(
+                                error: error,
+                                shouldFinishMonth: shouldFinishMonth
+                            ) {
+                                Self.emitUploadDurableSnapshotDeferred(
+                                    eventStream: eventStream,
+                                    month: monthKey,
+                                    message: profile.userFacingStorageErrorMessage(error)
+                                )
                             } else if !isSnapshotWriteFailed {
                                 throw error
                             }
@@ -843,6 +843,32 @@ struct BackupParallelExecutor: Sendable {
             return
         }
         publishMonthSnapshot(monthStore: monthStore, month: month, remoteIndexService: remoteIndexService)
+    }
+
+    @discardableResult
+    static func emitUploadDurableSnapshotDeferred(
+        eventStream: BackupEventStream,
+        month: LibraryMonthKey,
+        message: String
+    ) -> Bool {
+        eventStream.emit(.monthChanged(MonthChangeEvent(
+            year: month.year,
+            month: month.month,
+            action: .uploadDurableSnapshotDeferred(message: message)
+        )))
+        return true
+    }
+
+    static func shouldEmitUploadDurableSnapshotDeferred(
+        error: Error,
+        shouldFinishMonth: Bool
+    ) -> Bool {
+        guard shouldFinishMonth,
+              let flushError = error as? V2MonthSession.FlushError,
+              case .snapshotWriteFailed = flushError else {
+            return false
+        }
+        return flushError.cancellationCause == nil
     }
 
     private static func publishMonthSnapshot(

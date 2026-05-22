@@ -83,9 +83,6 @@ enum BackupMonthIncompleteSummaryRenderer {
                 issues.localFingerprintVerificationIncompleteCount
             ))
         }
-        if let message = summary.metadataSnapshotDeferredMessage, !message.isEmpty {
-            parts.append(message)
-        }
         return parts
     }
 }

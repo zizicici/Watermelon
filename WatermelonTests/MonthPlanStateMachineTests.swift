@@ -11,16 +11,16 @@ final class MonthPlanStateMachineTests: XCTestCase {
         ))
 
         var uploadFirst = MonthPlan(needsUpload: true, needsDownload: true)
-        uploadFirst.apply(.uploadStarted)
-        uploadFirst.apply(.uploadCompleted)
-        uploadFirst.apply(.recordUploadFailures(observedFailedItemCount: 4))
-        uploadFirst.apply(.recordIncomplete(summary))
+        uploadFirst.markUploadStarted()
+        uploadFirst.markUploadDurablyCompleted()
+        uploadFirst.recordUploadFailures(observedFailedItemCount: 4)
+        uploadFirst.recordDownloadIncomplete(summary)
 
         var downloadFirst = MonthPlan(needsUpload: true, needsDownload: true)
-        downloadFirst.apply(.uploadStarted)
-        downloadFirst.apply(.uploadCompleted)
-        downloadFirst.apply(.recordIncomplete(summary))
-        downloadFirst.apply(.recordUploadFailures(observedFailedItemCount: 4))
+        downloadFirst.markUploadStarted()
+        downloadFirst.markUploadDurablyCompleted()
+        downloadFirst.recordDownloadIncomplete(summary)
+        downloadFirst.recordUploadFailures(observedFailedItemCount: 4)
 
         XCTAssertEqual(uploadFirst.phase, .partiallyFailed)
         XCTAssertEqual(downloadFirst.phase, .partiallyFailed)
@@ -34,10 +34,10 @@ final class MonthPlanStateMachineTests: XCTestCase {
         let summary = BackupMonthIncompleteSummary(downloadIssues: DownloadIssueSummary(skippedIncompleteCount: 2))
         var plan = MonthPlan(needsUpload: true, needsDownload: true)
 
-        plan.apply(.recordUploadFailures(observedFailedItemCount: 3))
-        plan.apply(.recordIncomplete(summary))
-        plan.apply(.recordTerminalFailure(terminal))
-        plan.apply(.completed)
+        plan.recordUploadFailures(observedFailedItemCount: 3)
+        plan.recordDownloadIncomplete(summary)
+        plan.recordTerminalFailure(terminal)
+        plan.markUploadDurablyCompleted()
 
         XCTAssertEqual(plan.phase, .failed)
         XCTAssertEqual(plan.failureFacts.uploadFailedItemCount, 3)
@@ -47,12 +47,12 @@ final class MonthPlanStateMachineTests: XCTestCase {
 
     func testCompletedAfterNonFatalFactsRemainsPartiallyFailed() {
         var plan = MonthPlan(needsUpload: false, needsDownload: true)
-        plan.apply(.downloadStarted)
-        plan.apply(.recordIncomplete(BackupMonthIncompleteSummary(
+        plan.markDownloadStarted()
+        plan.recordDownloadIncomplete(BackupMonthIncompleteSummary(
             downloadIssues: DownloadIssueSummary(fingerprintMismatchCount: 2)
-        )))
+        ))
 
-        plan.apply(.completed)
+        plan.closeDownloadAttemptClean()
 
         XCTAssertEqual(plan.phase, .partiallyFailed)
         XCTAssertTrue(plan.failureFacts.hasUserVisibleFailure)
@@ -64,42 +64,84 @@ final class MonthPlanStateMachineTests: XCTestCase {
                 skippedIncompleteCount: 3,
                 fingerprintMismatchCount: 1,
                 localFingerprintVerificationIncompleteCount: 2
-            ),
-            metadataSnapshotDeferredMessage: "old snapshot warning"
+            )
         )
         let second = BackupMonthIncompleteSummary(
             downloadIssues: DownloadIssueSummary(
                 skippedIncompleteCount: 1,
                 fingerprintMismatchCount: 4,
                 localFingerprintVerificationIncompleteCount: 2
-            ),
-            metadataSnapshotDeferredMessage: "new snapshot warning"
+            )
         )
         var plan = MonthPlan(needsUpload: true, needsDownload: true)
 
-        plan.apply(.recordUploadFailures(observedFailedItemCount: 2))
-        plan.apply(.recordUploadFailures(observedFailedItemCount: 2))
-        plan.apply(.recordUploadFailures(observedFailedItemCount: 5))
-        plan.apply(.recordUploadFailures(observedFailedItemCount: -9))
-        plan.apply(.recordIncomplete(first))
-        plan.apply(.recordIncomplete(first))
-        plan.apply(.recordIncomplete(second))
+        plan.recordUploadFailures(observedFailedItemCount: 2)
+        plan.recordUploadFailures(observedFailedItemCount: 2)
+        plan.recordUploadFailures(observedFailedItemCount: 5)
+        plan.recordUploadFailures(observedFailedItemCount: -9)
+        plan.recordDownloadIncomplete(first)
+        plan.recordDownloadIncomplete(first)
+        plan.recordDownloadIncomplete(second)
 
         XCTAssertEqual(plan.failureFacts.uploadFailedItemCount, 5)
         XCTAssertEqual(plan.failureFacts.incomplete.downloadIssues.skippedIncompleteCount, 3)
         XCTAssertEqual(plan.failureFacts.incomplete.downloadIssues.fingerprintMismatchCount, 4)
         XCTAssertEqual(plan.failureFacts.incomplete.downloadIssues.localFingerprintVerificationIncompleteCount, 2)
-        XCTAssertEqual(plan.failureFacts.incomplete.metadataSnapshotDeferredMessage, "new snapshot warning")
     }
 
     func testTerminalFailureLatestWins() {
         var plan = MonthPlan(needsUpload: true, needsDownload: false)
-        plan.apply(.recordTerminalFailure(MonthTerminalFailure(kind: .backupStartFailed, message: "start failed")))
-        plan.apply(.recordTerminalFailure(MonthTerminalFailure(kind: .uploadRunFailed, message: "upload failed")))
+        plan.recordTerminalFailure(MonthTerminalFailure(kind: .backupStartFailed, message: "start failed"))
+        plan.recordTerminalFailure(MonthTerminalFailure(kind: .uploadRunFailed, message: "upload failed"))
 
         XCTAssertEqual(plan.phase, .failed)
         XCTAssertEqual(plan.failureFacts.terminalFailure?.kind, .uploadRunFailed)
         XCTAssertEqual(plan.failureFacts.terminalFailure?.message, "upload failed")
+    }
+
+    func testDurableSnapshotDeferredClosesUploadThroughNamedPath() {
+        var plan = MonthPlan(needsUpload: true, needsDownload: false)
+
+        plan.recordDurableUploadSnapshotDeferred(message: "snapshot deferred")
+
+        XCTAssertTrue(plan.workFacts.uploadFinished)
+        XCTAssertEqual(plan.phase, .partiallyFailed)
+        XCTAssertEqual(plan.failureFacts.durableSnapshotDeferredMessage, "snapshot deferred")
+    }
+
+    func testUploadProgressCompletionTriggersSyncAfterIncompleteWarning() {
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        let summary = BackupMonthIncompleteSummary(downloadIssues: DownloadIssueSummary(skippedIncompleteCount: 1))
+        var session = HomeExecutionSession()
+        session.enter(backup: [], download: [], complement: [month], localAssetIDs: { _ in ["asset1"] })
+        session.recordMonthIncomplete(month, summary: summary)
+
+        let shouldSync = session.handleUploadProgress(
+            uploadProgress(newlyUploadCompletedMonths: [month]),
+            now: 100,
+            syncThrottleInterval: 1_000
+        )
+
+        XCTAssertTrue(shouldSync)
+        XCTAssertTrue(session.monthPlans[month]?.workFacts.uploadFinished == true)
+        XCTAssertEqual(session.monthPlans[month]?.phase, .partiallyFailed)
+    }
+
+    func testUploadProgressCompletionTriggersSyncAfterDurableSnapshotDeferredWarning() {
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        var session = HomeExecutionSession()
+        session.enter(backup: [month], download: [], complement: [], localAssetIDs: { _ in ["asset1"] })
+        session.recordDurableUploadSnapshotDeferred(month, message: "snapshot deferred")
+
+        let shouldSync = session.handleUploadProgress(
+            uploadProgress(newlyUploadCompletedMonths: [month]),
+            now: 100,
+            syncThrottleInterval: 1_000
+        )
+
+        XCTAssertTrue(shouldSync)
+        XCTAssertTrue(session.monthPlans[month]?.workFacts.uploadFinished == true)
+        XCTAssertEqual(session.monthPlans[month]?.phase, .partiallyFailed)
     }
 
     func testUploadFailuresDoNotSuppressPendingComplementDownload() {
@@ -110,7 +152,8 @@ final class MonthPlanStateMachineTests: XCTestCase {
 
         let outcome = session.handleUploadResult(.completed(
             failedCountByMonth: [month: 3],
-            incompleteSummaryByMonth: [:]
+            incompleteSummaryByMonth: [:],
+            uploadSnapshotDeferredMessageByMonth: [:]
         ))
 
         if case .continueToDownload = outcome {} else {
@@ -121,13 +164,129 @@ final class MonthPlanStateMachineTests: XCTestCase {
         XCTAssertTrue(session.monthPlans[month]?.hasPendingDownloadWork == true)
     }
 
-    func testDownloadStartedTransitionsPartiallyFailedToDownloading() {
+    func testUploadDoneComplementDoesNotReceiveUploadRunFailure() {
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        var session = HomeExecutionSession()
+        session.enter(backup: [], download: [], complement: [month], localAssetIDs: { _ in ["asset1"] })
+        session.completeComplementMonthUpload(month)
+
+        _ = session.handleUploadResult(.failed(
+            "upload failed",
+            failedCountByMonth: [:],
+            incompleteSummaryByMonth: [:],
+            uploadSnapshotDeferredMessageByMonth: [:]
+        ))
+
+        let plan = session.monthPlans[month]!
+        XCTAssertEqual(plan.phase, .uploadDone)
+        XCTAssertNil(plan.failureFacts.terminalFailure)
+        XCTAssertTrue(plan.hasPendingDownloadWork)
+    }
+
+    func testFailedUploadResultAppliesDurableSnapshotDeferredBeforeTerminalStamp() {
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        var session = HomeExecutionSession()
+        session.enter(backup: [month], download: [], complement: [], localAssetIDs: { _ in ["asset1"] })
+
+        _ = session.handleUploadResult(.failed(
+            "upload failed",
+            failedCountByMonth: [:],
+            incompleteSummaryByMonth: [:],
+            uploadSnapshotDeferredMessageByMonth: [month: "snapshot deferred"]
+        ))
+
+        let plan = session.monthPlans[month]!
+        XCTAssertTrue(plan.workFacts.uploadFinished)
+        XCTAssertEqual(plan.failureFacts.durableSnapshotDeferredMessage, "snapshot deferred")
+        XCTAssertNil(plan.failureFacts.terminalFailure)
+        XCTAssertEqual(plan.phase, .partiallyFailed)
+    }
+
+    func testComplementPartialWithPendingDownloadReceivesRunAbortFailure() {
         var plan = MonthPlan(needsUpload: true, needsDownload: true)
-        plan.apply(.uploadCompleted)
-        plan.apply(.recordUploadFailures(observedFailedItemCount: 2))
+        plan.markUploadDurablyCompleted()
+        plan.recordUploadFailures(observedFailedItemCount: 2)
 
         XCTAssertEqual(plan.phase, .partiallyFailed)
-        plan.apply(.downloadStarted)
+        XCTAssertTrue(plan.shouldReceiveRunAbortFailure)
+        XCTAssertFalse(plan.hasClosedUserVisibleOutcome)
+    }
+
+    func testClosedPartialDoesNotReceiveRunAbortFailure() {
+        var plan = MonthPlan(needsUpload: true, needsDownload: true)
+        plan.markUploadDurablyCompleted()
+        plan.recordUploadFailures(observedFailedItemCount: 2)
+        plan.markDownloadStarted()
+        plan.closeDownloadAttemptClean()
+
+        XCTAssertEqual(plan.phase, .partiallyFailed)
+        XCTAssertFalse(plan.shouldReceiveRunAbortFailure)
+        XCTAssertTrue(plan.hasClosedUserVisibleOutcome)
+    }
+
+    func testRound18DurableSnapshotDeferredIsNotStampedByMissingConnection() {
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        var session = HomeExecutionSession()
+        session.enter(backup: [month], download: [], complement: [], localAssetIDs: { _ in ["asset1"] })
+        session.recordDurableUploadSnapshotDeferred(month, message: "snapshot deferred")
+
+        _ = session.failForMissingConnection()
+
+        let plan = session.monthPlans[month]!
+        XCTAssertTrue(plan.workFacts.uploadFinished)
+        XCTAssertNil(plan.failureFacts.terminalFailure)
+        XCTAssertEqual(plan.phase, .partiallyFailed)
+    }
+
+    func testFailForMissingConnectionSessionMatrix() {
+        let pendingUpload = LibraryMonthKey(year: 2024, month: 6)
+        let closedPartial = LibraryMonthKey(year: 2024, month: 7)
+        let completed = LibraryMonthKey(year: 2024, month: 8)
+        let existingFailed = LibraryMonthKey(year: 2024, month: 9)
+        var session = HomeExecutionSession()
+        session.enter(
+            backup: [pendingUpload],
+            download: [closedPartial, completed, existingFailed],
+            complement: [],
+            localAssetIDs: { _ in ["asset1"] }
+        )
+
+        session.beginDownloadMonth(closedPartial)
+        session.finishDownloadAttemptWithIncomplete(
+            closedPartial,
+            summary: BackupMonthIncompleteSummary(
+                downloadIssues: DownloadIssueSummary(skippedIncompleteCount: 1)
+            )
+        )
+        session.beginDownloadMonth(completed)
+        session.finishDownloadAttempt(completed)
+        session.beginDownloadMonth(existingFailed)
+        session.finishDownloadAttemptWithFailure(
+            existingFailed,
+            failure: MonthTerminalFailure(kind: .downloadRunFailed, message: "download failed")
+        )
+
+        _ = session.failForMissingConnection()
+
+        XCTAssertEqual(
+            session.monthPlans[pendingUpload]?.failureFacts.terminalFailure?.kind,
+            .missingConnection
+        )
+        XCTAssertNil(session.monthPlans[closedPartial]?.failureFacts.terminalFailure)
+        XCTAssertNil(session.monthPlans[completed]?.failureFacts.terminalFailure)
+        XCTAssertEqual(
+            session.monthPlans[existingFailed]?.failureFacts.terminalFailure?.kind,
+            .downloadRunFailed
+        )
+    }
+
+    func testDownloadStartedTransitionsPartiallyFailedToDownloading() {
+        var plan = MonthPlan(needsUpload: true, needsDownload: true)
+        plan.markUploadDurablyCompleted()
+        plan.recordUploadFailures(observedFailedItemCount: 2)
+
+        XCTAssertEqual(plan.phase, .partiallyFailed)
+        plan.markDownloadStarted()
 
         XCTAssertEqual(plan.phase, .downloading)
         XCTAssertEqual(plan.failureFacts.uploadFailedItemCount, 2)
@@ -138,7 +297,7 @@ final class MonthPlanStateMachineTests: XCTestCase {
     func testDownloadAttemptFinishedWithoutStartDoesNotCloseWork() {
         var plan = MonthPlan(needsUpload: false, needsDownload: true)
 
-        plan.apply(.downloadAttemptFinished)
+        plan.closeDownloadAttemptClean()
 
         XCTAssertFalse(plan.workFacts.downloadStarted)
         XCTAssertFalse(plan.workFacts.downloadFinished)
@@ -213,18 +372,18 @@ final class MonthPlanStateMachineTests: XCTestCase {
 
     func testPartiallyFailedActiveDownloadCanPauseAndResume() {
         var plan = MonthPlan(needsUpload: true, needsDownload: true)
-        plan.apply(.uploadCompleted)
-        plan.apply(.recordUploadFailures(observedFailedItemCount: 2))
-        plan.apply(.downloadStarted)
+        plan.markUploadDurablyCompleted()
+        plan.recordUploadFailures(observedFailedItemCount: 2)
+        plan.markDownloadStarted()
 
         XCTAssertEqual(plan.phase, .downloading)
-        plan.apply(.downloadPaused)
+        plan.markDownloadPaused()
 
         XCTAssertEqual(plan.phase, .downloadPaused)
         XCTAssertTrue(plan.workFacts.hasActiveDownloadAttempt)
         XCTAssertTrue(plan.hasPendingDownloadWork)
 
-        plan.apply(.downloadResumed)
+        plan.markDownloadResumed()
 
         XCTAssertEqual(plan.phase, .downloading)
         XCTAssertEqual(plan.failureFacts.uploadFailedItemCount, 2)
@@ -243,7 +402,8 @@ final class MonthPlanStateMachineTests: XCTestCase {
 
         let outcome = session.handleUploadResult(.completed(
             failedCountByMonth: [month: 3],
-            incompleteSummaryByMonth: [:]
+            incompleteSummaryByMonth: [:],
+            uploadSnapshotDeferredMessageByMonth: [:]
         ))
 
         if case .continueToDownload = outcome {} else {
@@ -264,14 +424,13 @@ final class MonthPlanStateMachineTests: XCTestCase {
         ))
 
         var factsFirst = MonthPlan(needsUpload: false, needsDownload: true)
-        factsFirst.apply(.downloadStarted)
-        factsFirst.apply(.recordIncomplete(summary))
-        factsFirst.apply(.downloadAttemptFinished)
+        factsFirst.markDownloadStarted()
+        factsFirst.closeDownloadAttemptIncomplete(summary)
 
         var attemptFirst = MonthPlan(needsUpload: false, needsDownload: true)
-        attemptFirst.apply(.downloadStarted)
-        attemptFirst.apply(.downloadAttemptFinished)
-        attemptFirst.apply(.recordIncomplete(summary))
+        attemptFirst.markDownloadStarted()
+        attemptFirst.closeDownloadAttemptClean()
+        attemptFirst.recordDownloadIncomplete(summary)
 
         XCTAssertEqual(factsFirst.phase, .partiallyFailed)
         XCTAssertEqual(attemptFirst.phase, .partiallyFailed)
@@ -347,7 +506,8 @@ final class MonthPlanStateMachineTests: XCTestCase {
 
         let result = BackupSessionAsyncBridge.UploadResult.completed(
             failedCountByMonth: [month: 3],
-            incompleteSummaryByMonth: [month: summary]
+            incompleteSummaryByMonth: [month: summary],
+            uploadSnapshotDeferredMessageByMonth: [:]
         )
         let outcome = session.handleUploadResult(result)
         if case .finished = outcome {} else {
@@ -370,12 +530,12 @@ final class MonthPlanStateMachineTests: XCTestCase {
                 skippedIncompleteCount: 1,
                 fingerprintMismatchCount: 2,
                 localFingerprintVerificationIncompleteCount: 3
-            ),
-            metadataSnapshotDeferredMessage: "snapshot deferred"
+            )
         )
         let facts = MonthFailureFacts(
             uploadFailedItemCount: 4,
             incomplete: summary,
+            durableSnapshotDeferredMessage: "snapshot deferred",
             terminalFailure: MonthTerminalFailure(kind: .downloadRunFailed, message: "download failed")
         )
         let state = HomeExecutionState(
@@ -424,5 +584,15 @@ final class MonthPlanStateMachineTests: XCTestCase {
         XCTAssertNotEqual(unverified, skipped)
         XCTAssertNotEqual(mismatch, skipped)
         XCTAssertNotEqual(mismatch, unverified)
+    }
+
+    private func uploadProgress(
+        newlyUploadCompletedMonths: Set<LibraryMonthKey>
+    ) -> BackupSessionAsyncBridge.UploadProgress {
+        BackupSessionAsyncBridge.UploadProgress(
+            newlyStartedMonths: [],
+            newlyUploadCompletedMonths: newlyUploadCompletedMonths,
+            processedCountByMonth: [:]
+        )
     }
 }

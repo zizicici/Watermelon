@@ -23,17 +23,13 @@ struct DownloadIssueSummary: Equatable, Sendable {
 
 struct BackupMonthIncompleteSummary: Equatable, Sendable {
     var downloadIssues: DownloadIssueSummary = .init()
-    var metadataSnapshotDeferredMessage: String?
 
     var isEmpty: Bool {
-        downloadIssues.isEmpty && metadataSnapshotDeferredMessage == nil
+        downloadIssues.isEmpty
     }
 
     mutating func mergeObserved(_ other: BackupMonthIncompleteSummary) {
         downloadIssues.mergeObserved(other.downloadIssues)
-        if let message = other.metadataSnapshotDeferredMessage {
-            metadataSnapshotDeferredMessage = message
-        }
     }
 }
 

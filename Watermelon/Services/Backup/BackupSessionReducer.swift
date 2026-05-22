@@ -53,8 +53,9 @@ struct BackupSessionState {
     var total: Int = 0
     var completedAssetIDsForResume: Set<String> = []
     var startedMonths = Set<LibraryMonthKey>()
-    var completedMonths = Set<LibraryMonthKey>()
+    var uploadCompletedMonths = Set<LibraryMonthKey>()
     var incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary] = [:]
+    var uploadSnapshotDeferredMessageByMonth: [LibraryMonthKey: String] = [:]
     var processedCountByMonth: [LibraryMonthKey: Int] = [:]
     var failedCountByMonth: [LibraryMonthKey: Int] = [:]
 
@@ -82,8 +83,9 @@ struct BackupSessionState {
             skipped: skipped,
             total: total,
             startedMonths: startedMonths,
-            completedMonths: completedMonths,
+            uploadCompletedMonths: uploadCompletedMonths,
             incompleteSummaryByMonth: incompleteSummaryByMonth,
+            uploadSnapshotDeferredMessageByMonth: uploadSnapshotDeferredMessageByMonth,
             processedCountByMonth: processedCountByMonth,
             failedCountByMonth: failedCountByMonth
         )
@@ -118,8 +120,9 @@ struct BackupSessionState {
         completedAssetIDsForResume.removeAll()
         if shouldResetSessionItems {
             startedMonths.removeAll()
-            completedMonths.removeAll()
+            uploadCompletedMonths.removeAll()
             incompleteSummaryByMonth.removeAll()
+            uploadSnapshotDeferredMessageByMonth.removeAll()
             processedCountByMonth.removeAll()
             failedCountByMonth.removeAll()
         }
@@ -204,6 +207,7 @@ struct BackupSessionState {
         controlPhase = .resuming
         currentRunMode = pausedDisplayMode
         statusText = String(localized: "backup.session.resuming")
+        // Per-month warnings survive resume; `.started` clears them when that month restarts.
         processedCountByMonth.removeAll()
         return BackupSessionResumeContext(pausedMode: pausedMode, pausedDisplayMode: pausedDisplayMode)
     }
@@ -299,15 +303,20 @@ struct BackupSessionState {
             switch change.action {
             case .started:
                 startedMonths.insert(monthKey)
-                completedMonths.remove(monthKey)
+                uploadCompletedMonths.remove(monthKey)
                 incompleteSummaryByMonth.removeValue(forKey: monthKey)
+                uploadSnapshotDeferredMessageByMonth.removeValue(forKey: monthKey)
                 failedCountByMonth.removeValue(forKey: monthKey)
             case .completed:
-                completedMonths.insert(monthKey)
+                uploadCompletedMonths.insert(monthKey)
                 incompleteSummaryByMonth.removeValue(forKey: monthKey)
+                uploadSnapshotDeferredMessageByMonth.removeValue(forKey: monthKey)
             case .incomplete(let summary):
-                completedMonths.remove(monthKey)
+                uploadCompletedMonths.insert(monthKey)
                 incompleteSummaryByMonth[monthKey, default: BackupMonthIncompleteSummary()].mergeObserved(summary)
+            case .uploadDurableSnapshotDeferred(let message):
+                uploadCompletedMonths.insert(monthKey)
+                uploadSnapshotDeferredMessageByMonth[monthKey] = message
             }
             return BackupSessionReductionOutcome(shouldStop: false, notification: .throttled)
 
@@ -418,7 +427,9 @@ struct BackupSessionState {
     }
 
     private func completedStatusText(runMode: BackupRunMode, failedCount: Int) -> String {
-        let completedWithoutWarnings = failedCount == 0 && incompleteSummaryByMonth.isEmpty
+        let completedWithoutWarnings = failedCount == 0 &&
+            incompleteSummaryByMonth.isEmpty &&
+            uploadSnapshotDeferredMessageByMonth.isEmpty
         switch (runMode.isRetry, completedWithoutWarnings) {
         case (true, true):
             return String(localized: "backup.session.retryCompleted")
