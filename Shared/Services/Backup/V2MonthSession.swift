@@ -25,6 +25,9 @@ final class V2MonthSession: BackupMonthStore {
             while let next = pending.popLast() {
                 if let cancel = next as? CancellationError { return cancel }
                 let nsError = next as NSError
+                if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+                    return CancellationError()
+                }
                 let key = "\(nsError.domain)#\(nsError.code)#\(nsError.localizedDescription)"
                 guard seen.insert(key).inserted else { continue }
                 switch next {

@@ -1647,6 +1647,21 @@ final class V2FlushTests: XCTestCase {
                      "nonExclusiveFinalization must not be cancellation")
     }
 
+    func testFlushErrorCancellationCause_recognisesNSURLErrorCancelledLeaf() {
+        let urlCancel = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        let gate = MetadataCreateGate.Error.stagingVerificationFailed(
+            remotePath: "/snapshot.jsonl",
+            underlying: urlCancel
+        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
+            committedAssets: [],
+            committedTombstones: [],
+            underlying: SnapshotWriter.WriteError.finalizationFailed(gate)
+        )
+        XCTAssertNotNil(wrapped.cancellationCause,
+                        "URLSession-level cancel (NSURLErrorDomain/-999) must be classified as cancellation so user-stop mid-flush doesn't surface as a non-cancel error")
+    }
+
     // MARK: - Strict-subset finder (BackupMonthStore wiring for production uploads)
 
     func testFindStrictSubsetAssetFingerprints_returnsOnlySupersededAssets() async throws {

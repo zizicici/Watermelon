@@ -614,6 +614,38 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         )
         return (asset, resource, link)
     }
+
+    // MARK: - isCancellationError
+
+    func testIsCancellationError_detectsBareCancellationError() {
+        XCTAssertTrue(AssetProcessor.isCancellationError(CancellationError()))
+    }
+
+    func testIsCancellationError_detectsRawNSURLErrorCancelledLeaf() {
+        let urlCancel = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        XCTAssertTrue(AssetProcessor.isCancellationError(urlCancel),
+                      "raw NSURLErrorCancelled from S3 URLSession must classify as cancellation")
+    }
+
+    func testIsCancellationError_detectsStorageWrappedNSURLErrorCancelled() {
+        let urlCancel = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        let wrapped = RemoteStorageClientError.underlying(urlCancel)
+        XCTAssertTrue(AssetProcessor.isCancellationError(wrapped))
+    }
+
+    func testIsCancellationError_detectsDeeplyNestedNSURLErrorCancelled() {
+        var error: Error = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        for _ in 0 ..< 8 {
+            error = NSError(domain: "wrap", code: 1, userInfo: [NSUnderlyingErrorKey: error as NSError])
+        }
+        XCTAssertTrue(AssetProcessor.isCancellationError(error))
+    }
+
+    func testIsCancellationError_doesNotMisclassifyTransportError() {
+        let timeout = NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+        XCTAssertFalse(AssetProcessor.isCancellationError(timeout))
+        XCTAssertFalse(AssetProcessor.isCancellationError(RemoteStorageClientError.underlying(timeout)))
+    }
 }
 
 private final class ThrowingCommitMonthStore: BackupMonthStore {

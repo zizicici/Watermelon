@@ -356,6 +356,9 @@ final class HomeExecutionCoordinator {
 
     @discardableResult
     private func handleUploadResult(_ result: BackupSessionAsyncBridge.UploadResult) async -> Bool {
+        // Captured before session mutation so an upload-run rollup that newly stamps
+        // terminal failures on its targets isn't mistaken for a pre-existing per-month alert.
+        let hadMonthTerminalFailureBeforeUploadRollup = session.monthPlans.values.contains { $0.failureFacts.hasTerminalFailure }
         switch session.handleUploadResult(result) {
         case .continueToDownload:
             appendInfoLog(String(localized: "home.execution.log.uploadPhaseCompleteStartDownload"))
@@ -370,6 +373,13 @@ final class HomeExecutionCoordinator {
             notifyStateChanged()
             return false
         case .failed(let alert):
+            if hadMonthTerminalFailureBeforeUploadRollup {
+                // A per-month failure already surfaced its specific reason via setErrorStatus+onAlert;
+                // the upload-run rollup carries only the generic "backup.session.failed" text from the reducer.
+                appendWarningLog(String(format: String(localized: "home.execution.log.uploadPhaseFailed"), alert.message))
+                notifyStateChanged()
+                return false
+            }
             setErrorStatus(alert.message, log: String(format: String(localized: "home.execution.log.uploadPhaseFailed"), alert.message))
             notifyStateChanged()
             onAlert?(alert.title, alert.message)
