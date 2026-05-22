@@ -41,6 +41,10 @@ enum BackupV2RuntimeOpenErrorMapping {
                 if RemoteWriteClassifier.isCancellation(underlying) {
                     return CancellationError()
                 }
+                // Surface external-volume loss directly; the run-level classifier doesn't peel BootstrapError.
+                if RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
+                    return underlying
+                }
                 return BackupV2RuntimeBuildError.damagedV2Repo
             case .futureFormatVersion(let minAppVersion):
                 return BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
@@ -54,6 +58,10 @@ enum BackupV2RuntimeOpenErrorMapping {
             case .unreadable(let underlying):
                 if let underlying, RemoteWriteClassifier.isCancellation(underlying) {
                     return CancellationError()
+                }
+                if let underlying,
+                   RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
+                    return underlying
                 }
                 return BackupV2RuntimeBuildError.damagedV2Repo
             }

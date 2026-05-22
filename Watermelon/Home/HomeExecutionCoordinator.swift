@@ -283,10 +283,19 @@ final class HomeExecutionCoordinator {
         backupBridge?.cancel()
         downloadHelper?.cancel()
 
-        let alert = session.failForMissingConnection()
+        // Prefer BSC's reducer-stamped failure reason so the AppSession.clear cascade doesn't replace it with "No node connected".
+        let messageOverride = pendingRunFailureMessageOverride()
+        let alert = session.failForMissingConnection(messageOverride: messageOverride)
         setErrorStatus(alert.message, log: String(format: String(localized: "home.execution.log.executionFailed"), alert.message))
         notifyStateChanged()
         onAlert?(alert.title, alert.message)
+    }
+
+    private func pendingRunFailureMessageOverride() -> String? {
+        guard let snapshot = backupSessionController?.snapshot(),
+              snapshot.state == .failed else { return nil }
+        let text = snapshot.statusText
+        return text.isEmpty ? nil : text
     }
 
     // MARK: - Execution Task

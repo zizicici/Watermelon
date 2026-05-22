@@ -256,8 +256,8 @@ struct HomeExecutionSession {
         phase = .downloading
     }
 
-    mutating func failForMissingConnection() -> AlertMessage {
-        let message = String(localized: "home.execution.notConnected")
+    mutating func failForMissingConnection(messageOverride: String? = nil) -> AlertMessage {
+        let message = messageOverride ?? String(localized: "home.execution.notConnected")
         let failure = MonthTerminalFailure(kind: .missingConnection, message: message)
         applyToMonths(where: \.shouldReceiveRunAbortFailure) { $0.recordTerminalFailure(failure) }
         phase = .failed(message)

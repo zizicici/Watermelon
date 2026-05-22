@@ -557,7 +557,7 @@ enum State {
 
         let phaseBeforeFailure = controlPhase
         let externalUnavailable = profile.isExternalStorageUnavailableError(error)
-        handleExternalStorageUnavailableIfNeeded(error, for: profile)
+        // Stamp the externalUnavailable reason before AppSession.clear's synchronous cascade reaches Home.
         session.applyRunError(
             error,
             runMode: runMode,
@@ -567,6 +567,7 @@ enum State {
             phaseBeforeFailure: phaseBeforeFailure
         )
         notifyObserversNow()
+        handleExternalStorageUnavailableIfNeeded(error, for: profile)
     }
 
     // MARK: - Resume

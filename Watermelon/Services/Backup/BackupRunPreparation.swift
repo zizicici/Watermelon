@@ -327,11 +327,23 @@ struct BackupRunPreparationService: Sendable {
         let load: VersionManifestStore.Load
         do {
             load = try await VersionManifestStore(client: client, basePath: basePath).load()
-        } catch is RepoBootstrap.VersionConflict {
-            throw BackupCompatibilityError.damagedV2Repo
+        } catch let conflict as RepoBootstrap.VersionConflict {
+            switch conflict {
+            case .unreadable(let underlying):
+                if let underlying,
+                   RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
+                    throw underlying
+                }
+                throw BackupCompatibilityError.damagedV2Repo
+            case .higherFormatVersion, .mismatchedFormatVersion:
+                throw BackupCompatibilityError.damagedV2Repo
+            }
         } catch let bootstrap as RepoBootstrap.BootstrapError {
             switch bootstrap {
-            case .ioFailure:
+            case .ioFailure(let underlying):
+                if RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
+                    throw underlying
+                }
                 throw BackupCompatibilityError.damagedV2Repo
             case .futureFormatVersion(let minAppVersion):
                 throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
@@ -377,7 +389,10 @@ struct BackupRunPreparationService: Sendable {
             }
         } catch let bootstrap as RepoBootstrap.BootstrapError {
             switch bootstrap {
-            case .ioFailure:
+            case .ioFailure(let underlying):
+                if RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
+                    throw underlying
+                }
                 throw BackupCompatibilityError.damagedV2Repo
             case .futureFormatVersion(let minAppVersion):
                 throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)

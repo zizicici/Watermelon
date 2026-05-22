@@ -39,6 +39,8 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
     private var uploadErrorByPath: [String: InjectedError] = [:]
     private var deleteErrorByPath: [String: InjectedError] = [:]
     private var injectedMtimes: [String: Date] = [:]
+    private var rawDownloadErrorByPath: [String: any Error] = [:]
+    private var rawMetadataErrorByPath: [String: any Error] = [:]
 
     init() {}
 
@@ -127,6 +129,14 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func injectDownloadError(_ error: InjectedError, for path: String) {
         downloadErrorByPath[Self.normalize(path)] = error
+    }
+
+    func injectRawDownloadError(_ error: any Error, for path: String) {
+        rawDownloadErrorByPath[Self.normalize(path)] = error
+    }
+
+    func injectRawMetadataError(_ error: any Error, for path: String) {
+        rawMetadataErrorByPath[Self.normalize(path)] = error
     }
 
     func injectPersistentDownloadError(_ error: InjectedError, for path: String) {
@@ -282,6 +292,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {
         let key = Self.normalize(path)
+        if let raw = rawMetadataErrorByPath.removeValue(forKey: key) {
+            throw raw
+        }
         if let err = metadataErrorByPath.removeValue(forKey: key) {
             throw Self.translate(err)
         }
@@ -399,6 +412,9 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
         }
         if let stuck = persistentDownloadErrorByPath[key] {
             throw Self.translate(stuck)
+        }
+        if let raw = rawDownloadErrorByPath.removeValue(forKey: key) {
+            throw raw
         }
         if let err = downloadErrorByPath.removeValue(forKey: key) {
             throw Self.translate(err)

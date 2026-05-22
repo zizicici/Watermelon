@@ -46,7 +46,11 @@ struct RemoteIndexV2SyncEngine: Sendable {
             switch bootstrap {
             case .futureFormatVersion(let minAppVersion):
                 throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
-            case .ioFailure:
+            case .ioFailure(let underlying):
+                // Surface external-volume loss directly; the run-level classifier doesn't peel BootstrapError.
+                if RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
+                    throw underlying
+                }
                 throw BackupCompatibilityError.damagedV2Repo
             }
         }

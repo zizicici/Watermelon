@@ -102,14 +102,55 @@ enum RemoteStorageClientError: LocalizedError {
     }
 
     static func isLikelyExternalStorageUnavailable(_ error: Error) -> Bool {
-        if let storageError = error as? RemoteStorageClientError {
-            switch storageError {
-            case .externalStorageUnavailable:
-                return true
-            case .underlying(let underlying):
-                return isLikelyExternalStorageUnavailable(underlying)
+        var pending: [Error] = [error]
+        var seen: Set<ObjectIdentifier> = []
+        while let next = pending.popLast() {
+            switch next {
+            case let storage as RemoteStorageClientError:
+                switch storage {
+                case .externalStorageUnavailable:
+                    return true
+                case .underlying(let underlying):
+                    pending.append(underlying)
+                case .notConnected, .unavailable, .invalidConfiguration, .unsupportedStorageType:
+                    break
+                }
+            case let flush as V2MonthSession.FlushError:
+                switch flush {
+                case .concurrentFlushRejected:
+                    break
+                case .snapshotWriteFailed(_, _, let underlying):
+                    pending.append(underlying)
+                }
+            case let write as SnapshotWriter.WriteError:
+                switch write {
+                case .ioFailure(let underlying), .finalizationFailed(let underlying):
+                    pending.append(underlying)
+                case .verificationFailed:
+                    break
+                }
+            case let commit as CommitLogWriter.WriteError:
+                switch commit {
+                case .ioFailure(let underlying):
+                    pending.append(underlying)
+                case .alreadyExists, .encodingFailed:
+                    break
+                }
+            case let gate as MetadataCreateGate.Error:
+                switch gate {
+                case .stagingVerificationFailed(_, let underlying),
+                     .finalVerificationFailed(_, let underlying):
+                    if let underlying { pending.append(underlying) }
+                case .nonExclusiveFinalization:
+                    break
+                }
             default:
-                return false
+                // New Swift error wrappers must be added above — NSError bridging doesn't expose Swift-enum associated values.
+                let nsError = next as NSError
+                guard seen.insert(ObjectIdentifier(nsError)).inserted else { break }
+                if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                    pending.append(underlying)
+                }
             }
         }
         return false
