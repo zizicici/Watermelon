@@ -439,8 +439,10 @@ final class MonthManifestStore {
     }
 
     func reconcileWithRemoteListing(_ remoteFileNames: Set<String>) async throws -> CleanupMissingResourcesResult {
+        let nameCase = client.backendNameCaseSensitivity
+        let remotePresenceKeys = Set(remoteFileNames.map { nameCase.presenceKey(for: $0) })
         let missing = itemsByFileName.values
-            .filter { !remoteFileNames.contains($0.logicalName) }
+            .filter { !remotePresenceKeys.contains(nameCase.presenceKey(for: $0.logicalName)) }
             .map(\.contentHash)
         let result = try cleanupMissingResources(missingHashes: Set(missing))
         if dirty {
