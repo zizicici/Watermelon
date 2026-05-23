@@ -764,10 +764,10 @@ struct BackupParallelExecutor: Sendable {
                 executorLog.info("[heal] month \(monthStore.year)-\(monthStore.month) has incomplete asset")
                 return false
             }
-            // Cached row predates current selection rules: re-evaluate rather than skip.
-            if cache.selectionVersion < BackupAssetResourcePlanner.currentSelectionVersion {
-                return false
-            }
+            guard LocalHashIndexTrust.cacheFieldsPassCheapChecks(
+                cache.trustFields,
+                modificationDate: asset.modificationDate
+            ) else { return false }
             // PHAsset resource-shape drift can occur without an mtime bump.
             let currentResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
                 from: PHAssetResource.assetResources(for: asset)
@@ -775,9 +775,8 @@ struct BackupParallelExecutor: Sendable {
             if currentResources.count != cache.resourceCount {
                 return false
             }
-            guard let cachedSignature = cache.resourceSignature else { return false }
             let currentSignature = BackupAssetResourcePlanner.resourceSignature(orderedResources: currentResources)
-            if cachedSignature != currentSignature {
+            if !LocalHashIndexTrust.signatureMatches(cache.trustFields, currentSignature: currentSignature) {
                 return false
             }
             // Pre-fix manifests may still carry strict-subset survivors of this asset;

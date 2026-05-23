@@ -363,15 +363,7 @@ final class LocalIndexViewController: UIViewController {
     }
 
     private nonisolated static func canTrustIndexedRow(_ row: IndexedAssetRow, for asset: PHAsset) -> Bool {
-        if let mtime = asset.modificationDate, mtime > row.updatedAt { return false }
-        guard row.selectionVersion >= BackupAssetResourcePlanner.currentSelectionVersion,
-              let cachedSignature = row.resourceSignature else {
-            return false
-        }
-        let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
-            from: PHAssetResource.assetResources(for: asset)
-        )
-        return cachedSignature == BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered)
+        LocalHashIndexTrust.canTrust(row.trustFields, for: asset)
     }
 
     private func handleIncrementalTap() {

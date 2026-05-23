@@ -225,20 +225,15 @@ final class LocalIndexBuildCoordinator {
         _ asset: PHAsset,
         cache: LocalAssetHashCache
     ) -> Bool {
-        if let modificationDate = asset.modificationDate, modificationDate > cache.updatedAt {
+        if !LocalHashIndexTrust.cacheFieldsPassCheapChecks(cache.trustFields, modificationDate: asset.modificationDate) {
             return true
         }
-        if cache.selectionVersion < BackupAssetResourcePlanner.currentSelectionVersion {
-            return true
-        }
-        guard let cachedSignature = cache.resourceSignature else { return true }
         let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
             from: PHAssetResource.assetResources(for: asset)
         )
         if cache.resourceCount != ordered.count { return true }
-        if cachedSignature != BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered) {
-            return true
-        }
+        let currentSignature = BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered)
+        if !LocalHashIndexTrust.signatureMatches(cache.trustFields, currentSignature: currentSignature) { return true }
         for selected in ordered {
             let key = AssetResourceRoleSlot(role: selected.role, slot: selected.slot)
             if cache.hashesByRoleSlot[key] == nil { return true }

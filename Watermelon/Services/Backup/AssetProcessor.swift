@@ -380,19 +380,15 @@ final class AssetProcessor: Sendable {
         try Task.checkCancellation()
         guard let cachedLocalHash = context.cachedLocalHash else { return nil }
         guard cachedLocalHash.resourceCount == context.selectedResources.count else { return nil }
+        guard LocalHashIndexTrust.cacheFieldsPassCheapChecks(
+            cachedLocalHash.trustFields,
+            modificationDate: context.asset.modificationDate
+        ) else { return nil }
 
-        if let modificationDate = context.asset.modificationDate, modificationDate > cachedLocalHash.updatedAt {
-            return nil
-        }
-
-        if cachedLocalHash.selectionVersion < BackupAssetResourcePlanner.currentSelectionVersion {
-            return nil
-        }
-        guard let cachedSignature = cachedLocalHash.resourceSignature else { return nil }
         let currentSignature = BackupAssetResourcePlanner.resourceSignature(
             orderedResources: context.selectedResources
         )
-        guard cachedSignature == currentSignature else { return nil }
+        guard LocalHashIndexTrust.signatureMatches(cachedLocalHash.trustFields, currentSignature: currentSignature) else { return nil }
 
         try cancellationController?.throwIfCancelled()
         try Task.checkCancellation()

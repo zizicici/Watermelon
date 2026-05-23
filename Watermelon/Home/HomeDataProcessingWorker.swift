@@ -114,14 +114,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     }
 
     private static func canTrustFingerprint(_ record: LocalAssetFingerprintRecord, for asset: PHAsset) -> Bool {
-        if let mtime = asset.modificationDate, mtime > record.updatedAt { return false }
-        guard record.selectionVersion >= BackupAssetResourcePlanner.currentSelectionVersion,
-              let cachedSignature = record.resourceSignature else {
-            return false
-        }
-        let currentResources = PHAssetResource.assetResources(for: asset)
-        let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: currentResources)
-        return cachedSignature == BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered)
+        LocalHashIndexTrust.canTrust(record.trustFields, for: asset)
     }
 
     private func remoteFingerprintsForMonth(_ month: LibraryMonthKey) -> Set<Data> {

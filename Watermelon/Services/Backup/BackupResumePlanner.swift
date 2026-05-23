@@ -204,9 +204,9 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
                 var covered: Set<String> = []
                 covered.reserveCapacity(records.count)
                 for (id, record) in records {
-                    guard Self.cacheRowIsTrustworthy(record) else { continue }
                     guard let phAsset = phAssets[id] else { continue }
-                    guard Self.cachedSignatureMatchesCurrent(record: record, phAsset: phAsset) else { continue }
+                    // mtime is checked at the end of this loop.
+                    guard LocalHashIndexTrust.signatureMatches(record.trustFields, currentSignatureForAsset: phAsset) else { continue }
                     let month = LibraryMonthKey.from(date: phAsset.creationDate)
                     guard safeToSkip.contains(record.fingerprint, in: month) else { continue }
                     if let modDate = phAsset.modificationDate, modDate > record.updatedAt { continue }
@@ -227,18 +227,5 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
             result[asset.localIdentifier] = asset
         }
         return result
-    }
-
-    private static func cacheRowIsTrustworthy(_ record: LocalAssetFingerprintRecord) -> Bool {
-        guard record.selectionVersion >= BackupAssetResourcePlanner.currentSelectionVersion else { return false }
-        return record.resourceSignature != nil
-    }
-
-    private static func cachedSignatureMatchesCurrent(record: LocalAssetFingerprintRecord, phAsset: PHAsset) -> Bool {
-        guard let cachedSignature = record.resourceSignature else { return false }
-        let currentResources = PHAssetResource.assetResources(for: phAsset)
-        let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: currentResources)
-        let currentSignature = BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered)
-        return cachedSignature == currentSignature
     }
 }

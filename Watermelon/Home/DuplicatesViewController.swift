@@ -49,60 +49,32 @@ extension PhotoLibraryService: DuplicatePhotoLibraryProvider {
     }
 }
 
-private struct IndexedAssetTrustFields {
-    let updatedAt: Date
-    let selectionVersion: Int
-    let resourceSignature: Data?
-}
-
 private enum DuplicateAssetTrust {
     static func makeSnapshot(from asset: PHAsset) -> IndexedAssetTrustSnapshot {
-        let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
-            from: PHAssetResource.assetResources(for: asset)
-        )
+        let shape = LocalHashIndexTrust.AssetShape(asset: asset)
         return IndexedAssetTrustSnapshot(
             localIdentifier: asset.localIdentifier,
             creationDate: asset.creationDate,
-            modificationDate: asset.modificationDate,
+            modificationDate: shape.modificationDate,
             mediaType: asset.mediaType,
-            currentResourceSignature: BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered)
+            currentResourceSignature: shape.currentResourceSignature
         )
     }
 
     static func canTrust(_ row: DuplicateIndexedAssetRow, for snapshot: IndexedAssetTrustSnapshot) -> Bool {
-        canTrust(row.trustFields, for: snapshot)
+        LocalHashIndexTrust.canTrust(row.trustFields, for: snapshot.assetShape)
     }
 
     static func canTrust(_ row: IndexedAssetRow, for asset: PHAsset) -> Bool {
-        canTrust(row.trustFields, for: makeSnapshot(from: asset))
-    }
-
-    private static func canTrust(_ fields: IndexedAssetTrustFields, for snapshot: IndexedAssetTrustSnapshot) -> Bool {
-        if let mtime = snapshot.modificationDate, mtime > fields.updatedAt { return false }
-        guard fields.selectionVersion >= BackupAssetResourcePlanner.currentSelectionVersion,
-              let cachedSignature = fields.resourceSignature else {
-            return false
-        }
-        return cachedSignature == snapshot.currentResourceSignature
+        LocalHashIndexTrust.canTrust(row.trustFields, for: asset)
     }
 }
 
-private extension DuplicateIndexedAssetRow {
-    var trustFields: IndexedAssetTrustFields {
-        IndexedAssetTrustFields(
-            updatedAt: updatedAt,
-            selectionVersion: selectionVersion,
-            resourceSignature: resourceSignature
-        )
-    }
-}
-
-private extension IndexedAssetRow {
-    var trustFields: IndexedAssetTrustFields {
-        IndexedAssetTrustFields(
-            updatedAt: updatedAt,
-            selectionVersion: selectionVersion,
-            resourceSignature: resourceSignature
+private extension IndexedAssetTrustSnapshot {
+    var assetShape: LocalHashIndexTrust.AssetShape {
+        LocalHashIndexTrust.AssetShape(
+            modificationDate: modificationDate,
+            currentResourceSignature: currentResourceSignature
         )
     }
 }

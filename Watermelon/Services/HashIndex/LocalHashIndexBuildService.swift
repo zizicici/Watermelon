@@ -522,18 +522,13 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
     ) -> Bool {
         guard let cachedLocalHash else { return false }
         guard cachedLocalHash.resourceCount == selectedResources.count else { return false }
+        guard LocalHashIndexTrust.cacheFieldsPassCheapChecks(
+            cachedLocalHash.trustFields,
+            modificationDate: asset.modificationDate
+        ) else { return false }
 
-        if let modificationDate = asset.modificationDate,
-           modificationDate > cachedLocalHash.updatedAt {
-            return false
-        }
-
-        if cachedLocalHash.selectionVersion < BackupAssetResourcePlanner.currentSelectionVersion {
-            return false
-        }
-        guard let cachedSignature = cachedLocalHash.resourceSignature else { return false }
         let currentSignature = BackupAssetResourcePlanner.resourceSignature(orderedResources: selectedResources)
-        guard cachedSignature == currentSignature else { return false }
+        guard LocalHashIndexTrust.signatureMatches(cachedLocalHash.trustFields, currentSignature: currentSignature) else { return false }
 
         for selected in selectedResources {
             let key = AssetResourceRoleSlot(role: selected.role, slot: selected.slot)
