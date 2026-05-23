@@ -575,28 +575,28 @@ final class BackgroundBackupRunner {
                                 ignoreCancellation: Self.backgroundIntervalFlushIgnoresCancellation()
                             )
                         } catch {
-                            if let flushError = error as? V2MonthSession.FlushError,
-                               case .concurrentFlushRejected = flushError {
+                            var shouldBreakAssetLoop = false
+                            switch BackupFlushFailureClassification.classify(error, on: profile).backgroundIntervalAction {
+                            case .continueAssetLoopAndResetCounter:
                                 uploadsSinceFlush = 0
                                 continue
-                            }
-                            let isCancel = error is CancellationError
-                                || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
-                            if !isCancel {
-                                if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
-                                    connectionUnavailableAbort = true
-                                    anyMonthFailed = true
-                                    await writer.appendLog(
-                                        String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
-                                        level: .error
-                                    )
-                                    break
-                                }
+                            case .ignoreSilently:
+                                break
+                            case .abortProfileLogError:
+                                connectionUnavailableAbort = true
+                                anyMonthFailed = true
+                                await writer.appendLog(
+                                    String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                                    level: .error
+                                )
+                                shouldBreakAssetLoop = true
+                            case .logErrorAndContinue:
                                 await writer.appendErrorLog(
                                     String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
                                     unless: error
                                 )
                             }
+                            if shouldBreakAssetLoop { break }
                         }
                         uploadsSinceFlush = 0
                     }
@@ -617,28 +617,25 @@ final class BackgroundBackupRunner {
                     ignoreCancellation: Self.backgroundFinalFlushIgnoresCancellation()
                 )
             } catch {
-                if let flushError = error as? V2MonthSession.FlushError,
-                   case .concurrentFlushRejected = flushError {
+                switch BackupFlushFailureClassification.classify(error, on: profile).backgroundEndOfMonthAction {
+                case .continueMonthLoop:
                     continue
-                }
-                let isCancel = error is CancellationError
-                    || (error as? V2MonthSession.FlushError)?.cancellationCause != nil
-                if !isCancel {
-                    if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
-                        connectionUnavailableAbort = true
-                        anyMonthFailed = true
-                        await writer.appendLog(
-                            String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
-                            level: .error
-                        )
-                    } else {
-                        let reason = profile.userFacingStorageErrorMessage(error)
-                        monthFlushFailureReason = reason
-                        await writer.appendLog(
-                            String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
-                            level: .error
-                        )
-                    }
+                case .ignoreSilently:
+                    break
+                case .abortProfileLogError:
+                    connectionUnavailableAbort = true
+                    anyMonthFailed = true
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                        level: .error
+                    )
+                case .recordReasonLogError:
+                    let reason = profile.userFacingStorageErrorMessage(error)
+                    monthFlushFailureReason = reason
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
+                        level: .error
+                    )
                 }
             }
             uploadsSinceFlush = 0
