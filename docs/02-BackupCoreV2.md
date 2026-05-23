@@ -41,7 +41,13 @@
 
 ## 3. 执行前的本地索引预检查
 
-执行一开始，`HomeExecutionCoordinator.prepareLocalIndexIfNeeded()` 只做一步本地 hash 索引预检查：
+执行一开始，`HomeExecutionCoordinator` 会先判断是否需要本地 hash 索引预检查：
+
+1. download / sync 月份需要完整本地索引，因此一定会跑预检查
+2. upload-only 且 `允许访问 iCloud 原件` 开启时会跑预检查，用于识别上传范围里的 iCloud-only 资产并降 worker
+3. upload-only 且 `允许访问 iCloud 原件` 关闭时会跳过这一步，由上传阶段按需导出 / hash / 上传
+
+实际执行时第一轮始终离线：
 
 `LocalHashIndexBuildService.buildIndex(for:assetIDs, workerCount: 2, allowNetworkAccess: false)`
 
@@ -52,7 +58,7 @@
 
 关键规则：
 
-1. 第一轮始终离线执行，因此 iCloud-only 资源会被标记为 `unavailable`。cache-hit 资产也会顺带做一次轻量离线可用性探测，避免曾经建过索引、之后被系统回收到 iCloud 的资产漏检。
+1. 只要预检查被触发，第一轮始终离线执行，因此 iCloud-only 资源会被标记为 `unavailable`。cache-hit 资产也会顺带做一次轻量离线可用性探测，避免曾经建过索引、之后被系统回收到 iCloud 的资产漏检。
 2. 第一轮结束后，如果启用了 `允许访问 iCloud 原件` 且 **上传范围** (`upload + sync` 月份) 内存在 `unavailableAssetIDs`，本次 upload 会强制降为 `1` 个 worker——这一决定直接从第一轮结果推导。
 3. 如果本次 **只上传**，即使有少量本地索引仍不完整，也允许继续执行。
 4. 如果本次包含 **下载或同步**，且第一轮存在 `unavailableAssetIDs`：
@@ -155,8 +161,10 @@
    - 标记该月上传已完成（`uploadDone`）
    - 立刻 `syncRemoteDataAndWait()`（驱动 `BackupCoordinator` 重新拉取最新远端快照）
    - 刷新该月相关本地索引
+   - 调 `BackupCoordinator.verifyMonth(...)`；V2 路径会校验 metadata / 物理文件并对 cleanup-eligible 项写 tombstone，V1 路径会校验 legacy manifest
+   - `verifyMonth(...)` 对 V1 / V2 返回 `true` 时，Home 会再同步一次远端快照；这不等价于“本次一定写了 cleanup”，V2 verify 自身也会在结束前刷新一次 remote snapshot cache
    - 取出该月 `remoteOnlyItems`
-   - 交给 `DownloadWorkflowHelper.downloadItems(...)`
+   - 交给 `DownloadWorkflowHelper.downloadItems(...)`，只下载 `isRestorable == true` 的项，并在保存到相册后用 `RestoredAssetFingerprintVerifier` 验证 durable fingerprint binding
 4. 下载成功后再把该月标记为 `completed`
 
 效果：
@@ -170,13 +178,14 @@
 
 1. 先同步一次远端快照
 2. 如该月存在本地 asset，则刷新本地索引
-3. 读取 `remoteOnlyItems(month)`
-4. `DownloadWorkflowHelper.downloadItems(...)`
-5. 每个 item 成功后：
-   - `writeHashIndex(...)`
-   - 触发 `refreshLocalIndexAndNotify([assetID])`
+3. 调 `verifyMonth(...)`；V1 / V2 返回 `true` 时再同步一次远端快照，保证 verify / tombstone / manifest flush 后的缓存被 Home 看到
+4. 读取 `remoteOnlyItems(month)`
+5. `DownloadWorkflowHelper.downloadItems(...)` 过滤不可恢复项，并对恢复成功的 item 做 durable fingerprint 校验
+6. 每个 item 成功后：
+   - `RestoredAssetFingerprintVerifier` 已通过 `LocalHashIndexBuildService` 重建并核对本地 hash-index 中的 durable fingerprint
+   - 触发 `refreshLocalIndexAndNotify([assetID])`，让 Home 重新投影该 item 的匹配状态
 
-下载阶段的取消粒度仍是 item 级，因为 `RestoreService.restoreItems(...)` 在 item 循环开头检查 `Task.checkCancellation()`。
+下载阶段没有持久化到 resource 级的恢复进度；`RestoreService.restoreItems(...)` 会在 item / resource / 保存前等边界检查 cancellation，但中断后仍以 item 级结果恢复。
 
 ## 9. 进度与 UI 映射
 
@@ -228,6 +237,7 @@ V2 当前主路径：
 4. 每 10 个非 failed asset 触发一次 snapshot-cadence flush，月末或 pause/connection-loss 收束时再兜底 flush
 5. commit 已落盘但 snapshot 写失败时，错误会携带 `committedAssets / committedTombstones`；调用方先 publish 月快照再继续传播错误。只有非 paused、可关闭月份的最终 flush 会向 Home 发 `.uploadDurableSnapshotDeferred(message:)`
 6. `V2MonthSession.loadOrCreate(...)` 会列出真实月份目录，避免“文件已存在但 V2 metadata 未 flush”的 orphan 造成重名冲突
+7. 干净 flush 后会尝试 `RepoCheckpointBarrierHook`：按 `RepoCompactionPolicy` 判断是否需要写 checkpoint snapshot；checkpoint 被接受后发布 retention barrier，再由 `RepoRetentionCommitDeleteExecutor` 删除已被 barrier / liveness / post-delete verification 保护的 commit 前缀。低于 checkpoint 阈值时也会尝试删除已有 barrier 已覆盖的候选前缀。
 
 V1 兼容路径仍由 `MonthManifestStore` 维护 sqlite manifest：本地 sqlite 改动先落临时文件，月末 `flushToRemote(...)` 上传 `.watermelon_manifest.sqlite`。`MonthManifestStore` 实现拆为三段：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。
 
@@ -255,7 +265,7 @@ V1 兼容路径仍由 `MonthManifestStore` 维护 sqlite manifest：本地 sqlit
 
 `RemoteMaintenanceController`（`Watermelon/Services/Backup/`）是 “验证远端” 入口：
 
-1. 通过 `BackupCoordinator.verifyAllMonths(...)` 检查所有月份的 manifest 与实际远端文件一致性
+1. 通过 `BackupCoordinator.verifyAllMonths(...)` 检查所有已知月份；V2 月份走 `RepoVerifyMonthService`，可对 cleanup-eligible 项写 tombstone，V1 月份走 legacy manifest verify
 2. 暴露 `isVerifying / progress / lastError` 给 More 页 / 诊断页
 3. 校验运行期间会通过 `Notification.Name` 把 Home 的 `isMaintenanceBlocked` 拉为 `true`，从而让 `isSelectable` 与 `startExecution` 都被阻塞
 
@@ -270,3 +280,5 @@ V1 兼容路径仍由 `MonthManifestStore` 维护 sqlite manifest：本地 sqlit
 5. 并行执行的 PHAsset 批大小：`500`
 6. 小文件碰撞校验阈值：`5 * 1024 * 1024`（`smallFileThresholdBytes`）
 7. 上传最大重试次数：`3`（`client.shouldLimitUploadRetries(for:)` 命中时降为 `2`）
+8. V2 checkpoint 当前建议阈值：`5000` 个 replay commit 或 `16 MiB` replay commit bytes；`RepoCompactionPolicy` 里保留 `minimumCheckpointIntervalSeconds = 6h` 字段，但当前 `RepoCompactionPlanner` 的推荐逻辑尚未消费它
+9. V2 retention barrier 进入删除候选的最小年龄：`24h`；legacy client grace：`7d`；snapshot fallback keep count：`2`

@@ -1,6 +1,6 @@
 # 06 — Repo V2
 
-V1（per-month manifest sqlite）→ V2（commit log + snapshot）格式重构。完整设计见 `~/.claude/plans/wobbly-launching-stroustrup.md`。
+V1（per-month manifest sqlite）→ V2（commit log + snapshot）格式重构。`~/.claude/plans/wobbly-launching-stroustrup.md` 是历史设计记录；当前事实以本文件的“现状 / 当前实现摘要”和源码为准。
 
 ## Boundary Invariants
 
@@ -29,7 +29,20 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 
 后台备份（`BackgroundBackupRunner`）不会自动迁移 V1：检测到 V1 仓库直接结束 + execution log 提示用户在前台运行。
 
-## Stage 1 落地清单
+## 当前实现摘要
+
+当前 V2 由四组能力组成：
+
+1. **身份与版本**：`RepoBootstrap`、`IdentityClaimStore`、`VersionManifestStore`、`RepoIdentitySources` 共同收敛 canonical `repoID`，`repo.json` 是 read-cache，`version.json` 是格式版本 sentinel。
+2. **写入与读取**：`CommitLogWriter` 写 per-asset / tombstone jsonl commit，`SnapshotWriter` 写月级 materialized snapshot，`RepoMaterializer` 以 accepted snapshot baseline + uncovered commits 物化当前状态。
+3. **迁移与兼容**：`RemoteFormatCompatibilityService.inspectRemoteFormat(...)` 路由 fresh / V1 / V2 / pending-cleanup / unsupported；前台可执行 V1→V2 migration，后台只记录需要前台迁移。
+4. **维护与 retention**：`RepoCheckpointService` 按 `RepoCompactionPolicy` 写 per-month checkpoint snapshot；`RepoRetentionBarrierService` 发布 `.watermelon/retention/` manifest；`RepoRetentionCommitDeleteExecutor` 在 barrier、liveness、legacy grace 和 post-delete verification 都允许时保守删除 commit 前缀。
+
+Retention manifest 的文件名和 JSON wire schema 见 `docs/03-DataModel.md` §7；这里不重复字段级定义。
+
+## 当前组件清单（Stage 1 后续演进）
+
+本节源自 Stage 1 落地清单，但已经把后续 Iter / Unit 的当前结果合并进去；下方 “Iter N” 小节是历史变更记录，不应反向覆盖本节和源码里的当前事实。
 
 ### 远端协议层
 
@@ -66,6 +79,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - `LivenessTracker` — 30s 心跳 / 5min stale；LocalVolume = no-op；由 `BackupV2RuntimeBuilder` 启动、`BackupV2RuntimeServices.shutdown()` 在 run 收尾时停止
 - `RepoBootstrap` — fresh 远端先通过 identity claims / `repo-identity.json` finalization 选出 canonical `repoID`，`repo.json` 是 read-cache；`VersionManifestStore` 写 `version.json`
 - `V1MigrationService` — marker FSM 驱动 full migration：先确保 version 发布，phase 1 写 legacy-import commit + snapshot 并隔离不可迁移 residue，phase 2 写本地 `migrationCompleted=1`，phase 3 删除 / quarantine 旧 manifest 并 verify final state；pending-cleanup 仓库可走 cleanup-only
+- `RepoCompactionPlanner` / `RepoCheckpointService` / `RepoRetentionBarrierService` / `RepoRetentionCommitDeleteExecutor` — 当前 per-month checkpoint + retention barrier + commit 前缀删除维护路径
 - `BackupV2RuntimeServices` — 一个 run 期间 V2 服务的容器；`shutdown()` 关闭 `LivenessTracker` 心跳
 - `BackupV2RuntimeBuilder` — 共享 build 入口（前台 / 后台两种调用）；`RepoIdentitySources.collect(...)` 会收集 remote `repo.json`、既有 V2 commit/snapshot data 里的 repoID、以及与当前远端兼容的本地 `repo_state`，建议值按 `remote ?? data ?? stored ?? UUID()` 选择，发布前要求各来源一致，确保 SeqAllocator/Lamport 状态在 session 间稳定
 
@@ -105,7 +119,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - `RemoteAssetResourceLink` 加 `logicalName: String`
 - 新增 `ResourceCryptoMetadata`（占位，E2EE 留 Stage 2）
 - 新增 `RemoteAssetResource` join 视图
-- 旧 `remoteRelativePath` 计算属性删除，所有 caller 改 `physicalRemotePath`
+- `RemoteManifestResource` 不再暴露旧 `remoteRelativePath` 计算属性；restore-facing 的 `RemoteAssetResourceInstance` 仍保留 `remoteRelativePath` / `alternateRemoteRelativePaths` 作为下载候选路径
 
 ### i18n
 
@@ -119,16 +133,20 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 
 ### 测试
 
-- 代表性覆盖：`CoveredRangesTests`、`RepoLayoutTests`、`RepoStateRecordTests`、`CommitOpMapperTests`、`SnapshotRowMapperTests`、`IntegrityCheckTests`、`CommitLogParseTests`、`RepoMaterializerRoundTripTests`、`V2FlushTests`、`BootstrapStateMachineTests`、`ConcurrentBootstrapRaceTests`
+- 代表性覆盖：`CoveredRangesTests`、`RepoLayoutTests`、`RepoStateRecordTests`、`CommitOpMapperTests`、`SnapshotRowMapperTests`、`IntegrityCheckTests`、`CommitLogParseTests`、`RepoMaterializerRoundTripTests`、`RepoMaterializerReadRaceTests`、`V2FlushTests`、`BootstrapStateMachineTests`、`ConcurrentBootstrapRaceTests`、`RepoVerifyMonthServiceTests`、`RemoteIndexFormatRouteDecisionTests`、`RepoCheckpointServiceTests`、`RepoCheckpointBarrierHookTests`、`RepoRetentionDeletePreflightTests`、`RepoRetentionCommitDeleteExecutorTests`、`RetentionDeletionSafetyGateTests`、`StorageCapabilityMatrixTests`
 - 不在文档里硬编码总测试数；以当前 `WatermelonTests/` 为准
 
-### verifyMonth 5 类报告 + 物理文件撞名 + snapshot covered
+### verifyMonth 6 类报告 + 物理文件撞名 + snapshot covered
 
-- `Models/VerifyMonthReport.swift` 定义 5 类 `VerifyMonthReportKind`（phantomAsset / partiallyMissing / allResourcesGone / metadataOnlyLeft / fingerprintMismatch）；`allowsCleanup` 标识其中 3 类可写 tombstone
-- `RepoVerifyMonthService` 对 V2 仓库 materialize → 列举月份目录 → 比对 → 产生 `VerifyMonthReport`；`applyTombstones` 把 cleanup-eligible 项写成 `tombstoneAsset` commit
-- `BackupRunPreparation.verifyMonth` 通过 `inspectRemoteFormat` 路由：V2 / pending-cleanup 走 `verifyMonthV2`（含 `applyTombstones` + 重建 snapshot cache），V2+V1 residue 要求前台迁移，V1 保持原 reconcile
+- `Models/VerifyMonthReport.swift` 定义 6 类 `VerifyMonthReportKind`（phantomAsset / partiallyMissing / allResourcesGone / metadataOnlyLeft / fingerprintMismatch / verificationIncomplete）；`allowsCleanup` 只标识 phantomAsset / allResourcesGone / metadataOnlyLeft 可写 tombstone
+- `RepoVerifyMonthService` 对 V2 仓库 materialize → 列举月份目录 → 比对 → 产生 `VerifyMonthReport`；`verificationIncomplete` 来自 content-trust 预算耗尽或 probe 不确定，不会被当成 missing；`applyTombstones` 会重新 materialize + 重新 probe，确认仍 cleanup-eligible 后才写 `tombstoneAsset` commit
+- `BackupRunPreparation.verifyMonth` 通过 `inspectRemoteFormat` 路由：V2 / pending-cleanup 走 `verifyMonthV2`，V2+V1 residue 要求前台迁移，V1 保持原 reconcile。带 profile 的 V2 verify 会在结束前 `syncIndex(expectV2:localRepoID:)` 刷新 remote snapshot cache；只有存在 cleanup candidates 时才用 `maintenanceStartupMode: .disabled(.verifyMonthTombstoneApply)` 临时打开 V2 runtime 并尝试 tombstone
 - 物理文件撞名后缀：V2 且 `dataPathOverwriteRisk == .perKey` 时用 writerID / runID 后缀候选；V1 和 `.none` 风险后端保持原行为
 - `V2MonthSnapshotFlusher` 根据 commit flush 结果维护 covered ranges 并传给 `SnapshotWriter`；writer 本身只负责持久化和校验
+
+## 历史变更记录
+
+以下 Iter 小节记录当时发现的问题和修补顺序。出现“当时 / 曾 / 已删除 / 当前”这类措辞时，以“现状 / 当前实现摘要”和源码为准。
 
 ### Iter 3 加固
 
@@ -184,7 +202,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 **根因消除:**
 
 - (A) V1 sqlite schema 污染 V2:`V2MonthSession`(in-memory,不带 sqlite)替代 `MonthManifestStore` 的 V2 路径,`v2KnownLogicalNamesByHash` / `makeSeedFromV2State` dedup / `writeV2Snapshot` 多 path 重发 / `loadV2Materialized` 全部删除。multi-path 在 V2MonthSession 里是天然的(`pathsByHash` / `resourcesByPath`)
-- (B) optimistic-cache + deferred V2 commit:当时留 Stage 2；Unit 8 已改为 per-asset commit，剩余未来项只有 commit 文件 retention / compaction
+- (B) optimistic-cache + deferred V2 commit:当时留 Stage 2；Unit 8 已改为 per-asset commit；当前又补了保守 checkpoint / retention，剩余未来项转为物理数据文件 GC、snapshot GC、repair UI 与 retention 可观测性
 - (C) bootstrap 状态机:文档化决策表 + Phase A 的 `BootstrapStateMachineTests` 锁定 16 个半成品状态的 inspect 输出。schema 不重构(向后兼容代价大于收益)
 - (D) `try?` / silent catch:Phase B audit 把 `SnapshotReader.list` / `CommitLogReader.list` 改成「list throw + metadata 也 throw → 传播 list 错误」(metadata 探测失败不再吞)
 - (E) 缺端到端测试:Phase A 加 `InMemoryRemoteStorageClient` actor + 6 个测试套(round-trip / V1 migration / bootstrap / restore fallback / V2 flush / concurrent bootstrap)。不要在文档中硬编码总测试数
@@ -229,7 +247,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - `WatermelonTests/RestoreServiceFallbackTests.swift`
 - `WatermelonTests/ConcurrentBootstrapRaceTests.swift`
 
-**Per-asset commit 已落地**：旧 batch commit / optimistic subtraction 机制已删除。当前每个 row-writing asset 写 commit；batch / final flush 写 snapshot cadence。剩余风险是旧 commit 文件 retention / compaction，见 `docs/05-OpenIssues.md` §12。
+**Per-asset commit 已落地**：旧 batch commit / optimistic subtraction 机制已删除。当前每个 row-writing asset 写 commit；batch / final flush 写 snapshot cadence。commit 前缀 retention 已有保守实现，剩余边界见 `docs/05-OpenIssues.md` §12。
 
 ### Iter 6 加固
 
@@ -260,9 +278,21 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 - V2 写入路径在 `prepareUpload` 阶段只要 `monthStore.v2Services?.writerID != nil` 且后端为 `.perKey`，就强制走 writerID / runID 后缀候选（`RepoLayout.writerIDShort` + run prefix）
 - `.none` 风险后端（LocalVolume / SFTP）和 V1（无 `v2Services`）保持原行为，不强制新后缀
 
-仅以下纯 Stage 2 项目未在本次范围：
+### Iter 10 当前实现：checkpoint / retention / maintenance
 
-1. **commit / 物理文件 GC**：跨 writer 安全的版本（plan §0 / §6.5 明确不做）
+- `.watermelon/retention/` 已加入 V2 metadata 布局；`RetentionManifest` 记录 checkpoint snapshot、checkpoint SHA、covered ranges、delete prefix、observed seq high、policy 和 liveness gate，字段级 wire schema 见 `docs/03-DataModel.md` §7
+- `RepoCompactionPolicy.default` 当前阈值：`checkpointCommitThreshold = 5000`、`checkpointByteThreshold = 16 MiB`、`retentionStalenessThresholdSeconds = 24h`、`legacyClientGraceSeconds = 7d`、`snapshotFallbackKeepCount = 2`；policy 也保留 `minimumCheckpointIntervalSeconds = 6h` 字段，但当前 checkpoint 推荐逻辑只消费 commit 数和 bytes
+- `V2MonthSession.flushToRemote` 在 dirty 清空后运行 `RepoCheckpointBarrierHook`：低于阈值时也尝试删除已有 barrier 覆盖的 commit 前缀；达到阈值时先写 checkpoint snapshot，确认 materialize 接受后发布 retention barrier，再跑删除
+- `V2MonthCommitFlusher` / `V2MonthSnapshotFlusher` 通过 `V2RetentionBarrierRefresh` 做 barrier-aware refresh，确保本 session 的 commit / snapshot basis 不丢失已发布 barrier 的覆盖约束
+- `RepoRetentionDeletePreflightService` fail-closed：版本、repoID、migration marker、barrier set、checkpoint readback、accepted snapshot、observed seq、candidate header、planner cross-check、liveness gate 任一不满足都会阻止删除
+- `RepoRetentionCommitDeleteExecutor` 删除后用 `RepoRetentionPostDeleteVerifier` 做 retention-equivalence 校验；verification failed / inconclusive 都不会被当成普通成功
+- 正常 V2 runtime build 会启动 maintenance；`verifyMonth` 为应用 tombstone 临时打开 runtime 时显式禁用 startup maintenance
+- `RepoMaintenanceRuntimeBuilder` 在 enabled 模式下启动 liveness heartbeat（LocalVolume 为 no-op），并只在后端支持 `supportsLivenessSafeRenewal` 且 peer view complete 时跑 orphan metadata sweep；只有支持安全 renewal 的后端会在 heartbeat 中公布 `RetentionPeerCapability`。`RepoMaintenanceStartupRunner` 也只在 enabled 模式下对足够老的 retention manifest 继续跑 commit 前缀删除
+- 当前 capability 事实：LocalVolume / S3 / WebDAV 支持 `supportsLivenessSafeRenewal`；SMB / SFTP 不支持，因此不公布 barrier-aware retention capability，也不跑 orphan metadata sweep。commit 前缀删除仍由 preflight、liveness gate、legacy grace 与 post-delete verification 共同决定
+
+当前仍未实现 / 延后项：
+
+1. **物理数据文件 GC**：跨 writer 安全的版本（plan §0 / §6.5 明确不做）；commit 前缀 retention 已有保守实现
 2. **gcOrphan op + 物理文件 refcount + 「从备份删除 asset」UI**
 3. **`reportMissing` / `reportTampered` / `commitCorruption` op**
 4. **跨 writer snapshot GC**（grace + liveness gate + 联合覆盖判定）
@@ -271,7 +301,7 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 7. **月级 materialize 并发深化**
 8. **E2EE**（modes: plain / e2ee-content-visible / e2ee-private）
 9. **audit / repair 完整 UI**（兜底 pre-1.2.0 客户端误用造成的 desync）
-10. **全局 compaction snapshot（Delta Lake 风格）+ checkpoint**
+10. **全局 / 跨月 compaction snapshot**（当前只有 per-month checkpoint + retention barrier）
 11. **`writers/<writerID>.json` 元数据**
 12. **「合并历史 writer」UI**（处理 Keychain 丢失场景）
 13. **`verifyMonth` `partiallyMissing` 类提供 re-upload 动作**
@@ -280,6 +310,6 @@ V2 cutover 已完成。新 / 旧客户端在仓库上的行为：
 
 1. `min_app_version "2.0.0"` 是 `RepoLayout.minAppVersionPlaceholder`；发布时换实际下一版本号
 2. 升级**不可逆**：phase 2 翻转后已升级客户端永远无法回退到 V1
-3. Unit 8 已消除 V2 deferred batch commit 窗口；batch / final flush 只负责 snapshot cadence
+3. Unit 8 已消除 V2 deferred batch commit 窗口；batch / final flush 只负责 snapshot cadence。当前 checkpoint / retention 只保守删除被 accepted checkpoint + barrier + liveness + verification 共同保护的 commit 前缀
 4. **多端并发**：V2 best-effort，不保证零冲突（特别是 WebDAV）；plan §12 已声明
 5. **pre-1.2.0 V1 客户端**：协议无 sentinel 锁出，依赖用户主动升级所有设备

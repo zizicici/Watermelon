@@ -131,7 +131,7 @@ App 启动后直接进入 `HomeViewController`。
 
 然后执行前置检查：
 
-1. 只有在下载 / sync 需要完整本地索引，或 `允许访问 iCloud 原件` 未关闭时，才对本次涉及的本地 asset 做离线 hash 预检查 (`buildIndex(allowNetworkAccess: false)`)，默认 2 个 worker；upload-only 且 iCloud 原件关闭时会跳过
+1. 下载 / sync 需要完整本地索引，因此一定会对本次涉及的本地 asset 做离线 hash 预检查 (`buildIndex(allowNetworkAccess: false)`)，默认 2 个 worker；upload-only 只有在 `允许访问 iCloud 原件` 开启时才跑这一步，关闭时跳过
 2. 预检查中，cache-hit 资产会额外做一次轻量离线可用性探测：命中 iCloud-only 的话会被标成 `unavailable`，保证已被系统回收的资产能被识别出来
 3. 第一轮结束后，若启用了 `允许访问 iCloud 原件` 且 **上传范围** (`upload + sync` 月份) 内存在 `unavailableAssetIDs`，本次 upload 自动改为 `1` 个 worker
 4. 如果本次包含下载或同步，且第一轮仍有 `unavailableAssetIDs`：
@@ -155,7 +155,7 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 
 1. 先同步远端快照
 2. 刷新该月本地索引
-3. 调 `backupCoordinator.verifyMonth(...)` 校验该月远端 metadata / 物理文件；如果校验改动了远端，再同步一次远端快照
+3. 调 `backupCoordinator.verifyMonth(...)` 校验该月远端 metadata / 物理文件；V1 / V2 返回 `true` 时再同步一次远端快照，这代表缓存需要刷新，不代表本次一定写了 cleanup
 4. 只下载 `remoteOnlyItems` 中 `isRestorable == true` 的项；incomplete / fingerprint mismatch / metadata-only 等会被跳过并计入 partial
 5. 每个 item 保存到相册后，`RestoredAssetFingerprintVerifier` 会重建并验证 durable fingerprint binding；验证成功才刷新本地索引
 
@@ -167,7 +167,7 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 
 1. 同步远端快照
 2. 刷新本地索引
-3. `verifyMonth(...)`；如果校验产生远端变更，再同步一次远端快照
+3. `verifyMonth(...)`；V1 / V2 返回 `true` 时再同步一次远端快照
 4. 下载 `remoteOnlyItems` 中可恢复的项，并对每个恢复结果做 durable fingerprint 校验
 5. 完全成功后标记该月 `completed`；有不可恢复项或校验失败时标记 partial / `downloadIncomplete`
 
