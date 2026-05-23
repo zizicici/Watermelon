@@ -9,19 +9,19 @@ struct RemoteIndexV2SyncEngine: Sendable {
     ) async throws -> RepoMaterializer.MaterializeOutput {
         if let preMaterialized {
             if let localRepoID, let outputRepoID = preMaterialized.repoID, localRepoID != outputRepoID {
-                throw BackupCompatibilityError.repoIdentityMismatch
+                throw BackupCompatibilityError.repoIdentityMismatch(stored: localRepoID, observed: outputRepoID)
             }
             if let localRepoID {
                 let liveRepoID = try await loadExpectedRepoIDReadOnly(client: client, basePath: basePath)
                 if localRepoID != liveRepoID {
-                    throw BackupCompatibilityError.repoIdentityMismatch
+                    throw BackupCompatibilityError.repoIdentityMismatch(stored: localRepoID, observed: liveRepoID)
                 }
             }
             return preMaterialized
         }
         let expectedRepoID = try await loadExpectedRepoIDReadOnly(client: client, basePath: basePath)
         if let localRepoID, localRepoID != expectedRepoID {
-            throw BackupCompatibilityError.repoIdentityMismatch
+            throw BackupCompatibilityError.repoIdentityMismatch(stored: localRepoID, observed: expectedRepoID)
         }
         return try await RepoMaterializer(client: client, basePath: basePath)
             .materialize(expectedRepoID: expectedRepoID)
@@ -43,16 +43,7 @@ struct RemoteIndexV2SyncEngine: Sendable {
                 return id
             }
         } catch let bootstrap as RepoBootstrap.BootstrapError {
-            switch bootstrap {
-            case .futureFormatVersion(let minAppVersion):
-                throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
-            case .ioFailure(let underlying):
-                // Surface external-volume loss directly; the run-level classifier doesn't peel BootstrapError.
-                if RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
-                    throw underlying
-                }
-                throw BackupCompatibilityError.damagedV2Repo
-            }
+            throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: bootstrap)
         }
     }
 }

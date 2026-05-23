@@ -36,35 +36,10 @@ enum BackupV2RuntimeOpenErrorMapping {
             return buildError
         }
         if let bootstrap = error as? RepoBootstrap.BootstrapError {
-            switch bootstrap {
-            case .ioFailure(let underlying):
-                if RemoteWriteClassifier.isCancellation(underlying) {
-                    return CancellationError()
-                }
-                // Surface external-volume loss directly; the run-level classifier doesn't peel BootstrapError.
-                if RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
-                    return underlying
-                }
-                return BackupV2RuntimeBuildError.damagedV2Repo
-            case .futureFormatVersion(let minAppVersion):
-                return BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
-            }
+            return translate(bootstrapError: bootstrap)
         }
         if let conflict = error as? RepoBootstrap.VersionConflict {
-            switch conflict {
-            case .higherFormatVersion(_, _, let minAppVersion),
-                 .mismatchedFormatVersion(_, _, let minAppVersion):
-                return BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
-            case .unreadable(let underlying):
-                if let underlying, RemoteWriteClassifier.isCancellation(underlying) {
-                    return CancellationError()
-                }
-                if let underlying,
-                   RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
-                    return underlying
-                }
-                return BackupV2RuntimeBuildError.damagedV2Repo
-            }
+            return translate(versionConflict: conflict)
         }
         if let compatibility = error as? BackupCompatibilityError {
             switch compatibility {
@@ -72,15 +47,63 @@ enum BackupV2RuntimeOpenErrorMapping {
                 return BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
             case .damagedV2Repo:
                 return BackupV2RuntimeBuildError.damagedV2Repo
-            case .repoIdentityMismatch:
-                return BackupV2RuntimeBuildError.repoIdentityMismatch(stored: "", observed: "")
+            case .repoIdentityMismatch(let stored, let observed):
+                return BackupV2RuntimeBuildError.repoIdentityMismatch(
+                    stored: stored ?? "",
+                    observed: observed ?? ""
+                )
             case .requiresForegroundMigration:
                 return BackupV2RuntimeBuildError.requiresForegroundMigration
-            case .repoFormatRegression:
-                return BackupV2RuntimeBuildError.repoFormatRegression(repoID: "")
+            case .repoFormatRegression(let repoID):
+                return BackupV2RuntimeBuildError.repoFormatRegression(repoID: repoID ?? "")
             }
         }
         return error
+    }
+
+    static func translate(bootstrapError: RepoBootstrap.BootstrapError) -> Error {
+        switch bootstrapError {
+        case .ioFailure(let underlying):
+            if RemoteWriteClassifier.isCancellation(underlying) {
+                return CancellationError()
+            }
+            // Surface external-volume loss directly; the run-level classifier doesn't peel BootstrapError.
+            if RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
+                return underlying
+            }
+            return BackupV2RuntimeBuildError.damagedV2Repo
+        case .futureFormatVersion(let minAppVersion):
+            return BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
+        }
+    }
+
+    static func translate(versionConflict: RepoBootstrap.VersionConflict) -> Error {
+        switch versionConflict {
+        case .higherFormatVersion(_, _, let minAppVersion),
+             .mismatchedFormatVersion(_, _, let minAppVersion):
+            return BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
+        case .unreadable(let underlying):
+            if let underlying, RemoteWriteClassifier.isCancellation(underlying) {
+                return CancellationError()
+            }
+            if let underlying,
+               RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
+                return underlying
+            }
+            return BackupV2RuntimeBuildError.damagedV2Repo
+        }
+    }
+
+    static func translateToCompatibilityError(bootstrapError: RepoBootstrap.BootstrapError) -> Error {
+        let translated = translate(bootstrapError: bootstrapError)
+        guard let build = translated as? BackupV2RuntimeBuildError else { return translated }
+        return compatibilityError(for: classifyBuildFailure(build))
+    }
+
+    static func translateToCompatibilityError(versionConflict: RepoBootstrap.VersionConflict) -> Error {
+        let translated = translate(versionConflict: versionConflict)
+        guard let build = translated as? BackupV2RuntimeBuildError else { return translated }
+        return compatibilityError(for: classifyBuildFailure(build))
     }
 
     static func classifyBuildFailure(_ error: Error) -> BackupV2RuntimeOpenFailure {
@@ -117,11 +140,20 @@ enum BackupV2RuntimeOpenErrorMapping {
         case .unsupportedRemoteFormat(let minAppVersion):
             return BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
         case .repoIdentityMismatch:
-            return BackupCompatibilityError.repoIdentityMismatch
+            if case BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) = failure.originalError {
+                return BackupCompatibilityError.repoIdentityMismatch(
+                    stored: stored.isEmpty ? nil : stored,
+                    observed: observed.isEmpty ? nil : observed
+                )
+            }
+            return BackupCompatibilityError.repoIdentityMismatch(stored: nil, observed: nil)
         case .requiresForegroundMigration:
             return BackupCompatibilityError.requiresForegroundMigration
         case .repoFormatRegression:
-            return BackupCompatibilityError.repoFormatRegression
+            if case BackupV2RuntimeBuildError.repoFormatRegression(let repoID) = failure.originalError {
+                return BackupCompatibilityError.repoFormatRegression(repoID: repoID.isEmpty ? nil : repoID)
+            }
+            return BackupCompatibilityError.repoFormatRegression(repoID: nil)
         case .damagedV2Repo:
             return BackupCompatibilityError.damagedV2Repo
         case .profileMissingID:

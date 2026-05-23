@@ -356,6 +356,230 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
         XCTAssertTrue(matches.isEmpty, matches.joined(separator: "\n"))
     }
 
+    func testNormalizeOpenErrorPreservesRepoIdentityMismatchPayload() {
+        let input = BackupCompatibilityError.repoIdentityMismatch(stored: "A", observed: "B")
+        let normalized = BackupV2RuntimeOpenErrorMapping.normalizeOpenError(input)
+        guard case BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) = normalized else {
+            return XCTFail("expected repoIdentityMismatch, got \(normalized)")
+        }
+        XCTAssertEqual(stored, "A")
+        XCTAssertEqual(observed, "B")
+    }
+
+    func testNormalizeOpenErrorRepoIdentityMismatchWithNilPayloadFallsBackToEmptyStrings() {
+        let input = BackupCompatibilityError.repoIdentityMismatch(stored: nil, observed: nil)
+        let normalized = BackupV2RuntimeOpenErrorMapping.normalizeOpenError(input)
+        guard case BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) = normalized else {
+            return XCTFail("expected repoIdentityMismatch, got \(normalized)")
+        }
+        XCTAssertEqual(stored, "")
+        XCTAssertEqual(observed, "")
+    }
+
+    func testNormalizeOpenErrorPreservesRepoFormatRegressionPayload() {
+        let input = BackupCompatibilityError.repoFormatRegression(repoID: "repo-abc")
+        let normalized = BackupV2RuntimeOpenErrorMapping.normalizeOpenError(input)
+        guard case BackupV2RuntimeBuildError.repoFormatRegression(let repoID) = normalized else {
+            return XCTFail("expected repoFormatRegression, got \(normalized)")
+        }
+        XCTAssertEqual(repoID, "repo-abc")
+    }
+
+    func testCompatibilityErrorRoundTripsRepoIdentityMismatchPayload() {
+        let build = BackupV2RuntimeBuildError.repoIdentityMismatch(stored: "X", observed: "Y")
+        let failure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(build)
+        let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: failure)
+        guard case BackupCompatibilityError.repoIdentityMismatch(let stored, let observed) = mapped else {
+            return XCTFail("expected repoIdentityMismatch, got \(mapped)")
+        }
+        XCTAssertEqual(stored, "X")
+        XCTAssertEqual(observed, "Y")
+    }
+
+    func testCompatibilityErrorRepoIdentityMismatchEmptyPayloadBecomesNil() {
+        let build = BackupV2RuntimeBuildError.repoIdentityMismatch(stored: "", observed: "")
+        let failure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(build)
+        let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: failure)
+        guard case BackupCompatibilityError.repoIdentityMismatch(let stored, let observed) = mapped else {
+            return XCTFail("expected repoIdentityMismatch, got \(mapped)")
+        }
+        XCTAssertNil(stored)
+        XCTAssertNil(observed)
+    }
+
+    func testCompatibilityErrorRoundTripsRepoFormatRegressionPayload() {
+        let build = BackupV2RuntimeBuildError.repoFormatRegression(repoID: "repo-Z")
+        let failure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(build)
+        let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: failure)
+        guard case BackupCompatibilityError.repoFormatRegression(let repoID) = mapped else {
+            return XCTFail("expected repoFormatRegression, got \(mapped)")
+        }
+        XCTAssertEqual(repoID, "repo-Z")
+    }
+
+    func testTranslateBootstrapErrorIOFailureExternalStorageUnavailablePassesThrough() {
+        let input = RepoBootstrap.BootstrapError.ioFailure(RemoteStorageClientError.externalStorageUnavailable)
+        let translated = BackupV2RuntimeOpenErrorMapping.translate(bootstrapError: input)
+        XCTAssertTrue(
+            RemoteStorageClientError.isLikelyExternalStorageUnavailable(translated),
+            "expected external-volume passthrough, got \(translated)"
+        )
+    }
+
+    func testTranslateBootstrapErrorIOFailureCancellationReturnsCancellation() {
+        let input = RepoBootstrap.BootstrapError.ioFailure(CancellationError())
+        let translated = BackupV2RuntimeOpenErrorMapping.translate(bootstrapError: input)
+        XCTAssertTrue(translated is CancellationError, "expected CancellationError, got \(translated)")
+    }
+
+    func testTranslateBootstrapErrorIOFailureUnknownUnderlyingReturnsDamagedV2Repo() {
+        let underlying = NSError(domain: "Synthetic", code: 99)
+        let input = RepoBootstrap.BootstrapError.ioFailure(underlying)
+        let translated = BackupV2RuntimeOpenErrorMapping.translate(bootstrapError: input)
+        guard case BackupV2RuntimeBuildError.damagedV2Repo = translated else {
+            return XCTFail("expected damagedV2Repo, got \(translated)")
+        }
+    }
+
+    func testTranslateBootstrapErrorFutureFormatVersionReturnsUnsupportedRemoteFormat() {
+        let input = RepoBootstrap.BootstrapError.futureFormatVersion(minAppVersion: "99.9")
+        let translated = BackupV2RuntimeOpenErrorMapping.translate(bootstrapError: input)
+        guard case BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) = translated else {
+            return XCTFail("expected unsupportedRemoteFormat, got \(translated)")
+        }
+        XCTAssertEqual(minAppVersion, "99.9")
+    }
+
+    func testTranslateVersionConflictHigherFormatReturnsUnsupportedRemoteFormat() {
+        let input = RepoBootstrap.VersionConflict.higherFormatVersion(remote: 5, local: 2, minAppVersion: "11.0")
+        let translated = BackupV2RuntimeOpenErrorMapping.translate(versionConflict: input)
+        guard case BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) = translated else {
+            return XCTFail("expected unsupportedRemoteFormat, got \(translated)")
+        }
+        XCTAssertEqual(minAppVersion, "11.0")
+    }
+
+    func testTranslateVersionConflictMismatchedFormatReturnsUnsupportedRemoteFormat() {
+        let input = RepoBootstrap.VersionConflict.mismatchedFormatVersion(remote: 2, local: 3, minAppVersion: nil)
+        let translated = BackupV2RuntimeOpenErrorMapping.translate(versionConflict: input)
+        guard case BackupV2RuntimeBuildError.unsupportedRemoteFormat(let minAppVersion) = translated else {
+            return XCTFail("expected unsupportedRemoteFormat, got \(translated)")
+        }
+        XCTAssertNil(minAppVersion)
+    }
+
+    func testTranslateVersionConflictUnreadableExternalStorageUnavailablePassesThrough() {
+        let input = RepoBootstrap.VersionConflict.unreadable(RemoteStorageClientError.externalStorageUnavailable)
+        let translated = BackupV2RuntimeOpenErrorMapping.translate(versionConflict: input)
+        XCTAssertTrue(
+            RemoteStorageClientError.isLikelyExternalStorageUnavailable(translated),
+            "expected external-volume passthrough, got \(translated)"
+        )
+    }
+
+    func testTranslateVersionConflictUnreadableCancellationReturnsCancellation() {
+        let input = RepoBootstrap.VersionConflict.unreadable(CancellationError())
+        let translated = BackupV2RuntimeOpenErrorMapping.translate(versionConflict: input)
+        XCTAssertTrue(translated is CancellationError, "expected CancellationError, got \(translated)")
+    }
+
+    func testTranslateVersionConflictUnreadableNilUnderlyingReturnsDamagedV2Repo() {
+        let input = RepoBootstrap.VersionConflict.unreadable(nil)
+        let translated = BackupV2RuntimeOpenErrorMapping.translate(versionConflict: input)
+        guard case BackupV2RuntimeBuildError.damagedV2Repo = translated else {
+            return XCTFail("expected damagedV2Repo, got \(translated)")
+        }
+    }
+
+    func testTranslateVersionConflictUnreadableUnknownUnderlyingReturnsDamagedV2Repo() {
+        let underlying = NSError(domain: "Synthetic", code: 77)
+        let input = RepoBootstrap.VersionConflict.unreadable(underlying)
+        let translated = BackupV2RuntimeOpenErrorMapping.translate(versionConflict: input)
+        guard case BackupV2RuntimeBuildError.damagedV2Repo = translated else {
+            return XCTFail("expected damagedV2Repo, got \(translated)")
+        }
+    }
+
+    func testTranslateToCompatibilityErrorBootstrapDamagedReturnsCompatibilityDamagedV2Repo() {
+        let input = RepoBootstrap.BootstrapError.ioFailure(NSError(domain: "Synthetic", code: 1))
+        let translated = BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: input)
+        guard case BackupCompatibilityError.damagedV2Repo = translated else {
+            return XCTFail("expected damagedV2Repo, got \(translated)")
+        }
+    }
+
+    func testTranslateToCompatibilityErrorVersionConflictUnsupportedReturnsCompatibilityUnsupported() {
+        let input = RepoBootstrap.VersionConflict.higherFormatVersion(remote: 9, local: 2, minAppVersion: "7.0")
+        let translated = BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(versionConflict: input)
+        guard case BackupCompatibilityError.remoteFormatUnsupported(let minAppVersion) = translated else {
+            return XCTFail("expected remoteFormatUnsupported, got \(translated)")
+        }
+        XCTAssertEqual(minAppVersion, "7.0")
+    }
+
+    func testTranslateToCompatibilityErrorPreservesExternalStoragePassthrough() {
+        let input = RepoBootstrap.BootstrapError.ioFailure(RemoteStorageClientError.externalStorageUnavailable)
+        let translated = BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: input)
+        XCTAssertTrue(
+            RemoteStorageClientError.isLikelyExternalStorageUnavailable(translated),
+            "expected external-volume passthrough, got \(translated)"
+        )
+    }
+
+    func testRemoteIndexV2SyncEnginePreMaterializedMismatchPopulatesPayload() async throws {
+        let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        let preMaterialized = try await builder.materialize()
+
+        do {
+            _ = try await RemoteIndexV2SyncEngine().materialize(
+                client: builder.client,
+                basePath: basePath,
+                preMaterialized: preMaterialized,
+                localRepoID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+            )
+            XCTFail("expected repoIdentityMismatch")
+        } catch let BackupCompatibilityError.repoIdentityMismatch(stored, observed) {
+            XCTAssertEqual(stored, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+            XCTAssertEqual(observed, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        }
+    }
+
+    func testRemoteIndexV2SyncEngineLiveSwapMismatchPopulatesPayload() async throws {
+        let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        let preMaterialized = try await builder.materialize()
+        try await TestFixtures.injectRepoJSON(builder.client, basePath: basePath, repoID: "cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+        do {
+            _ = try await RemoteIndexV2SyncEngine().materialize(
+                client: builder.client,
+                basePath: basePath,
+                preMaterialized: preMaterialized,
+                localRepoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            )
+            XCTFail("expected repoIdentityMismatch after live swap")
+        } catch let BackupCompatibilityError.repoIdentityMismatch(stored, observed) {
+            XCTAssertEqual(stored, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+            XCTAssertEqual(observed, "cccccccc-cccc-cccc-cccc-cccccccccccc")
+        }
+    }
+
+    func testRemoteIndexV2SyncEngineNoPreMaterializedMismatchPopulatesPayload() async throws {
+        let builder = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        do {
+            _ = try await RemoteIndexV2SyncEngine().materialize(
+                client: builder.client,
+                basePath: basePath,
+                preMaterialized: nil,
+                localRepoID: "dddddddd-dddd-dddd-dddd-dddddddddddd"
+            )
+            XCTFail("expected repoIdentityMismatch")
+        } catch let BackupCompatibilityError.repoIdentityMismatch(stored, observed) {
+            XCTAssertEqual(stored, "dddddddd-dddd-dddd-dddd-dddddddddddd")
+            XCTAssertEqual(observed, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        }
+    }
+
     func testProductionRuntimeOpenErrorMappingUsesSharedAuthority() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let preparation = try String(

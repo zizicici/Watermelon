@@ -328,26 +328,16 @@ struct BackupRunPreparationService: Sendable {
         do {
             load = try await VersionManifestStore(client: client, basePath: basePath).load()
         } catch let conflict as RepoBootstrap.VersionConflict {
+            // Profile-less inspect treats higher/mismatched format versions as damaged
+            // (the surrounding inspector reaches `.unsupported` via the success path, not via VersionConflict).
             switch conflict {
-            case .unreadable(let underlying):
-                if let underlying,
-                   RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
-                    throw underlying
-                }
-                throw BackupCompatibilityError.damagedV2Repo
+            case .unreadable:
+                throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(versionConflict: conflict)
             case .higherFormatVersion, .mismatchedFormatVersion:
                 throw BackupCompatibilityError.damagedV2Repo
             }
         } catch let bootstrap as RepoBootstrap.BootstrapError {
-            switch bootstrap {
-            case .ioFailure(let underlying):
-                if RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
-                    throw underlying
-                }
-                throw BackupCompatibilityError.damagedV2Repo
-            case .futureFormatVersion(let minAppVersion):
-                throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
-            }
+            throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: bootstrap)
         }
         switch load {
         case .absent:
@@ -388,26 +378,18 @@ struct BackupRunPreparationService: Sendable {
                 expectedRepoID = id
             }
         } catch let bootstrap as RepoBootstrap.BootstrapError {
-            switch bootstrap {
-            case .ioFailure(let underlying):
-                if RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
-                    throw underlying
-                }
-                throw BackupCompatibilityError.damagedV2Repo
-            case .futureFormatVersion(let minAppVersion):
-                throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
-            }
+            throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: bootstrap)
         }
         if let profileID = profile?.id {
             let identity = RepoIdentity(database: databaseManager)
             let localState = try await identity.findRepoStateByProfile(profileID: profileID)
             if let localState, localState.repoID != expectedRepoID {
-                throw BackupCompatibilityError.repoIdentityMismatch
+                throw BackupCompatibilityError.repoIdentityMismatch(stored: localState.repoID, observed: expectedRepoID)
             }
             if localState == nil {
                 let cachedRepoID = await remoteIndexService.materializedRepoID()
                 if let cachedRepoID, cachedRepoID != expectedRepoID {
-                    throw BackupCompatibilityError.repoIdentityMismatch
+                    throw BackupCompatibilityError.repoIdentityMismatch(stored: cachedRepoID, observed: expectedRepoID)
                 }
             }
         }

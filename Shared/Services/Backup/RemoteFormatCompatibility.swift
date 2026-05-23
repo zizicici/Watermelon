@@ -2,9 +2,9 @@ import Foundation
 
 enum BackupCompatibilityError: LocalizedError {
     case remoteFormatUnsupported(minAppVersion: String?)
-    case repoIdentityMismatch
+    case repoIdentityMismatch(stored: String?, observed: String?)
     case requiresForegroundMigration
-    case repoFormatRegression
+    case repoFormatRegression(repoID: String?)
     case damagedV2Repo
 
     var errorDescription: String? {
