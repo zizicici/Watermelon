@@ -8,7 +8,6 @@ struct RepoBootstrapInspectionFSM: Sendable {
         profile: ServerProfileRecord
     ) async throws -> RemoteFormatInspection {
         let basePath = RemotePathBuilder.normalizePath(profile.basePath)
-        let machine = BootstrapInspectionMachine()
         let entries: [RemoteStorageEntry]
         do {
             entries = try await client.list(path: basePath)
@@ -19,12 +18,10 @@ struct RepoBootstrapInspectionFSM: Sendable {
         let markerExists = entries.contains { entry in
             entry.isDirectory && entry.name == RepoLayout.watermelonDirectory
         }
-        machine.apply(.listedBase(markerExists: markerExists))
 
         guard markerExists else {
             let hasV1 = try await Self.detectV1Manifests(client: client, basePath: basePath, entries: entries)
-            machine.apply(.detectedV1Manifests(hasV1))
-            return machine.finish(hasV1 ? .v1 : .fresh)
+            return hasV1 ? .v1 : .fresh
         }
 
         return try await inspectMarkerPresent(
@@ -46,37 +43,30 @@ struct RepoBootstrapInspectionFSM: Sendable {
         basePath: String,
         entries: [RemoteStorageEntry]
     ) async throws -> RemoteFormatInspection {
-        let machine = BootstrapInspectionMachine()
-        machine.apply(.listedBase(markerExists: true))
         let manifest: VersionManifestStore.Load
         do {
             manifest = try await VersionManifestStore(client: client, basePath: basePath).load()
         } catch is RepoBootstrap.VersionConflict {
-            try machine.failDamaged()
+            throw BackupCompatibilityError.damagedV2Repo
         } catch let bootstrap as RepoBootstrap.BootstrapError {
-            if case .ioFailure = bootstrap { try machine.failDamaged() }
+            if case .ioFailure = bootstrap { throw BackupCompatibilityError.damagedV2Repo }
             throw bootstrap
         }
 
-        let versionSignal = VersionSignal(manifest)
-        machine.apply(.loadedVersion(versionSignal))
-
         if case .found(let preCheck) = manifest,
            preCheck.formatVersion > RepoLayout.currentSupportedFormatVersion {
-            return machine.finish(.unsupported(minAppVersion: preCheck.minAppVersion))
+            return .unsupported(minAppVersion: preCheck.minAppVersion)
         }
 
         let markerStore = MigrationMarkerStore(client: client, basePath: basePath)
         let migrationDirEntries = try await markerStore.migrationsDirectoryEntries()
         let migrationInProgress = migrationDirEntries.contains { $0.name.hasSuffix(".json") }
-        machine.apply(.listedMigrationDirectory(rawMigrationMarkerExists: migrationInProgress))
 
         var cachedV1Manifests: Bool?
         func hasV1Manifests() async throws -> Bool {
             if let cachedV1Manifests { return cachedV1Manifests }
             let detected = try await Self.detectV1Manifests(client: client, basePath: basePath, entries: entries)
             cachedV1Manifests = detected
-            machine.apply(.detectedV1Manifests(detected))
             return detected
         }
 
@@ -88,16 +78,14 @@ struct RepoBootstrapInspectionFSM: Sendable {
                 markerStore: markerStore,
                 migrationDirEntries: migrationDirEntries,
                 migrationInProgress: migrationInProgress,
-                hasV1Manifests: hasV1Manifests,
-                machine: machine
+                hasV1Manifests: hasV1Manifests
             )
         case .found(let manifest):
             return try await inspectVersionFound(
                 manifest: manifest,
                 markerStore: markerStore,
                 migrationDirEntries: migrationDirEntries,
-                hasV1Manifests: hasV1Manifests,
-                machine: machine
+                hasV1Manifests: hasV1Manifests
             )
         }
     }
@@ -108,56 +96,46 @@ struct RepoBootstrapInspectionFSM: Sendable {
         markerStore: MigrationMarkerStore,
         migrationDirEntries: [RemoteStorageEntry],
         migrationInProgress: Bool,
-        hasV1Manifests: () async throws -> Bool,
-        machine: BootstrapInspectionMachine
+        hasV1Manifests: () async throws -> Bool
     ) async throws -> RemoteFormatInspection {
         let v1Manifests = try await hasV1Manifests()
         let hasV2Data = try await Self.detectV2DataDirectories(client: client, basePath: basePath)
-        machine.apply(.detectedV2Data(hasV2Data))
-        machine.apply(.versionAbsent(
-            v1Manifests: v1Manifests,
-            v2Data: hasV2Data,
-            rawMigrationMarkerExists: migrationInProgress
-        ))
 
         if hasV2Data {
             if v1Manifests {
                 if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
-                    try machine.failDamaged()
+                    throw BackupCompatibilityError.damagedV2Repo
                 }
                 if migrationInProgress {
                     _ = try await parseMarkerEntriesFailingClosed(
                         markerStore: markerStore,
-                        migrationDirEntries: migrationDirEntries,
-                        machine: machine
+                        migrationDirEntries: migrationDirEntries
                     )
                 }
-                return machine.finish(.v2WithV1Manifests(formatVersion: RepoLayout.formatVersion))
+                return .v2WithV1Manifests(formatVersion: RepoLayout.formatVersion)
             }
             if migrationInProgress {
                 let markerStates = try await parseMarkerEntriesFailingClosed(
                     markerStore: markerStore,
-                    migrationDirEntries: migrationDirEntries,
-                    machine: machine
+                    migrationDirEntries: migrationDirEntries
                 )
                 let ordered = Self.sortedMarkers(markerStates)
-                machine.apply(.parsedMarkers(ordered.map(MigrationMarkerRoute.init)))
                 // Directory .json markers alongside parseable ones leave cleanup with
                 // an incomplete marker set — fail closed.
                 if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
-                    try machine.failDamaged()
+                    throw BackupCompatibilityError.damagedV2Repo
                 }
                 if let marker = ordered.first {
-                    return machine.finish(.v2WithPendingMigrationCleanup(
+                    return .v2WithPendingMigrationCleanup(
                         formatVersion: RepoLayout.formatVersion,
                         ownerWriterID: marker.writerID
-                    ))
+                    )
                 }
             }
-            try machine.failDamaged()
+            throw BackupCompatibilityError.damagedV2Repo
         }
         if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
-            try machine.failDamaged()
+            throw BackupCompatibilityError.damagedV2Repo
         }
         let fileMarkers = migrationDirEntries.filter {
             !$0.isDirectory && $0.name.hasSuffix(".json")
@@ -166,68 +144,54 @@ struct RepoBootstrapInspectionFSM: Sendable {
             do {
                 _ = try await markerStore.parseEntries(migrationDirEntries)
             } catch is MigrationMarkerStore.InvalidMarker {
-                try machine.failDamaged()
+                throw BackupCompatibilityError.damagedV2Repo
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 // Transport errors in !hasV2Data path: can't validate, proceed
             }
         }
-        if v1Manifests { return machine.finish(.v1) }
-        return machine.finish(.fresh)
+        if v1Manifests { return .v1 }
+        return .fresh
     }
 
     private func inspectVersionFound(
         manifest: VersionManifest,
         markerStore: MigrationMarkerStore,
         migrationDirEntries: [RemoteStorageEntry],
-        hasV1Manifests: () async throws -> Bool,
-        machine: BootstrapInspectionMachine
+        hasV1Manifests: () async throws -> Bool
     ) async throws -> RemoteFormatInspection {
         let formatVersion = manifest.formatVersion
         guard formatVersion >= 2 && formatVersion <= RepoLayout.currentSupportedFormatVersion else {
-            return machine.finish(.unsupported(minAppVersion: manifest.minAppVersion))
+            return .unsupported(minAppVersion: manifest.minAppVersion)
         }
 
         let markerStates = try await parseMarkerEntriesFailingClosed(
             markerStore: markerStore,
-            migrationDirEntries: migrationDirEntries,
-            machine: machine
+            migrationDirEntries: migrationDirEntries
         )
         let ordered = Self.sortedMarkers(markerStates)
-        machine.apply(.parsedMarkers(ordered.map(MigrationMarkerRoute.init)))
         // parseEntries skips directories; any directory-shaped .json marker alongside
         // parseable ones leaves cleanup with an incomplete marker set — fail closed.
         if migrationDirEntries.contains(where: { $0.isDirectory && $0.name.hasSuffix(".json") }) {
-            try machine.failDamaged()
+            throw BackupCompatibilityError.damagedV2Repo
         }
         if try await hasV1Manifests() {
-            machine.apply(.versionSupported(
-                formatVersion: formatVersion,
-                v1Manifests: true,
-                markers: ordered.map(MigrationMarkerRoute.init)
-            ))
-            return machine.finish(.v2WithV1Manifests(formatVersion: formatVersion))
+            return .v2WithV1Manifests(formatVersion: formatVersion)
         }
-        let markerRoutes = ordered.map(MigrationMarkerRoute.init)
-        machine.apply(.versionSupported(
-            formatVersion: formatVersion,
-            v1Manifests: false,
-            markers: markerRoutes
-        ))
         if let cleanup = ordered.first(where: { $0.phase.isCleanupSafe }) {
-            return machine.finish(.v2WithPendingMigrationCleanup(
+            return .v2WithPendingMigrationCleanup(
                 formatVersion: formatVersion,
                 ownerWriterID: cleanup.writerID
-            ))
+            )
         }
         if let residue = ordered.first {
-            return machine.finish(.v2WithPendingMigrationCleanup(
+            return .v2WithPendingMigrationCleanup(
                 formatVersion: formatVersion,
                 ownerWriterID: residue.writerID
-            ))
+            )
         }
-        return machine.finish(.v2(formatVersion: formatVersion))
+        return .v2(formatVersion: formatVersion)
     }
 
     private static func sortedMarkers(_ markers: [ParsedMigrationMarker]) -> [ParsedMigrationMarker] {
@@ -241,13 +205,12 @@ struct RepoBootstrapInspectionFSM: Sendable {
 
     private func parseMarkerEntriesFailingClosed(
         markerStore: MigrationMarkerStore,
-        migrationDirEntries: [RemoteStorageEntry],
-        machine: BootstrapInspectionMachine
+        migrationDirEntries: [RemoteStorageEntry]
     ) async throws -> [ParsedMigrationMarker] {
         do {
             return try await markerStore.parseEntries(migrationDirEntries)
         } catch is MigrationMarkerStore.InvalidMarker {
-            try machine.failDamaged()
+            throw BackupCompatibilityError.damagedV2Repo
         }
     }
 
@@ -301,99 +264,5 @@ struct RepoBootstrapInspectionFSM: Sendable {
             }
         }
         return false
-    }
-}
-
-private enum BootstrapInspectionState: Equatable, Sendable {
-    case start
-    case baseListed(markerExists: Bool)
-    case noMarker(v1Manifests: Bool)
-    case markerPresent(version: VersionSignal, rawMigrationMarkerExists: Bool?)
-    case versionAbsent(v1Manifests: Bool, v2Data: Bool, rawMigrationMarkerExists: Bool)
-    case versionSupported(formatVersion: Int, v1Manifests: Bool, markers: [MigrationMarkerRoute])
-    case terminal(RemoteFormatInspection)
-    case damagedV2Repo
-}
-
-private enum BootstrapInspectionEvent: Sendable {
-    case listedBase(markerExists: Bool)
-    case loadedVersion(VersionSignal)
-    case listedMigrationDirectory(rawMigrationMarkerExists: Bool)
-    case detectedV1Manifests(Bool)
-    case detectedV2Data(Bool)
-    case parsedMarkers([MigrationMarkerRoute])
-    case versionAbsent(v1Manifests: Bool, v2Data: Bool, rawMigrationMarkerExists: Bool)
-    case versionSupported(formatVersion: Int, v1Manifests: Bool, markers: [MigrationMarkerRoute])
-}
-
-private final class BootstrapInspectionMachine {
-    private(set) var state: BootstrapInspectionState = .start
-
-    func apply(_ event: BootstrapInspectionEvent) {
-        switch event {
-        case .listedBase(let markerExists):
-            state = .baseListed(markerExists: markerExists)
-        case .loadedVersion(let signal):
-            state = .markerPresent(version: signal, rawMigrationMarkerExists: nil)
-        case .listedMigrationDirectory(let rawMigrationMarkerExists):
-            if case .markerPresent(let signal, _) = state {
-                state = .markerPresent(version: signal, rawMigrationMarkerExists: rawMigrationMarkerExists)
-            }
-        case .detectedV1Manifests(let detected):
-            if case .baseListed(false) = state {
-                state = .noMarker(v1Manifests: detected)
-            }
-        case .detectedV2Data:
-            break
-        case .parsedMarkers:
-            break
-        case .versionAbsent(let v1Manifests, let v2Data, let rawMigrationMarkerExists):
-            state = .versionAbsent(
-                v1Manifests: v1Manifests,
-                v2Data: v2Data,
-                rawMigrationMarkerExists: rawMigrationMarkerExists
-            )
-        case .versionSupported(let formatVersion, let v1Manifests, let markers):
-            state = .versionSupported(formatVersion: formatVersion, v1Manifests: v1Manifests, markers: markers)
-        }
-    }
-
-    func finish(_ inspection: RemoteFormatInspection) -> RemoteFormatInspection {
-        state = .terminal(inspection)
-        return inspection
-    }
-
-    func failDamaged() throws -> Never {
-        state = .damagedV2Repo
-        throw BackupCompatibilityError.damagedV2Repo
-    }
-}
-
-private enum VersionSignal: Equatable, Sendable {
-    case absent
-    case supported(formatVersion: Int)
-    case unsupported(minAppVersion: String?)
-
-    init(_ load: VersionManifestStore.Load) {
-        switch load {
-        case .absent:
-            self = .absent
-        case .found(let manifest):
-            if manifest.formatVersion >= 2 && manifest.formatVersion <= RepoLayout.currentSupportedFormatVersion {
-                self = .supported(formatVersion: manifest.formatVersion)
-            } else {
-                self = .unsupported(minAppVersion: manifest.minAppVersion)
-            }
-        }
-    }
-}
-
-private struct MigrationMarkerRoute: Equatable, Sendable {
-    let writerID: String
-    let phase: MigrationMarkerPhase
-
-    init(_ marker: ParsedMigrationMarker) {
-        self.writerID = marker.writerID
-        self.phase = marker.phase
     }
 }
