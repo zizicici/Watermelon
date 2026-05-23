@@ -598,17 +598,8 @@ final class MonthManifestStore {
         }
     }
 
-    struct FlushDelta: Sendable {
-        let didFlush: Bool
-        /// V2 fingerprints durably committed by this call, normally only from defensive flushes.
-        let committedV2AssetFingerprints: Set<Data>
-        let committedV2TombstoneFingerprints: Set<Data>
-
-        static let none = FlushDelta(didFlush: false, committedV2AssetFingerprints: [], committedV2TombstoneFingerprints: [])
-    }
-
     @discardableResult
-    func flushToRemote(ignoreCancellation: Bool = false) async throws -> FlushDelta {
+    func flushToRemote(ignoreCancellation: Bool = false) async throws -> BackupMonthFlushDelta {
         guard dirty else { return .none }
         if !ignoreCancellation {
             try Task.checkCancellation()
@@ -681,7 +672,7 @@ final class MonthManifestStore {
             try Task.checkCancellation()
         }
         dirty = false
-        return FlushDelta(didFlush: true, committedV2AssetFingerprints: [], committedV2TombstoneFingerprints: [])
+        return BackupMonthFlushDelta(didFlush: true, committedAssetFingerprints: [], committedTombstoneFingerprints: [])
     }
 
     private func moveReplacingExistingManifest(

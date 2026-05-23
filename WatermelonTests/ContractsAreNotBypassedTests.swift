@@ -18,7 +18,7 @@ final class ContractsAreNotBypassedTests: XCTestCase {
         let writer = RemoteIndexSyncService().makeOptimisticAssetWriter()
         let _: (RemoteManifestAsset, [RemoteAssetResourceLink]?) -> Void = writer.appendAsset
         let _: (RemoteManifestResource) -> Void = writer.appendResource
-        let _: (any BackupMonthStore, Bool) async throws -> MonthManifestStore.FlushDelta = { store, ignoreCancellation in
+        let _: (any BackupMonthStore, Bool) async throws -> BackupMonthFlushDelta = { store, ignoreCancellation in
             try await store.commitPendingAssetToRemote(ignoreCancellation: ignoreCancellation)
         }
     }

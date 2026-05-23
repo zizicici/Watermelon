@@ -336,7 +336,7 @@ V2 详细设计和残留项见 `docs/06-RepoV2.md`。数据模型层面只需要
 6. `.watermelon/retention/{YYYY-MM}--{lamport16}--{writerID}--{runIDPrefix}.json` 保存 checkpoint barrier / delete prefix / liveness gate，用于保守删除已被 checkpoint 覆盖的 commit 前缀
 7. `.watermelon/migrations/*.json` 记录 V1→V2 迁移阶段；迁移完成后仅可能留下 cleanup residue，`RemoteFormatInspection.v2WithPendingMigrationCleanup` 会驱动前台清理
 
-`V2MonthSession` 是 V2 worker 的月份状态容器：启动时按 repoID 过滤 materialize 单月，再叠加真实月份目录 listing；row-writing asset 返回前先写 per-asset commit，flush 时主要写 snapshot，并通过 `FlushDelta` 告诉 `RemoteIndexSyncService` 哪些 asset / tombstone commit 已 durable。干净 flush 后会尝试 checkpoint / retention barrier / commit 前缀删除维护。
+`V2MonthSession` 是 V2 worker 的月份状态容器：启动时按 repoID 过滤 materialize 单月，再叠加真实月份目录 listing；row-writing asset 返回前先写 per-asset commit，flush 时主要写 snapshot，并通过 `BackupMonthFlushDelta` 告诉 `RemoteIndexSyncService` 哪些 asset / tombstone commit 已 durable。干净 flush 后会尝试 checkpoint / retention barrier / commit 前缀删除维护。
 
 ### Retention manifest wire schema
 

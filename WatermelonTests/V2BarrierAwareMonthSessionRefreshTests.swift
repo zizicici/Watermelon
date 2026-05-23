@@ -429,8 +429,8 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         try await injectBarrier(client: client, repoID: repoID, writerID: writerB, runID: runB, seq: 7, lamport: 600)
 
         let delta = try await session.flushToRemote(ignoreCancellation: false)
-        XCTAssertEqual(delta.committedV2AssetFingerprints, [replacement.asset.assetFingerprint])
-        XCTAssertEqual(delta.committedV2TombstoneFingerprints, [oldFP])
+        XCTAssertEqual(delta.committedAssetFingerprints, [replacement.asset.assetFingerprint])
+        XCTAssertEqual(delta.committedTombstoneFingerprints, [oldFP])
 
         let commit = try await readCommit(client: client, writerID: writerA, seq: 2)
         let tombstone = try XCTUnwrap(commit.ops.compactMap { op -> CommitTombstoneBody? in

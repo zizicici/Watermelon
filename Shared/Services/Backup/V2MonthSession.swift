@@ -236,7 +236,7 @@ final class V2MonthSession: BackupMonthStore {
 
 
     @discardableResult
-    func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta {
+    func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> BackupMonthFlushDelta {
         guard beginFlush() else {
             throw FlushError.concurrentFlushRejected
         }
@@ -245,7 +245,7 @@ final class V2MonthSession: BackupMonthStore {
     }
 
     @discardableResult
-    func flushToRemote(ignoreCancellation: Bool = false) async throws -> MonthManifestStore.FlushDelta {
+    func flushToRemote(ignoreCancellation: Bool = false) async throws -> BackupMonthFlushDelta {
         guard beginFlush() else {
             throw FlushError.concurrentFlushRejected
         }
@@ -285,10 +285,10 @@ final class V2MonthSession: BackupMonthStore {
             try await runCheckpointBarrierHook(services: services)
         }
 
-        return MonthManifestStore.FlushDelta(
+        return BackupMonthFlushDelta(
             didFlush: didFlush,
-            committedV2AssetFingerprints: commitResult?.committedAssets ?? [],
-            committedV2TombstoneFingerprints: commitResult?.committedTombstones ?? []
+            committedAssetFingerprints: commitResult?.committedAssets ?? [],
+            committedTombstoneFingerprints: commitResult?.committedTombstones ?? []
         )
     }
 
@@ -310,7 +310,7 @@ final class V2MonthSession: BackupMonthStore {
         }
     }
 
-    private func commitPendingAssetToRemoteLocked(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta {
+    private func commitPendingAssetToRemoteLocked(ignoreCancellation: Bool) async throws -> BackupMonthFlushDelta {
         guard let services = v2Services else { return .none }
         guard let result = try await commitPendingAssetToRemoteLockedResult(
             services: services,
@@ -318,10 +318,10 @@ final class V2MonthSession: BackupMonthStore {
         ) else {
             return .none
         }
-        return MonthManifestStore.FlushDelta(
+        return BackupMonthFlushDelta(
             didFlush: true,
-            committedV2AssetFingerprints: result.committedAssets,
-            committedV2TombstoneFingerprints: result.committedTombstones
+            committedAssetFingerprints: result.committedAssets,
+            committedTombstoneFingerprints: result.committedTombstones
         )
     }
 

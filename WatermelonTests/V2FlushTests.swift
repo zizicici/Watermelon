@@ -70,8 +70,8 @@ final class V2FlushTests: XCTestCase {
 
         let delta = try await store.flushToRemote()
         XCTAssertTrue(delta.didFlush)
-        XCTAssertEqual(delta.committedV2AssetFingerprints, [asset.assetFingerprint])
-        XCTAssertTrue(delta.committedV2TombstoneFingerprints.isEmpty)
+        XCTAssertEqual(delta.committedAssetFingerprints, [asset.assetFingerprint])
+        XCTAssertTrue(delta.committedTombstoneFingerprints.isEmpty)
 
         // Commit file should exist at expected path.
         let commitPath = RepoLayout.commitFilePath(
@@ -130,7 +130,7 @@ final class V2FlushTests: XCTestCase {
         let delta = try await store.commitPendingAssetToRemote(ignoreCancellation: false)
 
         XCTAssertTrue(delta.didFlush)
-        XCTAssertEqual(delta.committedV2AssetFingerprints, [rows.asset.assetFingerprint])
+        XCTAssertEqual(delta.committedAssetFingerprints, [rows.asset.assetFingerprint])
         let counts = await repoMetadataCounts(client)
         XCTAssertEqual(counts.commits, 1)
         XCTAssertEqual(counts.snapshots, 0)
@@ -197,7 +197,7 @@ final class V2FlushTests: XCTestCase {
         let delta = try await store.flushToRemote(ignoreCancellation: false)
 
         XCTAssertTrue(delta.didFlush)
-        XCTAssertTrue(delta.committedV2AssetFingerprints.isEmpty)
+        XCTAssertTrue(delta.committedAssetFingerprints.isEmpty)
         let counts = await repoMetadataCounts(client)
         XCTAssertEqual(counts.commits, 2)
         XCTAssertEqual(counts.snapshots, 1)
@@ -278,7 +278,7 @@ final class V2FlushTests: XCTestCase {
             ignoreCancellation: false
         )
 
-        XCTAssertEqual(delta.committedV2AssetFingerprints, [rows.asset.assetFingerprint])
+        XCTAssertEqual(delta.committedAssetFingerprints, [rows.asset.assetFingerprint])
         XCTAssertEqual(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey], [rows.asset.assetFingerprint])
     }
 
@@ -326,7 +326,7 @@ final class V2FlushTests: XCTestCase {
 
     func testFlushV2ReturnsTombstoneFingerprintsInDelta() async throws {
         // Tombstone-only flush: applyDeletions adds to pending tombstones; flush
-        // reports them in committedV2TombstoneFingerprints.
+        // reports them in committedTombstoneFingerprints.
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let v2 = try await makeV2Services(client: client)
@@ -371,10 +371,10 @@ final class V2FlushTests: XCTestCase {
         try store.upsertAsset(newAsset, links: [link], replacingSubsetFingerprints: [fp])
 
         let delta = try await store.flushToRemote(ignoreCancellation: false)
-        XCTAssertTrue(delta.committedV2TombstoneFingerprints.contains(fp),
-                      "tombstone fingerprint must be reported in FlushDelta for defensive publication")
-        XCTAssertTrue(delta.committedV2AssetFingerprints.contains(newFP),
-                      "superseding asset must be reported in FlushDelta")
+        XCTAssertTrue(delta.committedTombstoneFingerprints.contains(fp),
+                      "tombstone fingerprint must be reported in BackupMonthFlushDelta for defensive publication")
+        XCTAssertTrue(delta.committedAssetFingerprints.contains(newFP),
+                      "superseding asset must be reported in BackupMonthFlushDelta")
 
         // Both ops must land in a single commit file (seq=2; seq=1 was the first flush).
         let commitPath = RepoLayout.commitFilePath(
@@ -1262,7 +1262,7 @@ final class V2FlushTests: XCTestCase {
 
         let delta = try await store.flushToRemote()
         XCTAssertTrue(delta.didFlush)
-        XCTAssertEqual(delta.committedV2AssetFingerprints, [asset.assetFingerprint])
+        XCTAssertEqual(delta.committedAssetFingerprints, [asset.assetFingerprint])
 
         // The successful commit lands at seq=2 (seq=1 was pre-occupied).
         let seq2Path = RepoLayout.commitFilePath(
@@ -2418,7 +2418,7 @@ final class V2FlushTests: XCTestCase {
                        "strict-subset finder must surface A given B's full link set")
         try store.upsertAsset(fullAsset, links: fullLinks, replacingSubsetFingerprints: subsets)
         let healDelta = try await store.flushToRemote(ignoreCancellation: false)
-        XCTAssertTrue(healDelta.committedV2TombstoneFingerprints.contains(partialFP),
+        XCTAssertTrue(healDelta.committedTombstoneFingerprints.contains(partialFP),
                       "heal flush must emit a tombstone for A")
 
         // Materialized state must reflect A being tombstoned and B remaining.

@@ -52,10 +52,10 @@ protocol BackupMonthStore: AnyObject {
     var physicallyMissingHashesAreAuthoritative: Bool { get }
 
     @discardableResult
-    func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta
+    func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> BackupMonthFlushDelta
 
     @discardableResult
-    func flushToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta
+    func flushToRemote(ignoreCancellation: Bool) async throws -> BackupMonthFlushDelta
 }
 
 extension MonthManifestStore: BackupMonthStore {
@@ -80,7 +80,7 @@ extension BackupMonthStore {
     }
 
     @discardableResult
-    func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta {
+    func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> BackupMonthFlushDelta {
         .none
     }
 }

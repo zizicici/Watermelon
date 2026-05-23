@@ -435,7 +435,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
 
         let delta = try await session.flushToRemote()
         XCTAssertTrue(delta.didFlush)
-        XCTAssertEqual(delta.committedV2AssetFingerprints, [fingerprint])
+        XCTAssertEqual(delta.committedAssetFingerprints, [fingerprint])
         let cleanDelta = try await session.flushToRemote()
         XCTAssertFalse(cleanDelta.didFlush)
         let retentionCount = await retentionFiles(inner).count

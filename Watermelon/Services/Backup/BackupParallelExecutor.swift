@@ -799,7 +799,7 @@ struct BackupParallelExecutor: Sendable {
         month: LibraryMonthKey,
         remoteIndexService: RemoteIndexSyncService,
         ignoreCancellation: Bool
-    ) async throws -> MonthManifestStore.FlushDelta {
+    ) async throws -> BackupMonthFlushDelta {
         do {
             let delta = try await monthStore.flushToRemote(ignoreCancellation: ignoreCancellation)
             publishDefensiveFlushSnapshotIfNeeded(
@@ -824,9 +824,9 @@ struct BackupParallelExecutor: Sendable {
         monthStore: any BackupMonthStore,
         month: LibraryMonthKey,
         remoteIndexService: RemoteIndexSyncService,
-        delta: MonthManifestStore.FlushDelta
+        delta: BackupMonthFlushDelta
     ) {
-        let committed = delta.committedV2AssetFingerprints.union(delta.committedV2TombstoneFingerprints)
+        let committed = delta.committedAssetFingerprints.union(delta.committedTombstoneFingerprints)
         guard !committed.isEmpty else { return }
         publishMonthSnapshot(monthStore: monthStore, month: month, remoteIndexService: remoteIndexService)
     }

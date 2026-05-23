@@ -555,15 +555,15 @@ final class AssetProcessor: Sendable {
     private func publishCommittedSweepIfNeeded(
         monthStore: any BackupMonthStore,
         manifestAsset: RemoteManifestAsset,
-        delta: MonthManifestStore.FlushDelta,
+        delta: BackupMonthFlushDelta,
         tombstonedSubsetFingerprints: Set<Data>
     ) {
         // V1 commits eagerly inside upsertAsset, so `delta` always reports no tombstones —
         // the `tombstonedSubsetFingerprints` argument is the only signal that subset rows
         // were just removed and the cache needs eviction.
-        guard !delta.committedV2TombstoneFingerprints.isEmpty ||
+        guard !delta.committedTombstoneFingerprints.isEmpty ||
             !tombstonedSubsetFingerprints.subtracting([manifestAsset.assetFingerprint]).isEmpty ||
-            delta.committedV2AssetFingerprints.subtracting([manifestAsset.assetFingerprint]).isEmpty == false else {
+            delta.committedAssetFingerprints.subtracting([manifestAsset.assetFingerprint]).isEmpty == false else {
             return
         }
         let snapshot = monthStore.unsortedSnapshot()

@@ -326,10 +326,10 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         )
         let store = ThrowingCommitMonthStore(year: month.year, month: month.month)
         store.shouldThrowCommit = false
-        store.commitDelta = MonthManifestStore.FlushDelta(
+        store.commitDelta = BackupMonthFlushDelta(
             didFlush: true,
-            committedV2AssetFingerprints: [carriedFingerprint, currentFingerprint],
-            committedV2TombstoneFingerprints: []
+            committedAssetFingerprints: [carriedFingerprint, currentFingerprint],
+            committedTombstoneFingerprints: []
         )
         store.snapshotResources = [carriedResource, currentResource]
         store.snapshotAssets = [carriedAsset, currentAsset]
@@ -662,7 +662,7 @@ private final class ThrowingCommitMonthStore: BackupMonthStore {
     var hasAnyAsset: Bool { false }
     var shouldThrowCommit = true
     var ignoreCancellationValues: [Bool] = []
-    var commitDelta = MonthManifestStore.FlushDelta.none
+    var commitDelta = BackupMonthFlushDelta.none
     var snapshotResources: [RemoteManifestResource] = []
     var snapshotAssets: [RemoteManifestAsset] = []
     var snapshotLinks: [RemoteAssetResourceLink] = []
@@ -693,7 +693,7 @@ private final class ThrowingCommitMonthStore: BackupMonthStore {
     }
     func physicallyMissingHashesSnapshot() -> Set<Data> { [] }
     var physicallyMissingHashesAreAuthoritative: Bool { false }
-    func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta {
+    func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> BackupMonthFlushDelta {
         ignoreCancellationValues.append(ignoreCancellation)
         eventRecorder?.append("commit")
         if shouldThrowCommit {
@@ -701,7 +701,7 @@ private final class ThrowingCommitMonthStore: BackupMonthStore {
         }
         return commitDelta
     }
-    func flushToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta { .none }
+    func flushToRemote(ignoreCancellation: Bool) async throws -> BackupMonthFlushDelta { .none }
 }
 
 private final class EventRecorder {
