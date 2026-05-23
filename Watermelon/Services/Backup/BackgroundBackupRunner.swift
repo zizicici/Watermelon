@@ -567,15 +567,16 @@ final class BackgroundBackupRunner {
                     guard result.status != .failed else { continue }
                     uploadsSinceFlush += 1
                     if uploadsSinceFlush >= Self.flushInterval {
+                        var intervalOutcome: V2MonthFlushOutcome?
+                        var shouldBreakAssetLoop = false
                         do {
-                            _ = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+                            intervalOutcome = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
                                 monthStore: monthStore,
                                 month: monthKey,
                                 remoteIndexService: assetProcessor.remoteIndexService,
                                 ignoreCancellation: Self.backgroundIntervalFlushIgnoresCancellation()
                             )
                         } catch {
-                            var shouldBreakAssetLoop = false
                             switch BackupFlushFailureClassification.classify(error, on: profile).backgroundIntervalAction {
                             case .continueAssetLoopAndResetCounter:
                                 uploadsSinceFlush = 0
@@ -596,8 +597,31 @@ final class BackgroundBackupRunner {
                                     unless: error
                                 )
                             }
-                            if shouldBreakAssetLoop { break }
                         }
+                        if let outcome = intervalOutcome,
+                           let dispatch = BackupFlushFailureClassification.backgroundIntervalPartialDispatch(
+                                outcome: outcome,
+                                profile: profile
+                           ) {
+                            switch dispatch.action {
+                            case .ignoreSilently:
+                                break
+                            case .abortProfileLogError:
+                                connectionUnavailableAbort = true
+                                anyMonthFailed = true
+                                await writer.appendLog(
+                                    String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(dispatch.displayError)),
+                                    level: .error
+                                )
+                                shouldBreakAssetLoop = true
+                            case .logErrorAndContinue:
+                                await writer.appendErrorLog(
+                                    String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(dispatch.displayError)),
+                                    unless: dispatch.displayError
+                                )
+                            }
+                        }
+                        if shouldBreakAssetLoop { break }
                         uploadsSinceFlush = 0
                     }
                 }
@@ -609,8 +633,9 @@ final class BackgroundBackupRunner {
                 // Connection-unavailable already terminated this profile; another remote write would just re-log the same failure.
                 break
             }
+            var eomOutcome: V2MonthFlushOutcome?
             do {
-                _ = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+                eomOutcome = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
                     monthStore: monthStore,
                     month: monthKey,
                     remoteIndexService: assetProcessor.remoteIndexService,
@@ -631,6 +656,30 @@ final class BackgroundBackupRunner {
                     )
                 case .recordReasonLogError:
                     let reason = profile.userFacingStorageErrorMessage(error)
+                    monthFlushFailureReason = reason
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),
+                        level: .error
+                    )
+                }
+            }
+            if let outcome = eomOutcome,
+               let dispatch = BackupFlushFailureClassification.backgroundEndOfMonthPartialDispatch(
+                    outcome: outcome,
+                    profile: profile
+               ) {
+                switch dispatch.action {
+                case .ignoreSilently:
+                    break
+                case .abortProfileLogError:
+                    connectionUnavailableAbort = true
+                    anyMonthFailed = true
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(dispatch.displayError)),
+                        level: .error
+                    )
+                case .recordReasonLogError:
+                    let reason = profile.userFacingStorageErrorMessage(dispatch.displayError)
                     monthFlushFailureReason = reason
                     await writer.appendLog(
                         String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, reason),

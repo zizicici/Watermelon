@@ -420,15 +420,16 @@ struct BackupParallelExecutor: Sendable {
                             if result.status != .failed {
                                 uploadsSinceFlush += 1
                                 if uploadsSinceFlush >= Self.flushInterval {
+                                    var intervalOutcome: V2MonthFlushOutcome?
+                                    var shouldBreakAssetLoop = false
                                     do {
-                                        _ = try await Self.flushMonthStorePublishingDefensiveCommits(
+                                        intervalOutcome = try await Self.flushMonthStorePublishingDefensiveCommits(
                                             monthStore: monthStore,
                                             month: monthKey,
                                             remoteIndexService: remoteIndexService,
                                             ignoreCancellation: false
                                         )
                                     } catch {
-                                        var shouldBreakAssetLoop = false
                                         switch BackupFlushFailureClassification.classify(error, on: profile).foregroundIntervalAction {
                                         case .continueAssetLoopAndResetCounter:
                                             uploadsSinceFlush = 0
@@ -460,8 +461,42 @@ struct BackupParallelExecutor: Sendable {
                                                 level: .warning
                                             )
                                         }
-                                        if shouldBreakAssetLoop { break }
                                     }
+                                    if let outcome = intervalOutcome,
+                                       let dispatch = BackupFlushFailureClassification.foregroundIntervalPartialDispatch(
+                                            outcome: outcome,
+                                            profile: profile
+                                       ) {
+                                        switch dispatch.action {
+                                        case .pauseAndBreakAssetLoop:
+                                            workerState.paused = true
+                                            shouldBreakAssetLoop = true
+                                        case .abortMonthBreakAssetLoop:
+                                            clientReusable = false
+                                            monthFatalError = dispatch.displayError
+                                            eventStream.emitLog(
+                                                String.localizedStringWithFormat(
+                                                    String(localized: "backup.parallel.flushManifestFailed"),
+                                                    workerID + 1,
+                                                    monthKey.text,
+                                                    profile.userFacingStorageErrorMessage(dispatch.displayError)
+                                                ),
+                                                level: .error
+                                            )
+                                            shouldBreakAssetLoop = true
+                                        case .logWarningAndContinue:
+                                            eventStream.emitLog(
+                                                String.localizedStringWithFormat(
+                                                    String(localized: "backup.parallel.flushManifestFailed"),
+                                                    workerID + 1,
+                                                    monthKey.text,
+                                                    profile.userFacingStorageErrorMessage(dispatch.displayError)
+                                                ),
+                                                level: .warning
+                                            )
+                                        }
+                                    }
+                                    if shouldBreakAssetLoop { break }
                                     uploadsSinceFlush = 0
                                 }
                             }
@@ -555,8 +590,10 @@ struct BackupParallelExecutor: Sendable {
                         level: .error
                     )
                 } else {
+                    var eomOutcome: V2MonthFlushOutcome?
+                    var shouldBreakMonthLoop = false
                     do {
-                        _ = try await Self.flushMonthStorePublishingDefensiveCommits(
+                        eomOutcome = try await Self.flushMonthStorePublishingDefensiveCommits(
                             monthStore: monthStore,
                             month: monthKey,
                             remoteIndexService: remoteIndexService,
@@ -565,7 +602,91 @@ struct BackupParallelExecutor: Sendable {
                                 hasV2Services: monthStore.v2Services != nil
                             )
                         )
-                        if shouldFinishMonth {
+                    } catch {
+                        switch BackupFlushFailureClassification.classify(error, on: profile).foregroundEndOfMonthAction {
+                        case .ignoreConcurrentReject:
+                            // Another flusher owns the pending state.
+                            break
+                        case .pauseAndBreakMonthLoop:
+                            workerState.paused = true
+                            shouldBreakMonthLoop = true
+                        case .abortMonthBreakMonthLoop:
+                            clientReusable = false
+                            monthFatalError = error
+                            eventStream.emitErrorLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.flushManifestFailed"),
+                                    workerID + 1,
+                                    monthKey.text,
+                                    profile.userFacingStorageErrorMessage(error)
+                                ),
+                                unless: error
+                            )
+                            shouldBreakMonthLoop = true
+                        case .logErrorAndRethrow:
+                            eventStream.emitErrorLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.flushManifestFailed"),
+                                    workerID + 1,
+                                    monthKey.text,
+                                    profile.userFacingStorageErrorMessage(error)
+                                ),
+                                unless: error
+                            )
+                            throw error
+                        }
+                    }
+
+                    if let outcome = eomOutcome {
+                        if let dispatch = BackupFlushFailureClassification.foregroundEndOfMonthPartialDispatch(
+                            outcome: outcome,
+                            profile: profile,
+                            shouldFinishMonth: shouldFinishMonth
+                        ) {
+                            switch dispatch.action {
+                            case .pauseAndBreakMonthLoop:
+                                workerState.paused = true
+                                shouldBreakMonthLoop = true
+                            case .abortMonthBreakMonthLoop:
+                                clientReusable = false
+                                monthFatalError = dispatch.displayError
+                                eventStream.emitErrorLog(
+                                    String.localizedStringWithFormat(
+                                        String(localized: "backup.parallel.flushManifestFailed"),
+                                        workerID + 1,
+                                        monthKey.text,
+                                        profile.userFacingStorageErrorMessage(dispatch.displayError)
+                                    ),
+                                    unless: dispatch.displayError
+                                )
+                                shouldBreakMonthLoop = true
+                            case .logErrorAndEmitDeferred:
+                                eventStream.emitErrorLog(
+                                    String.localizedStringWithFormat(
+                                        String(localized: "backup.parallel.flushManifestFailed"),
+                                        workerID + 1,
+                                        monthKey.text,
+                                        profile.userFacingStorageErrorMessage(dispatch.displayError)
+                                    ),
+                                    unless: dispatch.displayError
+                                )
+                                Self.emitUploadDurableSnapshotDeferred(
+                                    eventStream: eventStream,
+                                    month: monthKey,
+                                    message: profile.userFacingStorageErrorMessage(dispatch.displayError)
+                                )
+                            case .logErrorOnly:
+                                eventStream.emitErrorLog(
+                                    String.localizedStringWithFormat(
+                                        String(localized: "backup.parallel.flushManifestFailed"),
+                                        workerID + 1,
+                                        monthKey.text,
+                                        profile.userFacingStorageErrorMessage(dispatch.displayError)
+                                    ),
+                                    unless: dispatch.displayError
+                                )
+                            }
+                        } else if shouldFinishMonth {
                             let emitCompleted: () -> Void = {
                                 eventStream.emit(.monthChanged(MonthChangeEvent(
                                     year: monthKey.year,
@@ -657,73 +778,8 @@ struct BackupParallelExecutor: Sendable {
                                 eventStream.emitLog(pauseLog, level: .info)
                             }
                         }
-                    } catch {
-                        var shouldBreakMonthLoop = false
-                        switch BackupFlushFailureClassification.classify(error, on: profile).foregroundEndOfMonthAction {
-                        case .ignoreConcurrentReject:
-                            // Another flusher owns the pending state.
-                            break
-                        case .pauseAndBreakMonthLoop:
-                            workerState.paused = true
-                            shouldBreakMonthLoop = true
-                        case .abortMonthBreakMonthLoop:
-                            clientReusable = false
-                            monthFatalError = error
-                            eventStream.emitErrorLog(
-                                String.localizedStringWithFormat(
-                                    String(localized: "backup.parallel.flushManifestFailed"),
-                                    workerID + 1,
-                                    monthKey.text,
-                                    profile.userFacingStorageErrorMessage(error)
-                                ),
-                                unless: error
-                            )
-                            shouldBreakMonthLoop = true
-                        case .logErrorTryDeferDurableSnapshotSuppressRethrow:
-                            eventStream.emitErrorLog(
-                                String.localizedStringWithFormat(
-                                    String(localized: "backup.parallel.flushManifestFailed"),
-                                    workerID + 1,
-                                    monthKey.text,
-                                    profile.userFacingStorageErrorMessage(error)
-                                ),
-                                unless: error
-                            )
-                            if Self.shouldEmitUploadDurableSnapshotDeferred(
-                                error: error,
-                                shouldFinishMonth: shouldFinishMonth
-                            ) {
-                                Self.emitUploadDurableSnapshotDeferred(
-                                    eventStream: eventStream,
-                                    month: monthKey,
-                                    message: profile.userFacingStorageErrorMessage(error)
-                                )
-                            }
-                        case .logErrorTryDeferDurableSnapshotOrRethrow:
-                            eventStream.emitErrorLog(
-                                String.localizedStringWithFormat(
-                                    String(localized: "backup.parallel.flushManifestFailed"),
-                                    workerID + 1,
-                                    monthKey.text,
-                                    profile.userFacingStorageErrorMessage(error)
-                                ),
-                                unless: error
-                            )
-                            if Self.shouldEmitUploadDurableSnapshotDeferred(
-                                error: error,
-                                shouldFinishMonth: shouldFinishMonth
-                            ) {
-                                Self.emitUploadDurableSnapshotDeferred(
-                                    eventStream: eventStream,
-                                    month: monthKey,
-                                    message: profile.userFacingStorageErrorMessage(error)
-                                )
-                            } else {
-                                throw error
-                            }
-                        }
-                        if shouldBreakMonthLoop { break }
                     }
+                    if shouldBreakMonthLoop { break }
                 }
 
                 if let monthFatalError {
@@ -813,7 +869,7 @@ struct BackupParallelExecutor: Sendable {
         month: LibraryMonthKey,
         remoteIndexService: RemoteIndexSyncService,
         ignoreCancellation: Bool
-    ) async throws -> BackupMonthFlushDelta {
+    ) async throws -> V2MonthFlushOutcome {
         do {
             let delta = try await monthStore.flushToRemote(ignoreCancellation: ignoreCancellation)
             publishDefensiveFlushSnapshotIfNeeded(
@@ -822,15 +878,25 @@ struct BackupParallelExecutor: Sendable {
                 remoteIndexService: remoteIndexService,
                 delta: delta
             )
-            return delta
-        } catch {
-            publishDefensiveFlushSnapshotIfNeeded(
-                monthStore: monthStore,
-                month: month,
-                remoteIndexService: remoteIndexService,
-                error: error
-            )
-            throw error
+            return .completed(delta)
+        } catch let flushError as V2MonthSession.FlushError {
+            switch flushError {
+            case .concurrentFlushRejected:
+                throw flushError
+            case .snapshotWriteFailed(let assets, let tombstones, _):
+                let recovered = BackupMonthFlushDelta(
+                    didFlush: true,
+                    committedAssetFingerprints: assets,
+                    committedTombstoneFingerprints: tombstones
+                )
+                publishDefensiveFlushSnapshotIfNeeded(
+                    monthStore: monthStore,
+                    month: month,
+                    remoteIndexService: remoteIndexService,
+                    delta: recovered
+                )
+                return .commitDurableSnapshotDeferred(delta: recovered, flushError: flushError)
+            }
         }
     }
 
@@ -842,19 +908,6 @@ struct BackupParallelExecutor: Sendable {
     ) {
         let committed = delta.committedAssetFingerprints.union(delta.committedTombstoneFingerprints)
         guard !committed.isEmpty else { return }
-        publishMonthSnapshot(monthStore: monthStore, month: month, remoteIndexService: remoteIndexService)
-    }
-
-    static func publishDefensiveFlushSnapshotIfNeeded(
-        monthStore: any BackupMonthStore,
-        month: LibraryMonthKey,
-        remoteIndexService: RemoteIndexSyncService,
-        error: Error
-    ) {
-        guard case let V2MonthSession.FlushError.snapshotWriteFailed(assets, tombstones, _) = error,
-              !assets.union(tombstones).isEmpty else {
-            return
-        }
         publishMonthSnapshot(monthStore: monthStore, month: month, remoteIndexService: remoteIndexService)
     }
 
@@ -870,18 +923,6 @@ struct BackupParallelExecutor: Sendable {
             action: .uploadDurableSnapshotDeferred(message: message)
         )))
         return true
-    }
-
-    static func shouldEmitUploadDurableSnapshotDeferred(
-        error: Error,
-        shouldFinishMonth: Bool
-    ) -> Bool {
-        guard shouldFinishMonth,
-              let flushError = error as? V2MonthSession.FlushError,
-              case .snapshotWriteFailed = flushError else {
-            return false
-        }
-        return flushError.cancellationCause == nil
     }
 
     private static func publishMonthSnapshot(

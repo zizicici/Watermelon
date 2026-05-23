@@ -271,13 +271,17 @@ final class V2FlushTests: XCTestCase {
         try store.upsertAsset(rows.asset, links: [rows.link])
         let remoteIndexService = RemoteIndexSyncService()
 
-        let delta = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+        let outcome = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
             monthStore: store,
             month: monthKey,
             remoteIndexService: remoteIndexService,
             ignoreCancellation: false
         )
 
+        guard case .completed(let delta) = outcome else {
+            XCTFail("expected .completed outcome, got \(outcome)")
+            return
+        }
         XCTAssertEqual(delta.committedAssetFingerprints, [rows.asset.assetFingerprint])
         XCTAssertEqual(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey], [rows.asset.assetFingerprint])
     }
@@ -298,16 +302,21 @@ final class V2FlushTests: XCTestCase {
         try store.upsertAsset(rows.asset, links: [rows.link])
         let remoteIndexService = RemoteIndexSyncService()
 
-        do {
-            _ = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
-                monthStore: store,
-                month: monthKey,
-                remoteIndexService: remoteIndexService,
-                ignoreCancellation: false
-            )
-            XCTFail("expected occupied snapshot path to fail")
-        } catch V2MonthSession.FlushError.snapshotWriteFailed(let committedAssets, _, _) {
+        let outcome = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+            monthStore: store,
+            month: monthKey,
+            remoteIndexService: remoteIndexService,
+            ignoreCancellation: false
+        )
+        guard case .commitDurableSnapshotDeferred(let delta, let flushError) = outcome else {
+            XCTFail("expected .commitDurableSnapshotDeferred outcome, got \(outcome)")
+            return
+        }
+        XCTAssertEqual(delta.committedAssetFingerprints, [rows.asset.assetFingerprint])
+        if case .snapshotWriteFailed(let committedAssets, _, _) = flushError {
             XCTAssertEqual(committedAssets, [rows.asset.assetFingerprint])
+        } else {
+            XCTFail("outcome.flushError must be FlushError.snapshotWriteFailed, got \(flushError)")
         }
 
         XCTAssertEqual(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey], [rows.asset.assetFingerprint])

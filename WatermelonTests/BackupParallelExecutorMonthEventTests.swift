@@ -3,41 +3,94 @@ import XCTest
 
 final class BackupParallelExecutorMonthEventTests: XCTestCase {
 
-    func testSnapshotWriteFailureEmissionGateRequiresFinishingMonth() {
-        let error = snapshotWriteFailedError()
+    private static let probeAssets: Set<Data> = [
+        TestFixtures.fingerprint(0xC1),
+        TestFixtures.fingerprint(0xC2)
+    ]
+    private static let probeTombstones: Set<Data> = [
+        TestFixtures.fingerprint(0xD1)
+    ]
 
-        XCTAssertFalse(BackupParallelExecutor.shouldEmitUploadDurableSnapshotDeferred(
-            error: error,
-            shouldFinishMonth: false
-        ))
-        XCTAssertTrue(BackupParallelExecutor.shouldEmitUploadDurableSnapshotDeferred(
-            error: error,
-            shouldFinishMonth: true
-        ))
-    }
-
-    func testNonSnapshotFlushFailureDoesNotQualifyForDurableSnapshotDeferredEvent() {
-        XCTAssertFalse(BackupParallelExecutor.shouldEmitUploadDurableSnapshotDeferred(
-            error: V2MonthSession.FlushError.concurrentFlushRejected,
-            shouldFinishMonth: true
-        ))
-        XCTAssertFalse(BackupParallelExecutor.shouldEmitUploadDurableSnapshotDeferred(
-            error: NSError(domain: "test", code: 1),
-            shouldFinishMonth: true
-        ))
-    }
-
-    func testSnapshotWriteFailureWithCancellationCauseDoesNotQualifyForDurableSnapshotDeferredEvent() {
-        let error = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [Data([0x01])],
-            committedTombstones: [],
-            underlying: CancellationError()
+    private func makePartialOutcome(underlying: Error) -> V2MonthFlushOutcome {
+        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(
+            committedAssets: Self.probeAssets,
+            committedTombstones: Self.probeTombstones,
+            underlying: underlying
         )
+        let delta = BackupMonthFlushDelta(
+            didFlush: true,
+            committedAssetFingerprints: Self.probeAssets,
+            committedTombstoneFingerprints: Self.probeTombstones
+        )
+        return .commitDurableSnapshotDeferred(delta: delta, flushError: flushError)
+    }
 
-        XCTAssertFalse(BackupParallelExecutor.shouldEmitUploadDurableSnapshotDeferred(
-            error: error,
-            shouldFinishMonth: true
-        ))
+    func testForegroundEndOfMonthPartialDispatchEmitsDeferredEventForSoftPartialWithShouldFinishMonth() async {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let outcome = makePartialOutcome(underlying: NSError(domain: "soft", code: 1))
+        guard let dispatch = BackupFlushFailureClassification.foregroundEndOfMonthPartialDispatch(
+            outcome: outcome, profile: profile, shouldFinishMonth: true
+        ) else {
+            XCTFail("dispatch must be non-nil for partial outcome")
+            return
+        }
+        XCTAssertEqual(dispatch.action, .logErrorAndEmitDeferred)
+
+        // Verify the wrapper-derived message reaches the emitted MonthChangeEvent.
+        // userFacingStorageErrorMessage(dispatch.displayError) is the production source of truth;
+        // we re-derive it here and assert the emit helper passes it through.
+        let expectedMessage = profile.userFacingStorageErrorMessage(dispatch.displayError)
+        let month = LibraryMonthKey(year: 2024, month: 6)
+        let eventStream = BackupEventStream()
+        let emitted = BackupParallelExecutor.emitUploadDurableSnapshotDeferred(
+            eventStream: eventStream,
+            month: month,
+            message: expectedMessage
+        )
+        eventStream.finish()
+        XCTAssertTrue(emitted)
+        let events = await collectEvents(from: eventStream)
+        XCTAssertEqual(events.deferredEventMessages, [expectedMessage],
+                       "Emitted MonthChangeEvent.uploadDurableSnapshotDeferred.message must equal userFacingStorageErrorMessage(dispatch.displayError) — proves the wrapper, not the unwrapped inner error, is the message source.")
+    }
+
+    func testForegroundEndOfMonthPartialDispatchEmitsLogOnlyForSoftPartialWithoutShouldFinishMonth() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let outcome = makePartialOutcome(underlying: NSError(domain: "soft", code: 1))
+        guard let dispatch = BackupFlushFailureClassification.foregroundEndOfMonthPartialDispatch(
+            outcome: outcome, profile: profile, shouldFinishMonth: false
+        ) else {
+            XCTFail("dispatch must be non-nil for partial outcome")
+            return
+        }
+        XCTAssertEqual(dispatch.action, .logErrorOnly,
+                       "shouldFinishMonth=false must NOT emit the durable-snapshot-deferred event — preserves today's shouldEmitUploadDurableSnapshotDeferred returning false.")
+    }
+
+    func testForegroundEndOfMonthPartialDispatchPausesForCancellationPartial() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let outcome = makePartialOutcome(underlying: CancellationError())
+        guard let dispatch = BackupFlushFailureClassification.foregroundEndOfMonthPartialDispatch(
+            outcome: outcome, profile: profile, shouldFinishMonth: true
+        ) else {
+            XCTFail("dispatch must be non-nil for partial outcome")
+            return
+        }
+        XCTAssertEqual(dispatch.action, .pauseAndBreakMonthLoop,
+                       "Cancellation precedence beats partial — never emit deferred event for cancellation partial.")
+    }
+
+    func testForegroundEndOfMonthPartialDispatchAbortsForConnectionUnavailablePartial() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let outcome = makePartialOutcome(underlying: NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet))
+        guard let dispatch = BackupFlushFailureClassification.foregroundEndOfMonthPartialDispatch(
+            outcome: outcome, profile: profile, shouldFinishMonth: true
+        ) else {
+            XCTFail("dispatch must be non-nil for partial outcome")
+            return
+        }
+        XCTAssertEqual(dispatch.action, .abortMonthBreakMonthLoop,
+                       "Connection-unavailable precedence beats partial — never emit deferred event for connection-unavailable partial.")
     }
 
     func testDurableSnapshotDeferredEmitterProducesOnlyDeferredEvent() async {
@@ -53,7 +106,7 @@ final class BackupParallelExecutorMonthEventTests: XCTestCase {
 
         XCTAssertTrue(emitted)
         let events = await collectEvents(from: eventStream)
-        XCTAssertTrue(events.containsDurableSnapshotDeferredEvent)
+        XCTAssertEqual(events.deferredEventMessages, ["snapshot deferred"])
         XCTAssertFalse(events.containsIncompleteEvent)
     }
 
@@ -64,24 +117,16 @@ final class BackupParallelExecutorMonthEventTests: XCTestCase {
         }
         return events
     }
-
-    private func snapshotWriteFailedError() -> V2MonthSession.FlushError {
-        V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [Data([0x01])],
-            committedTombstones: [Data([0x02])],
-            underlying: NSError(domain: "test", code: 1)
-        )
-    }
 }
 
 private extension [BackupEvent] {
-    var containsDurableSnapshotDeferredEvent: Bool {
-        contains { event in
+    var deferredEventMessages: [String] {
+        compactMap { event -> String? in
             guard case .monthChanged(let change) = event,
-                  case .uploadDurableSnapshotDeferred = change.action else {
-                return false
+                  case .uploadDurableSnapshotDeferred(let message) = change.action else {
+                return nil
             }
-            return true
+            return message
         }
     }
 
