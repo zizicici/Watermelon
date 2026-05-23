@@ -6,6 +6,7 @@ import GRDB
 /// - v2 ns→ms: rename + divide; NULL preserved; 0 preserved
 /// - v3 repo local state: writerID nullable for existing rows (NOT NULL would crash legacy data)
 /// - v3 repo local state: composite PK on (profileID, repoID)
+/// - v4 duplicate candidate index: additive partial fingerprint index for duplicate discovery
 /// - v1 SMB unique: partial on storageType='smb'; IFNULL(domain,'') collapses NULL/""
 /// - Re-open idempotency: re-running migrator preserves data and indexes
 final class DatabaseMigratorTests: XCTestCase {
@@ -169,7 +170,12 @@ final class DatabaseMigratorTests: XCTestCase {
         let appliedIdentifiers = try queue.read { db in
             try productionMigrator.appliedIdentifiers(db)
         }
-        XCTAssertEqual(appliedIdentifiers, Set(["v1_initial", "v2_ms_timestamps", "v3_repo_local_state"]))
+        XCTAssertEqual(appliedIdentifiers, Set([
+            "v1_initial",
+            "v2_ms_timestamps",
+            "v3_repo_local_state",
+            "v4_duplicate_candidate_index"
+        ]))
     }
 
     func testV3RepoLocalState_repoState_compositePrimaryKey_uniquePerProfileRepoPair() throws {
@@ -322,7 +328,7 @@ final class DatabaseMigratorTests: XCTestCase {
         XCTAssertEqual(names1, names2, "two fresh DBs migrated through makeMigrator() must end up with identical schemas")
     }
 
-    func testFreshDatabase_recordsV3RepoLocalState() throws {
+    func testFreshDatabase_recordsCurrentProductionMigrations() throws {
         let url = tempDir.appendingPathComponent("db.sqlite")
         let dbm = try DatabaseManager(databaseURL: url)
         let migrator = DatabaseManager.makeMigrator()
@@ -330,7 +336,33 @@ final class DatabaseMigratorTests: XCTestCase {
         let appliedIdentifiers = try dbm.read { db in
             try migrator.appliedIdentifiers(db)
         }
-        XCTAssertEqual(appliedIdentifiers, Set(["v1_initial", "v2_ms_timestamps", "v3_repo_local_state"]))
+        XCTAssertEqual(appliedIdentifiers, Set([
+            "v1_initial",
+            "v2_ms_timestamps",
+            "v3_repo_local_state",
+            "v4_duplicate_candidate_index"
+        ]))
+    }
+
+    func testV4DuplicateCandidateIndex_isRegisteredAfterV3AndKeepsExistingIndex() throws {
+        let url = tempDir.appendingPathComponent("db.sqlite")
+        let dbm = try DatabaseManager(databaseURL: url)
+
+        let appliedIdentifiers = try dbm.read { db in
+            try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid")
+        }
+        XCTAssertEqual(appliedIdentifiers, [
+            "v1_initial",
+            "v2_ms_timestamps",
+            "v3_repo_local_state",
+            "v4_duplicate_candidate_index"
+        ])
+
+        let indexNames = try dbm.read { db in
+            try Set(Row.fetchAll(db, sql: "PRAGMA index_list(local_assets)").compactMap { $0["name"] as String? })
+        }
+        XCTAssertTrue(indexNames.contains("idx_local_assets_fingerprint_candidates"))
+        XCTAssertTrue(indexNames.contains("idx_local_assets_has_fingerprint"))
     }
 
 

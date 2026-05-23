@@ -2,14 +2,113 @@ import Photos
 import SnapKit
 import UIKit
 
-@MainActor
-final class DuplicatesViewController: UIViewController {
-    fileprivate struct DuplicateEntry {
-        let assetLocalIdentifier: String
-        let creationDate: Date?
-        let mediaType: PHAssetMediaType
+struct DuplicateEntry: Sendable {
+    let assetLocalIdentifier: String
+    let creationDate: Date?
+    let mediaType: PHAssetMediaType
+}
+
+struct DuplicateGroup: Sendable {
+    let fingerprint: Data
+    let entries: [DuplicateEntry]
+}
+
+struct DuplicatesData: Sendable {
+    let scopeTotal: Int
+    let scopeIndexed: Int
+    let indexCoverageWarning: Bool
+    let groups: [DuplicateGroup]
+}
+
+struct IndexedAssetTrustSnapshot: Sendable {
+    let localIdentifier: String
+    let creationDate: Date?
+    let modificationDate: Date?
+    let mediaType: PHAssetMediaType
+    let currentResourceSignature: Data
+}
+
+protocol DuplicateCandidateRepository: Sendable {
+    func fetchPotentiallyUsableIndexedAssetCount(minSelectionVersion: Int) throws -> Int
+    func fetchDuplicateIndexedAssetCandidates(minSelectionVersion: Int) throws -> [DuplicateIndexedAssetCandidate]
+    func fetchValidIndexedRows(assetIDs: Set<String>) throws -> [String: IndexedAssetRow]
+}
+
+protocol DuplicatePhotoLibraryProvider: Sendable {
+    func assetCount(query: PhotoLibraryQuery) -> Int
+    func fetchTrustSnapshots(localIdentifiers: Set<String>) -> [IndexedAssetTrustSnapshot]
+    func collectAssetIDs(query: PhotoLibraryQuery) -> Set<String>
+    func fetchResults(query: PhotoLibraryQuery) -> [PHFetchResult<PHAsset>]
+}
+
+extension ContentHashIndexRepository: DuplicateCandidateRepository {}
+
+extension PhotoLibraryService: DuplicatePhotoLibraryProvider {
+    func fetchTrustSnapshots(localIdentifiers: Set<String>) -> [IndexedAssetTrustSnapshot] {
+        fetchAssets(localIdentifiers: localIdentifiers).map(DuplicateAssetTrust.makeSnapshot(from:))
+    }
+}
+
+private struct IndexedAssetTrustFields {
+    let updatedAt: Date
+    let selectionVersion: Int
+    let resourceSignature: Data?
+}
+
+private enum DuplicateAssetTrust {
+    static func makeSnapshot(from asset: PHAsset) -> IndexedAssetTrustSnapshot {
+        let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
+            from: PHAssetResource.assetResources(for: asset)
+        )
+        return IndexedAssetTrustSnapshot(
+            localIdentifier: asset.localIdentifier,
+            creationDate: asset.creationDate,
+            modificationDate: asset.modificationDate,
+            mediaType: asset.mediaType,
+            currentResourceSignature: BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered)
+        )
     }
 
+    static func canTrust(_ row: DuplicateIndexedAssetRow, for snapshot: IndexedAssetTrustSnapshot) -> Bool {
+        canTrust(row.trustFields, for: snapshot)
+    }
+
+    static func canTrust(_ row: IndexedAssetRow, for asset: PHAsset) -> Bool {
+        canTrust(row.trustFields, for: makeSnapshot(from: asset))
+    }
+
+    private static func canTrust(_ fields: IndexedAssetTrustFields, for snapshot: IndexedAssetTrustSnapshot) -> Bool {
+        if let mtime = snapshot.modificationDate, mtime > fields.updatedAt { return false }
+        guard fields.selectionVersion >= BackupAssetResourcePlanner.currentSelectionVersion,
+              let cachedSignature = fields.resourceSignature else {
+            return false
+        }
+        return cachedSignature == snapshot.currentResourceSignature
+    }
+}
+
+private extension DuplicateIndexedAssetRow {
+    var trustFields: IndexedAssetTrustFields {
+        IndexedAssetTrustFields(
+            updatedAt: updatedAt,
+            selectionVersion: selectionVersion,
+            resourceSignature: resourceSignature
+        )
+    }
+}
+
+private extension IndexedAssetRow {
+    var trustFields: IndexedAssetTrustFields {
+        IndexedAssetTrustFields(
+            updatedAt: updatedAt,
+            selectionVersion: selectionVersion,
+            resourceSignature: resourceSignature
+        )
+    }
+}
+
+@MainActor
+final class DuplicatesViewController: UIViewController {
     fileprivate enum SectionID: Hashable {
         case indexGate
         case group(fingerprint: Data)
@@ -24,12 +123,6 @@ final class DuplicatesViewController: UIViewController {
     fileprivate struct EntryLocator {
         let fingerprint: Data
         let indexInGroup: Int
-    }
-
-    private struct DuplicatesData {
-        let scopeTotal: Int
-        let scopeIndexed: Int
-        let groups: [(fingerprint: Data, entries: [DuplicateEntry])]
     }
 
     private final class DiffableDataSource: UITableViewDiffableDataSource<SectionID, ItemID> {
@@ -59,6 +152,7 @@ final class DuplicatesViewController: UIViewController {
     private var locatorByEntry: [String: EntryLocator] = [:]
     private var scopeTotal = 0
     private var scopeIndexed = 0
+    private var indexCoverageWarning = false
 
     private var dataSource: DiffableDataSource!
     private var loadTask: Task<Void, Never>?
@@ -69,7 +163,7 @@ final class DuplicatesViewController: UIViewController {
     private var executeBarButton: UIBarButtonItem!
 
     private var isIndexGateVisible: Bool {
-        coordinator.isRunning || scopeTotal > scopeIndexed
+        coordinator.isRunning || indexCoverageWarning
     }
 
     private static let dateFormatter: DateFormatter = {
@@ -279,7 +373,7 @@ final class DuplicatesViewController: UIViewController {
         loadTask = Task { [weak self] in
             let data = await Self.computeData(
                 repository: repository,
-                photoLibraryService: photoLibraryService
+                photoLibraryProvider: photoLibraryService
             )
             guard !Task.isCancelled else { return }
             self?.applyData(data)
@@ -289,12 +383,15 @@ final class DuplicatesViewController: UIViewController {
     private func applyData(_ data: DuplicatesData) {
         scopeTotal = data.scopeTotal
         scopeIndexed = data.scopeIndexed
+        indexCoverageWarning = data.indexCoverageWarning
 
         groupOrder = data.groups.map(\.fingerprint)
         var entriesByGroup: [Data: [DuplicateEntry]] = [:]
         var locatorByEntry: [String: EntryLocator] = [:]
         var keepIndexByGroup: [Data: Int] = [:]
-        for (fingerprint, entries) in data.groups {
+        for group in data.groups {
+            let fingerprint = group.fingerprint
+            let entries = group.entries
             entriesByGroup[fingerprint] = entries
             keepIndexByGroup[fingerprint] = 0
             for (index, entry) in entries.enumerated() {
@@ -521,39 +618,43 @@ final class DuplicatesViewController: UIViewController {
         }
     }
 
-    private nonisolated static func computeData(
-        repository: ContentHashIndexRepository,
-        photoLibraryService: PhotoLibraryService
+    nonisolated static func computeData(
+        repository: any DuplicateCandidateRepository,
+        photoLibraryProvider: any DuplicatePhotoLibraryProvider
     ) async -> DuplicatesData {
         await withCancellableDetachedValue(priority: .userInitiated) {
-            let allIDs = photoLibraryService.collectAssetIDs(query: .allAssets)
-            let valid = (try? repository.fetchValidIndexedRows(assetIDs: allIDs)) ?? [:]
+            let currentSelectionVersion = BackupAssetResourcePlanner.currentSelectionVersion
+            let scopeTotal = photoLibraryProvider.assetCount(query: .allAssets)
+            let rawIndexed = (try? repository.fetchPotentiallyUsableIndexedAssetCount(
+                minSelectionVersion: currentSelectionVersion
+            )) ?? 0
+            let candidateGroups = (try? repository.fetchDuplicateIndexedAssetCandidates(
+                minSelectionVersion: currentSelectionVersion
+            )) ?? []
 
-            let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(valid.keys))
-            var assetsByID: [String: PHAsset] = [:]
-            var validFingerprints: [String: Data] = [:]
-            for asset in phAssets {
-                guard let row = valid[asset.localIdentifier] else { continue }
-                guard Self.canTrustIndexedRow(row, for: asset) else { continue }
-                assetsByID[asset.localIdentifier] = asset
-                validFingerprints[asset.localIdentifier] = row.assetFingerprint
-            }
+            let candidateIDs = Set(candidateGroups.flatMap { candidate in
+                candidate.rows.map(\.assetLocalIdentifier)
+            })
+            let snapshots = photoLibraryProvider.fetchTrustSnapshots(localIdentifiers: candidateIDs)
+            let snapshotsByID = Dictionary(uniqueKeysWithValues: snapshots.map { snapshot in
+                (snapshot.localIdentifier, snapshot)
+            })
 
-            var assetIDsByFingerprint: [Data: [String]] = [:]
-            for (assetID, fingerprint) in validFingerprints {
-                assetIDsByFingerprint[fingerprint, default: []].append(assetID)
-            }
-            let duplicateIDArrays = assetIDsByFingerprint.filter { $0.value.count > 1 }
-
-            var groups: [(fingerprint: Data, entries: [DuplicateEntry])] = []
-            for (fingerprint, assetIDs) in duplicateIDArrays {
+            var droppedCandidateRowForTrust = false
+            var groups: [DuplicateGroup] = []
+            for candidate in candidateGroups {
                 var entries: [DuplicateEntry] = []
-                for assetID in assetIDs {
-                    guard let phAsset = assetsByID[assetID] else { continue }
+                for row in candidate.rows {
+                    guard let snapshot = snapshotsByID[row.assetLocalIdentifier],
+                          DuplicateAssetTrust.canTrust(row, for: snapshot)
+                    else {
+                        droppedCandidateRowForTrust = true
+                        continue
+                    }
                     entries.append(DuplicateEntry(
-                        assetLocalIdentifier: assetID,
-                        creationDate: phAsset.creationDate,
-                        mediaType: phAsset.mediaType
+                        assetLocalIdentifier: row.assetLocalIdentifier,
+                        creationDate: snapshot.creationDate,
+                        mediaType: snapshot.mediaType
                     ))
                 }
                 guard entries.count > 1 else { continue }
@@ -563,15 +664,20 @@ final class DuplicatesViewController: UIViewController {
                     if lhsDate != rhsDate { return lhsDate < rhsDate }
                     return lhs.assetLocalIdentifier < rhs.assetLocalIdentifier
                 }
-                groups.append((fingerprint: fingerprint, entries: entries))
+                groups.append(DuplicateGroup(
+                    fingerprint: candidate.assetFingerprint,
+                    entries: entries
+                ))
             }
             groups.sort { lhs, rhs in
                 lhs.fingerprint.lexicographicallyPrecedes(rhs.fingerprint)
             }
 
+            let scopeIndexed = min(rawIndexed, scopeTotal)
             return DuplicatesData(
-                scopeTotal: allIDs.count,
-                scopeIndexed: validFingerprints.count,
+                scopeTotal: scopeTotal,
+                scopeIndexed: scopeIndexed,
+                indexCoverageWarning: rawIndexed != scopeTotal || droppedCandidateRowForTrust,
                 groups: groups
             )
         }
@@ -598,25 +704,14 @@ final class DuplicatesViewController: UIViewController {
                       let keepAsset = phAssetByID[pair.keep],
                       let deleteAsset = phAssetByID[pair.delete]
                 else { return false }
-                guard Self.canTrustIndexedRow(keepRow, for: keepAsset),
-                      Self.canTrustIndexedRow(deleteRow, for: deleteAsset) else {
+                guard DuplicateAssetTrust.canTrust(keepRow, for: keepAsset),
+                      DuplicateAssetTrust.canTrust(deleteRow, for: deleteAsset) else {
                     return false
                 }
                 if keepRow.assetFingerprint != deleteRow.assetFingerprint { return false }
             }
             return true
         }
-    }
-
-    private nonisolated static func canTrustIndexedRow(_ row: IndexedAssetRow, for asset: PHAsset) -> Bool {
-        if let mtime = asset.modificationDate, mtime > row.updatedAt { return false }
-        guard row.selectionVersion >= BackupAssetResourcePlanner.currentSelectionVersion,
-              let cachedSignature = row.resourceSignature else {
-            return false
-        }
-        let currentResources = PHAssetResource.assetResources(for: asset)
-        let ordered = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: currentResources)
-        return cachedSignature == BackupAssetResourcePlanner.resourceSignature(orderedResources: ordered)
     }
 
     private nonisolated static func deleteAssets(

@@ -104,6 +104,14 @@ final class DatabaseManager: @unchecked Sendable {
             try db.execute(sql: "ALTER TABLE local_assets ADD COLUMN resourceSignature BLOB")
         }
 
+        migrator.registerMigration("v4_duplicate_candidate_index") { db in
+            try db.execute(sql: """
+                CREATE INDEX idx_local_assets_fingerprint_candidates
+                ON local_assets(assetFingerprint, assetLocalIdentifier)
+                WHERE assetFingerprint IS NOT NULL AND resourceSignature IS NOT NULL
+                """)
+        }
+
         return migrator
     }
 

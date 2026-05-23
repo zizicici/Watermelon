@@ -25,6 +25,19 @@ struct IndexedAssetRow: Sendable {
     let resourceSignature: Data?
 }
 
+struct DuplicateIndexedAssetRow: Sendable {
+    let assetLocalIdentifier: String
+    let assetFingerprint: Data
+    let updatedAt: Date
+    let selectionVersion: Int
+    let resourceSignature: Data?
+}
+
+struct DuplicateIndexedAssetCandidate: Sendable {
+    let assetFingerprint: Data
+    let rows: [DuplicateIndexedAssetRow]
+}
+
 struct LocalAssetFingerprintRecord: Sendable, Equatable {
     let fingerprint: Data
     let updatedAt: Date
@@ -288,6 +301,88 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 }
             }
             return result
+        }
+    }
+
+    func fetchPotentiallyUsableIndexedAssetCount(minSelectionVersion: Int) throws -> Int {
+        try databaseManager.read { db in
+            try Int.fetchOne(
+                db,
+                sql: """
+                SELECT COUNT(*)
+                FROM local_assets
+                WHERE assetFingerprint IS NOT NULL
+                  AND resourceSignature IS NOT NULL
+                  AND selectionVersion >= ?
+                """,
+                arguments: [minSelectionVersion]
+            ) ?? 0
+        }
+    }
+
+    func fetchDuplicateIndexedAssetCandidates(
+        minSelectionVersion: Int
+    ) throws -> [DuplicateIndexedAssetCandidate] {
+        try databaseManager.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                WITH candidate_fingerprints AS (
+                    SELECT assetFingerprint
+                    FROM local_assets
+                    WHERE assetFingerprint IS NOT NULL
+                      AND resourceSignature IS NOT NULL
+                      AND selectionVersion >= ?
+                    GROUP BY assetFingerprint
+                    HAVING COUNT(*) > 1
+                )
+                SELECT
+                    la.assetLocalIdentifier,
+                    la.assetFingerprint,
+                    la.updatedAt,
+                    la.selectionVersion,
+                    la.resourceSignature
+                FROM local_assets la
+                JOIN candidate_fingerprints cf
+                  ON la.assetFingerprint = cf.assetFingerprint
+                WHERE la.assetFingerprint IS NOT NULL
+                  AND la.resourceSignature IS NOT NULL
+                  AND la.selectionVersion >= ?
+                ORDER BY la.assetFingerprint, la.assetLocalIdentifier
+                """,
+                arguments: [minSelectionVersion, minSelectionVersion]
+            )
+
+            var candidates: [DuplicateIndexedAssetCandidate] = []
+            var currentFingerprint: Data?
+            var currentRows: [DuplicateIndexedAssetRow] = []
+
+            func flush() {
+                guard let fingerprint = currentFingerprint, !currentRows.isEmpty else { return }
+                candidates.append(DuplicateIndexedAssetCandidate(
+                    assetFingerprint: fingerprint,
+                    rows: currentRows
+                ))
+                currentRows.removeAll(keepingCapacity: true)
+            }
+
+            for row in rows {
+                let fingerprint: Data = row["assetFingerprint"]
+                if currentFingerprint != fingerprint {
+                    flush()
+                    currentFingerprint = fingerprint
+                }
+                currentRows.append(DuplicateIndexedAssetRow(
+                    assetLocalIdentifier: row["assetLocalIdentifier"],
+                    assetFingerprint: fingerprint,
+                    updatedAt: row["updatedAt"],
+                    selectionVersion: Int(row["selectionVersion"] as Int64? ?? 0),
+                    resourceSignature: row["resourceSignature"] as Data?
+                ))
+            }
+            flush()
+
+            return candidates
         }
     }
 

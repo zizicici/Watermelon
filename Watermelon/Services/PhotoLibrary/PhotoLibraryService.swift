@@ -160,6 +160,15 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    func assetCount(query: PhotoLibraryQuery) -> Int {
+        switch query {
+        case .allAssets:
+            return fetchAssetsResult().count
+        case .albums:
+            return fetchResults(query: query).reduce(0) { $0 + $1.count }
+        }
+    }
+
     func collectAssetIDs(query: PhotoLibraryQuery) -> Set<String> {
         var ids = Set<String>()
         for result in fetchResults(query: query) {
