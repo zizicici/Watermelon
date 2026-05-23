@@ -66,11 +66,15 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
         let runID = RepoIdentity.newRunID()
         let bootstrap = RepoBootstrap(client: client, basePath: basePath)
 
+        let action = BackupV2RepoOpenPlanner.plan(
+            inspection: inspection,
+            allowMigration: allowMigration
+        )
         let resolvedRepoID: String
-        switch inspection {
-        case .unsupported(let minAppVersion):
+        switch action {
+        case .throwUnsupported(let minAppVersion):
             throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
-        case .v2:
+        case .openExistingV2:
             resolvedRepoID = try await resolveAndPublishIdentityForShapedRepo(
                 profileID: profileID,
                 writerID: writerID,
@@ -81,7 +85,7 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
                 publishBootstrap: bootstrap
             )
             try await bootstrap.ensureSubdirectories()
-        case .v2WithPendingMigrationCleanup(_, let ownerWriterID):
+        case .openWithCleanupV2(let ownerWriterID):
             try await bootstrap.ensureSubdirectories()
             let cleanupBootstrap = RepoBootstrap(client: metadataClient, basePath: basePath)
             let cleanup = V1MigrationService(
@@ -107,7 +111,7 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
                     runID: runID
                 )
             }
-        case .fresh:
+        case .bootstrapFresh:
             if let existing = try await identity.findRepoStateByProfile(profileID: profileID) {
                 throw BackupV2RuntimeBuildError.repoFormatRegression(repoID: existing.repoID)
             }
@@ -115,10 +119,9 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
                 try await bootstrap.initializeFreshRepo(writerID: writerID)
             }
             await onBootstrap?()
-        case .v1, .v2WithV1Manifests:
-            guard allowMigration else {
-                throw BackupV2RuntimeBuildError.requiresForegroundMigration
-            }
+        case .throwRequiresForegroundMigration:
+            throw BackupV2RuntimeBuildError.requiresForegroundMigration
+        case .migrateFromV1:
             let migration = V1MigrationService(
                 client: client,
                 basePath: basePath,
