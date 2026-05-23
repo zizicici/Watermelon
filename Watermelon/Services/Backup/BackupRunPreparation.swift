@@ -266,38 +266,31 @@ struct BackupRunPreparationService: Sendable {
             // Profile-less inspect must still parse version.json so a future format isn't downgraded to V2 stamped at the local formatVersion.
             inspection = try await Self.profileLessInspect(client: client, basePath: basePath)
         }
+        let hasPriorV2Binding: Bool
         if let profileID = profile?.id {
             let identity = RepoIdentity(database: databaseManager)
             let localState = try await identity.findRepoStateByProfile(profileID: profileID)
             if localState != nil {
-                switch inspection {
-                case .fresh:
-                    throw BackupCompatibilityError.damagedV2Repo
-                case .v1:
-                    throw BackupCompatibilityError.requiresForegroundMigration
-                default:
-                    break
-                }
-            } else if await remoteIndexService.materializedRepoID() != nil {
-                switch inspection {
-                case .fresh:
-                    throw BackupCompatibilityError.damagedV2Repo
-                case .v1:
-                    throw BackupCompatibilityError.requiresForegroundMigration
-                default:
-                    break
-                }
+                hasPriorV2Binding = true
+            } else {
+                hasPriorV2Binding = await remoteIndexService.materializedRepoID() != nil
             }
+        } else {
+            hasPriorV2Binding = false
         }
-        switch inspection {
-        case .unsupported(let minAppVersion):
+        let action = BackupV2RepoVerifyPlanner.plan(
+            inspection: inspection,
+            hasPriorV2Binding: hasPriorV2Binding
+        )
+        switch action {
+        case .throwUnsupported(let minAppVersion):
             throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
-        case .v2, .v2WithPendingMigrationCleanup:
+        case .verifyMonthV2:
             _ = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
             return true
-        case .v2WithV1Manifests:
+        case .throwRequiresForegroundMigration:
             throw BackupCompatibilityError.requiresForegroundMigration
-        case .v1:
+        case .verifyMonthV1:
             try await remoteIndexService.verifyMonth(
                 client: client,
                 basePath: basePath,
@@ -305,8 +298,10 @@ struct BackupRunPreparationService: Sendable {
             )
             // V1 verify may flush manifest changes; treat as potentially mutating.
             return true
-        case .fresh:
+        case .skipFreshRepo:
             return false
+        case .throwDamagedV2Repo:
+            throw BackupCompatibilityError.damagedV2Repo
         }
     }
 
