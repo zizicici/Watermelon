@@ -2432,4 +2432,28 @@ final class V2FlushTests: XCTestCase {
         XCTAssertTrue(monthState.deletedAssetFingerprints.contains(partialFP),
                       "strict-subset heal: A must appear as tombstoned for LWW gating against stale peer adds")
     }
+
+    // MARK: - External-volume regression for connection-unavailable through V2 wrappers
+
+    func testIsConnectionUnavailableEnumeratesEveryWrapperNodeForExternalVolume() throws {
+        // Pin invariant #4 from the unit-003 plan: for external-volume profiles, the per-node
+        // predicate `isConnectionUnavailableError` itself walks wrappers via
+        // `isLikelyExternalStorageUnavailable`. The new BackupErrorChain-based outer walk
+        // must still surface the external-storage-unavailable cause when buried under
+        // FlushError → WriteError → CommitWriteError → RemoteStorageClientError chains.
+        let externalProfile = TestFixtures.makeServerProfile(storageType: .externalVolume)
+        let cause = V2MonthSession.FlushError.snapshotWriteFailed(
+            committedAssets: [],
+            committedTombstones: [],
+            underlying: SnapshotWriter.WriteError.finalizationFailed(
+                CommitLogWriter.WriteError.ioFailure(
+                    RemoteStorageClientError.externalStorageUnavailable
+                )
+            )
+        )
+        XCTAssertTrue(
+            externalProfile.isConnectionUnavailableErrorIncludingFlushUnderlying(cause),
+            "external-volume profile must detect connection-unavailable through V2 flush wrappers"
+        )
+    }
 }

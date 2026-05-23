@@ -11,69 +11,12 @@ final class V2MonthSession: BackupMonthStore {
 
         /// SnapshotWriter can wrap CancellationError.
         var cancellationCause: CancellationError? {
-            switch self {
-            case .concurrentFlushRejected:
-                return nil
-            case .snapshotWriteFailed(_, _, let underlying):
-                return Self.cancellationCause(in: underlying)
+            let matched = BackupErrorChain.contains(self) { node in
+                if node is CancellationError { return true }
+                let nsError = node as NSError
+                return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
             }
-        }
-
-        private static func cancellationCause(in error: Error) -> CancellationError? {
-            var pending: [Error] = [error]
-            var seen: Set<String> = []
-            while let next = pending.popLast() {
-                if let cancel = next as? CancellationError { return cancel }
-                let nsError = next as NSError
-                if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
-                    return CancellationError()
-                }
-                let key = "\(nsError.domain)#\(nsError.code)#\(nsError.localizedDescription)"
-                guard seen.insert(key).inserted else { continue }
-                switch next {
-                case let flush as V2MonthSession.FlushError:
-                    switch flush {
-                    case .concurrentFlushRejected:
-                        break
-                    case .snapshotWriteFailed(_, _, let underlying):
-                        pending.append(underlying)
-                    }
-                case let write as SnapshotWriter.WriteError:
-                    switch write {
-                    case .ioFailure(let inner), .finalizationFailed(let inner):
-                        pending.append(inner)
-                    case .verificationFailed:
-                        break
-                    }
-                case let commit as CommitLogWriter.WriteError:
-                    switch commit {
-                    case .ioFailure(let inner):
-                        pending.append(inner)
-                    case .alreadyExists, .encodingFailed:
-                        break
-                    }
-                case let gate as MetadataCreateGate.Error:
-                    switch gate {
-                    case .stagingVerificationFailed(_, let underlying),
-                         .finalVerificationFailed(_, let underlying):
-                        if let underlying { pending.append(underlying) }
-                    case .nonExclusiveFinalization:
-                        break
-                    }
-                case let storage as RemoteStorageClientError:
-                    switch storage {
-                    case .underlying(let inner):
-                        pending.append(inner)
-                    default:
-                        break
-                    }
-                default:
-                    if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
-                        pending.append(underlying)
-                    }
-                }
-            }
-            return nil
+            return matched ? CancellationError() : nil
         }
     }
 
@@ -460,56 +403,6 @@ final class V2MonthSession: BackupMonthStore {
 
 extension ServerProfileRecord {
     func isConnectionUnavailableErrorIncludingFlushUnderlying(_ error: Error) -> Bool {
-        var pending: [Error] = [error]
-        var seen: Set<String> = []
-        while let next = pending.popLast() {
-            let nsError = next as NSError
-            let key = "\(nsError.domain)#\(nsError.code)#\(nsError.localizedDescription)"
-            guard seen.insert(key).inserted else { continue }
-            if isConnectionUnavailableError(next) { return true }
-            switch next {
-            case let flush as V2MonthSession.FlushError:
-                switch flush {
-                case .concurrentFlushRejected:
-                    break
-                case .snapshotWriteFailed(_, _, let underlying):
-                    pending.append(underlying)
-                }
-            case let write as SnapshotWriter.WriteError:
-                switch write {
-                case .ioFailure(let underlying), .finalizationFailed(let underlying):
-                    pending.append(underlying)
-                case .verificationFailed:
-                    break
-                }
-            case let commit as CommitLogWriter.WriteError:
-                switch commit {
-                case .ioFailure(let underlying):
-                    pending.append(underlying)
-                case .alreadyExists, .encodingFailed:
-                    break
-                }
-            case let gate as MetadataCreateGate.Error:
-                switch gate {
-                case .stagingVerificationFailed(_, let underlying),
-                     .finalVerificationFailed(_, let underlying):
-                    if let underlying { pending.append(underlying) }
-                case .nonExclusiveFinalization:
-                    break
-                }
-            case let storage as RemoteStorageClientError:
-                switch storage {
-                case .underlying(let underlying):
-                    pending.append(underlying)
-                default:
-                    break
-                }
-            default:
-                if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
-                    pending.append(underlying)
-                }
-            }
-        }
-        return false
+        BackupErrorChain.contains(error) { isConnectionUnavailableError($0) }
     }
 }
