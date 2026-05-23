@@ -421,9 +421,9 @@ final class AssetProcessor: Sendable {
         )
         if context.monthStore.containsAssetFingerprint(cachedFingerprint),
            !context.monthStore.isAssetIncomplete(cachedFingerprint),
-           context.monthStore.findStrictSubsetAssetFingerprints(
+           !context.monthStore.hasStrictSubsetAssetFingerprint(
                forResourceKeys: cachedResourceKeys
-           ).isEmpty {
+           ) {
             let totalFileSizeBytes = Self.totalSizeBytes(of: context.selectedResources)
             let dbStart = CFAbsoluteTimeGetCurrent()
             try hashIndexRepository.upsertAssetFingerprint(

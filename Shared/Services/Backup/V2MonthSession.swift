@@ -232,6 +232,12 @@ final class V2MonthSession: BackupMonthStore {
         indexes.findStrictSubsetAssetFingerprints(forResourceKeys: keys)
     }
 
+    func hasStrictSubsetAssetFingerprint(
+        forResourceKeys keys: Set<AssetResourceLinkKey>
+    ) -> Bool {
+        indexes.hasStrictSubsetAssetFingerprint(forResourceKeys: keys)
+    }
+
     func isAssetIncomplete(_ fingerprint: Data) -> Bool {
         indexes.isAssetIncomplete(fingerprint)
     }

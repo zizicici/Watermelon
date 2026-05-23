@@ -1,12 +1,29 @@
 import Foundation
 
 final class V2MonthIndexes {
+    struct StrictSubsetQueryStats: Equatable {
+        let incomingKeyCount: Int
+        let hashBucketLookups: Int
+        let candidateCount: Int
+        let predicateChecks: Int
+        let stoppedAfterFirstMatch: Bool
+    }
+
+    private struct StrictSubsetQueryResult {
+        let fingerprints: [Data]
+        let hasMatch: Bool
+        let stats: StrictSubsetQueryStats
+    }
+
     let year: Int
     let month: Int
 
     private var resourcesByPath: [String: RemoteManifestResource]
     private var assetsByFingerprint: [Data: RemoteManifestAsset]
     private var linksByFingerprint: [Data: [RemoteAssetResourceLink]]
+    /// Derived from linksByFingerprint; future link-state mutators must use the index helpers.
+    private var linkKeySetByFingerprint: [Data: Set<AssetResourceLinkKey>] = [:]
+    private var fingerprintsByResourceHash: [Data: Set<Data>] = [:]
     /// `findResourceByHash` returns lex-min over present paths only; missing-path lookup would bind metadata to undownloadable bytes.
     private var pathsByHash: [Data: Set<String>]
     /// Reverse name indexes keep upload preparation from scanning every resource in a month.
@@ -137,6 +154,7 @@ final class V2MonthIndexes {
             .subtracting(materializedState.deletedAssetStamps.keys)
         // Seed committed rows faithfully so post-tombstone orphan resources survive covered snapshots.
         self.committedResourceByPath = materializedState.resources
+        rebuildLinkIndexes()
     }
 
     func containsAssetFingerprint(_ fingerprint: Data) -> Bool {
@@ -148,15 +166,100 @@ final class V2MonthIndexes {
     func findStrictSubsetAssetFingerprints(
         forResourceKeys keys: Set<AssetResourceLinkKey>
     ) -> [Data] {
-        guard !keys.isEmpty else { return [] }
-        var result: [Data] = []
-        for (fingerprint, links) in linksByFingerprint {
-            let have = AssetResourceLinkSetPredicate.keys(fromLinks: links)
-            if AssetResourceLinkSetPredicate.isStrictSubset(have, of: keys) {
-                result.append(fingerprint)
+        queryStrictSubsets(forResourceKeys: keys, stopAfterFirstMatch: false).fingerprints
+    }
+
+    func hasStrictSubsetAssetFingerprint(
+        forResourceKeys keys: Set<AssetResourceLinkKey>
+    ) -> Bool {
+        queryStrictSubsets(forResourceKeys: keys, stopAfterFirstMatch: true).hasMatch
+    }
+
+    func strictSubsetQueryStatsForTesting(
+        forResourceKeys keys: Set<AssetResourceLinkKey>,
+        stopAfterFirstMatch: Bool = false
+    ) -> StrictSubsetQueryStats {
+        queryStrictSubsets(forResourceKeys: keys, stopAfterFirstMatch: stopAfterFirstMatch).stats
+    }
+
+    private func queryStrictSubsets(
+        forResourceKeys keys: Set<AssetResourceLinkKey>,
+        stopAfterFirstMatch: Bool
+    ) -> StrictSubsetQueryResult {
+        guard !keys.isEmpty else {
+            return StrictSubsetQueryResult(
+                fingerprints: [],
+                hasMatch: false,
+                stats: StrictSubsetQueryStats(
+                    incomingKeyCount: 0,
+                    hashBucketLookups: 0,
+                    candidateCount: 0,
+                    predicateChecks: 0,
+                    stoppedAfterFirstMatch: false
+                )
+            )
+        }
+
+        var candidates: Set<Data> = []
+        for key in keys {
+            if let bucket = fingerprintsByResourceHash[key.hash] {
+                candidates.formUnion(bucket)
             }
         }
-        return result
+
+        var result: [Data] = []
+        var predicateChecks = 0
+        var stoppedAfterFirstMatch = false
+        for fingerprint in candidates {
+            guard let have = linkKeySetByFingerprint[fingerprint] else { continue }
+            predicateChecks += 1
+            guard AssetResourceLinkSetPredicate.isStrictSubset(have, of: keys) else { continue }
+            result.append(fingerprint)
+            if stopAfterFirstMatch {
+                stoppedAfterFirstMatch = true
+                break
+            }
+        }
+
+        return StrictSubsetQueryResult(
+            fingerprints: result,
+            hasMatch: !result.isEmpty,
+            stats: StrictSubsetQueryStats(
+                incomingKeyCount: keys.count,
+                hashBucketLookups: keys.count,
+                candidateCount: candidates.count,
+                predicateChecks: predicateChecks,
+                stoppedAfterFirstMatch: stoppedAfterFirstMatch
+            )
+        )
+    }
+
+    private func rebuildLinkIndexes() {
+        linkKeySetByFingerprint.removeAll(keepingCapacity: true)
+        fingerprintsByResourceHash.removeAll(keepingCapacity: true)
+        linkKeySetByFingerprint.reserveCapacity(linksByFingerprint.count)
+        for (fingerprint, links) in linksByFingerprint {
+            indexAddAsset(fingerprint: fingerprint, links: links)
+        }
+    }
+
+    private func indexAddAsset(fingerprint: Data, links: [RemoteAssetResourceLink]) {
+        linkKeySetByFingerprint[fingerprint] = AssetResourceLinkSetPredicate.keys(fromLinks: links)
+        for link in links {
+            fingerprintsByResourceHash[link.resourceHash, default: []].insert(fingerprint)
+        }
+    }
+
+    private func indexRemoveAsset(_ fingerprint: Data) {
+        if let oldLinks = linksByFingerprint[fingerprint] {
+            for link in oldLinks {
+                fingerprintsByResourceHash[link.resourceHash]?.remove(fingerprint)
+                if fingerprintsByResourceHash[link.resourceHash]?.isEmpty == true {
+                    fingerprintsByResourceHash.removeValue(forKey: link.resourceHash)
+                }
+            }
+        }
+        linkKeySetByFingerprint.removeValue(forKey: fingerprint)
     }
 
     func isAssetIncomplete(_ fingerprint: Data) -> Bool {
@@ -299,14 +402,17 @@ final class V2MonthIndexes {
         // Subset replacement — older partial assets that are strict subsets of this one
         // get tombstoned. Mirrors MonthManifestStore behavior for legacy import.
         for sub in replacingSubsetFingerprints where sub != asset.assetFingerprint {
+            indexRemoveAsset(sub)
             assetsByFingerprint.removeValue(forKey: sub)
             linksByFingerprint.removeValue(forKey: sub)
             pendingV2AssetFingerprints.remove(sub)
             pendingV2TombstoneFingerprints.insert(sub)
         }
 
+        indexRemoveAsset(asset.assetFingerprint)
         assetsByFingerprint[asset.assetFingerprint] = asset
         linksByFingerprint[asset.assetFingerprint] = links
+        indexAddAsset(fingerprint: asset.assetFingerprint, links: links)
         pendingV2AssetFingerprints.insert(asset.assetFingerprint)
         pendingV2TombstoneFingerprints.remove(asset.assetFingerprint)
         // Resurrect: mirrors RepoMaterializer's apply-addAsset gate so the snapshot

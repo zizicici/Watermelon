@@ -36,6 +36,10 @@ protocol BackupMonthStore: AnyObject {
         forResourceKeys keys: Set<AssetResourceLinkKey>
     ) -> [Data]
 
+    func hasStrictSubsetAssetFingerprint(
+        forResourceKeys keys: Set<AssetResourceLinkKey>
+    ) -> Bool
+
     @discardableResult
     func upsertResource(_ resource: RemoteManifestResource) throws -> RemoteManifestResource
 
@@ -68,6 +72,12 @@ extension BackupMonthStore {
     func findStrictSubsetAssetFingerprints(
         forResourceKeys keys: Set<AssetResourceLinkKey>
     ) -> [Data] { [] }
+
+    func hasStrictSubsetAssetFingerprint(
+        forResourceKeys keys: Set<AssetResourceLinkKey>
+    ) -> Bool {
+        !findStrictSubsetAssetFingerprints(forResourceKeys: keys).isEmpty
+    }
 
     @discardableResult
     func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> MonthManifestStore.FlushDelta {

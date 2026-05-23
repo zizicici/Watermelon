@@ -145,6 +145,24 @@ final class MonthManifestStore {
         return result
     }
 
+    func hasStrictSubsetAssetFingerprint(
+        forResourceKeys keys: Set<AssetResourceLinkKey>
+    ) -> Bool {
+        guard !keys.isEmpty else { return false }
+        var candidates: Set<Data> = []
+        for key in keys {
+            if let bucket = assetsByResourceHash[key.hash] { candidates.formUnion(bucket) }
+        }
+        if candidates.isEmpty { return false }
+        for fingerprint in candidates {
+            guard let have = linkKeySetByFingerprint[fingerprint] else { continue }
+            if AssetResourceLinkSetPredicate.isStrictSubset(have, of: keys) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Rebuilds the link/hash indexes from `assetLinksByFingerprint`. Call after wholesale
     /// reloads (`reloadCache`, `seedDatabase`) where assetLinksByFingerprint is replaced en masse.
     func rebuildLinkIndexes() {

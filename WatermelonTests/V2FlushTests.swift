@@ -1428,6 +1428,144 @@ final class V2FlushTests: XCTestCase {
         return (asset, resource, link)
     }
 
+    private func strictSubsetData(_ value: Int) -> Data {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        var remaining = UInt64(value)
+        for index in 0 ..< 8 {
+            bytes[31 - index] = UInt8(remaining & 0xff)
+            remaining >>= 8
+        }
+        return Data(bytes)
+    }
+
+    private func emptyV2Indexes() -> V2MonthIndexes {
+        V2MonthIndexes(
+            year: year,
+            month: month,
+            materializedState: .empty,
+            remoteFilesByName: [:],
+            verifiedMissingHashes: nil,
+            nameCase: .caseSensitive
+        )
+    }
+
+    @discardableResult
+    private func addV2IndexedResource(
+        _ indexes: V2MonthIndexes,
+        hash: Data,
+        name: String,
+        resourceType: Int = ResourceTypeCode.photo
+    ) throws -> RemoteManifestResource {
+        let resource = RemoteManifestResource(
+            year: year,
+            month: month,
+            physicalRemotePath: "2026/01/\(name)",
+            contentHash: hash,
+            fileSize: 1,
+            resourceType: resourceType,
+            creationDateMs: nil,
+            backedUpAtMs: 0
+        )
+        return try indexes.upsertResource(resource)
+    }
+
+    private func strictSubsetAsset(
+        fingerprint: Data,
+        resourceCount: Int
+    ) -> RemoteManifestAsset {
+        RemoteManifestAsset(
+            year: year,
+            month: month,
+            assetFingerprint: fingerprint,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resourceCount: resourceCount,
+            totalFileSizeBytes: Int64(resourceCount)
+        )
+    }
+
+    private func strictSubsetLink(
+        fingerprint: Data,
+        hash: Data,
+        role: Int = ResourceTypeCode.photo,
+        slot: Int = 0,
+        name: String = "photo.jpg"
+    ) -> RemoteAssetResourceLink {
+        RemoteAssetResourceLink(
+            year: year,
+            month: month,
+            assetFingerprint: fingerprint,
+            resourceHash: hash,
+            role: role,
+            slot: slot,
+            logicalName: name
+        )
+    }
+
+    private func strictSubsetKey(
+        hash: Data,
+        role: Int = ResourceTypeCode.photo,
+        slot: Int = 0
+    ) -> AssetResourceLinkKey {
+        AssetResourceLinkKey(role: role, slot: slot, hash: hash)
+    }
+
+    private func largeStrictSubsetState(
+        unrelatedCount: Int,
+        includePartial: Bool
+    ) -> (state: RepoMonthState, partialFingerprint: Data, photoHash: Data, videoHash: Data) {
+        var state = RepoMonthState.empty
+        for index in 0 ..< unrelatedCount {
+            let fingerprint = strictSubsetData(10_000 + index)
+            let hash = strictSubsetData(20_000 + index)
+            state.assets[fingerprint] = SnapshotAssetRow(
+                assetFingerprint: fingerprint,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 1,
+                totalFileSizeBytes: 1,
+                stamp: nil
+            )
+            state.assetResources[AssetResourceKey(
+                assetFingerprint: fingerprint,
+                role: ResourceTypeCode.photo,
+                slot: 0
+            )] = SnapshotAssetResourceRow(
+                assetFingerprint: fingerprint,
+                role: ResourceTypeCode.photo,
+                slot: 0,
+                resourceHash: hash,
+                logicalName: "unrelated-\(index).jpg"
+            )
+        }
+
+        let partialFingerprint = strictSubsetData(90_001)
+        let photoHash = strictSubsetData(90_002)
+        let videoHash = strictSubsetData(90_003)
+        if includePartial {
+            state.assets[partialFingerprint] = SnapshotAssetRow(
+                assetFingerprint: partialFingerprint,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                resourceCount: 1,
+                totalFileSizeBytes: 1,
+                stamp: nil
+            )
+            state.assetResources[AssetResourceKey(
+                assetFingerprint: partialFingerprint,
+                role: ResourceTypeCode.photo,
+                slot: 0
+            )] = SnapshotAssetResourceRow(
+                assetFingerprint: partialFingerprint,
+                role: ResourceTypeCode.photo,
+                slot: 0,
+                resourceHash: photoHash,
+                logicalName: "partial.jpg"
+            )
+        }
+        return (state, partialFingerprint, photoHash, videoHash)
+    }
+
     private func repoMetadataCounts(_ client: InMemoryRemoteStorageClient) async -> (commits: Int, snapshots: Int) {
         let files = await client.snapshotFiles().keys
         return (
@@ -1841,6 +1979,369 @@ final class V2FlushTests: XCTestCase {
         ]
         XCTAssertTrue(store.findStrictSubsetAssetFingerprints(forResourceKeys: sameKeys).isEmpty,
                       "equal link set is not a strict subset")
+    }
+
+    func testStrictSubsetFindAndHasParityAcrossV1AndV2EdgeCases() async throws {
+        let v1Client = InMemoryRemoteStorageClient()
+        try await v1Client.connect()
+        let v1Store = try await MonthManifestStore.loadOrCreate(
+            client: v1Client, basePath: basePath, year: year, month: month
+        )
+
+        let v2Client = InMemoryRemoteStorageClient()
+        try await v2Client.connect()
+        let v2 = try await makeV2Services(client: v2Client)
+        let v2Store = try await V2MonthSession.loadOrCreate(
+            client: v2Client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        let properHash = TestFixtures.fingerprint(0xA1)
+        let properExtraHash = TestFixtures.fingerprint(0xA2)
+        let roleHash = TestFixtures.fingerprint(0xA3)
+        let roleExtraHash = TestFixtures.fingerprint(0xA4)
+        let slotHash = TestFixtures.fingerprint(0xA5)
+        let slotExtraHash = TestFixtures.fingerprint(0xA6)
+        let properFP = TestFixtures.fingerprint(0xB1)
+        let roleFP = TestFixtures.fingerprint(0xB2)
+        let slotFP = TestFixtures.fingerprint(0xB3)
+        let emptyFP = TestFixtures.fingerprint(0xB4)
+
+        let resources = [
+            (properHash, "proper.jpg", ResourceTypeCode.photo),
+            (properExtraHash, "proper.mov", ResourceTypeCode.pairedVideo),
+            (roleHash, "role.jpg", ResourceTypeCode.photo),
+            (roleExtraHash, "role.mov", ResourceTypeCode.pairedVideo),
+            (slotHash, "slot.jpg", ResourceTypeCode.photo),
+            (slotExtraHash, "slot.mov", ResourceTypeCode.pairedVideo)
+        ]
+
+        func seed(_ store: any BackupMonthStore) throws {
+            for (hash, name, type) in resources {
+                _ = try store.upsertResource(RemoteManifestResource(
+                    year: year,
+                    month: month,
+                    physicalRemotePath: "2026/01/\(name)",
+                    contentHash: hash,
+                    fileSize: 1,
+                    resourceType: type,
+                    creationDateMs: nil,
+                    backedUpAtMs: 0
+                ))
+            }
+
+            let properAsset = strictSubsetAsset(fingerprint: properFP, resourceCount: 1)
+            try store.upsertAsset(properAsset, links: [
+                strictSubsetLink(fingerprint: properFP, hash: properHash, name: "proper.jpg")
+            ])
+
+            let roleAsset = strictSubsetAsset(fingerprint: roleFP, resourceCount: 1)
+            try store.upsertAsset(roleAsset, links: [
+                strictSubsetLink(
+                    fingerprint: roleFP,
+                    hash: roleHash,
+                    role: ResourceTypeCode.pairedVideo,
+                    name: "role.jpg"
+                )
+            ])
+
+            let slotAsset = strictSubsetAsset(fingerprint: slotFP, resourceCount: 1)
+            try store.upsertAsset(slotAsset, links: [
+                strictSubsetLink(
+                    fingerprint: slotFP,
+                    hash: slotHash,
+                    slot: 1,
+                    name: "slot.jpg"
+                )
+            ])
+
+            try store.upsertAsset(
+                strictSubsetAsset(fingerprint: emptyFP, resourceCount: 0),
+                links: []
+            )
+        }
+
+        try seed(v1Store)
+        try seed(v2Store)
+
+        let cases: [(name: String, keys: Set<AssetResourceLinkKey>, expected: Set<Data>)] = [
+            (
+                name: "proper strict subset",
+                keys: [
+                    strictSubsetKey(hash: properHash),
+                    strictSubsetKey(hash: properExtraHash, role: ResourceTypeCode.pairedVideo)
+                ],
+                expected: [properFP]
+            ),
+            (
+                name: "equal set",
+                keys: [strictSubsetKey(hash: properHash)],
+                expected: []
+            ),
+            (
+                name: "empty candidate",
+                keys: [
+                    strictSubsetKey(hash: TestFixtures.fingerprint(0xD1)),
+                    strictSubsetKey(hash: TestFixtures.fingerprint(0xD2), role: ResourceTypeCode.pairedVideo)
+                ],
+                expected: []
+            ),
+            (
+                name: "same hash different role",
+                keys: [
+                    strictSubsetKey(hash: roleHash),
+                    strictSubsetKey(hash: roleExtraHash, role: ResourceTypeCode.pairedVideo)
+                ],
+                expected: []
+            ),
+            (
+                name: "same hash different slot",
+                keys: [
+                    strictSubsetKey(hash: slotHash),
+                    strictSubsetKey(hash: slotExtraHash, role: ResourceTypeCode.pairedVideo)
+                ],
+                expected: []
+            ),
+            (
+                name: "no overlap",
+                keys: [
+                    strictSubsetKey(hash: TestFixtures.fingerprint(0xD3)),
+                    strictSubsetKey(hash: TestFixtures.fingerprint(0xD4), role: ResourceTypeCode.pairedVideo)
+                ],
+                expected: []
+            )
+        ]
+
+        func assertStore(
+            _ store: any BackupMonthStore,
+            label: String,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
+            for item in cases {
+                let found = Set(store.findStrictSubsetAssetFingerprints(forResourceKeys: item.keys))
+                XCTAssertEqual(found, item.expected, "\(label): \(item.name)", file: file, line: line)
+                XCTAssertEqual(
+                    store.hasStrictSubsetAssetFingerprint(forResourceKeys: item.keys),
+                    !found.isEmpty,
+                    "\(label): \(item.name)",
+                    file: file,
+                    line: line
+                )
+            }
+        }
+
+        assertStore(v1Store, label: "v1")
+        assertStore(v2Store, label: "v2")
+    }
+
+    func testV2StrictSubsetIndexDedupesDuplicateLinks() throws {
+        let indexes = emptyV2Indexes()
+        let hash = TestFixtures.fingerprint(0xE1)
+        let extraHash = TestFixtures.fingerprint(0xE2)
+        let fingerprint = TestFixtures.fingerprint(0xE3)
+        _ = try addV2IndexedResource(indexes, hash: hash, name: "duplicate.jpg")
+        let asset = strictSubsetAsset(fingerprint: fingerprint, resourceCount: 2)
+        let duplicateLink = strictSubsetLink(fingerprint: fingerprint, hash: hash, name: "duplicate.jpg")
+        try indexes.upsertAsset(asset, links: [duplicateLink, duplicateLink], replacingSubsetFingerprints: [])
+
+        let supersedingKeys: Set<AssetResourceLinkKey> = [
+            strictSubsetKey(hash: hash),
+            strictSubsetKey(hash: extraHash, role: ResourceTypeCode.pairedVideo)
+        ]
+        XCTAssertEqual(
+            Set(indexes.findStrictSubsetAssetFingerprints(forResourceKeys: supersedingKeys)),
+            [fingerprint]
+        )
+        XCTAssertTrue(indexes.findStrictSubsetAssetFingerprints(forResourceKeys: [strictSubsetKey(hash: hash)]).isEmpty)
+        let stats = indexes.strictSubsetQueryStatsForTesting(forResourceKeys: supersedingKeys)
+        XCTAssertEqual(stats.candidateCount, 1)
+        XCTAssertEqual(stats.predicateChecks, 1)
+    }
+
+    func testV2StrictSubsetIndexUpdatesOnSameFingerprintReplacement() throws {
+        let indexes = emptyV2Indexes()
+        let oldHash = TestFixtures.fingerprint(0xE4)
+        let newHash = TestFixtures.fingerprint(0xE5)
+        let extraHash = TestFixtures.fingerprint(0xE6)
+        let fingerprint = TestFixtures.fingerprint(0xE7)
+        _ = try addV2IndexedResource(indexes, hash: oldHash, name: "old.jpg")
+        _ = try addV2IndexedResource(indexes, hash: newHash, name: "new.jpg")
+
+        try indexes.upsertAsset(
+            strictSubsetAsset(fingerprint: fingerprint, resourceCount: 1),
+            links: [strictSubsetLink(fingerprint: fingerprint, hash: oldHash, name: "old.jpg")],
+            replacingSubsetFingerprints: []
+        )
+        try indexes.upsertAsset(
+            strictSubsetAsset(fingerprint: fingerprint, resourceCount: 1),
+            links: [strictSubsetLink(fingerprint: fingerprint, hash: newHash, name: "new.jpg")],
+            replacingSubsetFingerprints: []
+        )
+
+        let oldKeys: Set<AssetResourceLinkKey> = [
+            strictSubsetKey(hash: oldHash),
+            strictSubsetKey(hash: extraHash, role: ResourceTypeCode.pairedVideo)
+        ]
+        XCTAssertTrue(indexes.findStrictSubsetAssetFingerprints(forResourceKeys: oldKeys).isEmpty)
+        let oldStats = indexes.strictSubsetQueryStatsForTesting(forResourceKeys: oldKeys)
+        XCTAssertEqual(oldStats.candidateCount, 0)
+        XCTAssertEqual(oldStats.predicateChecks, 0)
+
+        let newKeys: Set<AssetResourceLinkKey> = [
+            strictSubsetKey(hash: newHash),
+            strictSubsetKey(hash: extraHash, role: ResourceTypeCode.pairedVideo)
+        ]
+        XCTAssertEqual(
+            Set(indexes.findStrictSubsetAssetFingerprints(forResourceKeys: newKeys)),
+            [fingerprint]
+        )
+    }
+
+    func testV2StrictSubsetIndexRemovesTombstonedSubsetsAndCleansEmptyBuckets() throws {
+        let indexes = emptyV2Indexes()
+        let partialHash = TestFixtures.fingerprint(0xE8)
+        let videoHash = TestFixtures.fingerprint(0xE9)
+        let oldOnlyHash = TestFixtures.fingerprint(0xEA)
+        let replacementHash = TestFixtures.fingerprint(0xEB)
+        let queryExtraHash = TestFixtures.fingerprint(0xEC)
+        let partialFP = TestFixtures.fingerprint(0xF1)
+        let fullFP = TestFixtures.fingerprint(0xF2)
+        let oldOnlyFP = TestFixtures.fingerprint(0xF3)
+        let replacementFP = TestFixtures.fingerprint(0xF4)
+
+        for (hash, name, type) in [
+            (partialHash, "partial.jpg", ResourceTypeCode.photo),
+            (videoHash, "partial.mov", ResourceTypeCode.pairedVideo),
+            (oldOnlyHash, "old-only.jpg", ResourceTypeCode.photo),
+            (replacementHash, "replacement.jpg", ResourceTypeCode.photo)
+        ] {
+            _ = try addV2IndexedResource(indexes, hash: hash, name: name, resourceType: type)
+        }
+
+        try indexes.upsertAsset(
+            strictSubsetAsset(fingerprint: partialFP, resourceCount: 1),
+            links: [strictSubsetLink(fingerprint: partialFP, hash: partialHash, name: "partial.jpg")],
+            replacingSubsetFingerprints: []
+        )
+        let fullLinks = [
+            strictSubsetLink(fingerprint: fullFP, hash: partialHash, name: "partial.jpg"),
+            strictSubsetLink(
+                fingerprint: fullFP,
+                hash: videoHash,
+                role: ResourceTypeCode.pairedVideo,
+                name: "partial.mov"
+            )
+        ]
+        try indexes.upsertAsset(
+            strictSubsetAsset(fingerprint: fullFP, resourceCount: 2),
+            links: fullLinks,
+            replacingSubsetFingerprints: [partialFP]
+        )
+        let fullKeys = AssetResourceLinkSetPredicate.keys(fromLinks: fullLinks)
+        XCTAssertTrue(indexes.findStrictSubsetAssetFingerprints(forResourceKeys: fullKeys).isEmpty)
+        XCTAssertFalse(indexes.hasStrictSubsetAssetFingerprint(forResourceKeys: fullKeys))
+
+        try indexes.upsertAsset(
+            strictSubsetAsset(fingerprint: oldOnlyFP, resourceCount: 1),
+            links: [strictSubsetLink(fingerprint: oldOnlyFP, hash: oldOnlyHash, name: "old-only.jpg")],
+            replacingSubsetFingerprints: []
+        )
+        try indexes.upsertAsset(
+            strictSubsetAsset(fingerprint: replacementFP, resourceCount: 1),
+            links: [strictSubsetLink(fingerprint: replacementFP, hash: replacementHash, name: "replacement.jpg")],
+            replacingSubsetFingerprints: [oldOnlyFP]
+        )
+        let oldOnlyQuery: Set<AssetResourceLinkKey> = [
+            strictSubsetKey(hash: oldOnlyHash),
+            strictSubsetKey(hash: queryExtraHash, role: ResourceTypeCode.pairedVideo)
+        ]
+        XCTAssertTrue(indexes.findStrictSubsetAssetFingerprints(forResourceKeys: oldOnlyQuery).isEmpty)
+        let oldOnlyStats = indexes.strictSubsetQueryStatsForTesting(forResourceKeys: oldOnlyQuery)
+        XCTAssertEqual(oldOnlyStats.candidateCount, 0)
+        XCTAssertEqual(oldOnlyStats.predicateChecks, 0)
+    }
+
+    func testV2StrictSubsetIndexRecordCommitDoesNotChangeQuery() throws {
+        let indexes = emptyV2Indexes()
+        let photoHash = TestFixtures.fingerprint(0xED)
+        let videoHash = TestFixtures.fingerprint(0xEE)
+        let fingerprint = TestFixtures.fingerprint(0xEF)
+        _ = try addV2IndexedResource(indexes, hash: photoHash, name: "photo.jpg")
+        try indexes.upsertAsset(
+            strictSubsetAsset(fingerprint: fingerprint, resourceCount: 1),
+            links: [strictSubsetLink(fingerprint: fingerprint, hash: photoHash, name: "photo.jpg")],
+            replacingSubsetFingerprints: []
+        )
+
+        let keys: Set<AssetResourceLinkKey> = [
+            strictSubsetKey(hash: photoHash),
+            strictSubsetKey(hash: videoHash, role: ResourceTypeCode.pairedVideo)
+        ]
+        let before = Set(indexes.findStrictSubsetAssetFingerprints(forResourceKeys: keys))
+        let beforeStats = indexes.strictSubsetQueryStatsForTesting(forResourceKeys: keys)
+        indexes.recordCommit(
+            assetClocks: [fingerprint: 1],
+            tombstoneClocks: [:],
+            committedResources: [:],
+            committedResourceClocks: [:],
+            writerID: writerID,
+            seq: 1
+        )
+        XCTAssertEqual(Set(indexes.findStrictSubsetAssetFingerprints(forResourceKeys: keys)), before)
+        XCTAssertEqual(indexes.strictSubsetQueryStatsForTesting(forResourceKeys: keys), beforeStats)
+    }
+
+    func testV2StrictSubsetQueryNarrowsCandidatesInLargeMonth() throws {
+        let unrelatedCount = 5_000
+        let fixture = largeStrictSubsetState(unrelatedCount: unrelatedCount, includePartial: true)
+        let indexes = V2MonthIndexes(
+            year: year,
+            month: month,
+            materializedState: fixture.state,
+            remoteFilesByName: [:],
+            verifiedMissingHashes: nil,
+            nameCase: .caseSensitive
+        )
+        let keys: Set<AssetResourceLinkKey> = [
+            strictSubsetKey(hash: fixture.photoHash),
+            strictSubsetKey(hash: fixture.videoHash, role: ResourceTypeCode.pairedVideo)
+        ]
+
+        XCTAssertEqual(
+            Set(indexes.findStrictSubsetAssetFingerprints(forResourceKeys: keys)),
+            [fixture.partialFingerprint]
+        )
+        XCTAssertTrue(indexes.hasStrictSubsetAssetFingerprint(forResourceKeys: keys))
+        let stats = indexes.strictSubsetQueryStatsForTesting(forResourceKeys: keys)
+        XCTAssertEqual(stats.incomingKeyCount, 2)
+        XCTAssertEqual(stats.hashBucketLookups, 2)
+        XCTAssertEqual(stats.candidateCount, 1)
+        XCTAssertEqual(stats.predicateChecks, 1)
+        XCTAssertLessThan(stats.candidateCount, unrelatedCount / 100)
+    }
+
+    func testV2StrictSubsetQueryAvoidsPredicateChecksWhenNoHashesOverlap() throws {
+        let fixture = largeStrictSubsetState(unrelatedCount: 5_000, includePartial: false)
+        let indexes = V2MonthIndexes(
+            year: year,
+            month: month,
+            materializedState: fixture.state,
+            remoteFilesByName: [:],
+            verifiedMissingHashes: nil,
+            nameCase: .caseSensitive
+        )
+        let keys: Set<AssetResourceLinkKey> = [
+            strictSubsetKey(hash: fixture.photoHash),
+            strictSubsetKey(hash: fixture.videoHash, role: ResourceTypeCode.pairedVideo)
+        ]
+
+        XCTAssertTrue(indexes.findStrictSubsetAssetFingerprints(forResourceKeys: keys).isEmpty)
+        XCTAssertFalse(indexes.hasStrictSubsetAssetFingerprint(forResourceKeys: keys))
+        let stats = indexes.strictSubsetQueryStatsForTesting(forResourceKeys: keys)
+        XCTAssertEqual(stats.incomingKeyCount, 2)
+        XCTAssertEqual(stats.hashBucketLookups, 2)
+        XCTAssertEqual(stats.candidateCount, 0)
+        XCTAssertEqual(stats.predicateChecks, 0)
     }
 
     /// Heal round-trip: pre-fix manifest carries both partial `A` and full `B`. A later

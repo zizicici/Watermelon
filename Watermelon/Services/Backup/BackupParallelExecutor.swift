@@ -787,7 +787,7 @@ struct BackupParallelExecutor: Sendable {
                     AssetResourceLinkKey(role: $0.key.role, slot: $0.key.slot, hash: $0.value)
                 }
             )
-            if !monthStore.findStrictSubsetAssetFingerprints(forResourceKeys: resourceKeys).isEmpty {
+            if monthStore.hasStrictSubsetAssetFingerprint(forResourceKeys: resourceKeys) {
                 return false
             }
         }
