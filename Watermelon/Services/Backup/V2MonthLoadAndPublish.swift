@@ -9,16 +9,15 @@ enum V2MonthLoadAndPublish {
         remoteIndexService: RemoteIndexSyncService,
         stepLogger: @escaping MonthManifestStepLogger
     ) async throws -> any BackupMonthStore {
-        let freshHashes = await remoteIndexService.verifiedPhysicallyMissingHashes(for: month)
-        let failClosedHashes = freshHashes ?? remoteIndexService.physicallyMissingHashes(for: month)
+        let presence = remoteIndexService.presenceSnapshot(for: month)
         let monthStore = try await V2MonthSession.loadOrCreate(
             client: client,
             basePath: basePath,
             year: month.year,
             month: month.month,
             v2Services: v2Services,
-            verifiedMissingHashes: failClosedHashes.isEmpty ? nil : failClosedHashes,
-            overlayIsAuthoritative: freshHashes != nil,
+            verifiedMissingHashes: presence.missingHashes.isEmpty ? nil : presence.missingHashes,
+            overlayIsAuthoritative: presence.isAuthoritative,
             stepLogger: stepLogger
         )
         remoteIndexService.publishMonthSnapshot(of: monthStore, for: month)

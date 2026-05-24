@@ -595,8 +595,8 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
             concurrencyCap: 4
         )
 
-        XCTAssertTrue(result.fresh)
-        XCTAssertTrue(result.missingByMonth.values.allSatisfy(\.isEmpty))
+        XCTAssertTrue(result.allMonthsFresh)
+        XCTAssertTrue(result.presence.entries.allSatisfy { $0.value.missingHashes.isEmpty })
         let maxOperations = await serialOnly.maxConcurrentOperations()
         let listCount = await serialOnly.listCount()
         let downloadCount = await serialOnly.downloadCount()

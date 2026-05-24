@@ -45,9 +45,8 @@ struct RemoteIndexOverlayMonthProbe: Sendable {
 }
 
 struct RemoteIndexOverlayProbeResult: Sendable {
-    let fresh: Bool
-    let missingByMonth: [LibraryMonthKey: Set<Data>]
-    let freshMonths: Set<LibraryMonthKey>
+    let allMonthsFresh: Bool
+    let presence: RemotePresenceSnapshot
 }
 
 struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
@@ -68,8 +67,7 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
         let effectiveCap = client.concurrencyMode == .serialOnly ? 1 : concurrencyCap
         var iterator = resourcesByMonth.makeIterator()
         var anyFailure = false
-        var missingByMonth: [LibraryMonthKey: Set<Data>] = [:]
-        var freshMonths: Set<LibraryMonthKey> = []
+        var builder = RemotePresenceSnapshot.Builder()
         try await withThrowingTaskGroup(of: (LibraryMonthKey, Result<RemoteIndexOverlayMonthProbe, Error>).self) { group in
             for _ in 0..<effectiveCap {
                 guard let (month, resources) = iterator.next() else { break }
@@ -113,9 +111,7 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                     case .preserveFallback:
                         monthFresh = probe.inconclusiveHashes.isEmpty
                     }
-                    if monthFresh {
-                        freshMonths.insert(month)
-                    } else {
+                    if !monthFresh {
                         anyFailure = true
                     }
                     let priorFallback = fallback[month] ?? []
@@ -124,12 +120,12 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                     // (e.g. budget exhausted on a different hash) — Home would keep treating a
                     // healthy remote asset as incomplete and queue a repair upload.
                     if monthFresh || !missing.isEmpty || !priorFallback.isEmpty {
-                        missingByMonth[month] = missing
+                        builder.set(month, missingHashes: missing, isAuthoritative: monthFresh)
                     }
                 case .failure(let error):
                     anyFailure = true
                     if let stale = fallback[month] {
-                        missingByMonth[month] = stale
+                        builder.set(month, missingHashes: stale, isAuthoritative: false)
                     }
                     overlayProbeLog.info("[SyncTiming] probe failed for \(month.text): \(error.localizedDescription)")
                 }
@@ -148,9 +144,8 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
             }
         }
         return RemoteIndexOverlayProbeResult(
-            fresh: !anyFailure,
-            missingByMonth: missingByMonth,
-            freshMonths: freshMonths
+            allMonthsFresh: !anyFailure,
+            presence: builder.build()
         )
     }
 

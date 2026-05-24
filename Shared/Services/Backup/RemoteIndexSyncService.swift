@@ -244,13 +244,13 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                     clearPhysicalPresenceOverlayFreshnessLocked()
                     revisionUnchanged = false
                 } else {
-                    for (month, hashes) in probe.missingByMonth {
-                        committedView.markPhysicallyMissing(month: month, hashes: hashes)
+                    for entry in probe.presence.entries {
+                        committedView.markPhysicallyMissing(month: entry.month, hashes: entry.value.missingHashes)
                     }
-                    setPhysicalPresenceOverlayFreshnessLocked(freshMonths: probe.freshMonths)
+                    setPhysicalPresenceOverlayFreshnessLocked(freshMonths: probe.presence.freshMonths)
                     revisionUnchanged = true
                 }
-                let overlayFresh = revisionUnchanged && probe.fresh
+                let overlayFresh = revisionUnchanged && probe.allMonthsFresh
                 let (revision, snapshot) = committedView.currentSnapshotWithRevision()
                 let coverage = Self.resumeCoverage(from: snapshot)
                 let handle = RemoteViewHandle(
@@ -438,10 +438,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         do {
             _ = try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
         } catch is CancellationError {
-            applyPhysicalPresenceOverlay(priorOverlay)
+            applyPhysicalPresenceOverlay(RemotePresenceSnapshot.failClosed(missingByMonth: priorOverlay))
             throw CancellationError()
         } catch {
-            applyPhysicalPresenceOverlay(priorOverlay)
+            applyPhysicalPresenceOverlay(RemotePresenceSnapshot.failClosed(missingByMonth: priorOverlay))
             syncLog.info("[SyncTiming] overlay refresh skipped: \(error.localizedDescription)")
         }
         committedView.markSynced(Date())
@@ -808,8 +808,38 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
     }
 
+    func presenceSnapshot(for month: LibraryMonthKey) -> RemotePresenceSnapshot.Month {
+        optimisticMutationLock.withLock {
+            let hashes = committedView.physicallyMissingHashes(for: month)
+            let fresh = physicalPresenceOverlayFreshMonths.contains(month)
+            return RemotePresenceSnapshot.Month(missingHashes: hashes, isAuthoritative: fresh)
+        }
+    }
+
+    func fullPresenceSnapshot() -> RemotePresenceSnapshot {
+        optimisticMutationLock.withLock {
+            var builder = RemotePresenceSnapshot.Builder()
+            let missingMap = committedView.physicallyMissingSnapshot()
+            // Union so authoritative-empty months are represented; the committed view drops empty entries.
+            let touched = Set(missingMap.keys).union(physicalPresenceOverlayFreshMonths)
+            for month in touched {
+                builder.set(
+                    month,
+                    missingHashes: missingMap[month] ?? [],
+                    isAuthoritative: physicalPresenceOverlayFreshMonths.contains(month)
+                )
+            }
+            return builder.build()
+        }
+    }
+
     func physicallyMissingHashesForTest(month: LibraryMonthKey) -> Set<Data> {
         physicallyMissingHashes(for: month)
+    }
+
+    @discardableResult
+    func applyPresenceSnapshotForTest(_ snapshot: RemotePresenceSnapshot) -> Bool {
+        applyPhysicalPresenceOverlay(snapshot)
     }
 
     func physicallyMissingSnapshot() -> [LibraryMonthKey: Set<Data>] {
@@ -842,22 +872,20 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             concurrencyCap: concurrencyCap
         )
         let applied = applyPhysicalPresenceOverlay(
-            probe.missingByMonth,
-            expectedRevision: captured.revision,
-            freshMonths: probe.freshMonths
+            probe.presence,
+            expectedRevision: captured.revision
         )
         if !applied {
             syncLog.info("[SyncTiming] overlay refresh captured stale revision; preserving previous overlay")
             return false
         }
-        return probe.fresh
+        return probe.allMonthsFresh
     }
 
     @discardableResult
     private func applyPhysicalPresenceOverlay(
-        _ missingByMonth: [LibraryMonthKey: Set<Data>],
-        expectedRevision: UInt64? = nil,
-        freshMonths: Set<LibraryMonthKey> = []
+        _ snapshot: RemotePresenceSnapshot,
+        expectedRevision: UInt64? = nil
     ) -> Bool {
         optimisticMutationLock.withLock {
             if let expectedRevision,
@@ -865,10 +893,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 clearPhysicalPresenceOverlayFreshnessLocked()
                 return false
             }
-            for (month, hashes) in missingByMonth {
-                committedView.markPhysicallyMissing(month: month, hashes: hashes)
+            for entry in snapshot.entries {
+                committedView.markPhysicallyMissing(month: entry.month, hashes: entry.value.missingHashes)
             }
-            setPhysicalPresenceOverlayFreshnessLocked(freshMonths: freshMonths)
+            setPhysicalPresenceOverlayFreshnessLocked(freshMonths: snapshot.freshMonths)
             return true
         }
     }
