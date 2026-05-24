@@ -340,7 +340,7 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
                         matches.append("\(relative):\(index + 1):\(line.trimmingCharacters(in: .whitespaces))")
                     }
                     if line.contains("maintenanceStartupMode: .disabled") {
-                        let allowed = relative == "Watermelon/Services/Backup/BackupRunPreparation.swift"
+                        let allowed = relative == "Shared/Services/Repo/BackupV2RuntimeLease.swift"
                             && line.contains(".verifyMonthTombstoneApply")
                         if !allowed {
                             matches.append("\(relative):\(index + 1):\(line.trimmingCharacters(in: .whitespaces))")
@@ -594,13 +594,26 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
             contentsOf: root.appendingPathComponent("Shared/Services/Repo/BackupV2RepoOpenService.swift"),
             encoding: .utf8
         )
+        let lease = try String(
+            contentsOf: root.appendingPathComponent("Shared/Services/Repo/BackupV2RuntimeLease.swift"),
+            encoding: .utf8
+        )
 
-        XCTAssertTrue(preparation.contains("BackupV2RuntimeOpenErrorMapping.withCompatibilityMapping"))
+        // Lease absorbs the runtime build/open boundary. The verify pre-build
+        // bootstrap-error translation stays in BackupRunPreparation.swift; that
+        // path is outside the lease scope (M15 territory) and uses a different
+        // helper, so it is not banned here.
+        XCTAssertFalse(preparation.contains("BackupV2RuntimeOpenErrorMapping.withCompatibilityMapping"))
+        XCTAssertFalse(preparation.contains("BackupV2RuntimeOpenErrorMapping.classifyBuildFailure"))
         XCTAssertFalse(preparation.contains("withBackupV2RuntimeBuildErrorMapping"))
         XCTAssertFalse(preparation.contains("catch BackupV2RuntimeBuildError"))
 
-        XCTAssertTrue(background.contains("BackupV2RuntimeOpenErrorMapping.classifyBuildFailure"))
+        XCTAssertFalse(background.contains("BackupV2RuntimeOpenErrorMapping.withCompatibilityMapping"))
+        XCTAssertFalse(background.contains("BackupV2RuntimeOpenErrorMapping.classifyBuildFailure"))
         XCTAssertFalse(background.contains("catch BackupV2RuntimeBuildError"))
+
+        XCTAssertTrue(lease.contains("BackupV2RuntimeOpenErrorMapping.withCompatibilityMapping"))
+        XCTAssertTrue(lease.contains("BackupV2RuntimeOpenErrorMapping.classifyBuildFailure"))
 
         XCTAssertTrue(repoOpen.contains("BackupV2RuntimeOpenErrorMapping.withOpenErrorNormalization"))
         XCTAssertFalse(repoOpen.contains("withShapedRepoBootstrapErrorMapping"))

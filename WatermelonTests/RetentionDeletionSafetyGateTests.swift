@@ -190,6 +190,9 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         }
 
         // Production backup runtime callers must not carry maintenance-off overrides.
+        // The lease (Shared/Services/Repo/BackupV2RuntimeLease.swift) is the single
+        // place that selects maintenanceStartupMode, including the verify factory's
+        // .disabled(.verifyMonthTombstoneApply) value.
         let productionBuildCallers = [
             "Watermelon/Services/Backup/BackupRunPreparation.swift",
             "Watermelon/Services/Backup/BackgroundBackupRunner.swift"
@@ -199,16 +202,16 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
             XCTAssertFalse(text.contains("retentionRuntimeMode:"), "retentionRuntimeMode unexpectedly passed in \(path)")
             XCTAssertFalse(text.contains("RepoRetentionRuntimeMode"), "retention runtime mode unexpectedly referenced in \(path)")
             XCTAssertFalse(text.contains("runMaintenanceTasks:"), "runMaintenanceTasks unexpectedly passed in \(path)")
-            if path.hasSuffix("BackgroundBackupRunner.swift") {
-                XCTAssertFalse(text.contains("maintenanceStartupMode:"), "background backup unexpectedly overrides maintenance startup in \(path)")
-            }
+            XCTAssertFalse(text.contains("maintenanceStartupMode:"), "production caller unexpectedly overrides maintenance startup in \(path); the lease owns this axis now")
         }
-        let preparation = try source(root, "Watermelon/Services/Backup/BackupRunPreparation.swift")
+        let lease = try source(root, "Shared/Services/Repo/BackupV2RuntimeLease.swift")
         XCTAssertEqual(
-            preparation.components(separatedBy: "maintenanceStartupMode: .disabled(.verifyMonthTombstoneApply)").count - 1,
+            lease.components(separatedBy: "maintenanceStartupMode: .disabled(.verifyMonthTombstoneApply)").count - 1,
             1
         )
-        XCTAssertFalse(preparation.contains("maintenanceStartupMode: .disabled(.test)"))
+        XCTAssertFalse(lease.contains("maintenanceStartupMode: .disabled(.test)"))
+        XCTAssertFalse(lease.contains("retentionRuntimeMode:"))
+        XCTAssertFalse(lease.contains("runMaintenanceTasks:"))
 
         for path in [
             "Shared/Services/Backup/V2MonthSession.swift",

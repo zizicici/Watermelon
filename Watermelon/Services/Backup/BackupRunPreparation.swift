@@ -54,10 +54,11 @@ struct BackupRunPreparationService: Sendable {
             let client = try makeStorageClient(profile: profile, password: password)
             try await client.connect()
 
-            var v2ServicesForCleanup: BackupV2RuntimeServices?
+            var leaseForCleanup: BackupV2RuntimeLease?
             do {
-                let v2Services = try await prepareV2Runtime(client: client, profile: profile, password: password, eventStream: eventStream)
-                v2ServicesForCleanup = v2Services
+                let lease = try await prepareV2Runtime(client: client, profile: profile, password: password, eventStream: eventStream)
+                leaseForCleanup = lease
+                let v2Services = lease?.services
 
                 do {
                     let preMaterialized = await v2Services?.initialMaterializeOutput.peek()
@@ -172,8 +173,8 @@ struct BackupRunPreparationService: Sendable {
                     v2Services: v2Services
                 )
             } catch {
-                if let v2 = v2ServicesForCleanup {
-                    await v2.shutdown()
+                if let lease = leaseForCleanup {
+                    await lease.shutdown()
                 }
                 await client.disconnectSafely()
                 throw error
@@ -346,27 +347,18 @@ struct BackupRunPreparationService: Sendable {
         let verifier = RepoVerifyMonthService(client: metadataClient, basePath: basePath, expectedRepoID: expectedRepoID)
         var report = try await verifier.verify(month: month)
         if !report.cleanupCandidates.isEmpty, let profile {
-            let v2: BackupV2RuntimeServices
-            v2 = try await BackupV2RuntimeOpenErrorMapping.withCompatibilityMapping(
-                metadataClient: metadataClient,
-                disconnectOnError: false
-            ) {
-                try await BackupV2RuntimeBuilder.build(
-                    client: client,
-                    metadataClient: metadataClient,
-                    ownsMetadataClient: false,
-                    maintenanceStartupMode: .disabled(.verifyMonthTombstoneApply),
-                    profile: profile,
-                    databaseManager: databaseManager,
-                    format: formatCompatibilityService,
-                    allowMigration: false
-                )
-            }
+            let lease = try await BackupV2RuntimeLease.forVerifyMonth(
+                client: client,
+                borrowedMetadataClient: metadataClient,
+                profile: profile,
+                databaseManager: databaseManager,
+                format: formatCompatibilityService
+            )
             do {
                 let appliedFingerprints = try await verifier.applyTombstones(
                     month: month,
                     cleanupItems: report.cleanupCandidates,
-                    services: v2
+                    services: lease.services
                 )
                 report.didMutateRemote = !appliedFingerprints.isEmpty
                 // Evict only what was actually tombstoned; applyTombstones may have skipped since-healed items.
@@ -382,9 +374,9 @@ struct BackupRunPreparationService: Sendable {
                     )
                 }
                 _ = try await remoteIndexService.syncIndex(client: client, profile: profile, expectV2: true, localRepoID: expectedRepoID)
-                await v2.shutdown()
+                await lease.shutdown()
             } catch {
-                await v2.shutdown()
+                await lease.shutdown()
                 throw error
             }
         } else if let profile {
@@ -483,34 +475,20 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord,
         password: String,
         eventStream: BackupEventStream
-    ) async throws -> BackupV2RuntimeServices? {
-        // Dedicated metadata connection so metadata writes don't contend with worker uploads.
-        let raw = try storageClientFactory.makeClient(profile: profile, password: password)
-        try await raw.connect()
-        // serialOnly backends must serialize concurrent metadata writes.
-        let metadataClient = wrapIfSerial(raw)
-        return try await BackupV2RuntimeOpenErrorMapping.withCompatibilityMapping(
-            metadataClient: metadataClient,
-            disconnectOnError: true
-        ) {
-            try await BackupV2RuntimeBuilder.build(
-                client: client,
-                metadataClient: metadataClient,
-                profile: profile,
-                databaseManager: databaseManager,
-                format: formatCompatibilityService,
-                allowMigration: true,
-                onMigrationStart: {
-                    eventStream.emitLog(String(localized: "backup.repo.migrationStarted"), level: .info)
-                },
-                onMigrationComplete: { processed in
-                    eventStream.emitLog(String.localizedStringWithFormat(String(localized: "backup.repo.migrationCompleted"), processed), level: .info)
-                },
-                onBootstrap: {
-                    eventStream.emitLog(String(localized: "backup.repo.bootstrapped"), level: .info)
-                }
-            )
-        }
+    ) async throws -> BackupV2RuntimeLease? {
+        return try await BackupV2RuntimeLease.forForegroundRun(
+            client: client,
+            profile: profile,
+            databaseManager: databaseManager,
+            format: formatCompatibilityService,
+            eventStream: eventStream,
+            makeMetadataClient: {
+                // Dedicated metadata connection so metadata writes don't contend with worker uploads.
+                let raw = try storageClientFactory.makeClient(profile: profile, password: password)
+                try await raw.connect()
+                return raw
+            }
+        )
     }
 
 }

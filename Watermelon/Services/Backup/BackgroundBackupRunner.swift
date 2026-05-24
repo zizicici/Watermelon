@@ -202,13 +202,21 @@ final class BackgroundBackupRunner {
             )
             return .failed
         }
-        let metadataClient: any RemoteStorageClientProtocol
-        do {
-            let raw = try storageClientFactory.makeClient(profile: profile, password: password)
-            try await raw.connect()
-            // serialOnly backends — wrap to serialize concurrent metadata writes.
-            metadataClient = wrapIfSerial(raw)
-        } catch {
+
+        let lease: BackupV2RuntimeLease
+        switch await BackupV2RuntimeLease.forBackgroundRun(
+            client: client,
+            profile: profile,
+            databaseManager: databaseManager,
+            makeMetadataClient: { [storageClientFactory, profile, password] in
+                let raw = try storageClientFactory.makeClient(profile: profile, password: password)
+                try await raw.connect()
+                return raw
+            }
+        ) {
+        case .success(let openedLease):
+            lease = openedLease
+        case .failure(.metadataConnect(let error)):
             if RemoteWriteClassifier.isCancellation(error) {
                 await client.disconnectSafely()
                 return .cancelled
@@ -219,23 +227,11 @@ final class BackgroundBackupRunner {
             )
             await client.disconnectSafely()
             return .failed
-        }
-
-        let v2Services: BackupV2RuntimeServices
-        do {
-            v2Services = try await BackupV2RuntimeBuilder.build(
-                client: client,
-                metadataClient: metadataClient,
-                profile: profile,
-                databaseManager: databaseManager,
-                allowMigration: false
-            )
-        } catch {
-            let failure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(error)
-            await metadataClient.disconnectSafely()
+        case .failure(.builderOpen(let failure)):
             await client.disconnectSafely()
             return await handleRuntimeOpenFailure(failure, profile: profile, writer: writer)
         }
+        let v2Services = lease.services
 
         do {
             let preMaterialized = await v2Services.initialMaterializeOutput.peek()
