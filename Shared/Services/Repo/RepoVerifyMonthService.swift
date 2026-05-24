@@ -64,38 +64,8 @@ actor RepoVerifyMonthService {
                 links: links,
                 isResourceAvailable: { presence.isPresent($0) }
             )
-            switch state {
-            case .healthy: continue
-            case .phantom:
-                items.append(VerifyMonthReportItem(
-                    kind: .phantomAsset,
-                    assetFingerprint: fp,
-                    detail: "no asset_resources rows; fingerprint=\(fp.hexString)"
-                ))
-            case .fullyMissing:
-                items.append(VerifyMonthReportItem(
-                    kind: .allResourcesGone,
-                    assetFingerprint: fp,
-                    detail: "all \(links.count) resources missing on remote"
-                ))
-            case .metadataOnlyLeft:
-                items.append(VerifyMonthReportItem(
-                    kind: .metadataOnlyLeft,
-                    assetFingerprint: fp,
-                    detail: "only adjustment-data roles remain"
-                ))
-            case .fingerprintMismatch:
-                items.append(VerifyMonthReportItem(
-                    kind: .fingerprintMismatch,
-                    assetFingerprint: fp,
-                    detail: "stored fp does not match recomputed from \(links.count) link(s)"
-                ))
-            case .partiallyMissing(let missing):
-                items.append(VerifyMonthReportItem(
-                    kind: .partiallyMissing,
-                    assetFingerprint: fp,
-                    detail: "\(missing.count)/\(links.count) resources missing"
-                ))
+            if let item = VerifyMonthReportItem.from(state: state, fingerprint: fp, linkCount: links.count) {
+                items.append(item)
             }
         }
 

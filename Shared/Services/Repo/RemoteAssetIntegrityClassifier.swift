@@ -19,10 +19,7 @@ enum AssetIntegrityState: Sendable, Equatable {
 
     /// Only fully missing assets are safe for automatic tombstone cleanup.
     var allowsCleanup: Bool {
-        switch self {
-        case .phantom, .fullyMissing, .metadataOnlyLeft: return true
-        case .healthy, .partiallyMissing, .fingerprintMismatch: return false
-        }
+        VerifyMonthReportKind(from: self)?.allowsCleanup ?? false
     }
 
     var isHealthy: Bool {
