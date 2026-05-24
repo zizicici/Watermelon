@@ -432,16 +432,12 @@ final class BackgroundBackupRunner {
 
             let monthStore: any BackupMonthStore
             do {
-                let freshHashes = await assetProcessor.remoteIndexService.verifiedPhysicallyMissingHashes(for: monthKey)
-                let failClosedHashes = freshHashes ?? assetProcessor.remoteIndexService.physicallyMissingHashes(for: monthKey)
-                monthStore = try await V2MonthSession.loadOrCreate(
+                monthStore = try await V2MonthLoadAndPublish.loadAndPublishSnapshot(
                     client: client,
                     basePath: profile.basePath,
-                    year: monthKey.year,
-                    month: monthKey.month,
+                    month: monthKey,
                     v2Services: v2Services,
-                    verifiedMissingHashes: failClosedHashes.isEmpty ? nil : failClosedHashes,
-                    overlayIsAuthoritative: freshHashes != nil,
+                    remoteIndexService: assetProcessor.remoteIndexService,
                     stepLogger: { message in
                         eventStream.emitLog(message, level: .error)
                     }
@@ -464,23 +460,6 @@ final class BackgroundBackupRunner {
                 )
                 continue
             }
-
-            // BG is single-worker sequential — this replace keeps the BG-local
-            // RemoteIndexSyncService's committedView aligned with the V2MonthSession
-            // we just loaded (resources/assets/links is the load-bearing half).
-            // physicallyMissingHashes is defensive parity in BG (no cross-worker
-            // reads). FG's BackupParallelExecutor does the equivalent for the
-            // genuinely parallel case.
-            let loadedSnapshot = monthStore.unsortedSnapshot()
-            assetProcessor.remoteIndexService.replaceCachedMonth(
-                monthKey,
-                resources: loadedSnapshot.resources,
-                assets: loadedSnapshot.assets,
-                links: loadedSnapshot.links,
-                physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
-                    ? monthStore.physicallyMissingHashesSnapshot()
-                    : nil
-            )
 
             let fetchBatchSize = 500
             for batchStart in stride(from: 0, to: assetIDs.count, by: fetchBatchSize) {

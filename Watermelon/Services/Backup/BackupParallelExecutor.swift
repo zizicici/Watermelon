@@ -209,16 +209,12 @@ struct BackupParallelExecutor: Sendable {
                 let monthStore: any BackupMonthStore
                 do {
                     if let v2Services {
-                        let freshHashes = await remoteIndexService.verifiedPhysicallyMissingHashes(for: monthKey)
-                        let failClosedHashes = freshHashes ?? remoteIndexService.physicallyMissingHashes(for: monthKey)
-                        monthStore = try await V2MonthSession.loadOrCreate(
+                        monthStore = try await V2MonthLoadAndPublish.loadAndPublishSnapshot(
                             client: client,
                             basePath: profile.basePath,
-                            year: monthKey.year,
-                            month: monthKey.month,
+                            month: monthKey,
                             v2Services: v2Services,
-                            verifiedMissingHashes: failClosedHashes.isEmpty ? nil : failClosedHashes,
-                            overlayIsAuthoritative: freshHashes != nil,
+                            remoteIndexService: remoteIndexService,
                             stepLogger: { message in
                                 eventStream.emitLog(message, level: .error)
                             }
@@ -232,6 +228,17 @@ struct BackupParallelExecutor: Sendable {
                             stepLogger: { message in
                                 eventStream.emitLog(message, level: .error)
                             }
+                        )
+                        // loadOrCreate may have cleaned manifest rows; sync to snapshotCache so consumers don't see stale state.
+                        let loadedSnapshot = monthStore.unsortedSnapshot()
+                        remoteIndexService.replaceCachedMonth(
+                            monthKey,
+                            resources: loadedSnapshot.resources,
+                            assets: loadedSnapshot.assets,
+                            links: loadedSnapshot.links,
+                            physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
+                                ? monthStore.physicallyMissingHashesSnapshot()
+                                : nil
                         )
                     }
                 } catch {
@@ -250,18 +257,6 @@ struct BackupParallelExecutor: Sendable {
                     )
                     throw error
                 }
-
-                // loadOrCreate may have cleaned manifest rows; sync to snapshotCache so consumers don't see stale state.
-                let loadedSnapshot = monthStore.unsortedSnapshot()
-                remoteIndexService.replaceCachedMonth(
-                    monthKey,
-                    resources: loadedSnapshot.resources,
-                    assets: loadedSnapshot.assets,
-                    links: loadedSnapshot.links,
-                    physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
-                        ? monthStore.physicallyMissingHashesSnapshot()
-                        : nil
-                )
 
                 eventStream.emitLog(
                     String.localizedStringWithFormat(
