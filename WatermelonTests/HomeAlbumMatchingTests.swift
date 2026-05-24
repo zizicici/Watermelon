@@ -136,7 +136,7 @@ final class HomeAlbumMatchingTests: XCTestCase {
         let items = HomeAlbumMatching.buildRemoteItems(
             assets: [asset], resources: [resPresent, resMissing],
             links: [linkPresent, linkMissing],
-            physicallyMissingHashesByMonth: [LibraryMonthKey(year: year, month: month): [missingHash]]
+            presenceByMonth: [LibraryMonthKey(year: year, month: month): RemotePresenceSnapshot.Month(missingHashes: [missingHash], isAuthoritative: false)]
         )
         let item = try? XCTUnwrap(items.first)
         XCTAssertEqual(item?.isRestorable, false,
@@ -167,7 +167,7 @@ final class HomeAlbumMatchingTests: XCTestCase {
 
         let overlayed = HomeAlbumMatching.buildRemoteItems(
             assets: [asset], resources: [resource], links: [link],
-            physicallyMissingHashesByMonth: [LibraryMonthKey(year: year, month: month): [hash]]
+            presenceByMonth: [LibraryMonthKey(year: year, month: month): RemotePresenceSnapshot.Month(missingHashes: [hash], isAuthoritative: false)]
         )
         XCTAssertTrue(overlayed.isEmpty,
                       "no surviving resources → no item emitted (same as phantom)")

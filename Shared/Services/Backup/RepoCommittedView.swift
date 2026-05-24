@@ -68,7 +68,7 @@ final class RepoCommittedView: @unchecked Sendable {
                 resources: delta.resources,
                 assets: delta.assets,
                 assetResourceLinks: delta.assetResourceLinks,
-                physicallyMissingHashes: overlay[delta.month] ?? []
+                presence: RemotePresenceSnapshot.Month(missingHashes: overlay[delta.month] ?? [], isAuthoritative: false)
             )
         }
         return RemoteLibrarySnapshotState(
@@ -97,7 +97,7 @@ final class RepoCommittedView: @unchecked Sendable {
             resources: base.resources,
             assets: base.assets,
             assetResourceLinks: base.assetResourceLinks,
-            physicallyMissingHashes: physicallyMissingByMonth[month] ?? []
+            presence: RemotePresenceSnapshot.Month(missingHashes: physicallyMissingByMonth[month] ?? [], isAuthoritative: false)
         )
     }
     func fileNames(for month: LibraryMonthKey) -> Set<String> { cache.fileNames(for: month) }

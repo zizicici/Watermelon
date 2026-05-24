@@ -88,7 +88,7 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
 
         var resourceSizeByHash: [Data: Int64] = [:]
         resourceSizeByHash.reserveCapacity(delta.resources.count)
-        for resource in delta.resources where !delta.physicallyMissingHashes.contains(resource.contentHash) {
+        for resource in delta.resources where !delta.presence.missingHashes.contains(resource.contentHash) {
             resourceSizeByHash[resource.contentHash] = resource.fileSize
         }
 

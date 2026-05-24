@@ -263,21 +263,21 @@ struct RemoteLibraryMonthDelta {
     let resources: [RemoteManifestResource]
     let assets: [RemoteManifestAsset]
     let assetResourceLinks: [RemoteAssetResourceLink]
-    /// See `RemoteLibrarySnapshot.physicallyMissingHashesByMonth`.
-    let physicallyMissingHashes: Set<Data>
+    /// Slice 2: typed read-view. `isAuthoritative` stays `false` here until slice 3 plumbs freshness from the service into the read-view source.
+    let presence: RemotePresenceSnapshot.Month
 
     init(
         month: LibraryMonthKey,
         resources: [RemoteManifestResource],
         assets: [RemoteManifestAsset],
         assetResourceLinks: [RemoteAssetResourceLink],
-        physicallyMissingHashes: Set<Data> = []
+        presence: RemotePresenceSnapshot.Month = .absent
     ) {
         self.month = month
         self.resources = resources
         self.assets = assets
         self.assetResourceLinks = assetResourceLinks
-        self.physicallyMissingHashes = physicallyMissingHashes
+        self.presence = presence
     }
 }
 

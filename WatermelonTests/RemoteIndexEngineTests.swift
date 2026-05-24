@@ -193,7 +193,7 @@ final class RemoteIndexEngineTests: XCTestCase {
         let withMissing = RemoteLibraryMonthDelta(
             month: delta.month, resources: delta.resources, assets: delta.assets,
             assetResourceLinks: delta.assetResourceLinks,
-            physicallyMissingHashes: [videoHash]
+            presence: RemotePresenceSnapshot.Month(missingHashes: [videoHash], isAuthoritative: false)
         )
         _ = engine.apply(
             state: TestFixtures.remoteSnapshotState(revision: 1, isFullSnapshot: true, deltas: [withMissing]),

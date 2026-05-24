@@ -42,7 +42,7 @@ enum HomeAlbumMatching {
         assets: [RemoteManifestAsset],
         resources: [RemoteManifestResource],
         links: [RemoteAssetResourceLink],
-        physicallyMissingHashesByMonth: [LibraryMonthKey: Set<Data>] = [:]
+        presenceByMonth: [LibraryMonthKey: RemotePresenceSnapshot.Month] = [:]
     ) -> [RemoteAlbumItem] {
         guard !assets.isEmpty else { return [] }
 
@@ -95,7 +95,7 @@ enum HomeAlbumMatching {
                 // match, but a cross-month link from corrupt manifest / V1 residue would
                 // bypass the missing-check via the asset-keyed shortcut.
                 let linkMonth = LibraryMonthKey(year: link.year, month: link.month)
-                let monthMissing = physicallyMissingHashesByMonth[linkMonth] ?? []
+                let monthMissing = (presenceByMonth[linkMonth] ?? .absent).missingHashes
                 if monthMissing.contains(link.resourceHash) {
                     skippedCount += 1
                     continue

@@ -435,7 +435,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                     assets: delta.assets,
                     resources: delta.resources,
                     links: delta.assetResourceLinks,
-                    physicallyMissingHashesByMonth: [month: delta.physicallyMissingHashes]
+                    presenceByMonth: [month: delta.presence]
                 )
                 let localIDs = self.localIndex.localAssetIDs(for: month)
                 cont.resume(returning: RemoteOnlyQueryResult(
