@@ -658,7 +658,7 @@ private struct RepoRetentionDeleteCandidateScanner: Sendable {
             let commit: CommitFile
             do {
                 commit = try await reader.read(remotePath: listedPath)
-            } catch let error as CommitLogReader.ReadError {
+            } catch let error as RepoJSONLReadError {
                 switch error {
                 case .notFound:
                     protectedSummary.readFailedCandidateCount += 1

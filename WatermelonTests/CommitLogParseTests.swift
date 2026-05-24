@@ -67,7 +67,7 @@ final class CommitLogParseTests: XCTestCase {
         let raw = lines.joined(separator: "\n") + "\n"
         XCTAssertThrowsError(try CommitLogReader.parse(text: raw)) { err in
             switch err {
-            case CommitLogReader.ReadError.integrityMismatch: break
+            case RepoJSONLReadError.integrityMismatch: break
             default: XCTFail("expected integrity mismatch, got \(err)")
             }
         }

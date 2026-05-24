@@ -286,15 +286,15 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
         do {
             _ = try await commitReader.read(filename: commitFilename)
             XCTFail("expected corrupt commit")
-        } catch CommitLogReader.ReadError.notFound {
+        } catch RepoJSONLReadError.notFound {
             XCTFail("corrupt bytes must not map to notFound")
-        } catch CommitLogReader.ReadError.missingEnd, CommitLogReader.ReadError.missingHeader, CommitLogReader.ReadError.decodeFailure {
+        } catch RepoJSONLReadError.missingEnd, RepoJSONLReadError.missingHeader, RepoJSONLReadError.decodeFailure {
         }
         await client.injectPersistentDownloadError(.notFound, for: commitPath)
         do {
             _ = try await commitReader.read(filename: commitFilename)
             XCTFail("expected notFound")
-        } catch CommitLogReader.ReadError.notFound(let filename) {
+        } catch RepoJSONLReadError.notFound(let filename) {
             XCTAssertEqual(filename, commitFilename)
         }
         await client.clearPersistentDownloadError(for: commitPath)
@@ -312,15 +312,15 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
         do {
             _ = try await snapshotReader.read(filename: snapshotFilename)
             XCTFail("expected corrupt snapshot")
-        } catch SnapshotReader.ReadError.notFound {
+        } catch RepoJSONLReadError.notFound {
             XCTFail("corrupt bytes must not map to notFound")
-        } catch SnapshotReader.ReadError.missingEnd, SnapshotReader.ReadError.missingHeader, SnapshotReader.ReadError.decodeFailure {
+        } catch RepoJSONLReadError.missingEnd, RepoJSONLReadError.missingHeader, RepoJSONLReadError.decodeFailure {
         }
         await client.injectPersistentDownloadError(.notFound, for: snapshotPath)
         do {
             _ = try await snapshotReader.read(filename: snapshotFilename)
             XCTFail("expected notFound")
-        } catch SnapshotReader.ReadError.notFound(let filename) {
+        } catch RepoJSONLReadError.notFound(let filename) {
             XCTAssertEqual(filename, snapshotFilename)
         }
         await client.clearPersistentDownloadError(for: snapshotPath)

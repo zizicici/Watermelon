@@ -128,7 +128,7 @@ struct RepoIdentityAuthority: Sendable {
                 repoIDs.insert(file.header.repoID)
             } catch is CancellationError {
                 throw CancellationError()
-            } catch is CommitLogReader.ReadError {
+            } catch is RepoJSONLReadError {
                 continue
             } catch {
                 if RemoteStorageErrorClassifier.isNotFound(error) { continue }
@@ -143,7 +143,7 @@ struct RepoIdentityAuthority: Sendable {
                 repoIDs.insert(file.header.repoID)
             } catch is CancellationError {
                 throw CancellationError()
-            } catch is SnapshotReader.ReadError {
+            } catch is RepoJSONLReadError {
                 continue
             } catch {
                 if RemoteStorageErrorClassifier.isNotFound(error) { continue }

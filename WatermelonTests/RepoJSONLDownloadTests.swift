@@ -21,7 +21,7 @@ final class RepoJSONLDownloadTests: XCTestCase {
             client: client,
             remotePath: remotePath,
             to: temp,
-            notFoundError: CommitLogReader.ReadError.notFound(filename: "should-not-fire.jsonl")
+            notFoundError: RepoJSONLReadError.notFound(filename: "should-not-fire.jsonl")
         )
 
         let bytes = try Data(contentsOf: temp)
@@ -42,7 +42,7 @@ final class RepoJSONLDownloadTests: XCTestCase {
                 client: client,
                 remotePath: remotePath,
                 to: temp,
-                notFoundError: CommitLogReader.ReadError.notFound(filename: "abc.jsonl")
+                notFoundError: RepoJSONLReadError.notFound(filename: "abc.jsonl")
             )
             XCTFail("expected helper to throw CancellationError")
         } catch is CancellationError {
@@ -62,7 +62,7 @@ final class RepoJSONLDownloadTests: XCTestCase {
                 client: client,
                 remotePath: remotePath,
                 to: temp,
-                notFoundError: CommitLogReader.ReadError.notFound(filename: "abc.jsonl")
+                notFoundError: RepoJSONLReadError.notFound(filename: "abc.jsonl")
             )
             XCTFail("expected helper to throw CancellationError")
         } catch is CancellationError {
@@ -85,17 +85,18 @@ final class RepoJSONLDownloadTests: XCTestCase {
                 client: client,
                 remotePath: remotePath,
                 to: temp,
-                notFoundError: CommitLogReader.ReadError.notFound(filename: "abc.jsonl")
+                notFoundError: RepoJSONLReadError.notFound(filename: "abc.jsonl")
             )
-            XCTFail("expected helper to throw CommitLogReader.ReadError.notFound")
-        } catch let CommitLogReader.ReadError.notFound(filename) {
+            XCTFail("expected helper to throw RepoJSONLReadError.notFound")
+        } catch let RepoJSONLReadError.notFound(filename) {
             XCTAssertEqual(filename, "abc.jsonl")
         } catch {
-            XCTFail("expected CommitLogReader.ReadError.notFound, got \(error)")
+            XCTFail("expected RepoJSONLReadError.notFound, got \(error)")
         }
     }
 
-    func testDownload_translatesSnapshotNotFoundToSnapshotReaderTypedError() async throws {
+    func testDownload_translatesNotFoundToCallerSuppliedArbitraryErrorType() async throws {
+        enum TestOnlyNotFoundError: Error { case notFound(filename: String) }
         let client = InMemoryRemoteStorageClient()
         await client.injectRawDownloadError(
             NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoSuchFileError),
@@ -109,13 +110,13 @@ final class RepoJSONLDownloadTests: XCTestCase {
                 client: client,
                 remotePath: remotePath,
                 to: temp,
-                notFoundError: SnapshotReader.ReadError.notFound(filename: "xyz.jsonl")
+                notFoundError: TestOnlyNotFoundError.notFound(filename: "xyz.jsonl")
             )
-            XCTFail("expected helper to throw SnapshotReader.ReadError.notFound")
-        } catch let SnapshotReader.ReadError.notFound(filename) {
+            XCTFail("expected helper to throw TestOnlyNotFoundError.notFound")
+        } catch let TestOnlyNotFoundError.notFound(filename) {
             XCTAssertEqual(filename, "xyz.jsonl")
         } catch {
-            XCTFail("expected SnapshotReader.ReadError.notFound, got \(error)")
+            XCTFail("expected TestOnlyNotFoundError.notFound, got \(error)")
         }
     }
 
@@ -131,12 +132,12 @@ final class RepoJSONLDownloadTests: XCTestCase {
                 client: client,
                 remotePath: remotePath,
                 to: temp,
-                notFoundError: CommitLogReader.ReadError.notFound(filename: "abc.jsonl")
+                notFoundError: RepoJSONLReadError.notFound(filename: "abc.jsonl")
             )
             XCTFail("expected helper to throw")
         } catch is CancellationError {
             XCTFail("must not surface a transport error as CancellationError")
-        } catch let CommitLogReader.ReadError.notFound {
+        } catch let RepoJSONLReadError.notFound {
             XCTFail("must not surface a transport error as notFound")
         } catch {
             let nsError = error as NSError
@@ -162,11 +163,11 @@ final class RepoJSONLDownloadTests: XCTestCase {
                 client: client,
                 remotePath: remotePath,
                 to: temp,
-                notFoundError: CommitLogReader.ReadError.notFound(filename: "abc.jsonl")
+                notFoundError: RepoJSONLReadError.notFound(filename: "abc.jsonl")
             )
             XCTFail("expected helper to throw CancellationError")
         } catch is CancellationError {
-        } catch let CommitLogReader.ReadError.notFound {
+        } catch let RepoJSONLReadError.notFound {
             XCTFail("notFound branch must not fire when the outer error is a cancellation")
         } catch {
             XCTFail("expected CancellationError, got \(error)")

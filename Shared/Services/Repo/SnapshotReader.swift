@@ -1,14 +1,6 @@
 import Foundation
 
 actor SnapshotReader {
-    enum ReadError: Error {
-        case missingHeader
-        case missingEnd
-        case integrityMismatch(IntegrityResult)
-        case decodeFailure(Error)
-        case notFound(filename: String)
-    }
-
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
 
@@ -43,11 +35,11 @@ actor SnapshotReader {
             client: client,
             remotePath: remotePath,
             to: temp,
-            notFoundError: ReadError.notFound(filename: filename)
+            notFoundError: RepoJSONLReadError.notFound(filename: filename)
         )
         let data = try Data(contentsOf: temp)
         guard let raw = String(data: data, encoding: .utf8) else {
-            throw ReadError.decodeFailure(SnapshotWireError.malformed("utf8"))
+            throw RepoJSONLReadError.decodeFailure(SnapshotWireError.malformed("utf8"))
         }
         return try Self.parse(text: raw)
     }
@@ -59,9 +51,9 @@ actor SnapshotReader {
             return String(line[..<end])
         }
         while let last = lines.last, last.isEmpty { lines.removeLast() }
-        guard !lines.isEmpty else { throw ReadError.missingHeader }
+        guard !lines.isEmpty else { throw RepoJSONLReadError.missingHeader }
         if lines.contains(where: { $0.isEmpty }) {
-            throw ReadError.decodeFailure(SnapshotWireError.malformed("blank line"))
+            throw RepoJSONLReadError.decodeFailure(SnapshotWireError.malformed("blank line"))
         }
         let endRaw = lines.removeLast()
 
@@ -76,27 +68,27 @@ actor SnapshotReader {
             integrity.absorbLine(line)
             let row: SnapshotRow
             do { row = try SnapshotRowMapper.decodeLine(line) }
-            catch { throw ReadError.decodeFailure(error) }
+            catch { throw RepoJSONLReadError.decodeFailure(error) }
             switch row {
             case .header(let h):
                 guard header == nil else {
-                    throw ReadError.decodeFailure(SnapshotWireError.malformed("duplicate header"))
+                    throw RepoJSONLReadError.decodeFailure(SnapshotWireError.malformed("duplicate header"))
                 }
                 header = h
             case .asset(let a): assets.append(a)
             case .resource(let r): resources.append(r)
             case .assetResource(let r): assetResources.append(r)
             case .deletedKey(let k): deletedKeys.append(k)
-            case .end: throw ReadError.decodeFailure(SnapshotWireError.malformed("end before tail"))
+            case .end: throw RepoJSONLReadError.decodeFailure(SnapshotWireError.malformed("end before tail"))
             }
         }
 
-        guard let header else { throw ReadError.missingHeader }
+        guard let header else { throw RepoJSONLReadError.missingHeader }
         let endRow: SnapshotRow
         do { endRow = try SnapshotRowMapper.decodeLine(endRaw) }
-        catch { throw ReadError.decodeFailure(error) }
+        catch { throw RepoJSONLReadError.decodeFailure(error) }
         guard case .end(let sha, let rowCount) = endRow else {
-            throw ReadError.missingEnd
+            throw RepoJSONLReadError.missingEnd
         }
 
         let result = verifyIntegrity(
@@ -106,7 +98,7 @@ actor SnapshotReader {
             actualRowCount: integrity.rowCount
         )
         if result != .ok {
-            throw ReadError.integrityMismatch(result)
+            throw RepoJSONLReadError.integrityMismatch(result)
         }
 
         return SnapshotFile(

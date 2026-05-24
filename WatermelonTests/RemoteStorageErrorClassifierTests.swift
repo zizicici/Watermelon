@@ -56,7 +56,7 @@ final class RemoteStorageErrorClassifierTests: XCTestCase {
                 code: 500,
                 userInfo: [S3ErrorClassifier.userInfoServerCodeKey: "InternalError"]
             ),
-            CommitLogReader.ReadError.missingHeader
+            RepoJSONLReadError.missingHeader
         ]
 
         for error in cases {

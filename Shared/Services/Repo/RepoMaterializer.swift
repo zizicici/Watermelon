@@ -313,7 +313,7 @@ private struct SnapshotTrustPipeline {
                             if let baseline = Self.makeBaseline(file: file, reference: candidate) {
                                 return SnapshotTaskResult(month: month, baseline: baseline)
                             }
-                        } catch let error as SnapshotReader.ReadError {
+                        } catch let error as RepoJSONLReadError {
                             switch error {
                             case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
                                 materializerLog.warning("skip corrupt snapshot \(candidate.filename, privacy: .public): \(String(describing: error), privacy: .public)")
@@ -511,7 +511,7 @@ private struct CommitTrustPipeline {
                             acceptedOps.append(op)
                         }
                         return AcceptedCommit(month: reference.month, header: file.header, ops: acceptedOps)
-                    } catch let error as CommitLogReader.ReadError {
+                    } catch let error as RepoJSONLReadError {
                         switch error {
                         case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
                             materializerLog.warning("skip corrupt commit \(reference.filename, privacy: .public): \(String(describing: error), privacy: .public)")

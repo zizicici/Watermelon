@@ -274,7 +274,7 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         let commit: CommitFile
         do {
             commit = try await CommitLogReader(client: client, basePath: basePath).read(remotePath: candidate.path)
-        } catch let error as CommitLogReader.ReadError {
+        } catch let error as RepoJSONLReadError {
             switch error {
             case .notFound:
                 return .alreadyMissing

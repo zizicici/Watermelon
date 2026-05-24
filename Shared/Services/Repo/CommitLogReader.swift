@@ -1,14 +1,6 @@
 import Foundation
 
 actor CommitLogReader {
-    enum ReadError: Error {
-        case missingHeader
-        case missingEnd
-        case integrityMismatch(IntegrityResult)
-        case decodeFailure(Error)
-        case notFound(filename: String)
-    }
-
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
 
@@ -41,7 +33,7 @@ actor CommitLogReader {
             client: client,
             remotePath: remotePath,
             to: temp,
-            notFoundError: ReadError.notFound(filename: filename)
+            notFoundError: RepoJSONLReadError.notFound(filename: filename)
         )
         return try Self.parse(localURL: temp)
     }
@@ -49,7 +41,7 @@ actor CommitLogReader {
     static func parse(localURL: URL) throws -> CommitFile {
         let data = try Data(contentsOf: localURL)
         guard let raw = String(data: data, encoding: .utf8) else {
-            throw ReadError.decodeFailure(CommitWireError.malformed("utf8"))
+            throw RepoJSONLReadError.decodeFailure(CommitWireError.malformed("utf8"))
         }
         return try parse(text: raw)
     }
@@ -63,10 +55,10 @@ actor CommitLogReader {
         }
         while let last = lines.last, last.isEmpty { lines.removeLast() }
         guard !lines.isEmpty else {
-            throw ReadError.missingHeader
+            throw RepoJSONLReadError.missingHeader
         }
         if lines.contains(where: { $0.isEmpty }) {
-            throw ReadError.decodeFailure(CommitWireError.malformed("blank line"))
+            throw RepoJSONLReadError.decodeFailure(CommitWireError.malformed("blank line"))
         }
         let endRaw = lines.removeLast()
 
@@ -78,31 +70,31 @@ actor CommitLogReader {
             integrity.absorbLine(line)
             let row: CommitWireRow
             do { row = try CommitOpMapper.decodeLine(line) }
-            catch { throw ReadError.decodeFailure(error) }
+            catch { throw RepoJSONLReadError.decodeFailure(error) }
             switch row {
             case .header(let h):
                 guard header == nil else {
-                    throw ReadError.decodeFailure(CommitWireError.malformed("duplicate header"))
+                    throw RepoJSONLReadError.decodeFailure(CommitWireError.malformed("duplicate header"))
                 }
                 header = h
             case .op(let o):
                 guard header != nil else {
-                    throw ReadError.decodeFailure(CommitWireError.malformed("op before header"))
+                    throw RepoJSONLReadError.decodeFailure(CommitWireError.malformed("op before header"))
                 }
                 ops.append(o)
             case .end:
-                throw ReadError.decodeFailure(CommitWireError.malformed("end before tail"))
+                throw RepoJSONLReadError.decodeFailure(CommitWireError.malformed("end before tail"))
             }
         }
 
         guard let header else {
-            throw ReadError.missingHeader
+            throw RepoJSONLReadError.missingHeader
         }
         let endRow: CommitWireRow
         do { endRow = try CommitOpMapper.decodeLine(endRaw) }
-        catch { throw ReadError.decodeFailure(error) }
+        catch { throw RepoJSONLReadError.decodeFailure(error) }
         guard case .end(let sha, let rowCount) = endRow else {
-            throw ReadError.missingEnd
+            throw RepoJSONLReadError.missingEnd
         }
 
         let result = verifyIntegrity(
@@ -112,7 +104,7 @@ actor CommitLogReader {
             actualRowCount: integrity.rowCount
         )
         if result != .ok {
-            throw ReadError.integrityMismatch(result)
+            throw RepoJSONLReadError.integrityMismatch(result)
         }
 
         return CommitFile(header: header, ops: ops, sha256Hex: sha, rowCount: rowCount)
