@@ -18,26 +18,10 @@ actor CommitLogReader {
     }
 
     func listCommitFilenames() async throws -> [String] {
-        let dir = RepoLayout.commitsDirectoryPath(base: basePath)
-        let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: dir)
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            // Not-found error codes vary by backend; metadata probe is backend-agnostic.
-            // If the probe also fails, propagate original (don't silently return empty).
-            do {
-                let metadata = try await client.metadata(path: dir)
-                if metadata == nil { return [] }
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            }
-            throw error
-        }
-        return entries.compactMap { entry in
-            guard !entry.isDirectory, entry.name.hasSuffix(".jsonl") else { return nil }
-            return entry.name
-        }
+        try await RepoJSONLDirectoryListing.listFilenames(
+            client: client,
+            directory: RepoLayout.commitsDirectoryPath(base: basePath)
+        )
     }
 
     func read(filename: String) async throws -> CommitFile {
