@@ -566,15 +566,9 @@ final class AssetProcessor: Sendable {
             delta.committedAssetFingerprints.subtracting([manifestAsset.assetFingerprint]).isEmpty == false else {
             return
         }
-        let snapshot = monthStore.unsortedSnapshot()
-        remoteIndexService.replaceCachedMonth(
-            LibraryMonthKey(year: monthStore.year, month: monthStore.month),
-            resources: snapshot.resources,
-            assets: snapshot.assets,
-            links: snapshot.links,
-            physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
-                ? monthStore.physicallyMissingHashesSnapshot()
-                : nil
+        remoteIndexService.publishMonthSnapshot(
+            of: monthStore,
+            for: LibraryMonthKey(year: monthStore.year, month: monthStore.month)
         )
     }
 

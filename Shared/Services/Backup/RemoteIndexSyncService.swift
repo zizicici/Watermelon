@@ -763,6 +763,19 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
     }
 
+    func publishMonthSnapshot(of monthStore: any BackupMonthStore, for month: LibraryMonthKey) {
+        let snapshot = monthStore.unsortedSnapshot()
+        replaceCachedMonth(
+            month,
+            resources: snapshot.resources,
+            assets: snapshot.assets,
+            links: snapshot.links,
+            physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
+                ? monthStore.physicallyMissingHashesSnapshot()
+                : nil
+        )
+    }
+
     func markPhysicallyMissingV2(month: LibraryMonthKey, hashes: Set<Data>) {
         optimisticMutationLock.withLock {
             committedView.markPhysicallyMissing(month: month, hashes: hashes)

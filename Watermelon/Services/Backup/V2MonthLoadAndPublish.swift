@@ -21,16 +21,7 @@ enum V2MonthLoadAndPublish {
             overlayIsAuthoritative: freshHashes != nil,
             stepLogger: stepLogger
         )
-        let snapshot = monthStore.unsortedSnapshot()
-        remoteIndexService.replaceCachedMonth(
-            month,
-            resources: snapshot.resources,
-            assets: snapshot.assets,
-            links: snapshot.links,
-            physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
-                ? monthStore.physicallyMissingHashesSnapshot()
-                : nil
-        )
+        remoteIndexService.publishMonthSnapshot(of: monthStore, for: month)
         return monthStore
     }
 }

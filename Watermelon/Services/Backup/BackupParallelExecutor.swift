@@ -230,16 +230,7 @@ struct BackupParallelExecutor: Sendable {
                             }
                         )
                         // loadOrCreate may have cleaned manifest rows; sync to snapshotCache so consumers don't see stale state.
-                        let loadedSnapshot = monthStore.unsortedSnapshot()
-                        remoteIndexService.replaceCachedMonth(
-                            monthKey,
-                            resources: loadedSnapshot.resources,
-                            assets: loadedSnapshot.assets,
-                            links: loadedSnapshot.links,
-                            physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
-                                ? monthStore.physicallyMissingHashesSnapshot()
-                                : nil
-                        )
+                        remoteIndexService.publishMonthSnapshot(of: monthStore, for: monthKey)
                     }
                 } catch {
                     if error is CancellationError {
@@ -903,7 +894,7 @@ struct BackupParallelExecutor: Sendable {
     ) {
         let committed = delta.committedAssetFingerprints.union(delta.committedTombstoneFingerprints)
         guard !committed.isEmpty else { return }
-        publishMonthSnapshot(monthStore: monthStore, month: month, remoteIndexService: remoteIndexService)
+        remoteIndexService.publishMonthSnapshot(of: monthStore, for: month)
     }
 
     @discardableResult
@@ -918,23 +909,6 @@ struct BackupParallelExecutor: Sendable {
             action: .uploadDurableSnapshotDeferred(message: message)
         )))
         return true
-    }
-
-    private static func publishMonthSnapshot(
-        monthStore: any BackupMonthStore,
-        month: LibraryMonthKey,
-        remoteIndexService: RemoteIndexSyncService
-    ) {
-        let snapshot = monthStore.unsortedSnapshot()
-        remoteIndexService.replaceCachedMonth(
-            month,
-            resources: snapshot.resources,
-            assets: snapshot.assets,
-            links: snapshot.links,
-            physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
-                ? monthStore.physicallyMissingHashesSnapshot()
-                : nil
-        )
     }
 
     private func emitProgress(
