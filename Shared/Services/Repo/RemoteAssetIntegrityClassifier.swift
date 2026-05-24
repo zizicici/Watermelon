@@ -112,4 +112,24 @@ enum RemoteAssetIntegrityClassifier {
                  links: links.map(\.integrityLink),
                  isResourceAvailable: isResourceAvailable)
     }
+
+    static func isIncomplete(
+        assetFingerprint: Data,
+        links: [AssetIntegrityLink],
+        isResourceAvailable: (Data) -> Bool
+    ) -> Bool {
+        !classify(assetFingerprint: assetFingerprint,
+                  links: links,
+                  isResourceAvailable: isResourceAvailable).isHealthy
+    }
+
+    static func isIncomplete(
+        assetFingerprint: Data,
+        links: [RemoteAssetResourceLink],
+        isResourceAvailable: (Data) -> Bool
+    ) -> Bool {
+        !classify(assetFingerprint: assetFingerprint,
+                  links: links,
+                  isResourceAvailable: isResourceAvailable).isHealthy
+    }
 }

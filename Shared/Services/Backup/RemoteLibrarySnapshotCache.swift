@@ -365,10 +365,10 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         for (_, asset) in monthAssets {
             let fp = asset.assetFingerprint
             let links = linksByFingerprint[fp] ?? []
-            guard MonthManifestStore.isAssetIncomplete(
+            guard RemoteAssetIntegrityClassifier.isIncomplete(
+                assetFingerprint: asset.assetFingerprint,
                 links: links,
-                isResourceAvailable: { resourceHashes.contains($0) },
-                assetFingerprint: asset.assetFingerprint
+                isResourceAvailable: { resourceHashes.contains($0) }
             ) else { continue }
 
             if links.isEmpty {

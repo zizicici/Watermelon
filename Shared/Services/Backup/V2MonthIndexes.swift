@@ -266,12 +266,12 @@ final class V2MonthIndexes {
         guard let asset = assetsByFingerprint[fingerprint] else { return false }
         let links = linksByFingerprint[fingerprint] ?? []
         // Filter gates actionability only; materialized state stays faithful to the commit log.
-        return MonthManifestStore.isAssetIncomplete(
+        return RemoteAssetIntegrityClassifier.isIncomplete(
+            assetFingerprint: asset.assetFingerprint,
             links: links,
             isResourceAvailable: { hash in
                 self.anyPresentPath(forHash: hash) != nil
-            },
-            assetFingerprint: asset.assetFingerprint
+            }
         )
     }
 

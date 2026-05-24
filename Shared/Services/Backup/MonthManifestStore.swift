@@ -414,10 +414,10 @@ final class MonthManifestStore {
     func isAssetIncomplete(_ fingerprint: Data) -> Bool {
         guard let asset = assetsByFingerprint[fingerprint] else { return false }
         let links = assetLinksByFingerprint[fingerprint] ?? []
-        return Self.isAssetIncomplete(
+        return RemoteAssetIntegrityClassifier.isIncomplete(
+            assetFingerprint: asset.assetFingerprint,
             links: links,
-            isResourceAvailable: { itemsByHash[$0] != nil },
-            assetFingerprint: asset.assetFingerprint
+            isResourceAvailable: { itemsByHash[$0] != nil }
         )
     }
 
@@ -488,10 +488,10 @@ final class MonthManifestStore {
         var assetsToRemove: Set<Data> = []
         for (fingerprint, asset) in assetsByFingerprint {
             let links = assetLinksByFingerprint[fingerprint] ?? []
-            if Self.isAssetIncomplete(
+            if RemoteAssetIntegrityClassifier.isIncomplete(
+                assetFingerprint: asset.assetFingerprint,
                 links: links,
-                isResourceAvailable: { availableHashes.contains($0) },
-                assetFingerprint: asset.assetFingerprint
+                isResourceAvailable: { availableHashes.contains($0) }
             ) {
                 assetsToRemove.insert(fingerprint)
             }
@@ -741,22 +741,4 @@ final class MonthManifestStore {
         }
     }
 
-}
-
-extension MonthManifestStore {
-    /// Thin shim over the canonical classifier. Predates the classifier extraction;
-    /// kept so V1 callsites don't have to change shape. New code should call
-    /// `RemoteAssetIntegrityClassifier.classify(...)` directly to consume the typed
-    /// state instead of a coarse boolean.
-    static func isAssetIncomplete(
-        links: [RemoteAssetResourceLink],
-        isResourceAvailable: (Data) -> Bool,
-        assetFingerprint: Data
-    ) -> Bool {
-        !RemoteAssetIntegrityClassifier.classify(
-            assetFingerprint: assetFingerprint,
-            links: links,
-            isResourceAvailable: isResourceAvailable
-        ).isHealthy
-    }
 }
