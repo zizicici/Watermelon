@@ -64,6 +64,50 @@ struct RemoteFormatCompatibilityService: Sendable {
         try await RepoBootstrapInspectionFSM().inspect(client: client, profile: profile)
     }
 
+    /// Read+parse `.watermelon/version.json` so the profile-less verify path doesn't hardcode the local formatVersion onto a remote that may be V3+.
+    func inspectRemoteFormatProfileless(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> RemoteFormatInspection {
+        let versionPath = RepoLayout.versionFilePath(base: basePath)
+        guard let meta = try await client.metadata(path: versionPath) else {
+            return .v1
+        }
+        // Pre-bound the size so a damaged/oversized version.json never reaches the parser.
+        guard !meta.isDirectory,
+              meta.size <= Self.maxProfileLessVersionFileBytes else {
+            throw BackupCompatibilityError.damagedV2Repo
+        }
+        let load: VersionManifestStore.Load
+        do {
+            load = try await VersionManifestStore(client: client, basePath: basePath).load()
+        } catch let conflict as RepoBootstrap.VersionConflict {
+            switch conflict {
+            case .unreadable:
+                throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(versionConflict: conflict)
+            case .higherFormatVersion, .mismatchedFormatVersion:
+                throw BackupCompatibilityError.damagedV2Repo
+            }
+        } catch let bootstrap as RepoBootstrap.BootstrapError {
+            throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: bootstrap)
+        }
+        switch load {
+        case .absent:
+            return .v1
+        case .found(let manifest):
+            let formatVersion = manifest.formatVersion
+            if formatVersion > RepoLayout.currentSupportedFormatVersion {
+                return .unsupported(minAppVersion: manifest.minAppVersion)
+            }
+            if formatVersion >= 2 {
+                return .v2(formatVersion: formatVersion)
+            }
+            return .v1
+        }
+    }
+
+    private static let maxProfileLessVersionFileBytes: Int64 = 64 * 1024
+
     /// Bootstrap-side guard: minting a new repoID over existing V2 data would orphan it.
     func hasAnyV2CommitOrSnapshotData(
         client: any RemoteStorageClientProtocol,

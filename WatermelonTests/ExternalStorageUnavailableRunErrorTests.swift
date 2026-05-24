@@ -249,10 +249,6 @@ final class ExternalStorageUnavailableRunErrorTests: XCTestCase {
         }
     }
 
-    /// JSON-parse failure in VersionManifestStore.load() is the only reachable path that
-    /// produces a typed throw (VersionConflict.unreadable(nil)) through profileLessInspect's
-    /// Round 8 catch arms. Pins the nil-underlying negative branch so a future drop of the
-    /// catch arm (raw VersionConflict.unreadable leaking out) would be caught.
     func testProfileLessInspectVersionConflictUnreadableWithNilUnderlyingCollapsesToDamagedV2Repo() async throws {
         let (databaseManager, dbURL) = try makeTempDatabaseManager()
         addTeardownBlock { try? FileManager.default.removeItem(at: dbURL.deletingLastPathComponent()) }
@@ -260,10 +256,6 @@ final class ExternalStorageUnavailableRunErrorTests: XCTestCase {
 
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        // 1-byte non-JSON content: passes the outer file/size guard in profileLessInspect,
-        // then VersionManifestWire(data:) fails to decode → load() throws
-        // VersionConflict.unreadable(nil) → typed catch arm peels nil underlying →
-        // falls through to BackupCompatibilityError.damagedV2Repo.
         let versionPath = RepoLayout.versionFilePath(base: basePath)
         await client.injectFile(path: versionPath, data: Data([0x01]))
 
@@ -285,10 +277,6 @@ final class ExternalStorageUnavailableRunErrorTests: XCTestCase {
         }
     }
 
-    /// profileLessInspect's load() path surfaces externalStorageUnavailable as raw RSCE
-    /// (VersionManifestStore.load() rethrows raw on download failure rather than wrapping
-    /// in BootstrapError/VersionConflict). Round 8's typed catches defend against future
-    /// producers; this test pins the actual production propagation shape.
     func testProfileLessInspectPreservesExternalCauseFromVersionManifestDownload() async throws {
         let (databaseManager, dbURL) = try makeTempDatabaseManager()
         addTeardownBlock { try? FileManager.default.removeItem(at: dbURL.deletingLastPathComponent()) }

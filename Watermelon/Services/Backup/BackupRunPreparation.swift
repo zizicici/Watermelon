@@ -18,7 +18,6 @@ struct BackupRunPreparationService: Sendable {
     private let remoteIndexService: RemoteIndexSyncService
     private let databaseManager: DatabaseManager
     private let formatCompatibilityService = RemoteFormatCompatibilityService()
-    private static let maxProfileLessVersionFileBytes: Int64 = 64 * 1024
 
     init(
         photoLibraryService: PhotoLibraryService,
@@ -260,11 +259,11 @@ struct BackupRunPreparationService: Sendable {
     ) async throws -> Bool {
         let inspection: RemoteFormatInspection
         if let profile {
-            inspection = try await RemoteFormatCompatibilityService()
+            inspection = try await formatCompatibilityService
                 .inspectRemoteFormat(client: client, profile: profile)
         } else {
-            // Profile-less inspect must still parse version.json so a future format isn't downgraded to V2 stamped at the local formatVersion.
-            inspection = try await Self.profileLessInspect(client: client, basePath: basePath)
+            inspection = try await formatCompatibilityService
+                .inspectRemoteFormatProfileless(client: client, basePath: basePath)
         }
         let hasPriorV2Binding: Bool
         if let profileID = profile?.id {
@@ -302,50 +301,6 @@ struct BackupRunPreparationService: Sendable {
             return false
         case .throwDamagedV2Repo:
             throw BackupCompatibilityError.damagedV2Repo
-        }
-    }
-
-    /// Read+parse `.watermelon/version.json` directly so the profile-less verify path doesn't hardcode the local formatVersion onto a remote that may be V3+.
-    private static func profileLessInspect(
-        client: any RemoteStorageClientProtocol,
-        basePath: String
-    ) async throws -> RemoteFormatInspection {
-        let versionPath = RepoLayout.versionFilePath(base: basePath)
-        guard let meta = try await client.metadata(path: versionPath) else {
-            return .v1
-        }
-        // Pre-bound the size so a damaged/oversized version.json never reaches the parser.
-        guard !meta.isDirectory,
-              meta.size <= Self.maxProfileLessVersionFileBytes else {
-            throw BackupCompatibilityError.damagedV2Repo
-        }
-        let load: VersionManifestStore.Load
-        do {
-            load = try await VersionManifestStore(client: client, basePath: basePath).load()
-        } catch let conflict as RepoBootstrap.VersionConflict {
-            // Profile-less inspect treats higher/mismatched format versions as damaged
-            // (the surrounding inspector reaches `.unsupported` via the success path, not via VersionConflict).
-            switch conflict {
-            case .unreadable:
-                throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(versionConflict: conflict)
-            case .higherFormatVersion, .mismatchedFormatVersion:
-                throw BackupCompatibilityError.damagedV2Repo
-            }
-        } catch let bootstrap as RepoBootstrap.BootstrapError {
-            throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: bootstrap)
-        }
-        switch load {
-        case .absent:
-            return .v1
-        case .found(let manifest):
-            let formatVersion = manifest.formatVersion
-            if formatVersion > RepoLayout.currentSupportedFormatVersion {
-                return .unsupported(minAppVersion: manifest.minAppVersion)
-            }
-            if formatVersion >= 2 {
-                return .v2(formatVersion: formatVersion)
-            }
-            return .v1
         }
     }
 
