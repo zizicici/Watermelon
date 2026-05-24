@@ -97,15 +97,7 @@ actor CommitLogReader {
             throw RepoJSONLReadError.missingEnd
         }
 
-        let result = verifyIntegrity(
-            expectedSha256: sha,
-            expectedRowCount: rowCount,
-            actualSha256: integrity.finalize(),
-            actualRowCount: integrity.rowCount
-        )
-        if result != .ok {
-            throw RepoJSONLReadError.integrityMismatch(result)
-        }
+        try integrity.verifyOrThrowJSONLMismatch(expectedSha256: sha, expectedRowCount: rowCount)
 
         return CommitFile(header: header, ops: ops, sha256Hex: sha, rowCount: rowCount)
     }
