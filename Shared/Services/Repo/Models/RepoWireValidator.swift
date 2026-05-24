@@ -13,6 +13,36 @@ enum WireValidationError: Error, Equatable {
     case malformed(String)
 }
 
+extension WireValidationError {
+    /// Per-case rules are shared between commit and snapshot mappers; new validator
+    /// cases land here once instead of in two parallel switches.
+    func translated<Out>(
+        missingField: (String) -> Out,
+        malformed: (String) -> Out
+    ) -> Out {
+        switch self {
+        case .missingField(let f):
+            return missingField(f)
+        case .wrongHashLength(let f, let n):
+            return malformed("\(f) must be 32-byte hex (got \(n))")
+        case .invalidHex(let f):
+            return malformed("\(f) invalid hex")
+        case .nonNegative(let f, _):
+            return malformed("\(f) must be non-negative")
+        case .uint64OutOfIntRange(let f, _):
+            return malformed("\(f) exceeds Int.max")
+        case .fractionalNumber(let f):
+            return missingField(f)
+        case .pathContainsTraversal(let p):
+            return malformed("physicalRemotePath rejected: containsParentTraversal(\"\(p)\")")
+        case .malformedMonthScope(let s):
+            return malformed("malformed month scope: \(s)")
+        case .malformed(let s):
+            return malformed(s)
+        }
+    }
+}
+
 enum RepoWireValidator {
     /// 32-byte enforcement: truncated hashes collide trivially → poisoned dedup keys.
     static func validateHash(_ raw: String, field: String) throws -> Data {

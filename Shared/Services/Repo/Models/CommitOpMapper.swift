@@ -314,25 +314,10 @@ enum CommitOpMapper {
         do {
             return try block()
         } catch let err as WireValidationError {
-            switch err {
-            case .missingField(let f): throw CommitWireError.missingField(f)
-            case .wrongHashLength(let f, let n):
-                throw CommitWireError.malformed("\(f) must be 32-byte hex (got \(n))")
-            case .invalidHex(let f):
-                throw CommitWireError.malformed("\(f) invalid hex")
-            case .nonNegative(let f, _):
-                throw CommitWireError.malformed("\(f) must be non-negative")
-            case .uint64OutOfIntRange(let f, _):
-                throw CommitWireError.malformed("\(f) exceeds Int.max")
-            case .fractionalNumber(let f):
-                throw CommitWireError.missingField(f)
-            case .pathContainsTraversal(let p):
-                throw CommitWireError.malformed("physicalRemotePath rejected: containsParentTraversal(\"\(p)\")")
-            case .malformedMonthScope(let s):
-                throw CommitWireError.malformed("malformed month scope: \(s)")
-            case .malformed(let s):
-                throw CommitWireError.malformed(s)
-            }
+            throw err.translated(
+                missingField: CommitWireError.missingField,
+                malformed: CommitWireError.malformed
+            )
         }
     }
 

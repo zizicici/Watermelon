@@ -198,25 +198,10 @@ enum SnapshotRowMapper {
         do {
             return try block()
         } catch let err as WireValidationError {
-            switch err {
-            case .missingField(let f): throw SnapshotWireError.missingField(f)
-            case .wrongHashLength(let f, let n):
-                throw SnapshotWireError.malformed("\(f) must be 32-byte hex (got \(n))")
-            case .invalidHex(let f):
-                throw SnapshotWireError.malformed("\(f) invalid hex")
-            case .nonNegative(let f, _):
-                throw SnapshotWireError.malformed("\(f) must be non-negative")
-            case .uint64OutOfIntRange(let f, _):
-                throw SnapshotWireError.malformed("\(f) exceeds Int.max")
-            case .fractionalNumber(let f):
-                throw SnapshotWireError.missingField(f)
-            case .pathContainsTraversal(let p):
-                throw SnapshotWireError.malformed("physicalRemotePath rejected: containsParentTraversal(\"\(p)\")")
-            case .malformedMonthScope(let s):
-                throw SnapshotWireError.malformed("malformed month scope: \(s)")
-            case .malformed(let s):
-                throw SnapshotWireError.malformed(s)
-            }
+            throw err.translated(
+                missingField: SnapshotWireError.missingField,
+                malformed: SnapshotWireError.malformed
+            )
         }
     }
 
