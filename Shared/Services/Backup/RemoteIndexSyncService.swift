@@ -161,7 +161,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     private let committedView: RepoCommittedView
     private let optimisticMutationLock = NSLock()
-    private var physicalPresenceOverlayFreshMonths: Set<LibraryMonthKey> = []
     private let syncGate = SyncGate()
     private let state = MutableState()
 
@@ -241,13 +240,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             let result: (handle: RemoteViewHandle, staleRevision: Bool) = optimisticMutationLock.withLock {
                 let revisionUnchanged: Bool
                 if committedView.currentRevision() != captured.revision {
-                    clearPhysicalPresenceOverlayFreshnessLocked()
+                    committedView.clearPresenceFreshness()
                     revisionUnchanged = false
                 } else {
-                    for entry in probe.presence.entries {
-                        committedView.markPhysicallyMissing(month: entry.month, hashes: entry.value.missingHashes)
-                    }
-                    setPhysicalPresenceOverlayFreshnessLocked(freshMonths: probe.presence.freshMonths)
+                    committedView.applyPresenceSnapshot(probe.presence)
                     revisionUnchanged = true
                 }
                 let overlayFresh = revisionUnchanged && probe.allMonthsFresh
@@ -613,32 +609,20 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     private func loadMaterializedCommittedView(_ output: RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] {
         optimisticMutationLock.withLock {
-            clearPhysicalPresenceOverlayFreshnessLocked()
-            return committedView.loadFromMaterialize(output)
+            committedView.loadFromMaterialize(output)
         }
     }
 
     private func resetCommittedViewAndOverlayFreshness() {
         optimisticMutationLock.withLock {
             committedView.reset()
-            clearPhysicalPresenceOverlayFreshnessLocked()
         }
     }
 
     private func clearPhysicalPresenceOverlayFreshness() {
         optimisticMutationLock.withLock {
-            clearPhysicalPresenceOverlayFreshnessLocked()
+            committedView.clearPresenceFreshness()
         }
-    }
-
-    private func clearPhysicalPresenceOverlayFreshnessLocked() {
-        physicalPresenceOverlayFreshMonths.removeAll()
-    }
-
-    private func setPhysicalPresenceOverlayFreshnessLocked(
-        freshMonths: Set<LibraryMonthKey>
-    ) {
-        physicalPresenceOverlayFreshMonths = freshMonths
     }
 
     func currentRepoIsV2() async -> Bool? {
@@ -766,13 +750,9 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 resources: resources,
                 assets: assets,
                 assetResourceLinks: links,
-                physicallyMissingHashes: physicallyMissingHashes
+                physicallyMissingHashes: physicallyMissingHashes,
+                freshness: physicallyMissingHashes == nil ? .markStale : .markFresh
             )
-            if physicallyMissingHashes == nil {
-                physicalPresenceOverlayFreshMonths.remove(month)
-            } else {
-                physicalPresenceOverlayFreshMonths.insert(month)
-            }
         }
     }
 
@@ -803,33 +783,19 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     func verifiedPhysicallyMissingHashes(for month: LibraryMonthKey) async -> Set<Data>? {
         optimisticMutationLock.withLock {
-            guard physicalPresenceOverlayFreshMonths.contains(month) else { return nil }
-            return committedView.physicallyMissingHashes(for: month)
+            committedView.verifiedPhysicallyMissingHashes(for: month)
         }
     }
 
     func presenceSnapshot(for month: LibraryMonthKey) -> RemotePresenceSnapshot.Month {
         optimisticMutationLock.withLock {
-            let hashes = committedView.physicallyMissingHashes(for: month)
-            let fresh = physicalPresenceOverlayFreshMonths.contains(month)
-            return RemotePresenceSnapshot.Month(missingHashes: hashes, isAuthoritative: fresh)
+            committedView.presenceSnapshot(for: month)
         }
     }
 
     func fullPresenceSnapshot() -> RemotePresenceSnapshot {
         optimisticMutationLock.withLock {
-            var builder = RemotePresenceSnapshot.Builder()
-            let missingMap = committedView.physicallyMissingSnapshot()
-            // Union so authoritative-empty months are represented; the committed view drops empty entries.
-            let touched = Set(missingMap.keys).union(physicalPresenceOverlayFreshMonths)
-            for month in touched {
-                builder.set(
-                    month,
-                    missingHashes: missingMap[month] ?? [],
-                    isAuthoritative: physicalPresenceOverlayFreshMonths.contains(month)
-                )
-            }
-            return builder.build()
+            committedView.fullPresenceSnapshot()
         }
     }
 
@@ -888,16 +854,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         expectedRevision: UInt64? = nil
     ) -> Bool {
         optimisticMutationLock.withLock {
-            if let expectedRevision,
-               committedView.currentRevision() != expectedRevision {
-                clearPhysicalPresenceOverlayFreshnessLocked()
-                return false
-            }
-            for entry in snapshot.entries {
-                committedView.markPhysicallyMissing(month: entry.month, hashes: entry.value.missingHashes)
-            }
-            setPhysicalPresenceOverlayFreshnessLocked(freshMonths: snapshot.freshMonths)
-            return true
+            committedView.applyPresenceSnapshot(snapshot, expectedRevision: expectedRevision)
         }
     }
 

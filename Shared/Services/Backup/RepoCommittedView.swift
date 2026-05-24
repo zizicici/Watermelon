@@ -1,8 +1,18 @@
 import Foundation
 
 final class RepoCommittedView: @unchecked Sendable {
+    enum PresenceFreshness {
+        case keep
+        case markFresh
+        case markStale
+    }
+
     private let cache: RemoteLibrarySnapshotCache
     private var physicallyMissingByMonth: PerMonth<Set<Data>> = PerMonth<Set<Data>>()
+    // Co-located with physicallyMissingByMonth: lock-ordering is optimisticMutationLock (service, outer)
+    // -> missingLock (view, inner). Membership changes participate in cache.markMonthsChanged so the
+    // authoritative bit on RemoteLibraryMonthDelta.presence is visible to incremental state(since:) callers.
+    private var physicalPresenceOverlayFreshMonths: Set<LibraryMonthKey> = []
     private let missingLock = NSLock()
 
     init(cache: RemoteLibrarySnapshotCache = RemoteLibrarySnapshotCache()) {
@@ -68,7 +78,10 @@ final class RepoCommittedView: @unchecked Sendable {
                 resources: delta.resources,
                 assets: delta.assets,
                 assetResourceLinks: delta.assetResourceLinks,
-                presence: RemotePresenceSnapshot.Month(missingHashes: overlay[delta.month] ?? [], isAuthoritative: false)
+                presence: RemotePresenceSnapshot.Month(
+                    missingHashes: overlay[delta.month] ?? [],
+                    isAuthoritative: physicalPresenceOverlayFreshMonths.contains(delta.month)
+                )
             )
         }
         return RemoteLibrarySnapshotState(
@@ -97,7 +110,10 @@ final class RepoCommittedView: @unchecked Sendable {
             resources: base.resources,
             assets: base.assets,
             assetResourceLinks: base.assetResourceLinks,
-            presence: RemotePresenceSnapshot.Month(missingHashes: physicallyMissingByMonth[month] ?? [], isAuthoritative: false)
+            presence: RemotePresenceSnapshot.Month(
+                missingHashes: physicallyMissingByMonth[month] ?? [],
+                isAuthoritative: physicalPresenceOverlayFreshMonths.contains(month)
+            )
         )
     }
     func fileNames(for month: LibraryMonthKey) -> Set<String> { cache.fileNames(for: month) }
@@ -122,12 +138,97 @@ final class RepoCommittedView: @unchecked Sendable {
         return physicallyMissingSnapshotMapLocked()
     }
 
+    func verifiedPhysicallyMissingHashes(for month: LibraryMonthKey) -> Set<Data>? {
+        missingLock.lock()
+        defer { missingLock.unlock() }
+        guard physicalPresenceOverlayFreshMonths.contains(month) else { return nil }
+        return physicallyMissingByMonth[month] ?? []
+    }
+
+    func presenceSnapshot(for month: LibraryMonthKey) -> RemotePresenceSnapshot.Month {
+        missingLock.lock()
+        defer { missingLock.unlock() }
+        return RemotePresenceSnapshot.Month(
+            missingHashes: physicallyMissingByMonth[month] ?? [],
+            isAuthoritative: physicalPresenceOverlayFreshMonths.contains(month)
+        )
+    }
+
+    func fullPresenceSnapshot() -> RemotePresenceSnapshot {
+        missingLock.lock()
+        defer { missingLock.unlock() }
+        let missingMap = physicallyMissingSnapshotMapLocked()
+        var builder = RemotePresenceSnapshot.Builder()
+        // Union so authoritative-empty months are represented; physicallyMissingByMonth drops empty entries.
+        let touched = Set(missingMap.keys).union(physicalPresenceOverlayFreshMonths)
+        for month in touched {
+            builder.set(
+                month,
+                missingHashes: missingMap[month] ?? [],
+                isAuthoritative: physicalPresenceOverlayFreshMonths.contains(month)
+            )
+        }
+        return builder.build()
+    }
+
+    /// Freshness-only changes participate in revision tracking via cache.markMonthsChanged on the
+    /// symmetric difference, coalesced with any missing-hash deltas the apply produces.
+    @discardableResult
+    func applyPresenceSnapshot(
+        _ snapshot: RemotePresenceSnapshot,
+        expectedRevision: UInt64? = nil
+    ) -> Bool {
+        missingLock.lock()
+        defer { missingLock.unlock() }
+        if let expectedRevision, cache.currentRevision() != expectedRevision {
+            let cleared = physicalPresenceOverlayFreshMonths
+            physicalPresenceOverlayFreshMonths.removeAll()
+            if !cleared.isEmpty {
+                cache.markMonthsChanged(cleared)
+            }
+            return false
+        }
+        var coalescedChanged: Set<LibraryMonthKey> = []
+        for entry in snapshot.entries {
+            let previous = physicallyMissingByMonth[entry.month] ?? []
+            if previous != entry.value.missingHashes {
+                if entry.value.missingHashes.isEmpty {
+                    physicallyMissingByMonth.remove(entry.month)
+                } else {
+                    physicallyMissingByMonth.set(entry.value.missingHashes, for: entry.month)
+                }
+                coalescedChanged.insert(entry.month)
+            }
+        }
+        let newFresh = snapshot.freshMonths
+        let freshnessDelta = physicalPresenceOverlayFreshMonths.symmetricDifference(newFresh)
+        physicalPresenceOverlayFreshMonths = newFresh
+        coalescedChanged.formUnion(freshnessDelta)
+        if !coalescedChanged.isEmpty {
+            cache.markMonthsChanged(coalescedChanged)
+        }
+        return true
+    }
+
+    func clearPresenceFreshness() {
+        missingLock.lock()
+        defer { missingLock.unlock() }
+        let cleared = physicalPresenceOverlayFreshMonths
+        physicalPresenceOverlayFreshMonths.removeAll()
+        if !cleared.isEmpty {
+            cache.markMonthsChanged(cleared)
+        }
+    }
+
     @discardableResult
     func loadFromMaterialize(_ output: RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] {
         missingLock.lock()
         defer { missingLock.unlock() }
         let priorOverlay = physicallyMissingSnapshotMapLocked()
         var preservedOverlay: [LibraryMonthKey: Set<Data>] = [:]
+        // cache.reset() advances lastResetRevision below, forcing the full-snapshot path on the next
+        // state(since: baseRevision) call — no explicit markMonthsChanged needed for freshness clearing.
+        physicalPresenceOverlayFreshMonths.removeAll()
         cache.reset()
         physicallyMissingByMonth.removeAll()
         for (month, monthState) in output.state.months {
@@ -186,11 +287,13 @@ final class RepoCommittedView: @unchecked Sendable {
         resources: [RemoteManifestResource],
         assets: [RemoteManifestAsset],
         assetResourceLinks: [RemoteAssetResourceLink],
-        physicallyMissingHashes: Set<Data>? = nil
+        physicallyMissingHashes: Set<Data>? = nil,
+        freshness: PresenceFreshness = .keep
     ) -> Bool {
         missingLock.lock()
         defer { missingLock.unlock() }
         let previousMissing = physicallyMissingByMonth[month] ?? []
+        let wasFresh = physicalPresenceOverlayFreshMonths.contains(month)
         let result = cache.replaceMonth(month, resources: resources, assets: assets, assetResourceLinks: assetResourceLinks)
         let stillPresent = Set(resources.map(\.contentHash))
         if let physicallyMissingHashes {
@@ -208,8 +311,21 @@ final class RepoCommittedView: @unchecked Sendable {
                 physicallyMissingByMonth.set(intersected, for: month)
             }
         }
+        let willBeFresh: Bool
+        switch freshness {
+        case .keep:
+            willBeFresh = wasFresh
+        case .markFresh:
+            physicalPresenceOverlayFreshMonths.insert(month)
+            willBeFresh = true
+        case .markStale:
+            physicalPresenceOverlayFreshMonths.remove(month)
+            willBeFresh = false
+        }
         let currentMissing = physicallyMissingByMonth[month] ?? []
-        if currentMissing != previousMissing {
+        let missingChanged = currentMissing != previousMissing
+        let freshnessChanged = wasFresh != willBeFresh
+        if missingChanged || freshnessChanged {
             cache.markMonthsChanged([month])
         }
         return result
@@ -219,8 +335,17 @@ final class RepoCommittedView: @unchecked Sendable {
     func removeMonth(_ month: LibraryMonthKey) -> Bool {
         missingLock.lock()
         defer { missingLock.unlock() }
+        let wasFresh = physicalPresenceOverlayFreshMonths.contains(month)
         physicallyMissingByMonth.remove(month)
-        return cache.removeMonth(month)
+        physicalPresenceOverlayFreshMonths.remove(month)
+        let removed = cache.removeMonth(month)
+        // cache.removeMonth returns false (no revision bump) for cache-empty months. When freshness
+        // was set for such a month (authoritative-empty via applyPresenceSnapshot), the freshness
+        // clear MUST still mark the month changed so incremental state(since:) sees authority drop.
+        if wasFresh && !removed {
+            cache.markMonthsChanged([month])
+        }
+        return removed
     }
 
     func markSynced(_ at: Date) {
@@ -232,6 +357,7 @@ final class RepoCommittedView: @unchecked Sendable {
         defer { missingLock.unlock() }
         cache.reset()
         physicallyMissingByMonth.removeAll()
+        physicalPresenceOverlayFreshMonths.removeAll()
     }
 
     func markMonthsChanged(_ months: Set<LibraryMonthKey>) {
