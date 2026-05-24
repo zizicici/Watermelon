@@ -194,7 +194,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         try await TestFixtures.injectVersionJSON(client, basePath: basePath)
         await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
         // Malformed bytes at the repo identity path force BootstrapError.ioFailure
-        // from RepoIdentitySources.collect → bootstrap.loadRepoID → loadRepoJSONStrict
+        // from RepoIdentityAuthority.resolve → bootstrap.loadRepoID → loadRepoJSONStrict
         // before V1MigrationService is invoked.
         await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), contents: "{not-json")
         let metadataClient = InMemoryRemoteStorageClient()
@@ -379,7 +379,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
 
         // Malformed repo.json forces BootstrapError.ioFailure from the arm's
-        // RepoIdentitySources.collect → bootstrap.loadRepoID path.
+        // RepoIdentityAuthority.resolve → bootstrap.loadRepoID path.
         await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), contents: "{not-json")
 
         do {

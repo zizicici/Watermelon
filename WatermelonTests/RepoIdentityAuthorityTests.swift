@@ -1,7 +1,7 @@
 import XCTest
 @testable import Watermelon
 
-final class RepoIdentitySourcesTests: XCTestCase {
+final class RepoIdentityAuthorityTests: XCTestCase {
     private let basePath = "/repo"
     private var tempDBURL: URL!
     private var databaseManager: DatabaseManager!
@@ -29,19 +29,21 @@ final class RepoIdentitySourcesTests: XCTestCase {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
-        let sources = try await RepoIdentitySources.collect(
-            profileID: profileID,
-            writerID: "w",
-            identity: identity,
-            client: client,
-            basePath: basePath,
-            format: RemoteFormatCompatibilityService()
-        )
+        let resolution = try await RepoIdentityAuthority(
+            context: RepoIdentityAuthorityContext(
+                profileID: profileID,
+                writerID: "w",
+                basePath: basePath,
+                dataClient: client,
+                identity: identity,
+                format: RemoteFormatCompatibilityService()
+            )
+        ).resolve()
 
-        XCTAssertEqual(sources.stored, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-        XCTAssertNil(sources.remote)
-        XCTAssertNil(sources.data)
-        XCTAssertEqual(sources.suggested, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        XCTAssertEqual(resolution.stored, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        XCTAssertNil(resolution.remote)
+        XCTAssertNil(resolution.data)
+        XCTAssertEqual(resolution.suggested, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     }
 
     func testAuthority_finalizationPrecedenceOverStaleClaimAndCache() async throws {
@@ -105,14 +107,16 @@ final class RepoIdentitySourcesTests: XCTestCase {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
 
         do {
-            _ = try await RepoIdentitySources.collect(
-                profileID: profileID,
-                writerID: "w",
-                identity: identity,
-                client: client,
-                basePath: basePath,
-                format: RemoteFormatCompatibilityService()
-            )
+            _ = try await RepoIdentityAuthority(
+                context: RepoIdentityAuthorityContext(
+                    profileID: profileID,
+                    writerID: "w",
+                    basePath: basePath,
+                    dataClient: client,
+                    identity: identity,
+                    format: RemoteFormatCompatibilityService()
+                )
+            ).resolve()
             XCTFail("expected damagedV2Repo")
         } catch BackupV2RuntimeBuildError.damagedV2Repo {
             // expected
@@ -151,14 +155,16 @@ final class RepoIdentitySourcesTests: XCTestCase {
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
 
         do {
-            _ = try await RepoIdentitySources.collect(
-                profileID: profileID,
-                writerID: "w",
-                identity: identity,
-                client: client,
-                basePath: basePath,
-                format: RemoteFormatCompatibilityService()
-            )
+            _ = try await RepoIdentityAuthority(
+                context: RepoIdentityAuthorityContext(
+                    profileID: profileID,
+                    writerID: "w",
+                    basePath: basePath,
+                    dataClient: client,
+                    identity: identity,
+                    format: RemoteFormatCompatibilityService()
+                )
+            ).resolve()
             XCTFail("expected damagedV2Repo")
         } catch BackupV2RuntimeBuildError.damagedV2Repo {
             // expected
@@ -185,18 +191,20 @@ final class RepoIdentitySourcesTests: XCTestCase {
             ).insert(db)
         }
 
-        let sources = try await RepoIdentitySources.collect(
-            profileID: profileID,
-            writerID: "w",
-            identity: identity,
-            client: client,
-            basePath: basePath,
-            format: RemoteFormatCompatibilityService()
-        )
+        let resolution = try await RepoIdentityAuthority(
+            context: RepoIdentityAuthorityContext(
+                profileID: profileID,
+                writerID: "w",
+                basePath: basePath,
+                dataClient: client,
+                identity: identity,
+                format: RemoteFormatCompatibilityService()
+            )
+        ).resolve()
 
-        XCTAssertEqual(sources.stored, "cccccccc-cccc-dddd-eeee-ffffffffffff")
-        XCTAssertEqual(sources.remote, "cccccccc-cccc-dddd-eeee-ffffffffffff")
-        XCTAssertEqual(sources.suggested, "cccccccc-cccc-dddd-eeee-ffffffffffff")
+        XCTAssertEqual(resolution.stored, "cccccccc-cccc-dddd-eeee-ffffffffffff")
+        XCTAssertEqual(resolution.remote, "cccccccc-cccc-dddd-eeee-ffffffffffff")
+        XCTAssertEqual(resolution.suggested, "cccccccc-cccc-dddd-eeee-ffffffffffff")
     }
 
     func testCollect_wipedAndReusedRemote_ownClaimPresent_recoversWithoutMismatch() async throws {
@@ -218,18 +226,20 @@ final class RepoIdentitySourcesTests: XCTestCase {
             ).insert(db)
         }
 
-        let sources = try await RepoIdentitySources.collect(
-            profileID: profileID,
-            writerID: ownWriterID,
-            identity: identity,
-            client: client,
-            basePath: basePath,
-            format: RemoteFormatCompatibilityService()
-        )
+        let resolution = try await RepoIdentityAuthority(
+            context: RepoIdentityAuthorityContext(
+                profileID: profileID,
+                writerID: ownWriterID,
+                basePath: basePath,
+                dataClient: client,
+                identity: identity,
+                format: RemoteFormatCompatibilityService()
+            )
+        ).resolve()
 
-        XCTAssertNil(sources.stored, "own claim authorizes ignoring the stale per-profile fallback")
-        XCTAssertEqual(sources.remote, "cccccccc-cccc-dddd-eeee-ffffffffffff")
-        XCTAssertEqual(sources.suggested, "cccccccc-cccc-dddd-eeee-ffffffffffff")
+        XCTAssertNil(resolution.stored, "own claim authorizes ignoring the stale per-profile fallback")
+        XCTAssertEqual(resolution.remote, "cccccccc-cccc-dddd-eeee-ffffffffffff")
+        XCTAssertEqual(resolution.suggested, "cccccccc-cccc-dddd-eeee-ffffffffffff")
     }
 
     func testCollect_wipedAndReusedRemote_noOwnClaim_preservesMismatch() async throws {
@@ -249,14 +259,16 @@ final class RepoIdentitySourcesTests: XCTestCase {
         }
 
         do {
-            _ = try await RepoIdentitySources.collect(
-                profileID: profileID,
-                writerID: ownWriterID,
-                identity: identity,
-                client: client,
-                basePath: basePath,
-                format: RemoteFormatCompatibilityService()
-            )
+            _ = try await RepoIdentityAuthority(
+                context: RepoIdentityAuthorityContext(
+                    profileID: profileID,
+                    writerID: ownWriterID,
+                    basePath: basePath,
+                    dataClient: client,
+                    identity: identity,
+                    format: RemoteFormatCompatibilityService()
+                )
+            ).resolve()
             XCTFail("expected repoIdentityMismatch without own claim")
         } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) {
             XCTAssertEqual(stored, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -284,14 +296,16 @@ final class RepoIdentitySourcesTests: XCTestCase {
         }
 
         do {
-            _ = try await RepoIdentitySources.collect(
-                profileID: profileID,
-                writerID: ownWriterID,
-                identity: identity,
-                client: client,
-                basePath: basePath,
-                format: RemoteFormatCompatibilityService()
-            )
+            _ = try await RepoIdentityAuthority(
+                context: RepoIdentityAuthorityContext(
+                    profileID: profileID,
+                    writerID: ownWriterID,
+                    basePath: basePath,
+                    dataClient: client,
+                    identity: identity,
+                    format: RemoteFormatCompatibilityService()
+                )
+            ).resolve()
             XCTFail("expected repoIdentityMismatch — foreign claim must not authorize own recovery")
         } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
             // expected
@@ -320,14 +334,16 @@ final class RepoIdentitySourcesTests: XCTestCase {
         }
 
         do {
-            _ = try await RepoIdentitySources.collect(
-                profileID: profileID,
-                writerID: ownWriterID,
-                identity: identity,
-                client: client,
-                basePath: basePath,
-                format: RemoteFormatCompatibilityService()
-            )
+            _ = try await RepoIdentityAuthority(
+                context: RepoIdentityAuthorityContext(
+                    profileID: profileID,
+                    writerID: ownWriterID,
+                    basePath: basePath,
+                    dataClient: client,
+                    identity: identity,
+                    format: RemoteFormatCompatibilityService()
+                )
+            ).resolve()
             XCTFail("expected repoIdentityMismatch — own claim for a different repo must not authorize recovery")
         } catch BackupV2RuntimeBuildError.repoIdentityMismatch {
             // expected
@@ -359,14 +375,16 @@ final class RepoIdentitySourcesTests: XCTestCase {
         _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: "w")
 
         do {
-            _ = try await RepoIdentitySources.collect(
-                profileID: profileID,
-                writerID: "w",
-                identity: identity,
-                client: client,
-                basePath: basePath,
-                format: RemoteFormatCompatibilityService()
-            )
+            _ = try await RepoIdentityAuthority(
+                context: RepoIdentityAuthorityContext(
+                    profileID: profileID,
+                    writerID: "w",
+                    basePath: basePath,
+                    dataClient: client,
+                    identity: identity,
+                    format: RemoteFormatCompatibilityService()
+                )
+            ).resolve()
             XCTFail("expected repoIdentityMismatch")
         } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) {
             XCTAssertEqual(stored, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -411,8 +429,8 @@ final class RepoIdentitySourcesTests: XCTestCase {
         let finalizedID = try XCTUnwrap(loaded)
 
         // Caller hands in a different suggestion; publish must adopt the finalized id.
-        let sources = RepoIdentitySources(stored: nil, remote: nil, data: nil, suggested: "aaaaaaaa-1111-2222-3333-444444444444")
-        let resolved = try await sources.publish(bootstrap: bootstrap, writerID: "w")
+        let resolution = RepoIdentityResolution(stored: nil, remote: nil, data: nil, suggested: "aaaaaaaa-1111-2222-3333-444444444444")
+        let resolved = try await RepoIdentityAuthority.publish(resolution, using: bootstrap, writerID: "w")
 
         XCTAssertEqual(resolved, finalizedID, "publish must read finalized id, not adopt suggested")
     }
@@ -426,9 +444,9 @@ final class RepoIdentitySourcesTests: XCTestCase {
         let loaded = try await bootstrap.loadRepoID()
         let finalizedID = try XCTUnwrap(loaded)
 
-        let sources = RepoIdentitySources(stored: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", remote: nil, data: nil, suggested: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        let resolution = RepoIdentityResolution(stored: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", remote: nil, data: nil, suggested: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         do {
-            _ = try await sources.publish(bootstrap: bootstrap, writerID: "w")
+            _ = try await RepoIdentityAuthority.publish(resolution, using: bootstrap, writerID: "w")
             XCTFail("expected repoIdentityMismatch")
         } catch BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) {
             XCTAssertEqual(stored, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")

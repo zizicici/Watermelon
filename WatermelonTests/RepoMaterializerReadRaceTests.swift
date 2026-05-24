@@ -346,17 +346,19 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
             storageType: .webdav
         )
 
-        let sources = try await RepoIdentitySources.collect(
-            profileID: profileID,
-            writerID: writerA,
-            identity: identity,
-            client: client,
-            basePath: basePath,
-            format: RemoteFormatCompatibilityService()
-        )
+        let resolution = try await RepoIdentityAuthority(
+            context: RepoIdentityAuthorityContext(
+                profileID: profileID,
+                writerID: writerA,
+                basePath: basePath,
+                dataClient: client,
+                identity: identity,
+                format: RemoteFormatCompatibilityService()
+            )
+        ).resolve()
 
-        XCTAssertEqual(sources.data, repoID)
-        XCTAssertEqual(sources.suggested, repoID)
+        XCTAssertEqual(resolution.data, repoID)
+        XCTAssertEqual(resolution.suggested, repoID)
     }
 
     func testCrossMonthObservedSeqDoesNotRecoverVanishedCommit() async throws {

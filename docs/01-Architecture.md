@@ -402,7 +402,7 @@
 15. `RetentionManifestTests` / `RetentionManifestRemoteStoreTests` / `RetentionDeletionSafetyGateTests` / `RetentionLivenessCapabilityTests` / `RepoRetentionBarrierServiceTests` / `RepoRetentionDeletePreflightTests` / `RepoRetentionDeleteExecutorTests` / `RepoRetentionCommitDeleteExecutorTests` / `RepoRetentionEquivalenceTests` / `V2BarrierAwareMonthSessionRefreshTests` — retention manifest、liveness gate、commit 前缀删除与 barrier-aware session refresh
 16. `RepoVerifyMonthServiceTests` / `RemoteIndexSyncServiceTests` / `RemoteIndexV1SyncEngineTests` / `RemoteIndexV2SyncEngineTests` / `RemoteResourcePresenceTests` / `RemoteIndexFormatRouteDecisionTests` / `StorageCapabilityMatrixTests` — verify、remote index、presence overlay、format route、backend capability contract
 17. `RestoreServiceFallbackTests` / `RestoredAssetFingerprintVerifierTests` / `RemoteAssetIntegrityClassifierTests` / `AssetResourceLinkSetPredicateTests` — 下载 fallback、durable fingerprint 校验与远端资产完整性分类
-18. `RepoBootstrapVersionTests` / `RepoIdentitySourcesTests` / `IdentityClaimStoreTests` / `VersionManifestStoreTests` / `MigrationMarkerStoreTests` / `OrphanMetadataCleanupTests` — version/bootstrap identity、migration marker 与 orphan metadata cleanup
+18. `RepoBootstrapVersionTests` / `RepoIdentityAuthorityTests` / `IdentityClaimStoreTests` / `VersionManifestStoreTests` / `MigrationMarkerStoreTests` / `OrphanMetadataCleanupTests` — version/bootstrap identity、migration marker 与 orphan metadata cleanup
 19. `BackupResumePlannerTests` / `BackupParallelExecutorMonthEventTests` / `BackupSessionReducerTests` / `MonthPlanStateMachineTests` — 恢复去重、月份事件和 Home/backup 状态机的纯逻辑
 20. `TestSupport.swift` — 共享 fixture（确定性日期、样例记录）
 
