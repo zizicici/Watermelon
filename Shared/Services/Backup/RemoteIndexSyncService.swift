@@ -177,12 +177,18 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         self.committedView = committedView
     }
 
+    /// `preInspection` lets the caller supply a known-current observation of the remote format
+    /// (e.g. published by `BackupV2RuntimeServices.postOpenSyncInspection`). Must reflect the
+    /// **current post-mutation** remote state — not a stale snapshot from before any open-side
+    /// bootstrap / migration / cleanup writes. Callers that performed an open which mutated
+    /// format-marker state MUST pass `nil` here so this method re-inspects after those writes.
     func syncIndex(
         client: RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         eventStream: BackupEventStream? = nil,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil,
         preMaterialized: RepoMaterializer.MaterializeOutput? = nil,
+        preInspection: RemoteFormatInspection? = nil,
         expectV2: Bool = false,
         localRepoID: String? = nil
     ) async throws -> RemoteIndexSyncDigest {
@@ -193,6 +199,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 eventStream: eventStream,
                 onSyncProgress: onSyncProgress,
                 preMaterialized: preMaterialized,
+                preInspection: preInspection,
                 expectV2: expectV2,
                 localRepoID: localRepoID
             )
@@ -287,6 +294,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         eventStream: BackupEventStream?,
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)?,
         preMaterialized: RepoMaterializer.MaterializeOutput? = nil,
+        preInspection: RemoteFormatInspection? = nil,
         expectV2: Bool = false,
         localRepoID: String? = nil
     ) async throws -> RemoteIndexSyncDigest {
@@ -298,8 +306,13 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
 
         let alreadyV2 = await state.isV2Repo() == true
-        let inspection = try await RemoteFormatCompatibilityService()
-            .inspectRemoteFormat(client: client, profile: profile)
+        let inspection: RemoteFormatInspection
+        if let preInspection {
+            inspection = preInspection
+        } else {
+            inspection = try await RemoteFormatCompatibilityService()
+                .inspectRemoteFormat(client: client, profile: profile)
+        }
         let route: RemoteIndexSyncRoute
         do {
             route = try RemoteIndexFormatRouteDecision.decide(

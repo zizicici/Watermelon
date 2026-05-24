@@ -21,6 +21,11 @@ struct BackupV2RuntimeServices: Sendable {
     let repoID: String
     let runID: String
     let basePath: String
+    /// Inspection result safe to forward to `RemoteIndexSyncService.syncIndex(preInspection:)`
+    /// when non-nil. See `OpenedBackupV2Repo.postOpenSyncInspection` for the contract.
+    /// Non-nil only on the `.openExistingV2` route; bootstrap / migration / cleanup
+    /// paths publish `nil` so sync re-inspects after open-side mutations.
+    let postOpenSyncInspection: RemoteFormatInspection?
     let database: DatabaseManager
     let identity: RepoIdentity
     let seqAllocator: SeqAllocator

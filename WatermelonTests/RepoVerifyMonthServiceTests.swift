@@ -320,7 +320,9 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let liveness = LivenessTracker(client: scaffold.client, basePath: basePath, writerID: writerA, isLocalVolume: true)
         return BackupV2RuntimeServices(
             writerID: writerA, repoID: repoID, runID: runID,
-            basePath: basePath, database: scaffold.database, identity: identity,
+            basePath: basePath,
+            postOpenSyncInspection: .v2(formatVersion: RepoLayout.currentSupportedFormatVersion),
+            database: scaffold.database, identity: identity,
             seqAllocator: allocator, lamport: lamport,
             commitWriter: commitWriter, snapshotWriter: snapshotWriter,
             liveness: liveness,

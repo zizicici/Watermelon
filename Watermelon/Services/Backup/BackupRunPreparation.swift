@@ -67,6 +67,7 @@ struct BackupRunPreparationService: Sendable {
                         profile: profile,
                         eventStream: eventStream,
                         preMaterialized: preMaterialized,
+                        preInspection: v2Services?.postOpenSyncInspection,
                         expectV2: v2Services != nil,
                         localRepoID: v2Services?.repoID
                     )

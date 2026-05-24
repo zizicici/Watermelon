@@ -240,6 +240,7 @@ final class BackgroundBackupRunner {
                 client: client,
                 profile: profile,
                 preMaterialized: preMaterialized,
+                preInspection: v2Services.postOpenSyncInspection,
                 expectV2: true,
                 localRepoID: v2Services.repoID
             )

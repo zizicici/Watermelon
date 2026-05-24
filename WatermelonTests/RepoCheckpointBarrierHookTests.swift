@@ -538,6 +538,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
             repoID: repoID,
             runID: runID,
             basePath: basePath,
+            postOpenSyncInspection: .v2(formatVersion: RepoLayout.currentSupportedFormatVersion),
             database: database,
             identity: identity,
             seqAllocator: allocator,

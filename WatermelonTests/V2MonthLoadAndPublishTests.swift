@@ -292,6 +292,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
             repoID: repoID,
             runID: runID,
             basePath: basePath,
+            postOpenSyncInspection: .v2(formatVersion: RepoLayout.currentSupportedFormatVersion),
             database: databaseManager,
             identity: identity,
             seqAllocator: allocator,

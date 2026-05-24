@@ -45,6 +45,7 @@ enum BackupV2RuntimeBuilder {
             repoID: opened.repoID,
             runID: opened.runID,
             basePath: opened.basePath,
+            postOpenSyncInspection: opened.postOpenSyncInspection,
             database: databaseManager,
             identity: opened.identity,
             seqAllocator: opened.seqAllocator,

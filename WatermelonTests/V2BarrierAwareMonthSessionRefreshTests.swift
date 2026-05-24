@@ -468,6 +468,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
             repoID: repoID,
             runID: runA,
             basePath: basePath,
+            postOpenSyncInspection: .v2(formatVersion: RepoLayout.currentSupportedFormatVersion),
             database: databaseManager,
             identity: identity,
             seqAllocator: allocator,

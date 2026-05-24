@@ -13,6 +13,14 @@ struct OpenedBackupV2Repo: Sendable {
     let snapshotWriter: SnapshotWriter
     let initialMaterializeOutput: RepoMaterializer.MaterializeOutput?
     let isLocalVolume: Bool
+    /// Inspection result safe to forward to `RemoteIndexSyncService.syncIndex(preInspection:)`
+    /// when non-nil. Non-nil ONLY when the open action was `.openExistingV2` — that path writes
+    /// `repo.json` (identity) and creates subdirectories but does NOT touch `version.json`,
+    /// migration markers, or V1 manifests, so pre-open and post-open inspections are observably
+    /// identical. On `.openWithCleanupV2` / `.bootstrapFresh` / `.migrateFromV1` the open
+    /// mutated format-marker state, so this is `nil` and sync MUST re-inspect to observe the
+    /// post-mutation shape.
+    let postOpenSyncInspection: RemoteFormatInspection?
 }
 
 struct BackupV2RepoOpenService: @unchecked Sendable {
@@ -71,6 +79,11 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
             allowMigration: allowMigration
         )
         let resolvedRepoID: String
+        // Exhaustively decided per-action so a new open action can't be added without
+        // explicitly stating whether its post-open remote shape matches its pre-open
+        // inspection. Only `.openExistingV2` preserves equivalence; mutating paths
+        // must leave sync to re-inspect.
+        let postOpenSyncInspection: RemoteFormatInspection?
         switch action {
         case .throwUnsupported(let minAppVersion):
             throw BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
@@ -85,6 +98,7 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
                 publishBootstrap: bootstrap
             )
             try await bootstrap.ensureSubdirectories()
+            postOpenSyncInspection = inspection
         case .openWithCleanupV2(let ownerWriterID):
             try await bootstrap.ensureSubdirectories()
             let cleanupBootstrap = RepoBootstrap(client: metadataClient, basePath: basePath)
@@ -111,6 +125,7 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
                     runID: runID
                 )
             }
+            postOpenSyncInspection = nil
         case .bootstrapFresh:
             if let existing = try await identity.findRepoStateByProfile(profileID: profileID) {
                 throw BackupV2RuntimeBuildError.repoFormatRegression(repoID: existing.repoID)
@@ -119,6 +134,7 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
                 try await bootstrap.initializeFreshRepo(writerID: writerID)
             }
             await onBootstrap?()
+            postOpenSyncInspection = nil
         case .throwRequiresForegroundMigration:
             throw BackupV2RuntimeBuildError.requiresForegroundMigration
         case .migrateFromV1:
@@ -148,6 +164,7 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
                     onMigrationComplete: onMigrationComplete
                 )
             }
+            postOpenSyncInspection = nil
         }
 
         let state = try await identity.lazyEnsureRepoState(
@@ -193,7 +210,8 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
             commitWriter: commitWriter,
             snapshotWriter: snapshotWriter,
             initialMaterializeOutput: output,
-            isLocalVolume: profile.resolvedStorageType == .externalVolume
+            isLocalVolume: profile.resolvedStorageType == .externalVolume,
+            postOpenSyncInspection: postOpenSyncInspection
         )
     }
 
