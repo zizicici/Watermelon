@@ -104,4 +104,27 @@ final class AssetIntegrityKindAdapterTests: XCTestCase {
         XCTAssertEqual(partial?.kind, .partiallyMissing)
         XCTAssertEqual(partial?.detail, "2/5 resources missing")
     }
+
+    func testKindTombstoneReason_matchesExpectedMapping() {
+        XCTAssertEqual(VerifyMonthReportKind.phantomAsset.tombstoneReason, .manifestOrphan)
+        XCTAssertEqual(VerifyMonthReportKind.metadataOnlyLeft.tombstoneReason, .manifestOrphan)
+        XCTAssertEqual(VerifyMonthReportKind.allResourcesGone.tombstoneReason, .verifyFailed)
+        XCTAssertNil(VerifyMonthReportKind.partiallyMissing.tombstoneReason)
+        XCTAssertNil(VerifyMonthReportKind.fingerprintMismatch.tombstoneReason)
+        XCTAssertNil(VerifyMonthReportKind.verificationIncomplete.tombstoneReason)
+    }
+
+    func testKindTombstoneReason_nilParityWithAllowsCleanup() {
+        let cases: [VerifyMonthReportKind] = [
+            .phantomAsset, .allResourcesGone, .metadataOnlyLeft,
+            .partiallyMissing, .fingerprintMismatch, .verificationIncomplete,
+        ]
+        for kind in cases {
+            XCTAssertEqual(
+                kind.tombstoneReason != nil,
+                kind.allowsCleanup,
+                "\(kind) tombstoneReason-nil parity with allowsCleanup"
+            )
+        }
+    }
 }

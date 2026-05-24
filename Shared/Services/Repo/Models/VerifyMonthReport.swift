@@ -59,6 +59,19 @@ extension VerifyMonthReportKind {
             self = .partiallyMissing
         }
     }
+
+    /// Tombstone reason for cleanup-eligible kinds; nil for kinds that `allowsCleanup` filters out.
+    /// Always nil ⟺ `allowsCleanup` is false (pinned by adapter parity test).
+    var tombstoneReason: CommitTombstoneBody.Reason? {
+        switch self {
+        case .phantomAsset, .metadataOnlyLeft:
+            return .manifestOrphan
+        case .allResourcesGone:
+            return .verifyFailed
+        case .partiallyMissing, .fingerprintMismatch, .verificationIncomplete:
+            return nil
+        }
+    }
 }
 
 extension VerifyMonthReportItem {

@@ -228,15 +228,11 @@ actor RepoVerifyMonthService {
             }
 
             let tombstones: [(item: VerifyMonthReportItem, reason: CommitTombstoneBody.Reason)] = stillEligible.compactMap { item in
-                switch item.kind {
-                case .phantomAsset, .metadataOnlyLeft:
-                    return (item, .manifestOrphan)
-                case .allResourcesGone:
-                    return (item, .verifyFailed)
-                case .partiallyMissing, .fingerprintMismatch, .verificationIncomplete:
+                guard let reason = item.kind.tombstoneReason else {
                     assertionFailure("allowsCleanup must filter \(item.kind)")
                     return nil
                 }
+                return (item, reason)
             }
             return TombstonePlan(
                 tombstones: tombstones,
