@@ -37,13 +37,12 @@ actor CommitLogReader {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("commit-fetch-\(UUID().uuidString).jsonl")
         defer { try? FileManager.default.removeItem(at: temp) }
-        do {
-            try await client.download(remotePath: remotePath, localURL: temp)
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            if RemoteStorageErrorClassifier.isNotFound(error) { throw ReadError.notFound(filename: filename) }
-            throw error
-        }
+        try await RepoJSONLDownload.download(
+            client: client,
+            remotePath: remotePath,
+            to: temp,
+            notFoundError: ReadError.notFound(filename: filename)
+        )
         return try Self.parse(localURL: temp)
     }
 
