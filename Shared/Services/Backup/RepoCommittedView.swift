@@ -93,12 +93,12 @@ final class RepoCommittedView: @unchecked Sendable {
     func monthSummaries() -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
         missingLock.lock()
         defer { missingLock.unlock() }
-        return cache.monthSummaries(physicallyMissingByMonth: physicallyMissingSnapshotMapLocked())
+        return cache.monthSummaries(presence: fullPresenceSnapshotLocked())
     }
     func healthDigest() -> RemoteHealthDigest {
         missingLock.lock()
         defer { missingLock.unlock() }
-        return cache.healthDigest(physicallyMissingByMonth: physicallyMissingSnapshotMapLocked())
+        return cache.healthDigest(presence: fullPresenceSnapshotLocked())
     }
     func allKnownMonths() -> Set<LibraryMonthKey> { cache.allKnownMonths() }
     func monthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
@@ -120,7 +120,7 @@ final class RepoCommittedView: @unchecked Sendable {
     func counts() -> RemoteIndexSyncDigest {
         missingLock.lock()
         defer { missingLock.unlock() }
-        return cache.counts(physicallyMissingByMonth: physicallyMissingSnapshotMapLocked())
+        return cache.counts(presence: fullPresenceSnapshotLocked())
     }
     func currentLastSyncedAt() -> Date? { cache.currentLastSyncedAt() }
 

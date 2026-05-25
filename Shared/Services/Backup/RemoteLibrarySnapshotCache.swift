@@ -146,7 +146,8 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     /// Snapshots per-month dicts under the lock (cheap COW reference copy), then
     /// runs the SHA-256 fingerprint recompute outside the lock so writers aren't
     /// stalled by the (potentially large) incomplete-asset scan.
-    func healthDigest(physicallyMissingByMonth: [LibraryMonthKey: Set<Data>] = [:]) -> RemoteHealthDigest {
+    func healthDigest(presence: RemotePresenceSnapshot = RemotePresenceSnapshot()) -> RemoteHealthDigest {
+        let physicallyMissingByMonth = presence.missingHashesByMonth
         let snapshot: HealthSnapshot = lock.withLock {
             HealthSnapshot(
                 assetsByMonth: assetsByMonth,
@@ -632,9 +633,10 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
 
     /// Pass V2 missing overlay to subtract phantom assets from stats; V1 callers pass empty.
     func monthSummaries(
-        physicallyMissingByMonth: [LibraryMonthKey: Set<Data>] = [:]
+        presence: RemotePresenceSnapshot = RemotePresenceSnapshot()
     ) -> [(month: LibraryMonthKey, assetCount: Int, photoCount: Int, videoCount: Int, totalSizeBytes: Int64)] {
-        lock.withLock {
+        let physicallyMissingByMonth = presence.missingHashesByMonth
+        return lock.withLock {
             if physicallyMissingByMonth.isEmpty {
                 return monthStatsCache.map { (month, stats) in
                     (month: month, assetCount: stats.assetCount, photoCount: stats.photoCount, videoCount: stats.videoCount, totalSizeBytes: stats.totalSizeBytes)
@@ -717,8 +719,9 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         lock.withLock { allKnownMonthsLocked() }
     }
 
-    func counts(physicallyMissingByMonth: [LibraryMonthKey: Set<Data>] = [:]) -> RemoteIndexSyncDigest {
-        lock.withLock {
+    func counts(presence: RemotePresenceSnapshot = RemotePresenceSnapshot()) -> RemoteIndexSyncDigest {
+        let physicallyMissingByMonth = presence.missingHashesByMonth
+        return lock.withLock {
             if physicallyMissingByMonth.isEmpty {
                 let resources = resourcesByMonth.values.reduce(0) { $0 + $1.count }
                 let assets = assetsByMonth.values.reduce(0) { $0 + $1.count }

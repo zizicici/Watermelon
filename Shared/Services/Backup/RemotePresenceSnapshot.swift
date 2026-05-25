@@ -34,6 +34,16 @@ struct RemotePresenceSnapshot: Sendable, Equatable {
         return out
     }
 
+    /// Cache-subtraction adapter: only months with a non-empty missing-hash set.
+    /// Drops authoritative-empty entries so the cache fast paths trip exactly as before.
+    var missingHashesByMonth: [LibraryMonthKey: Set<Data>] {
+        var dict: [LibraryMonthKey: Set<Data>] = [:]
+        for (month, value) in monthsByKey where !value.missingHashes.isEmpty {
+            dict[month] = value.missingHashes
+        }
+        return dict
+    }
+
     struct Builder {
         private var monthsByKey: [LibraryMonthKey: Month] = [:]
 

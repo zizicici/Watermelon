@@ -62,6 +62,37 @@ final class RemotePresenceSnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.freshMonths.isEmpty)
     }
 
+    /// Cache-subtraction adapter contract: only non-empty missing-hash entries surface.
+    /// Authoritative-empty months MUST be filtered so the cache fast paths still trip
+    /// (today's `RepoCommittedView.physicallyMissingSnapshotMapLocked()` returns only
+    /// non-empty entries because the underlying `PerMonth` is pruned by view mutators
+    /// — see `RepoCommittedView.markPhysicallyMissing` / `applyPresenceSnapshot` and
+    /// `PerMonth.subtract`'s drain-removal). The new accessor is the bit-equivalent
+    /// snapshot-side reproduction of that filter, and also pins the empty-snapshot
+    /// fast-path engagement (R8 mitigation in the unit-030 plan).
+    func testMissingHashesByMonth_omitsEmptyAndAuthoritativeEmptyEntries_returnsOnlyNonEmptyMissing() {
+        // (a) empty snapshot ⇒ empty subtraction dict ⇒ cache fast path trips.
+        XCTAssertTrue(RemotePresenceSnapshot().missingHashesByMonth.isEmpty,
+                      "empty snapshot must yield an empty subtraction dict so cache fast paths trip")
+
+        // (b) mixed snapshot with non-authoritative non-empty + authoritative-empty.
+        let h1 = TestFixtures.fingerprint(0x10)
+        let h2 = TestFixtures.fingerprint(0x11)
+        var builder = RemotePresenceSnapshot.Builder()
+        builder.set(monthA, missingHashes: [h1, h2], isAuthoritative: false)
+        builder.set(monthB, missingHashes: [], isAuthoritative: true)
+        let snapshot = builder.build()
+
+        let dict = snapshot.missingHashesByMonth
+
+        XCTAssertEqual(dict.count, 1,
+                       "authoritative-empty months must NOT appear in the cache-subtraction dict")
+        XCTAssertEqual(dict[monthA], [h1, h2],
+                       "non-empty missing hashes must round-trip into the per-month dict")
+        XCTAssertNil(dict[monthB],
+                     "authoritative-empty entry must be filtered (cache reads only the missing-hash subset)")
+    }
+
     func testFailClosed_wrapsRawDictionaryAsNonAuthoritativeEntries() {
         let h1 = TestFixtures.fingerprint(0x10)
         let h2 = TestFixtures.fingerprint(0x11)
