@@ -1,6 +1,6 @@
 import Foundation
 
-/// Stages overwrite-prone backends so exists+upload cannot replace a peer commit.
+// Stages overwrite-prone backends so exists+upload cannot replace a peer commit.
 actor CommitLogWriter {
     enum WriteError: Error {
         case alreadyExists
@@ -108,23 +108,23 @@ actor CommitLogWriter {
         expectedRowCount: Int,
         respectTaskCancellation: Bool
     ) async throws {
-        let result = try await performExclusiveCreate(
-            client: client,
-            localURL: localURL,
-            remotePath: remotePath,
-            respectTaskCancellation: respectTaskCancellation
-        )
-        switch result {
-        case .created:
-            return
-        case .alreadyExists, .bestEffortRetry:
-            try await verifyAfterAlreadyExists(
+        let attempt: MetadataCreateOrchestrator.AfterCreateAttempt
+        do {
+            attempt = try await MetadataCreateOrchestrator.atomicCreateThenVerify(
                 client: client,
+                localURL: localURL,
                 remotePath: remotePath,
-                expectedSha: expectedSha,
-                expectedRowCount: expectedRowCount
+                respectTaskCancellation: respectTaskCancellation,
+                verifier: MetadataWriteVerifiers.commitAware(
+                    expectedSha: expectedSha, expectedRowCount: expectedRowCount
+                )
             )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw WriteError.ioFailure(error)
         }
+        try Self.mapExclusiveCreateAttempt(attempt)
     }
 
     private static func performStagedCreateAndVerify(
@@ -157,84 +157,45 @@ actor CommitLogWriter {
         case .alreadyExists:
             throw WriteError.alreadyExists
         case .bestEffortRetry:
-            try await verifyAfterAlreadyExists(
-                client: client,
-                remotePath: remotePath,
-                expectedSha: expectedSha,
-                expectedRowCount: expectedRowCount
-            )
+            let outcome = await MetadataWriteVerifiers.commitAware(
+                expectedSha: expectedSha, expectedRowCount: expectedRowCount
+            ).verify(client: client, remotePath: remotePath, localURL: localURL)
+            try Self.mapStagedBestEffortRetryVerify(outcome)
         }
     }
 
-    /// Only transient verify failures become alreadyExists retries; permanent causes must surface.
-    private static func verifyAfterAlreadyExists(
-        client: any RemoteStorageClientProtocol,
-        remotePath: String,
-        expectedSha: String,
-        expectedRowCount: Int
-    ) async throws {
-        do {
-            try await verifyCommitOnRemote(
-                client: client,
-                remotePath: remotePath,
-                expectedSha: expectedSha,
-                expectedRowCount: expectedRowCount
-            )
-        } catch WriteError.ioFailure(let underlying) {
-            switch RemoteWriteClassifier.classifyVerifyFailure(underlying) {
-            case .cancelled:
-                throw CancellationError()
-            case .transient:
-                throw WriteError.alreadyExists
-            case .permanent:
-                throw WriteError.ioFailure(underlying)
-            }
-        }
-    }
+    // MARK: - Verify-outcome mapping helpers (internal for test coverage)
 
-    private static func performExclusiveCreate(
-        client: any RemoteStorageClientProtocol,
-        localURL: URL,
-        remotePath: String,
-        respectTaskCancellation: Bool
-    ) async throws -> AtomicCreateResult {
-        do {
-            return try await client.atomicCreate(
-                localURL: localURL,
-                remotePath: remotePath,
-                respectTaskCancellation: respectTaskCancellation
-            )
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            throw WriteError.ioFailure(error)
-        }
-    }
-
-    private static func verifyCommitOnRemote(
-        client: any RemoteStorageClientProtocol,
-        remotePath: String,
-        expectedSha: String,
-        expectedRowCount: Int
-    ) async throws {
-        let verifyURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("commit-verify-\(UUID().uuidString).jsonl")
-        defer { try? FileManager.default.removeItem(at: verifyURL) }
-        do {
-            try await client.download(remotePath: remotePath, localURL: verifyURL)
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) {
-                throw CancellationError()
-            }
-            throw WriteError.ioFailure(error)
-        }
-        let parsed: CommitFile
-        do {
-            parsed = try CommitLogReader.parse(localURL: verifyURL)
-        } catch {
+    internal static func mapExclusiveCreateAttempt(
+        _ attempt: MetadataCreateOrchestrator.AfterCreateAttempt
+    ) throws {
+        switch attempt {
+        case .createdWithoutVerification:
+            return
+        case .verifyAttempted(_, .matched):
+            return
+        case .verifyAttempted(_, .deterministicMismatch),
+             .verifyAttempted(_, .transientFailure):
             throw WriteError.alreadyExists
+        case .verifyAttempted(_, .permanentFailure(let underlying)):
+            throw WriteError.ioFailure(underlying)
+        case .verifyAttempted(_, .cancelled):
+            throw CancellationError()
         }
-        if parsed.sha256Hex.lowercased() != expectedSha.lowercased() || parsed.rowCount != expectedRowCount {
+    }
+
+    internal static func mapStagedBestEffortRetryVerify(
+        _ outcome: MetadataWriteVerifyOutcome
+    ) throws {
+        switch outcome {
+        case .matched:
+            return
+        case .deterministicMismatch, .transientFailure:
             throw WriteError.alreadyExists
+        case .permanentFailure(let underlying):
+            throw WriteError.ioFailure(underlying)
+        case .cancelled:
+            throw CancellationError()
         }
     }
 

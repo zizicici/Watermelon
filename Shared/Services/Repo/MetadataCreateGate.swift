@@ -1,7 +1,6 @@
 import Foundation
-import CryptoKit
 
-/// Durable repo metadata must not let peer bytes silently win destination paths.
+// Durable repo metadata must not let peer bytes silently win destination paths.
 enum MetadataCreateGate {
     enum FinalizationPolicy: Equatable {
         case allowBestEffort
@@ -89,39 +88,14 @@ enum MetadataCreateGate {
         let guarantee = client.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
         switch guarantee {
         case .exclusive:
-            // URLSession-backed clients (S3) surface task cancellation as
-            // NSURLErrorCancelled, not literal CancellationError. Normalize at the
-            // gate boundary so direct callers (SnapshotWriter, V1MigrationService)
-            // see CancellationError instead of a wrapped finalization failure.
-            let result: AtomicCreateResult
-            do {
-                result = try await client.atomicCreate(
-                    localURL: localURL,
-                    remotePath: remotePath,
-                    respectTaskCancellation: respectTaskCancellation
-                )
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                throw error
-            }
-            // S3 single-part PUT phantom: server wrote our bytes but client timed out;
-            // retry hits If-None-Match → 412 → .alreadyExists, but it's our own bytes.
-            // Caller payloads embed writer-distinguishing fields (created_by_writer /
-            // created_at_ms / run_id) so a peer can never SHA-collide with our local
-            // bytes — matching SHA proves the remote bytes are ours. Verify and upgrade.
-            if case .alreadyExists = result {
-                do {
-                    if try await verifyMatchesLocalWithRetries(client: client, remotePath: remotePath, localURL: localURL) {
-                        return CreateOutcome(result: .created, verification: .verifiedLocalBytes)
-                    }
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch let error where RemoteWriteClassifier.classifyVerifyFailure(error) == .transient {
-                } catch {
-                    throw Error.finalVerificationFailed(remotePath: remotePath, underlying: error)
-                }
-            }
-            return CreateOutcome(result: result, verification: .unverified)
+            let attempt = try await MetadataCreateOrchestrator.atomicCreateThenVerify(
+                client: client,
+                localURL: localURL,
+                remotePath: remotePath,
+                respectTaskCancellation: respectTaskCancellation,
+                verifier: MetadataWriteVerifiers.byteEquality
+            )
+            return try Self.mapExclusiveCreateAttempt(attempt, remotePath: remotePath)
         case .overwritePossible:
             let stagingPath = "\(remotePath).staging-\(UUID().uuidString)"
             let stagingResult: AtomicCreateResult
@@ -145,23 +119,18 @@ enum MetadataCreateGate {
                         "staging path \(stagingPath) already exists — UUID collision indicates a programming error"
                 ])
             }
-            do {
-                guard try await verifyMatchesLocalWithRetries(
-                    client: client,
-                    remotePath: stagingPath,
-                    localURL: localURL
-                ) else {
-                    try? await client.delete(path: stagingPath)
-                    throw Error.stagingVerificationFailed(remotePath: stagingPath, underlying: nil)
-                }
-            } catch is CancellationError {
+            let stagingVerifyOutcome = await MetadataWriteVerifiers.byteEquality.verify(
+                client: client, remotePath: stagingPath, localURL: localURL
+            )
+            switch Self.mapStagingVerify(stagingVerifyOutcome, stagingPath: stagingPath) {
+            case .continueToFinalization:
+                break
+            case .cleanupThenThrowStagingVerificationFailed(let underlying):
+                try? await client.delete(path: stagingPath)
+                throw Error.stagingVerificationFailed(remotePath: stagingPath, underlying: underlying)
+            case .cleanupThenThrowCancellation:
                 try? await client.delete(path: stagingPath)
                 throw CancellationError()
-            } catch let error as Error {
-                throw error
-            } catch {
-                try? await client.delete(path: stagingPath)
-                throw Error.stagingVerificationFailed(remotePath: stagingPath, underlying: error)
             }
             do {
                 let supportsExclusiveMove = try await client.resolvedSupportsExclusiveMoveIfAbsent(forDestinationPath: remotePath)
@@ -182,52 +151,124 @@ enum MetadataCreateGate {
                     }
                 }
                 if case .alreadyExists = finalization {
-                    do {
-                        if try await verifyMatchesLocalWithRetries(client: client, remotePath: remotePath, localURL: localURL) {
-                            try? await client.delete(path: stagingPath)
-                            return CreateOutcome(result: .created, verification: .verifiedLocalBytes)
-                        }
-                    } catch is CancellationError {
-                        try? await client.delete(path: stagingPath)
-                        throw CancellationError()
-                    } catch let error where RemoteWriteClassifier.classifyVerifyFailure(error) == .transient {
-                    } catch {
-                        try? await client.delete(path: stagingPath)
-                        throw Error.finalVerificationFailed(remotePath: remotePath, underlying: error)
-                    }
+                    let postMoveOutcome = await MetadataWriteVerifiers.byteEquality.verify(
+                        client: client, remotePath: remotePath, localURL: localURL
+                    )
+                    let mapped = Self.mapPostMoveAlreadyExistsVerify(postMoveOutcome, remotePath: remotePath)
                     try? await client.delete(path: stagingPath)
-                    return CreateOutcome(result: .alreadyExists, verification: .unverified)
+                    switch mapped {
+                    case .returnCreatedVerifiedLocalBytes:
+                        return CreateOutcome(result: .created, verification: .verifiedLocalBytes)
+                    case .returnAlreadyExistsUnverified:
+                        return CreateOutcome(result: .alreadyExists, verification: .unverified)
+                    case .throwFinalVerificationFailed(let underlying):
+                        throw Error.finalVerificationFailed(remotePath: remotePath, underlying: underlying)
+                    case .throwCancellation:
+                        throw CancellationError()
+                    }
                 }
             } catch {
                 try? await client.delete(path: stagingPath)
                 // URLSession-shaped cancellation can leak from moveIfAbsent / copy /
                 // metadata on URLSession-backed clients; normalize so direct callers
-                // (SnapshotWriter, V1MigrationService) get CancellationError instead
-                // of a wrapped finalization failure.
+                // get CancellationError instead of a wrapped finalization failure.
                 if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 throw error
             }
             try? await client.delete(path: stagingPath)
-            do {
-                guard try await verifyMatchesLocalWithRetries(
-                    client: client,
-                    remotePath: remotePath,
-                    localURL: localURL
-                ) else {
-                    throw Error.finalVerificationFailed(remotePath: remotePath, underlying: nil)
-                }
-                return CreateOutcome(result: .created, verification: .verifiedLocalBytes)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch let error as Error {
-                throw error
-            } catch let error where RemoteWriteClassifier.isCancellation(error) {
-                throw CancellationError()
-            } catch let error where RemoteWriteClassifier.classifyVerifyFailure(error) == .transient {
-                return CreateOutcome(result: .bestEffortRetry, verification: .unverified)
-            } catch {
-                throw Error.finalVerificationFailed(remotePath: remotePath, underlying: error)
-            }
+            let finalVerifyOutcome = await MetadataWriteVerifiers.byteEquality.verify(
+                client: client, remotePath: remotePath, localURL: localURL
+            )
+            return try Self.mapFinalPostMoveVerify(finalVerifyOutcome, remotePath: remotePath)
+        }
+    }
+
+    // MARK: - Verify-outcome mapping helpers (internal for test coverage)
+
+    internal enum StagingVerifyAction: Sendable {
+        case continueToFinalization
+        case cleanupThenThrowStagingVerificationFailed(underlying: (any Swift.Error)?)
+        case cleanupThenThrowCancellation
+    }
+
+    internal enum PostMoveAlreadyExistsAction: Sendable {
+        case returnCreatedVerifiedLocalBytes
+        case returnAlreadyExistsUnverified
+        case throwFinalVerificationFailed(underlying: (any Swift.Error)?)
+        case throwCancellation
+    }
+
+    internal static func mapExclusiveCreateAttempt(
+        _ attempt: MetadataCreateOrchestrator.AfterCreateAttempt,
+        remotePath: String
+    ) throws -> CreateOutcome {
+        switch attempt {
+        case .createdWithoutVerification:
+            return CreateOutcome(result: .created, verification: .unverified)
+        case .verifyAttempted(_, .matched):
+            return CreateOutcome(result: .created, verification: .verifiedLocalBytes)
+        case .verifyAttempted(let result, .deterministicMismatch),
+             .verifyAttempted(let result, .transientFailure):
+            // Preserve the original atomicCreate result so callers like
+            // MigrationMarkerStore that distinguish .alreadyExists (peer collision —
+            // retry with a different marker) from .bestEffortRetry (our upload landed
+            // but couldn't be verified — fall through to caller's verify) keep their
+            // existing decision paths.
+            return CreateOutcome(result: result, verification: .unverified)
+        case .verifyAttempted(_, .permanentFailure(let underlying)):
+            throw Error.finalVerificationFailed(remotePath: remotePath, underlying: underlying)
+        case .verifyAttempted(_, .cancelled):
+            throw CancellationError()
+        }
+    }
+
+    internal static func mapStagingVerify(
+        _ outcome: MetadataWriteVerifyOutcome,
+        stagingPath: String
+    ) -> StagingVerifyAction {
+        switch outcome {
+        case .matched:
+            return .continueToFinalization
+        case .deterministicMismatch:
+            return .cleanupThenThrowStagingVerificationFailed(underlying: nil)
+        case .transientFailure(let underlying), .permanentFailure(let underlying):
+            return .cleanupThenThrowStagingVerificationFailed(underlying: underlying)
+        case .cancelled:
+            return .cleanupThenThrowCancellation
+        }
+    }
+
+    internal static func mapPostMoveAlreadyExistsVerify(
+        _ outcome: MetadataWriteVerifyOutcome,
+        remotePath: String
+    ) -> PostMoveAlreadyExistsAction {
+        switch outcome {
+        case .matched:
+            return .returnCreatedVerifiedLocalBytes
+        case .deterministicMismatch, .transientFailure:
+            return .returnAlreadyExistsUnverified
+        case .permanentFailure(let underlying):
+            return .throwFinalVerificationFailed(underlying: underlying)
+        case .cancelled:
+            return .throwCancellation
+        }
+    }
+
+    internal static func mapFinalPostMoveVerify(
+        _ outcome: MetadataWriteVerifyOutcome,
+        remotePath: String
+    ) throws -> CreateOutcome {
+        switch outcome {
+        case .matched:
+            return CreateOutcome(result: .created, verification: .verifiedLocalBytes)
+        case .deterministicMismatch:
+            throw Error.finalVerificationFailed(remotePath: remotePath, underlying: nil)
+        case .transientFailure:
+            return CreateOutcome(result: .bestEffortRetry, verification: .unverified)
+        case .permanentFailure(let underlying):
+            throw Error.finalVerificationFailed(remotePath: remotePath, underlying: underlying)
+        case .cancelled:
+            throw CancellationError()
         }
     }
 
@@ -248,65 +289,23 @@ enum MetadataCreateGate {
         }
     }
 
+    // Thin shim for existing direct callers; delegates to MetadataWriteVerifiers.byteEquality.
     static func verifyMatchesLocalWithRetries(
         client: any RemoteStorageClientProtocol,
         remotePath: String,
         localURL: URL
     ) async throws -> Bool {
-        var lastError: Swift.Error?
-        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
-        var attempt = 0
-        while true {
-            do {
-                if try await verifyMatchesLocal(client: client, remotePath: remotePath, localURL: localURL) {
-                    return true
-                }
-                lastError = nil
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                lastError = error
-            }
-            // Same-size stale reads after our own write also need the grace window;
-            // exiting on the first byte mismatch defeats the eventual-consistency budget.
-            guard Date() < deadline else {
-                if let lastError { throw lastError }
-                return false
-            }
-            try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
-            attempt += 1
-        }
-    }
-
-    private static func verifyMatchesLocal(
-        client: any RemoteStorageClientProtocol,
-        remotePath: String,
-        localURL: URL
-    ) async throws -> Bool {
-        let verifyURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("metadata-verify-\(UUID().uuidString).bin")
-        defer { try? FileManager.default.removeItem(at: verifyURL) }
-        try await client.download(remotePath: remotePath, localURL: verifyURL)
-        let remoteAttrs = try FileManager.default.attributesOfItem(atPath: verifyURL.path)
-        let localAttrs = try FileManager.default.attributesOfItem(atPath: localURL.path)
-        guard let remoteSize = remoteAttrs[.size] as? Int64,
-              let localSize = localAttrs[.size] as? Int64,
-              remoteSize == localSize else {
+        switch await MetadataWriteVerifiers.byteEquality.verify(
+            client: client, remotePath: remotePath, localURL: localURL
+        ) {
+        case .matched:
+            return true
+        case .deterministicMismatch:
             return false
+        case .transientFailure(let underlying), .permanentFailure(let underlying):
+            throw underlying
+        case .cancelled:
+            throw CancellationError()
         }
-        return try streamingSHA256(of: verifyURL) == streamingSHA256(of: localURL)
-    }
-
-    private static func streamingSHA256(of url: URL) throws -> SHA256.Digest {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        var hasher = SHA256()
-        let chunkSize = 64 * 1024
-        while true {
-            try Task.checkCancellation()
-            let chunk = try handle.read(upToCount: chunkSize) ?? Data()
-            if chunk.isEmpty { break }
-            hasher.update(data: chunk)
-        }
-        return hasher.finalize()
     }
 }
