@@ -240,6 +240,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
                     && !path.hasSuffix("RepoCheckpointServiceTests.swift")
                     && !path.hasSuffix("RepoCheckpointBarrierHook.swift")
                     && !path.hasSuffix("RepoCheckpointBarrierHookTests.swift")
+                    && !path.hasSuffix("RetentionMaintenanceOrchestratorTests.swift")
             }
         for path in sourceFiles {
             let text = try String(contentsOf: root.appendingPathComponent(path))

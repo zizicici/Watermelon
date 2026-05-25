@@ -170,7 +170,7 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         XCTAssertEqual(lhs, rhs)
     }
 
-    func testDeletionProductionEnablementStaysBehindSafetyGateAndHook() throws {
+    func testDeletionProductionEnablementStaysBehindSafetyGateAndOrchestrator() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -180,8 +180,8 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         XCTAssertFalse(gateSource.contains("300"))
         XCTAssertFalse(gateSource.contains("300000"))
 
-        let hookSource = try source(root, "Shared/Services/Repo/RepoCheckpointBarrierHook.swift")
-        XCTAssertTrue(hookSource.contains("RepoRetentionCommitDeleteExecutor("))
+        let orchestratorSource = try source(root, "Shared/Services/Repo/RetentionMaintenanceOrchestrator.swift")
+        XCTAssertTrue(orchestratorSource.contains("RepoRetentionCommitDeleteExecutor("))
 
         for path in try FileManager.default.subpathsOfDirectory(atPath: root.path)
         where path.hasSuffix(".swift") && !path.hasPrefix("WatermelonTests/") {

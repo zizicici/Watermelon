@@ -300,7 +300,7 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
         XCTAssertEqual(verification, .inconclusive(reason: .repoIdentityReadFailed))
     }
 
-    func testRuntimeWiringOnlyUsesCheckpointBarrierHookAndExecutorDeletes() throws {
+    func testRuntimeWiringOnlyUsesRetentionMaintenanceOrchestratorAndExecutorDeletes() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -329,7 +329,7 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
                 ? relativePath(root: root, url: url)
                 : nil
         }.sorted()
-        XCTAssertEqual(callSites, ["Shared/Services/Repo/RepoCheckpointBarrierHook.swift"])
+        XCTAssertEqual(callSites, ["Shared/Services/Repo/RetentionMaintenanceOrchestrator.swift"])
 
         for path in [
             "Shared/Services/Repo/BackupV2RuntimeBuilder.swift",
@@ -342,8 +342,8 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
             XCTAssertFalse(text.contains("RepoRetentionCommitDeleteExecutor"), "executor unexpectedly wired in \(path)")
         }
 
-        let hook = try source(root, "Shared/Services/Repo/RepoCheckpointBarrierHook.swift")
-        XCTAssertTrue(hook.contains("RepoRetentionCommitDeleteExecutor("))
+        let orchestrator = try source(root, "Shared/Services/Repo/RetentionMaintenanceOrchestrator.swift")
+        XCTAssertTrue(orchestrator.contains("RepoRetentionCommitDeleteExecutor("))
     }
 
     private func makeReadyClient(includeWriterB: Bool = false) async throws -> InMemoryRemoteStorageClient {

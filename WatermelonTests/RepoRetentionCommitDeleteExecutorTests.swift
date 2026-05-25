@@ -418,7 +418,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
         })
     }
 
-    func testProductionWiringOnlyUsesCheckpointBarrierHook() throws {
+    func testProductionWiringOnlyUsesRetentionMaintenanceOrchestrator() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -439,7 +439,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
                 ? relativePath(root: root, url: url)
                 : nil
         }.sorted()
-        XCTAssertEqual(callSites, ["Shared/Services/Repo/RepoCheckpointBarrierHook.swift"])
+        XCTAssertEqual(callSites, ["Shared/Services/Repo/RetentionMaintenanceOrchestrator.swift"])
     }
 
     private func makeReadyClient(seqs: ClosedRange<UInt64>, covered: CoveredRanges) async throws -> InMemoryRemoteStorageClient {

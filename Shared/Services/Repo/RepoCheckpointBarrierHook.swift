@@ -76,23 +76,7 @@ struct RepoCheckpointBarrierHook: Sendable {
     }
 
     private func runCommitPrefixDeletion() async throws -> RepoRetentionCommitDeleteResult {
-        let result = try await RepoRetentionCommitDeleteExecutor(
-            client: services.metadataClient,
-            basePath: services.basePath,
-            policy: services.compactionPolicy,
-            isLocalVolume: services.isLocalVolume,
-            peerStatusProvider: {
-                try await services.liveness.snapshotRetentionPeerStatuses()
-            }
-        ).execute(
-            month: month,
-            expectedRepoID: services.repoID,
-            nowMs: Int64(Date().timeIntervalSince1970 * 1000)
-        )
-        if result.containsCancellation {
-            throw CancellationError()
-        }
-        return result
+        try await RetentionMaintenanceOrchestrator(services: services).runMonthCommitPrefixDelete(month: month)
     }
 }
 
@@ -111,81 +95,6 @@ struct RepoRetentionStartupMaintenance: Sendable {
     }
 
     func run() async throws -> [LibraryMonthKey: RepoRetentionCommitDeleteResult] {
-        let now = nowMs()
-        let months = try await candidateMonths(nowMs: now)
-        var results: [LibraryMonthKey: RepoRetentionCommitDeleteResult] = [:]
-        for month in months {
-            try Task.checkCancellation()
-            let result = try await RepoRetentionCommitDeleteExecutor(
-                client: services.metadataClient,
-                basePath: services.basePath,
-                policy: services.compactionPolicy,
-                isLocalVolume: services.isLocalVolume,
-                peerStatusProvider: {
-                    try await services.liveness.snapshotRetentionPeerStatuses()
-                }
-            ).execute(
-                month: month,
-                expectedRepoID: services.repoID,
-                nowMs: now
-            )
-            if result.containsCancellation {
-                throw CancellationError()
-            }
-            results[month] = result
-        }
-        return results
-    }
-
-    private func candidateMonths(nowMs: Int64) async throws -> [LibraryMonthKey] {
-        let load = try await RetentionManifestRemoteStore(
-            client: services.metadataClient,
-            basePath: services.basePath
-        ).loadManifests(expectedRepoID: services.repoID, month: nil)
-        let minAgeMs = Int64(services.compactionPolicy.retentionStalenessThresholdSeconds) * 1000
-        let months = Set(load.valid.compactMap { manifest -> LibraryMonthKey? in
-            guard nowMs - manifest.createdAtMs >= minAgeMs else { return nil }
-            return manifest.month
-        })
-        return months.sorted()
-    }
-}
-
-private extension RepoRetentionCommitDeleteResult {
-    var containsCancellation: Bool {
-        switch self {
-        case .preflightBlocked(_, _),
-             .completed(_, _, _):
-            return false
-        case .stopped(_, let reason, _, let verification):
-            return reason.containsCancellation || verification?.containsCancellation == true
-        case .verificationFailed(_, let stopReason, _, let verification):
-            return stopReason?.containsCancellation == true || verification.containsCancellation
-        case .verificationInconclusive(_, let stopReason, _, let verification):
-            return stopReason?.containsCancellation == true || verification.containsCancellation
-        }
-    }
-}
-
-private extension RepoRetentionCommitDeleteStopReason {
-    var containsCancellation: Bool {
-        switch self {
-        case .cancelled(_):
-            return true
-        case .deleteFailed(_, .cancelled):
-            return true
-        case .deleteFailed(_, _),
-             .preDeleteRevalidationFailed(_, _):
-            return false
-        }
-    }
-}
-
-private extension RepoRetentionPostDeleteVerificationResult {
-    var containsCancellation: Bool {
-        if case .inconclusive(reason: .cancelled) = self {
-            return true
-        }
-        return false
+        try await RetentionMaintenanceOrchestrator(services: services, nowMs: nowMs).runStartupCommitPrefixSweep()
     }
 }
