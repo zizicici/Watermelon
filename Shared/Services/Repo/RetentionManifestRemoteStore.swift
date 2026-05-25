@@ -111,9 +111,7 @@ struct RetentionManifestRemoteStore: Sendable {
         expectedRepoID: String?,
         month: LibraryMonthKey?
     ) async throws -> RetentionManifestLoadResult {
-        let canonicalExpectedRepoID = expectedRepoID.flatMap {
-            UUID(uuidString: $0)?.uuidString.lowercased()
-        } ?? expectedRepoID?.lowercased()
+        let canonicalExpectedRepoID = expectedRepoID.map { RepoCanonicalIdentity.normalizeLossy($0) }
         let dir = RepoLayout.retentionDirectoryPath(base: basePath)
         let entries: [RemoteStorageEntry]
         do {

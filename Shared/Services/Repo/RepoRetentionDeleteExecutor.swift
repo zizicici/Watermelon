@@ -105,7 +105,7 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
     ) async throws -> RepoRetentionCommitDeleteResult {
         try Task.checkCancellation()
 
-        let repoID = canonicalRepoIDForRetentionDelete(expectedRepoID)
+        let repoID = RepoCanonicalIdentity.normalizeLossy(expectedRepoID)
         let preflightResult = try await RepoRetentionDeletePreflightService(
             client: client,
             basePath: basePath,
@@ -306,10 +306,10 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         header: CommitHeader,
         expectedRepoID: String
     ) -> RepoRetentionCandidateHeaderMismatchReason? {
-        if canonicalRepoIDForRetentionDelete(header.repoID) != expectedRepoID {
+        if RepoCanonicalIdentity.normalizeLossy(header.repoID) != expectedRepoID {
             return .repoID(
                 expected: expectedRepoID,
-                actual: canonicalRepoIDForRetentionDelete(header.repoID)
+                actual: RepoCanonicalIdentity.normalizeLossy(header.repoID)
             )
         }
         if CommitHeader.parseMonthScope(header.scope) != candidate.month {

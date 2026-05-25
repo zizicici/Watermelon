@@ -47,13 +47,13 @@ struct RepoRetentionPostDeleteVerifier: Sendable {
         expectedRepoID: String,
         contract: RepoRetentionPostDeleteEquivalenceContract
     ) async -> RepoRetentionPostDeleteVerificationResult {
-        let repoID = canonicalRepoIDForRetentionDelete(expectedRepoID)
+        let repoID = RepoCanonicalIdentity.normalizeLossy(expectedRepoID)
         do {
-            switch try await RepoBootstrap(client: client, basePath: basePath).loadRepoIDStrict() {
+            switch try await RepoCanonicalIdentityReader(client: client, basePath: basePath).loadCanonical() {
             case .absent:
                 return .failed(reason: .missingRepoIdentity(expected: repoID), evidence: nil)
             case .found(let observed):
-                let observedRepoID = canonicalRepoIDForRetentionDelete(observed)
+                let observedRepoID = RepoCanonicalIdentity.normalizeLossy(observed)
                 guard observedRepoID == repoID else {
                     return .failed(
                         reason: .repoIdentityMismatch(expected: repoID, observed: observedRepoID),
@@ -103,8 +103,4 @@ struct RepoRetentionPostDeleteVerifier: Sendable {
             return .failed(reason: reason, evidence: evidence)
         }
     }
-}
-
-func canonicalRepoIDForRetentionDelete(_ value: String) -> String {
-    UUID(uuidString: value)?.uuidString.lowercased() ?? value.lowercased()
 }

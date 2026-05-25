@@ -423,10 +423,13 @@ final class LegacyMigrationExecutor {
     }
 
     private func refuseIfV2IdentityPresent() async throws {
-        let bootstrap = RepoBootstrap(client: client, basePath: profile.basePath)
+        let reader = RepoCanonicalIdentityReader(client: client, basePath: profile.basePath)
         let repoID: String?
         do {
-            repoID = try await bootstrap.loadRepoID()
+            switch try await reader.loadCanonical() {
+            case .absent: repoID = nil
+            case .found(let id): repoID = id
+            }
         } catch {
             throw NSError(
                 domain: "LegacyMigrationExecutor",

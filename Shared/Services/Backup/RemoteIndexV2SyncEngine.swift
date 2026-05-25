@@ -32,16 +32,14 @@ struct RemoteIndexV2SyncEngine: Sendable {
         basePath: String
     ) async throws -> String {
         do {
-            switch try await RepoBootstrap(client: client, basePath: basePath).loadRepoIDStrict() {
-            case .absent:
-                throw NSError(
-                    domain: "RemoteIndexSyncService",
-                    code: -50,
-                    userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json - backup-flow can repair, sync cannot"]
-                )
-            case .found(let id):
-                return id
-            }
+            return try await RepoCanonicalIdentityReader(client: client, basePath: basePath)
+                .requireCanonical(absentError: {
+                    NSError(
+                        domain: "RemoteIndexSyncService",
+                        code: -50,
+                        userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json - backup-flow can repair, sync cannot"]
+                    )
+                })
         } catch let bootstrap as RepoBootstrap.BootstrapError {
             throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: bootstrap)
         }

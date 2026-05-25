@@ -64,63 +64,42 @@ actor RepoBootstrap {
             try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
             try await client.createDirectory(path: RepoLayout.identityDirectoryPath(base: basePath))
 
-            let finalizedRepoID = try await loadFinalizedRepoID()
+            let firstFinalizedRepoID = try await loadFinalizedRepoID()
 
-            // Non-empty self claim might be canonical; only 0-byte is safe to overwrite.
-            try await claims.healZeroByteSelfClaim(writerID: writerID)
+            let bootstrapForLegacy = self
+            let election = try await claims.runOwnClaimElection(
+                requestedRepoID: requestedRepoID,
+                writerID: writerID,
+                firstFinalizedRepoID: firstFinalizedRepoID,
+                loadLegacyCacheRepoID: {
+                    switch try await bootstrapForLegacy.loadRepoJSONStrictForElection() {
+                    case .absent: return nil
+                    case .found(let id): return id
+                    }
+                }
+            )
 
-            let claimElection: ClaimElectionResult
-            if finalizedRepoID == nil {
-                claimElection = try await claims.canonicalElection(ignoringCorruptSelfClaimFor: writerID)
-            } else {
-                claimElection = ClaimElectionResult(repoID: nil, ignoredSelfCorrupt: false)
-            }
-            let existingCanonical = claimElection.repoID
-            let suggested: String
-            let isElectingFresh: Bool
-            if let finalizedRepoID {
-                suggested = finalizedRepoID
-                isElectingFresh = false
-            } else if let existingCanonical {
-                suggested = existingCanonical
-                isElectingFresh = false
-            } else if case .found(let legacyID) = try await loadRepoJSONStrict() {
-                suggested = legacyID
-                isElectingFresh = false
-            } else if claimElection.ignoredSelfCorrupt {
-                throw BootstrapError.ioFailure(NSError(
-                    domain: "RepoBootstrap",
-                    code: 10,
-                    userInfo: [NSLocalizedDescriptionKey: "own identity claim is corrupt and no trusted repo ID exists; inspect/delete manually"]
-                ))
-            } else {
-                suggested = requestedRepoID
-                isElectingFresh = true
-            }
-
-            let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-            try await claims.writeOwnClaim(repoID: suggested, writerID: writerID, createdAtMs: createdAtMs)
-
+            // Peer-finalize observation must precede any post-write claim re-read.
             let refreshedFinalizedRepoID = try await loadFinalizedRepoID()
             var canonical: String
             if let refreshedFinalizedRepoID {
                 canonical = refreshedFinalizedRepoID
             } else {
-                canonical = try await claims.canonicalRepoID() ?? suggested
+                canonical = try await claims.canonicalRepoID() ?? election.suggested
                 // Re-poll on fresh election; a concurrent first writer could publish a lower lex-min claim right after ours.
-                if isElectingFresh {
+                if election.isElectingFresh {
                     canonical = try await claims.stabilizeFreshElection(initial: canonical)
                 }
             }
 
             // Stale-claim hazard: if a peer's claim later disappears, our claim becomes canonical again and would flip us back to `suggested`.
-            if canonical != suggested {
-                try await claims.writeOwnClaim(repoID: canonical, writerID: writerID, createdAtMs: createdAtMs)
+            if canonical != election.suggested {
+                try await claims.writeOwnClaim(repoID: canonical, writerID: writerID, createdAtMs: election.createdAtMs)
             }
 
             // repo.json is a read-cache; finalized identity/claims are authoritative.
             do {
-                try await writeRepoJSONCache(canonical: canonical, writerID: writerID, createdAtMs: createdAtMs)
+                try await writeRepoJSONCache(canonical: canonical, writerID: writerID, createdAtMs: election.createdAtMs)
             } catch {
                 if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
                 bootstrapLog.warning("[RepoBootstrap] repo.json cache write failed: \(error.localizedDescription, privacy: .public)")
@@ -212,6 +191,10 @@ actor RepoBootstrap {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             throw BootstrapError.ioFailure(error)
         }
+    }
+
+    func loadRepoJSONStrictForElection() async throws -> RepoIDLoad {
+        try await loadRepoJSONStrict()
     }
 
     private func loadRepoJSONStrict() async throws -> RepoIDLoad {

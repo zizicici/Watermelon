@@ -316,19 +316,16 @@ struct BackupRunPreparationService: Sendable {
     ) async throws -> VerifyMonthReport {
         let metadataClient = wrapIfSerial(client)
         // Verifier needs remote repoID to filter foreign-id commits; absent on a V2 repo means broken identity, refuse.
-        let bootstrap = RepoBootstrap(client: metadataClient, basePath: basePath)
         let expectedRepoID: String
         do {
-            switch try await bootstrap.loadRepoIDStrict() {
-            case .absent:
-                throw NSError(
-                    domain: "BackupRunPreparation",
-                    code: -51,
-                    userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json - run a backup to repair before verifying"]
-                )
-            case .found(let id):
-                expectedRepoID = id
-            }
+            expectedRepoID = try await RepoCanonicalIdentityReader(client: metadataClient, basePath: basePath)
+                .requireCanonical(absentError: {
+                    NSError(
+                        domain: "BackupRunPreparation",
+                        code: -51,
+                        userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json - run a backup to repair before verifying"]
+                    )
+                })
         } catch let bootstrap as RepoBootstrap.BootstrapError {
             throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: bootstrap)
         }

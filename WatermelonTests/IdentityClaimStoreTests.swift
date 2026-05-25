@@ -560,6 +560,517 @@ final class IdentityClaimStoreTests: XCTestCase {
         guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return }
         await client.injectFile(path: RepoLayout.identityClaimPath(base: basePath, writerID: writerID), data: data)
     }
+
+    // MARK: - runOwnClaimElection
+
+    private let requestedRepoID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    private let existingCanonicalRepoID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    private let legacyCacheRepoID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    private let finalizedRepoID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+
+    private func installFinalizedMarker(_ client: InMemoryRemoteStorageClient, repoID: String) async throws {
+        let wire = RepoIdentityFinalizationWire(
+            repoID: repoID,
+            formatVersion: 1,
+            createdAtMs: 1_000,
+            createdByWriter: otherWriter
+        )
+        let data = try wire.encode()
+        await client.injectFile(path: RepoLayout.identityFinalizationFilePath(base: basePath), data: data)
+    }
+
+    private func installLegacyCache(_ client: InMemoryRemoteStorageClient, repoID: String) async throws {
+        let wire = RepoCacheWire(repoID: repoID, createdAtMs: 1_000, createdByWriter: otherWriter)
+        let data = try wire.encode()
+        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), data: data)
+    }
+
+    private func installMalformedLegacyCache(_ client: InMemoryRemoteStorageClient) async {
+        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), data: Data("malformed".utf8))
+    }
+
+    // Counts how many times the legacy-cache closure is invoked during an election call.
+    private final class Counter: @unchecked Sendable {
+        private var value = 0
+        private let lock = NSLock()
+        func increment() { lock.lock(); value += 1; lock.unlock() }
+        func get() -> Int { lock.lock(); defer { lock.unlock() }; return value }
+    }
+
+    private func wrapLegacyClosure(_ counter: Counter, returning value: String?) -> () async throws -> String? {
+        return {
+            counter.increment()
+            return value
+        }
+    }
+
+    private func wrapLegacyClosure(_ counter: Counter, throwing error: Error) -> () async throws -> String? {
+        return {
+            counter.increment()
+            throw error
+        }
+    }
+
+    func testRunOwnClaimElection_FreshElection_SuggestedIsRequested_IsElectingFreshTrue() async throws {
+        let (_, store) = await makeStore()
+        let counter = Counter()
+        let result = try await store.runOwnClaimElection(
+            requestedRepoID: requestedRepoID,
+            writerID: selfWriter,
+            firstFinalizedRepoID: nil,
+            loadLegacyCacheRepoID: wrapLegacyClosure(counter, returning: nil)
+        )
+        XCTAssertEqual(result.suggested, requestedRepoID)
+        XCTAssertTrue(result.isElectingFresh)
+        XCTAssertGreaterThan(result.createdAtMs, 0)
+        XCTAssertEqual(counter.get(), 1, "no finalized + no existing canonical: closure invoked once")
+    }
+
+    func testRunOwnClaimElection_FirstFinalizedPresent_SuggestedIsFinalized_IsElectingFreshFalse_ElectionScanSkipped_LegacyClosureNotInvoked() async throws {
+        let (_, store) = await makeStore()
+        let counter = Counter()
+        let result = try await store.runOwnClaimElection(
+            requestedRepoID: requestedRepoID,
+            writerID: selfWriter,
+            firstFinalizedRepoID: finalizedRepoID,
+            loadLegacyCacheRepoID: wrapLegacyClosure(counter, returning: legacyCacheRepoID)
+        )
+        XCTAssertEqual(result.suggested, finalizedRepoID)
+        XCTAssertFalse(result.isElectingFresh)
+        XCTAssertEqual(counter.get(), 0, "firstFinalized present: legacy closure must NOT be invoked")
+    }
+
+    func testRunOwnClaimElection_ExistingCanonical_SuggestedIsExisting_IsElectingFreshFalse_LegacyClosureNotInvoked() async throws {
+        let (client, store) = await makeStore()
+        await injectClaim(client, writerID: otherWriter, repoID: existingCanonicalRepoID, createdAtMs: 500)
+        let counter = Counter()
+        let result = try await store.runOwnClaimElection(
+            requestedRepoID: requestedRepoID,
+            writerID: selfWriter,
+            firstFinalizedRepoID: nil,
+            loadLegacyCacheRepoID: wrapLegacyClosure(counter, returning: legacyCacheRepoID)
+        )
+        XCTAssertEqual(result.suggested, existingCanonicalRepoID)
+        XCTAssertFalse(result.isElectingFresh)
+        XCTAssertEqual(counter.get(), 0, "existingCanonical present: legacy closure must NOT be invoked")
+    }
+
+    func testRunOwnClaimElection_LegacyCacheOnly_SuggestedIsLegacy_IsElectingFreshFalse_LegacyClosureInvokedOnce() async throws {
+        let (_, store) = await makeStore()
+        let counter = Counter()
+        let result = try await store.runOwnClaimElection(
+            requestedRepoID: requestedRepoID,
+            writerID: selfWriter,
+            firstFinalizedRepoID: nil,
+            loadLegacyCacheRepoID: wrapLegacyClosure(counter, returning: legacyCacheRepoID)
+        )
+        XCTAssertEqual(result.suggested, legacyCacheRepoID)
+        XCTAssertFalse(result.isElectingFresh)
+        XCTAssertEqual(counter.get(), 1)
+    }
+
+    func testRunOwnClaimElection_OwnClaimCorrupt_NoTrustedID_ThrowsBootstrapErrorCode10() async throws {
+        let (client, store) = await makeStore()
+        let selfClaimPath = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        await client.injectFile(path: selfClaimPath, data: Data("garbage".utf8))
+        let counter = Counter()
+        do {
+            _ = try await store.runOwnClaimElection(
+                requestedRepoID: requestedRepoID,
+                writerID: selfWriter,
+                firstFinalizedRepoID: nil,
+                loadLegacyCacheRepoID: wrapLegacyClosure(counter, returning: nil)
+            )
+            XCTFail("expected BootstrapError.ioFailure code 10")
+        } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
+            XCTAssertEqual(error.domain, "RepoBootstrap")
+            XCTAssertEqual(error.code, 10)
+        }
+    }
+
+    func testRunOwnClaimElection_OwnClaimCorrupt_FirstFinalizedPresent_AdoptsFinalized() async throws {
+        let (client, store) = await makeStore()
+        let selfClaimPath = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        await client.injectFile(path: selfClaimPath, data: Data("garbage".utf8))
+        let counter = Counter()
+        let result = try await store.runOwnClaimElection(
+            requestedRepoID: requestedRepoID,
+            writerID: selfWriter,
+            firstFinalizedRepoID: finalizedRepoID,
+            loadLegacyCacheRepoID: wrapLegacyClosure(counter, returning: nil)
+        )
+        XCTAssertEqual(result.suggested, finalizedRepoID)
+        XCTAssertFalse(result.isElectingFresh)
+        XCTAssertEqual(counter.get(), 0)
+    }
+
+    func testRunOwnClaimElection_OwnClaimCorrupt_LegacyCachePresent_AdoptsLegacy_IsElectingFreshFalse() async throws {
+        let (client, store) = await makeStore()
+        let selfClaimPath = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        await client.injectFile(path: selfClaimPath, data: Data("garbage".utf8))
+        let counter = Counter()
+        let result = try await store.runOwnClaimElection(
+            requestedRepoID: requestedRepoID,
+            writerID: selfWriter,
+            firstFinalizedRepoID: nil,
+            loadLegacyCacheRepoID: wrapLegacyClosure(counter, returning: legacyCacheRepoID)
+        )
+        XCTAssertEqual(result.suggested, legacyCacheRepoID)
+        XCTAssertFalse(result.isElectingFresh)
+        XCTAssertEqual(counter.get(), 1)
+    }
+
+    func testRunOwnClaimElection_HealsZeroByteSelfClaimFirst() async throws {
+        let (client, store) = await makeStore()
+        let selfClaimPath = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        await client.injectFile(path: selfClaimPath, data: Data())
+        let counter = Counter()
+        let result = try await store.runOwnClaimElection(
+            requestedRepoID: requestedRepoID,
+            writerID: selfWriter,
+            firstFinalizedRepoID: nil,
+            loadLegacyCacheRepoID: wrapLegacyClosure(counter, returning: nil)
+        )
+        XCTAssertEqual(result.suggested, requestedRepoID)
+        XCTAssertTrue(result.isElectingFresh)
+        let meta = try await client.metadata(path: selfClaimPath)
+        XCTAssertNotNil(meta)
+        XCTAssertGreaterThan(meta?.size ?? 0, 0)
+    }
+
+    func testRunOwnClaimElection_PeerWinsLexMin_ElectionResolvesToPeer_IsElectingFreshFalse() async throws {
+        let (client, store) = await makeStore()
+        await injectClaim(client, writerID: otherWriter, repoID: existingCanonicalRepoID, createdAtMs: 100)
+        let counter = Counter()
+        let result = try await store.runOwnClaimElection(
+            requestedRepoID: requestedRepoID,
+            writerID: selfWriter,
+            firstFinalizedRepoID: nil,
+            loadLegacyCacheRepoID: wrapLegacyClosure(counter, returning: nil)
+        )
+        XCTAssertEqual(result.suggested, existingCanonicalRepoID, "peer's lex-min claim wins")
+        XCTAssertFalse(result.isElectingFresh)
+        XCTAssertEqual(counter.get(), 0)
+    }
+
+    func testRunOwnClaimElection_DoesNotReadFinalizedItself_DoesNotCallStabilizeFreshElection_DoesNotWriteOwnClaimTwice() async throws {
+        // Negative-surface: method does not perform finalized-marker I/O. Install a
+        // marker; if runOwnClaimElection read it itself, suggested would become
+        // finalizedRepoID rather than requestedRepoID (caller passes nil).
+        let (client, store) = await makeStore()
+        try await installFinalizedMarker(client, repoID: finalizedRepoID)
+        let counter = Counter()
+        let result = try await store.runOwnClaimElection(
+            requestedRepoID: requestedRepoID,
+            writerID: selfWriter,
+            firstFinalizedRepoID: nil,
+            loadLegacyCacheRepoID: wrapLegacyClosure(counter, returning: nil)
+        )
+        XCTAssertEqual(result.suggested, requestedRepoID,
+                       "method must NOT consult finalized marker itself; it trusts firstFinalizedRepoID = nil")
+        XCTAssertTrue(result.isElectingFresh)
+        let selfClaimPath = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("verify-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        try await client.download(remotePath: selfClaimPath, localURL: temp)
+        let data = try Data(contentsOf: temp)
+        let wire = try IdentityClaimWire(data: data)
+        XCTAssertEqual(wire.repoID, requestedRepoID)
+        XCTAssertEqual(wire.writerID, selfWriter)
+    }
+
+    // REGRESSION: Valid existing claim + malformed legacy cache must adopt the claim
+    // without invoking the legacy-cache closure. Pins Off-ramp K and the lazy contract.
+    func testRunOwnClaimElection_ValidExistingClaim_MalformedLegacyRepoJSON_AdoptsClaim_DoesNotReadLegacyCache() async throws {
+        let (client, store) = await makeStore()
+        await injectClaim(client, writerID: otherWriter, repoID: existingCanonicalRepoID, createdAtMs: 500)
+        await installMalformedLegacyCache(client)
+        let counter = Counter()
+        let result = try await store.runOwnClaimElection(
+            requestedRepoID: requestedRepoID,
+            writerID: selfWriter,
+            firstFinalizedRepoID: nil,
+            loadLegacyCacheRepoID: wrapLegacyClosure(
+                counter,
+                throwing: RepoBootstrap.BootstrapError.ioFailure(NSError(
+                    domain: "RepoBootstrap", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "repo.json malformed"]
+                ))
+            )
+        )
+        XCTAssertEqual(result.suggested, existingCanonicalRepoID,
+                       "valid existing claim must win — closure not consulted")
+        XCTAssertFalse(result.isElectingFresh)
+        XCTAssertEqual(counter.get(), 0, "malformed legacy cache must NOT be touched when existing claim exists")
+        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
+        let resolved = try await bootstrap.ensureRepoJSON(repoID: requestedRepoID, writerID: selfWriter)
+        XCTAssertEqual(resolved, existingCanonicalRepoID)
+    }
+
+    // REGRESSION: No existing claim + malformed legacy cache must propagate
+    // BootstrapError.ioFailure(code: 1) unchanged. Pins closure error semantics.
+    func testRunOwnClaimElection_NoExistingClaim_MalformedLegacyRepoJSON_ThrowsIOFailureCode1() async throws {
+        let (_, store) = await makeStore()
+        let counter = Counter()
+        do {
+            _ = try await store.runOwnClaimElection(
+                requestedRepoID: requestedRepoID,
+                writerID: selfWriter,
+                firstFinalizedRepoID: nil,
+                loadLegacyCacheRepoID: wrapLegacyClosure(
+                    counter,
+                    throwing: RepoBootstrap.BootstrapError.ioFailure(NSError(
+                        domain: "RepoBootstrap", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "repo.json malformed"]
+                    ))
+                )
+            )
+            XCTFail("expected BootstrapError.ioFailure code 1 to propagate")
+        } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
+            XCTAssertEqual(error.domain, "RepoBootstrap")
+            XCTAssertEqual(error.code, 1)
+            XCTAssertEqual(counter.get(), 1, "closure must have been invoked once on the no-finalized + no-existing-canonical arm")
+        }
+    }
+
+    // Peer publishes the finalization marker AFTER our writeOwnClaim but BEFORE the
+    // refreshed finalized read. Refreshed marker must short-circuit step 9; divergence
+    // rewrite (step 10) and repo.json cache (step 11) must reuse the step-7
+    // election.createdAtMs (NOT freshly sample).
+    func testRunOwnClaimElection_PeerFinalizesBetweenWriteAndAdoption_FinalizedWinsWithoutPostWriteElection() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        let wire = RepoIdentityFinalizationWire(
+            repoID: finalizedRepoID,
+            formatVersion: 1,
+            createdAtMs: 1_000,
+            createdByWriter: otherWriter
+        )
+        let markerData = try wire.encode()
+        let markerPath = RepoLayout.identityFinalizationFilePath(base: basePath)
+        let identityDir = RepoLayout.identityDirectoryPath(base: basePath)
+        let selfClaimPath = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        let cachePath = RepoLayout.repoFilePath(base: basePath)
+        let client = PostSelfClaimInjectingClient(
+            inner: inner,
+            injectAtPath: markerPath,
+            injectPayload: markerData,
+            triggerOnPath: selfClaimPath,
+            identityDir: identityDir
+        )
+        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
+        let resolved = try await bootstrap.ensureRepoJSON(repoID: requestedRepoID, writerID: selfWriter)
+        XCTAssertEqual(resolved, finalizedRepoID, "peer-finalized marker must win at step 9")
+
+        // Step 9 must short-circuit on the refreshed finalized marker. Post-write
+        // canonicalElection (which lists the identity dir) must NOT run.
+        let identityListsAfterFire = await client.identityListCountAfterFire
+        XCTAssertEqual(identityListsAfterFire, 0,
+                       "refreshed finalized marker must short-circuit post-write claim re-read and stabilizeFreshElection")
+
+        // Expect EXACTLY 3 atomicCreates: step 7 (first writeOwnClaim) + step 10
+        // (divergence rewrite) + step 11 (cache). All three carry the same
+        // createdAtMs — the step-7 election timestamp.
+        let captures = await client.capturedWrites
+        let claimWrites = captures.filter { $0.path == selfClaimPath && $0.claimCreatedAtMs != nil }
+        let cacheWrites = captures.filter { $0.path == cachePath && $0.cacheCreatedAtMs != nil }
+        XCTAssertEqual(claimWrites.count, 2, "expected step-7 + step-10 writes to self claim")
+        XCTAssertEqual(cacheWrites.count, 1, "expected step-11 cache write")
+        let step7T = claimWrites[0].claimCreatedAtMs!
+        let step10T = claimWrites[1].claimCreatedAtMs!
+        let step11T = cacheWrites[0].cacheCreatedAtMs!
+        XCTAssertEqual(step10T, step7T,
+                       "step-10 divergence rewrite must reuse step-7 election.createdAtMs (not freshly sample)")
+        XCTAssertEqual(step11T, step7T,
+                       "step-11 cache write must reuse step-7 election.createdAtMs (not freshly sample)")
+
+        XCTAssertEqual(claimWrites[1].path, selfClaimPath)
+        let finalClaimTemp = FileManager.default.temporaryDirectory.appendingPathComponent("verify-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: finalClaimTemp) }
+        try await client.download(remotePath: selfClaimPath, localURL: finalClaimTemp)
+        let finalClaimWire = try IdentityClaimWire(data: try Data(contentsOf: finalClaimTemp))
+        XCTAssertEqual(finalClaimWire.repoID, finalizedRepoID)
+        XCTAssertEqual(finalClaimWire.createdAtMs, step7T)
+    }
+
+    // Delayed-election race through the FULL ensureRepoJSON path. Two wall-clock
+    // delays bracket the suggested-pick ladder:
+    //   (a) 50 ms delay on the first identityDir list (canonicalElection inside
+    //       runOwnClaimElection) — runs BEFORE the suggested-pick ladder.
+    //   (b) 50 ms delay on the first metadata call against repoFilePath (the
+    //       legacy-cache closure invoked DURING the suggested-pick ladder).
+    // tPeer = t0 + 75 sits between the two delay milestones, so any sampling
+    // regression that picks T_self before the suggested-pick ladder produces
+    // T_self <= t0 + 50 < tPeer → self wins lex-min → resolved != peer.
+    // Correct: T_self >= t0 + 100 > tPeer → peer wins → resolved == peer.
+    // The wrapper also captures every atomicCreate's createdAtMs so we can prove
+    // step 10 and step 11 reuse step-7 election.createdAtMs (not a fresh sample).
+    func testRunOwnClaimElection_DelayedElectionPath_PeerClaimWrittenDuringDelay_PeerWinsLexMin() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+
+        let t0 = Int64(Date().timeIntervalSince1970 * 1000)
+        let tPeer: Int64 = t0 + 75
+        let peerClaimDict: [String: Any] = [
+            "v": 1,
+            "repo_id": existingCanonicalRepoID,
+            "created_at_ms": tPeer,
+            "writer_id": otherWriter
+        ]
+        let peerClaimData = try JSONSerialization.data(withJSONObject: peerClaimDict)
+        let peerClaimPath = RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter)
+        let identityDir = RepoLayout.identityDirectoryPath(base: basePath)
+        let selfClaimPath = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        let cachePath = RepoLayout.repoFilePath(base: basePath)
+        let client = PostSelfClaimInjectingClient(
+            inner: inner,
+            injectAtPath: peerClaimPath,
+            injectPayload: peerClaimData,
+            triggerOnPath: selfClaimPath,
+            identityDir: identityDir,
+            repoFilePath: cachePath,
+            firstIdentityListDelay: .milliseconds(50),
+            firstRepoFileMetadataDelay: .milliseconds(50)
+        )
+
+        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
+        let resolved = try await bootstrap.ensureRepoJSON(repoID: requestedRepoID, writerID: selfWriter)
+        XCTAssertEqual(resolved, existingCanonicalRepoID,
+                       "peer wins lex-min — proves T_self sampled AFTER suggested-pick ladder (both delays)")
+
+        let captures = await client.capturedWrites
+        let claimWrites = captures.filter { $0.path == selfClaimPath && $0.claimCreatedAtMs != nil }
+        let cacheWrites = captures.filter { $0.path == cachePath && $0.cacheCreatedAtMs != nil }
+        XCTAssertEqual(claimWrites.count, 2, "expected step-7 + step-10 writes to self claim")
+        XCTAssertEqual(cacheWrites.count, 1, "expected step-11 cache write")
+
+        let step7T = claimWrites[0].claimCreatedAtMs!
+        let step10T = claimWrites[1].claimCreatedAtMs!
+        let step11T = cacheWrites[0].cacheCreatedAtMs!
+        XCTAssertEqual(step10T, step7T,
+                       "step-10 divergence rewrite must reuse step-7 election.createdAtMs (not freshly sample)")
+        XCTAssertEqual(step11T, step7T,
+                       "step-11 cache write must reuse step-7 election.createdAtMs (not freshly sample)")
+
+        XCTAssertGreaterThan(step7T, tPeer,
+                             "T_self sampled AFTER both canonicalElection delay AND legacy-cache delay")
+        XCTAssertGreaterThanOrEqual(step7T, t0 + 100,
+                                    "T_self sampled after the canonicalElection (50 ms) + legacy-cache (50 ms) delays")
+    }
+}
+
+// Wraps an InMemoryRemoteStorageClient. When atomicCreate is called on `triggerOnPath`
+// (the writer's own claim path), it injects an injection payload at `injectAtPath`
+// AFTER the create returns. Used to model a peer publishing a marker or claim in the
+// window between our first writeOwnClaim and our second loadFinalizedRepoID.
+// Also delays the first list on identityDir and the first metadata call against
+// repoFilePath, and captures every atomicCreate's createdAtMs (claim or cache wire).
+private actor PostSelfClaimInjectingClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    private let inner: InMemoryRemoteStorageClient
+    private let injectAtPath: String
+    private let injectPayload: Data
+    private let triggerOnPath: String
+    private let identityDir: String
+    private let repoFilePath: String
+    private let firstIdentityListDelay: Duration
+    private let firstRepoFileMetadataDelay: Duration
+    private var fired = false
+    private var firstIdentityListConsumed = false
+    private var firstRepoFileMetadataConsumed = false
+    private(set) var identityListCountAfterFire = 0
+
+    struct WriteCapture: Sendable {
+        let path: String
+        let claimCreatedAtMs: Int64?
+        let cacheCreatedAtMs: Int64?
+    }
+    private(set) var capturedWrites: [WriteCapture] = []
+
+    init(
+        inner: InMemoryRemoteStorageClient,
+        injectAtPath: String,
+        injectPayload: Data,
+        triggerOnPath: String,
+        identityDir: String,
+        repoFilePath: String = "",
+        firstIdentityListDelay: Duration = .zero,
+        firstRepoFileMetadataDelay: Duration = .zero
+    ) {
+        self.inner = inner
+        self.injectAtPath = injectAtPath
+        self.injectPayload = injectPayload
+        self.triggerOnPath = triggerOnPath
+        self.identityDir = identityDir
+        self.repoFilePath = repoFilePath
+        self.firstIdentityListDelay = firstIdentityListDelay
+        self.firstRepoFileMetadataDelay = firstRepoFileMetadataDelay
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        inner.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
+    }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        let isIdentityDir = normalize(path) == normalize(identityDir)
+        if isIdentityDir, !firstIdentityListConsumed {
+            firstIdentityListConsumed = true
+            if firstIdentityListDelay > .zero {
+                try await Task.sleep(for: firstIdentityListDelay)
+            }
+        }
+        if fired, isIdentityDir {
+            identityListCountAfterFire += 1
+        }
+        return try await inner.list(path: path)
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        if !repoFilePath.isEmpty, normalize(path) == normalize(repoFilePath), !firstRepoFileMetadataConsumed {
+            firstRepoFileMetadataConsumed = true
+            if firstRepoFileMetadataDelay > .zero {
+                try await Task.sleep(for: firstRepoFileMetadataDelay)
+            }
+        }
+        return try await inner.metadata(path: path)
+    }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        let data = (try? Data(contentsOf: localURL)) ?? Data()
+        let claimT = (try? IdentityClaimWire(data: data))?.createdAtMs
+        let cacheT = (try? RepoCacheWire(data: data))?.createdAtMs
+        capturedWrites.append(WriteCapture(path: normalize(remotePath), claimCreatedAtMs: claimT, cacheCreatedAtMs: cacheT))
+        let result = try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+        if !fired, normalize(remotePath) == normalize(triggerOnPath) {
+            fired = true
+            await inner.injectFile(path: injectAtPath, data: injectPayload)
+        }
+        return result
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws {
+        try await inner.setModificationDate(date, forPath: path)
+    }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+
+    nonisolated private func normalize(_ p: String) -> String {
+        let trimmed = p.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard !trimmed.isEmpty, trimmed != "." else { return "/" }
+        let collapsed = trimmed.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+        return "/" + collapsed
+    }
 }
 
 /// Returns metadata size=0 for `racePath` while serving non-empty `raceBytes` from `download`.

@@ -262,8 +262,8 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
 
         XCTAssertEqual(verification, .failed(
             reason: .repoIdentityMismatch(
-                expected: canonicalRepoIDForRetentionDelete(repoID),
-                observed: canonicalRepoIDForRetentionDelete(swappedRepoID)
+                expected: RepoCanonicalIdentity.normalizeLossy(repoID),
+                observed: RepoCanonicalIdentity.normalizeLossy(swappedRepoID)
             ),
             evidence: nil
         ))
@@ -281,7 +281,7 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
         )
 
         XCTAssertEqual(verification, .failed(
-            reason: .missingRepoIdentity(expected: canonicalRepoIDForRetentionDelete(repoID)),
+            reason: .missingRepoIdentity(expected: RepoCanonicalIdentity.normalizeLossy(repoID)),
             evidence: nil
         ))
     }

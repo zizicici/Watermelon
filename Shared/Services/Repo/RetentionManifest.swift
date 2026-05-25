@@ -66,7 +66,7 @@ struct RetentionManifest: Equatable, Sendable {
         policy: RetentionManifestPolicy,
         livenessGate: RetentionLivenessGate
     ) {
-        let canonicalRepoID = UUID(uuidString: repoID)?.uuidString.lowercased()
+        let canonicalRepoID = RepoCanonicalIdentity.normalize(repoID)
         precondition(canonicalRepoID != nil, "repoID must be a UUID")
         let canonicalWriterID = createdByWriterID.lowercased()
         precondition(RepoLayout.isValidWriterID(canonicalWriterID), "createdByWriterID must be a UUID")

@@ -183,7 +183,7 @@ struct RepoRetentionDeletePreflightService: Sendable {
         mode: RepoRetentionDeletePreflightMode,
         nowMs: Int64
     ) async throws -> RepoRetentionDeletePreflightResult {
-        let repoID = canonicalRepoID(expectedRepoID)
+        let repoID = RepoCanonicalIdentity.normalizeLossy(expectedRepoID)
         var report = RepoRetentionDeletePreflightReport(
             month: month,
             repoID: repoID,
@@ -238,11 +238,11 @@ struct RepoRetentionDeletePreflightService: Sendable {
 
         // Authoritative identity check against repo.json, not the materializer echo.
         do {
-            switch try await RepoBootstrap(client: client, basePath: basePath).loadRepoIDStrict() {
+            switch try await RepoCanonicalIdentityReader(client: client, basePath: basePath).loadCanonical() {
             case .absent:
                 return .blocked(blockers: [.repoIdentityMismatch(expected: repoID, observed: "(absent)")], report: report)
             case .found(let remoteID):
-                let canonical = canonicalRepoID(remoteID)
+                let canonical = RepoCanonicalIdentity.normalizeLossy(remoteID)
                 report.remoteRepoID = canonical
                 guard canonical == repoID else {
                     return .blocked(blockers: [.repoIdentityMismatch(expected: repoID, observed: canonical)], report: report)
@@ -408,8 +408,8 @@ struct RepoRetentionDeletePreflightService: Sendable {
         if snapshot.sha256Hex.lowercased() != manifest.checkpointSHA256Hex {
             return .sha256(expected: manifest.checkpointSHA256Hex, actual: snapshot.sha256Hex.lowercased())
         }
-        if canonicalRepoID(snapshot.header.repoID) != manifest.repoID {
-            return .repoID(expected: manifest.repoID, actual: canonicalRepoID(snapshot.header.repoID))
+        if RepoCanonicalIdentity.normalizeLossy(snapshot.header.repoID) != manifest.repoID {
+            return .repoID(expected: manifest.repoID, actual: RepoCanonicalIdentity.normalizeLossy(snapshot.header.repoID))
         }
         let snapshotMonth = CommitHeader.parseMonthScope(snapshot.header.scope)
         if snapshotMonth != manifest.month {
@@ -718,8 +718,8 @@ private struct RepoRetentionDeleteCandidateScanner: Sendable {
         header: CommitHeader,
         expectedRepoID: String
     ) -> RepoRetentionCandidateHeaderMismatchReason? {
-        if canonicalRepoID(header.repoID) != expectedRepoID {
-            return .repoID(expected: expectedRepoID, actual: canonicalRepoID(header.repoID))
+        if RepoCanonicalIdentity.normalizeLossy(header.repoID) != expectedRepoID {
+            return .repoID(expected: expectedRepoID, actual: RepoCanonicalIdentity.normalizeLossy(header.repoID))
         }
         if header.writerID != parsed.writerID {
             return .writerID(expected: parsed.writerID, actual: header.writerID)
@@ -733,10 +733,6 @@ private struct RepoRetentionDeleteCandidateScanner: Sendable {
         }
         return nil
     }
-}
-
-private func canonicalRepoID(_ value: String) -> String {
-    UUID(uuidString: value)?.uuidString.lowercased() ?? value.lowercased()
 }
 
 private func monthPrefix(from filename: String) -> LibraryMonthKey? {

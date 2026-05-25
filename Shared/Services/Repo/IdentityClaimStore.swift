@@ -26,6 +26,12 @@ nonisolated enum ExistingClaimClassification: Sendable {
 }
 
 nonisolated struct IdentityClaimStore: Sendable {
+    struct OwnClaimElectionResult: Sendable, Equatable {
+        let suggested: String
+        let isElectingFresh: Bool
+        let createdAtMs: Int64
+    }
+
     let client: any RemoteStorageClientProtocol
     let basePath: String
 
@@ -154,6 +160,50 @@ nonisolated struct IdentityClaimStore: Sendable {
     }
 
 
+    // createdAtMs sampled at step 7 (after pick) because it is canonicalElection's lex-min key.
+    func runOwnClaimElection(
+        requestedRepoID: String,
+        writerID: String,
+        firstFinalizedRepoID: String?,
+        loadLegacyCacheRepoID: () async throws -> String?
+    ) async throws -> OwnClaimElectionResult {
+        try await healZeroByteSelfClaim(writerID: writerID)
+
+        let claimElection: ClaimElectionResult
+        if firstFinalizedRepoID == nil {
+            claimElection = try await canonicalElection(ignoringCorruptSelfClaimFor: writerID)
+        } else {
+            claimElection = ClaimElectionResult(repoID: nil, ignoredSelfCorrupt: false)
+        }
+
+        let suggested: String
+        let isElectingFresh: Bool
+        if let finalizedRepoID = firstFinalizedRepoID {
+            suggested = finalizedRepoID
+            isElectingFresh = false
+        } else if let existingCanonical = claimElection.repoID {
+            suggested = existingCanonical
+            isElectingFresh = false
+        } else if let legacyID = try await loadLegacyCacheRepoID() {
+            suggested = legacyID
+            isElectingFresh = false
+        } else if claimElection.ignoredSelfCorrupt {
+            throw RepoBootstrap.BootstrapError.ioFailure(NSError(
+                domain: "RepoBootstrap",
+                code: 10,
+                userInfo: [NSLocalizedDescriptionKey: "own identity claim is corrupt and no trusted repo ID exists; inspect/delete manually"]
+            ))
+        } else {
+            suggested = requestedRepoID
+            isElectingFresh = true
+        }
+
+        let createdAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        try await writeOwnClaim(repoID: suggested, writerID: writerID, createdAtMs: createdAtMs)
+
+        return OwnClaimElectionResult(suggested: suggested, isElectingFresh: isElectingFresh, createdAtMs: createdAtMs)
+    }
+
     func classifyExistingClaim(claimPath: String, writerID: String, suggestedRepoID: String) async throws -> ExistingClaimClassification {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("claim-precheck-\(UUID().uuidString).json")
@@ -217,7 +267,7 @@ nonisolated struct IdentityClaimStore: Sendable {
 
     private static func canonicalRepoID(_ raw: String) throws -> String {
         do {
-            return try RepoWireValidator.validateRepoID(raw, field: "repoID")
+            return try RepoCanonicalIdentity.validate(raw, field: "repoID")
         } catch {
             throw RepoBootstrap.BootstrapError.ioFailure(NSError(
                 domain: "RepoBootstrap",
