@@ -335,13 +335,15 @@ final class RepoCommittedView: @unchecked Sendable {
         missingLock.lock()
         defer { missingLock.unlock() }
         let wasFresh = physicalPresenceOverlayFreshMonths.contains(month)
+        let previousMissing = physicallyMissingByMonth[month] ?? []
         physicallyMissingByMonth.remove(month)
         physicalPresenceOverlayFreshMonths.remove(month)
         let removed = cache.removeMonth(month)
-        // cache.removeMonth returns false (no revision bump) for cache-empty months. When freshness
-        // was set for such a month (authoritative-empty via applyPresenceSnapshot), the freshness
-        // clear MUST still mark the month changed so incremental state(since:) sees authority drop.
-        if wasFresh && !removed {
+        // cache.removeMonth returns false (no revision bump) for cache-empty months. When such a
+        // month had freshness set (authoritative-empty via applyPresenceSnapshot) or carried
+        // non-authoritative missing hashes (via markPhysicallyMissing), the clear MUST still mark
+        // the month changed so incremental state(since:) sees the authority drop / missing-set drop.
+        if (wasFresh || !previousMissing.isEmpty) && !removed {
             cache.markMonthsChanged([month])
         }
         return removed

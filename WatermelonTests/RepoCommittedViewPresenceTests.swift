@@ -242,6 +242,43 @@ final class RepoCommittedViewPresenceTests: XCTestCase {
                        "removeMonth on a month that was neither in cache nor fresh MUST be a no-op")
     }
 
+    /// Unit-027 residual (Reviewer B): `removeMonth(_:)` on a cache-empty month carrying
+    /// non-authoritative missing-hashes (seeded via `markPhysicallyMissing`) silently dropped
+    /// the overlay entry without bumping revision. After unit-032, the missing-set drop MUST
+    /// be visible to an incremental `state(since:)` consumer, mirroring the unit-027
+    /// freshness-clear path.
+    func testRemoveMonth_cacheEmptyNonFreshMissingHashes_revisionVisible() {
+        let view = RepoCommittedView()
+        let missingHash = TestFixtures.fingerprint(0xC1)
+
+        // markPhysicallyMissing itself calls cache.markMonthsChanged, so the seed bumps revision once.
+        view.markPhysicallyMissing(month: monthA, hashes: [missingHash])
+
+        XCTAssertEqual(view.presenceSnapshot(for: monthA).missingHashes, [missingHash])
+        XCTAssertFalse(view.presenceSnapshot(for: monthA).isAuthoritative,
+                       "precondition: month must be non-authoritative for the gap scenario")
+
+        // Capture base AFTER the seed so state(since: base) cannot match the seed delta.
+        let base = view.currentRevision()
+
+        // Cache has no payload for monthA, so cache.removeMonth returns false.
+        XCTAssertFalse(view.removeMonth(monthA))
+
+        XCTAssertGreaterThan(view.currentRevision(), base,
+                             "removeMonth on cache-empty non-fresh missing-hash month MUST bump revision via markMonthsChanged")
+
+        let stateDelta = view.state(since: base)
+        let entry = stateDelta.monthDeltas.first(where: { $0.month == monthA })
+        XCTAssertNotNil(entry,
+                        "missing-hash drop via removeMonth on cache-empty month MUST surface in incremental state")
+        XCTAssertEqual(entry?.presence.missingHashes, Set<Data>(),
+                       "post-removal delta MUST emit empty missing-hashes")
+        XCTAssertEqual(entry?.presence.isAuthoritative, false,
+                       "non-fresh precondition + freshness clear ⇒ delta authority remains false")
+
+        XCTAssertEqual(view.presenceSnapshot(for: monthA).missingHashes, Set<Data>())
+    }
+
     // MARK: - loadFromMaterialize / reset
 
     func testLoadFromMaterialize_clearsFreshness() async {
