@@ -757,14 +757,13 @@ final class RemoteIndexSyncService: @unchecked Sendable {
 
     func publishMonthSnapshot(of monthStore: any BackupMonthStore, for month: LibraryMonthKey) {
         let snapshot = monthStore.unsortedSnapshot()
+        let presence = monthStore.presence
         replaceCachedMonth(
             month,
             resources: snapshot.resources,
             assets: snapshot.assets,
             links: snapshot.links,
-            physicallyMissingHashes: monthStore.physicallyMissingHashesAreAuthoritative
-                ? monthStore.physicallyMissingHashesSnapshot()
-                : nil
+            physicallyMissingHashes: presence.isAuthoritative ? presence.missingHashes : nil
         )
     }
 

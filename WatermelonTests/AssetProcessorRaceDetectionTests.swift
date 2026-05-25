@@ -692,8 +692,7 @@ private final class ThrowingCommitMonthStore: BackupMonthStore {
     func unsortedSnapshot() -> (resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink]) {
         (snapshotResources, snapshotAssets, snapshotLinks)
     }
-    func physicallyMissingHashesSnapshot() -> Set<Data> { [] }
-    var physicallyMissingHashesAreAuthoritative: Bool { false }
+    var presence: RemotePresenceSnapshot.Month { .absent }
     func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> BackupMonthFlushDelta {
         ignoreCancellationValues.append(ignoreCancellation)
         eventRecorder?.append("commit")

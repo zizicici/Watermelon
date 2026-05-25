@@ -47,7 +47,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
         XCTAssertTrue(snapshot.resources.isEmpty)
         XCTAssertTrue(snapshot.assets.isEmpty)
         XCTAssertTrue(snapshot.links.isEmpty)
-        XCTAssertFalse(store.physicallyMissingHashesAreAuthoritative,
+        XCTAssertFalse(store.presence.isAuthoritative,
                        "overlayIsAuthoritative=false (no overlay seeded) must propagate to the loaded session")
 
         // No overlay was set; verifiedPhysicallyMissingHashes returns nil since the helper publishes nil
@@ -150,7 +150,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
             stepLogger: { _ in }
         )
 
-        XCTAssertTrue(store.physicallyMissingHashesAreAuthoritative,
+        XCTAssertTrue(store.presence.isAuthoritative,
                       "freshHashes was non-nil → overlayIsAuthoritative=true must propagate")
 
         // The helper publishes physicallyMissingHashes: non-nil (empty set), so freshness flag stays set.
@@ -178,10 +178,10 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
             stepLogger: { _ in }
         )
 
-        XCTAssertFalse(store.physicallyMissingHashesAreAuthoritative,
+        XCTAssertFalse(store.presence.isAuthoritative,
                        "freshHashes was nil → overlayIsAuthoritative=false must propagate")
 
-        // overlayIsAuthoritative was false -> physicallyMissingHashesAreAuthoritative false;
+        // overlayIsAuthoritative was false -> presence.isAuthoritative false;
         // helper publishes physicallyMissingHashes: nil; freshness flag must remain unset.
         let post = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertNil(post, "non-authoritative publish must leave freshness flag unset")
@@ -262,7 +262,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
             stepLogger: { _ in }
         )
 
-        XCTAssertFalse(store.physicallyMissingHashesAreAuthoritative,
+        XCTAssertFalse(store.presence.isAuthoritative,
                        "freshHashes was nil → overlayIsAuthoritative=false must propagate (committed-view fallback is informational, not authoritative)")
 
         // Helper publishes physicallyMissingHashes: nil. replaceMonth then intersects the previous
@@ -272,6 +272,109 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
         let postCommitted = ris.physicallyMissingHashes(for: monthKey)
         XCTAssertTrue(postCommitted.isEmpty,
                       "publish step with physicallyMissingHashes:nil must clear stale committed-view missing set when no resources reference it")
+    }
+
+    // MARK: - Gate A regression — non-authoritative non-empty fail-closed input must reach V2MonthIndexes
+
+    func testLoadAndPublish_nonAuthoritativeNonEmptyMissing_preservesFailClosedInputToIndexes() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let v2 = try await makeV2Services(client: client)
+
+        // Seed a committed resource for hash h via a separate seedStore + flush so the materializer
+        // returns a non-empty month state with a resource row whose contentHash == h.
+        let h = TestFixtures.fingerprint(0xCD)
+        let assetFP = TestFixtures.fingerprint(0xCE)
+        let physicalPath = "\(year)/\(String(format: "%02d", month))/cd-photo.jpg"
+        let resource = RemoteManifestResource(
+            year: year, month: month,
+            physicalRemotePath: physicalPath,
+            contentHash: h,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 0
+        )
+        let asset = RemoteManifestAsset(
+            year: year, month: month,
+            assetFingerprint: assetFP,
+            creationDateMs: 1_700_000_000_000,
+            backedUpAtMs: 1_700_000_001_000,
+            resourceCount: 1,
+            totalFileSizeBytes: 100
+        )
+        let link = RemoteAssetResourceLink(
+            year: year, month: month,
+            assetFingerprint: assetFP,
+            resourceHash: h,
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            logicalName: "cd-photo.jpg"
+        )
+        let seedStore = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        _ = try seedStore.upsertResource(resource)
+        try seedStore.upsertAsset(asset, links: [link])
+        _ = try await seedStore.flushToRemote()
+
+        // Inject the physical resource file so the second loadOrCreate's listing populates
+        // remoteFilesByName["cd-photo.jpg"] = .init(size: 100). That forces
+        // V2MonthIndexes.listedSizeMatches == true for the materialized row. Without this,
+        // listedSizeMatches stays false and V2MonthIndexes falls back to .missing under BOTH the
+        // correct decomposition and the rejected authority-gated decomposition — the assertion
+        // below would pass for the wrong reason.
+        await client.injectFile(
+            path: "\(basePath)/\(physicalPath)",
+            data: Data(repeating: 0xCD, count: 100)
+        )
+
+        // Fresh RIS for the load+publish phase. Seed the committed view's missing set WITHOUT
+        // freshness (markPhysicallyMissingV2 sets the missing set inside committedView without
+        // inserting into physicalPresenceOverlayFreshMonths). presenceSnapshot(for:) will return
+        // (missingHashes: [h], isAuthoritative: false) — the non-authoritative non-empty quadrant.
+        let ris = RemoteIndexSyncService()
+        ris.markPhysicallyMissingV2(month: monthKey, hashes: [h])
+
+        let preFresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        XCTAssertNil(preFresh, "setup precondition: freshness flag must NOT be set")
+        let prePresence = ris.presenceSnapshot(for: monthKey)
+        XCTAssertEqual(prePresence.missingHashes, [h])
+        XCTAssertFalse(prePresence.isAuthoritative,
+                       "setup precondition: committed view holds non-authoritative non-empty missing")
+
+        let store = try await V2MonthLoadAndPublish.loadAndPublishSnapshot(
+            client: client,
+            basePath: basePath,
+            month: monthKey,
+            v2Services: v2,
+            remoteIndexService: ris,
+            stepLogger: { _ in }
+        )
+
+        // (1) Authority bit propagates as false to the loaded session — Gate B unchanged.
+        XCTAssertFalse(store.presence.isAuthoritative,
+                       "non-authoritative presence input must propagate authority=false to the loaded session")
+
+        // (2) Fail-closed input preserved end-to-end: V2MonthIndexes.presenceMap marked h as
+        //     .missing because verifiedMissingHashes: [h] was forwarded (Gate A — non-empty
+        //     forwarding, authority-independent). The injected physical file forces
+        //     listedSizeMatches == true; a regression that gates Gate A on authority would let
+        //     V2MonthIndexes fall back to .listedSizeMatched here, yielding missingHashes == [].
+        XCTAssertEqual(store.presence.missingHashes, [h],
+                       "fail-closed missing hash MUST flow into V2MonthIndexes.presenceMap regardless of authority — Gate A")
+
+        // (3) Publish step did NOT seed the freshness flag (publishMonthSnapshot passes
+        //     physicallyMissingHashes: nil when presence.isAuthoritative is false — Gate B).
+        let postFresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        XCTAssertNil(postFresh,
+                     "non-authoritative publish must leave freshness flag unset")
+
+        // (4) Committed view still carries h as physically-missing (intersection with stillPresent
+        //     keeps [h] because the published snapshot includes the resource at hash h).
+        let postCommitted = ris.physicallyMissingHashes(for: monthKey)
+        XCTAssertEqual(postCommitted, [h],
+                       "committed view's non-authoritative missing set survives publish")
     }
 
     // MARK: - Helpers

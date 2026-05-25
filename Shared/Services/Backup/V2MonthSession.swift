@@ -44,7 +44,7 @@ final class V2MonthSession: BackupMonthStore {
 
     private(set) var dirty: Bool = false
 
-    let physicallyMissingHashesAreAuthoritative: Bool
+    private let isPresenceAuthoritative: Bool
     private let flushStateLock = NSLock()
     private var isFlushing = false
 
@@ -60,8 +60,7 @@ final class V2MonthSession: BackupMonthStore {
         materializedCovered: CoveredRanges,
         observedClockAtLoad: UInt64,
         remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata],
-        verifiedMissingHashes: Set<Data>? = nil,
-        overlayIsAuthoritative: Bool = false,
+        presence: RemotePresenceSnapshot.Month = .absent,
         stepLogger: MonthManifestStepLogger? = nil
     ) {
         self.client = client
@@ -72,7 +71,11 @@ final class V2MonthSession: BackupMonthStore {
         self.materializedCovered = materializedCovered
         self.stepLogger = stepLogger
         self.observedClockAtLoad = observedClockAtLoad
-        self.physicallyMissingHashesAreAuthoritative = overlayIsAuthoritative
+        // Gate A: non-empty fail-closed input forwarding (authority-independent — matches today's
+        // V2MonthLoadAndPublish line-for-line so non-authoritative missing evidence still drives
+        // V2MonthIndexes.presenceMap to .missing). Gate B (authority bit) stored separately for publish.
+        let verifiedMissingHashes: Set<Data>? = presence.missingHashes.isEmpty ? nil : presence.missingHashes
+        self.isPresenceAuthoritative = presence.isAuthoritative
         let indexes = V2MonthIndexes(
             year: year,
             month: month,
@@ -96,8 +99,7 @@ final class V2MonthSession: BackupMonthStore {
         year: Int,
         month: Int,
         v2Services: BackupV2RuntimeServices,
-        verifiedMissingHashes: Set<Data>? = nil,
-        overlayIsAuthoritative: Bool = false,
+        presence: RemotePresenceSnapshot.Month = .absent,
         stepLogger: MonthManifestStepLogger? = nil
     ) async throws -> V2MonthSession {
         let monthKey = LibraryMonthKey(year: year, month: month)
@@ -148,8 +150,7 @@ final class V2MonthSession: BackupMonthStore {
             materializedCovered: materializedCovered,
             observedClockAtLoad: output.state.observedClock,
             remoteFilesByName: remoteFilesByName,
-            verifiedMissingHashes: verifiedMissingHashes,
-            overlayIsAuthoritative: overlayIsAuthoritative,
+            presence: presence,
             stepLogger: stepLogger
         )
         if output.corruptedSnapshotMonths.contains(monthKey),
@@ -209,8 +210,11 @@ final class V2MonthSession: BackupMonthStore {
         indexes.unsortedSnapshot()
     }
 
-    func physicallyMissingHashesSnapshot() -> Set<Data> {
-        indexes.physicallyMissingHashesSnapshot()
+    var presence: RemotePresenceSnapshot.Month {
+        RemotePresenceSnapshot.Month(
+            missingHashes: indexes.physicallyMissingHashesSnapshot(),
+            isAuthoritative: isPresenceAuthoritative
+        )
     }
 
 

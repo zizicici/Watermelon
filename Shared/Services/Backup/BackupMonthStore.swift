@@ -47,9 +47,8 @@ protocol BackupMonthStore: AnyObject {
 
     func unsortedSnapshot() -> (resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink])
 
-    /// V2-only physical-presence overlay; V1 returns empty.
-    func physicallyMissingHashesSnapshot() -> Set<Data>
-    var physicallyMissingHashesAreAuthoritative: Bool { get }
+    /// V2-only physical-presence overlay; V1 reports `.absent` semantics via an authoritative empty Month.
+    var presence: RemotePresenceSnapshot.Month { get }
 
     @discardableResult
     func commitPendingAssetToRemote(ignoreCancellation: Bool) async throws -> BackupMonthFlushDelta
@@ -60,8 +59,9 @@ protocol BackupMonthStore: AnyObject {
 
 extension MonthManifestStore: BackupMonthStore {
     var hasAnyAsset: Bool { !assetsByFingerprint.isEmpty }
-    var physicallyMissingHashesAreAuthoritative: Bool { true }
-    func physicallyMissingHashesSnapshot() -> Set<Data> { [] }
+    var presence: RemotePresenceSnapshot.Month {
+        RemotePresenceSnapshot.Month(missingHashes: [], isAuthoritative: true)
+    }
 }
 
 extension BackupMonthStore {

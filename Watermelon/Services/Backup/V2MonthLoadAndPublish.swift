@@ -16,8 +16,7 @@ enum V2MonthLoadAndPublish {
             year: month.year,
             month: month.month,
             v2Services: v2Services,
-            verifiedMissingHashes: presence.missingHashes.isEmpty ? nil : presence.missingHashes,
-            overlayIsAuthoritative: presence.isAuthoritative,
+            presence: presence,
             stepLogger: stepLogger
         )
         remoteIndexService.publishMonthSnapshot(of: monthStore, for: month)

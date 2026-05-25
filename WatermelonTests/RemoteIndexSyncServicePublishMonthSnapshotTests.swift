@@ -101,7 +101,7 @@ final class RemoteIndexSyncServicePublishMonthSnapshotTests: XCTestCase {
 private final class FakeMonthStore: BackupMonthStore, @unchecked Sendable {
     let year: Int
     let month: Int
-    let physicallyMissingHashesAreAuthoritative: Bool
+    private let isAuthoritative: Bool
     private let resources: [RemoteManifestResource]
     private let assets: [RemoteManifestAsset]
     private let links: [RemoteAssetResourceLink]
@@ -118,7 +118,7 @@ private final class FakeMonthStore: BackupMonthStore, @unchecked Sendable {
     ) {
         self.year = year
         self.month = month
-        self.physicallyMissingHashesAreAuthoritative = authoritative
+        self.isAuthoritative = authoritative
         self.resources = resources
         self.assets = assets
         self.links = links
@@ -150,7 +150,9 @@ private final class FakeMonthStore: BackupMonthStore, @unchecked Sendable {
         (resources, assets, links)
     }
 
-    func physicallyMissingHashesSnapshot() -> Set<Data> { missingHashes }
+    var presence: RemotePresenceSnapshot.Month {
+        RemotePresenceSnapshot.Month(missingHashes: missingHashes, isAuthoritative: isAuthoritative)
+    }
 
     func flushToRemote(ignoreCancellation: Bool) async throws -> BackupMonthFlushDelta { .none }
 }
