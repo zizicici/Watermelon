@@ -270,6 +270,60 @@ final class RepoCommittedViewPresenceTests: XCTestCase {
                        "loadFromMaterialize MUST clear freshness as its first step")
     }
 
+    func testLoadFromMaterialize_returnsNonAuthoritativeSnapshot() {
+        let view = RepoCommittedView()
+        let h = TestFixtures.fingerprint(0x71)
+        let physicalPath = String(format: "%04d/%02d/%@", monthA.year, monthA.month, h.hexString)
+
+        _ = view.replaceMonth(
+            monthA,
+            resources: [TestFixtures.remoteResource(year: monthA.year, month: monthA.month, contentHash: h)],
+            assets: [],
+            assetResourceLinks: [],
+            physicallyMissingHashes: [h],
+            freshness: .markFresh
+        )
+        XCTAssertEqual(view.presenceSnapshot(for: monthA).isAuthoritative, true)
+        XCTAssertEqual(view.physicallyMissingHashes(for: monthA), [h])
+
+        let monthState = RepoMonthState(
+            assets: [:],
+            resources: [
+                physicalPath: SnapshotResourceRow(
+                    physicalRemotePath: physicalPath,
+                    contentHash: h,
+                    fileSize: 100,
+                    resourceType: ResourceTypeCode.photo,
+                    creationDateMs: nil,
+                    backedUpAtMs: 2,
+                    crypto: nil
+                )
+            ],
+            assetResources: [:],
+            deletedAssetFingerprints: []
+        )
+        let output = RepoMaterializer.MaterializeOutput(
+            state: RepoSnapshotState(months: [monthA: monthState], observedClock: 0),
+            observedSeqByWriter: [:],
+            coveredByMonth: [:],
+            acceptedSnapshotBaselinesByMonth: [:],
+            corruptedSnapshotMonths: [],
+            repoID: nil
+        )
+        let returned: RemotePresenceSnapshot = view.loadFromMaterialize(output)
+
+        let entryA = returned.month(monthA)
+        XCTAssertEqual(entryA.missingHashes, [h])
+        XCTAssertEqual(entryA.isAuthoritative, false,
+                       "loadFromMaterialize wraps preservedOverlay as failClosed — all months non-authoritative")
+        XCTAssertTrue(returned.freshMonths.isEmpty,
+                      "slice 3 cleared freshness; slice 4 reflects that in the return type")
+
+        XCTAssertEqual(view.presenceSnapshot(for: monthA).isAuthoritative, false)
+        XCTAssertEqual(view.physicallyMissingHashes(for: monthA), [h],
+                       "view retains [h] after intersection with stillPresent")
+    }
+
     func testReset_clearsFreshness() {
         let view = RepoCommittedView()
         _ = view.replaceMonth(

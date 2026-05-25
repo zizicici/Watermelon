@@ -174,9 +174,9 @@ final class RemotePresenceSnapshotTests: XCTestCase {
 
         // Stale prior overlay covers ONLY hPresent.
         service.markPhysicallyMissingV2(month: monthA, hashes: [hPresent])
-        let priorFallback = service.physicallyMissingSnapshot()
-        XCTAssertEqual(priorFallback[monthA], [hPresent],
-                       "precondition: prior fallback must contain hPresent so the !priorFallback.isEmpty publish-gate branch fires")
+        let priorFallback = service.fullPresenceSnapshot()
+        XCTAssertEqual(priorFallback.month(monthA).missingHashes, [hPresent],
+                       "precondition: prior fallback must contain hPresent so the !stale.isEmpty publish-gate branch fires")
 
         _ = try await service.refreshPhysicalPresenceOverlay(
             client: client,

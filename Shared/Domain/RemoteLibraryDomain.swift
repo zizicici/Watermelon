@@ -196,19 +196,19 @@ struct RemoteLibrarySnapshot {
     let resources: [RemoteManifestResource]
     let assets: [RemoteManifestAsset]
     let assetResourceLinks: [RemoteAssetResourceLink]
-    /// Subtract from classifier inputs — commit log keeps the row but the file is gone.
-    let physicallyMissingHashesByMonth: [LibraryMonthKey: Set<Data>]
+    /// Typed presence overlay: missing hashes plus authority bit per month.
+    let presence: RemotePresenceSnapshot
 
     init(
         resources: [RemoteManifestResource],
         assets: [RemoteManifestAsset],
         assetResourceLinks: [RemoteAssetResourceLink] = [],
-        physicallyMissingHashesByMonth: [LibraryMonthKey: Set<Data>] = [:]
+        presence: RemotePresenceSnapshot = RemotePresenceSnapshot()
     ) {
         self.resources = resources
         self.assets = assets
         self.assetResourceLinks = assetResourceLinks
-        self.physicallyMissingHashesByMonth = physicallyMissingHashesByMonth
+        self.presence = presence
     }
 
     var totalCount: Int {

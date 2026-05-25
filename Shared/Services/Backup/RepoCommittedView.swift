@@ -50,7 +50,7 @@ final class RepoCommittedView: @unchecked Sendable {
             resources: base.resources,
             assets: base.assets,
             assetResourceLinks: base.assetResourceLinks,
-            physicallyMissingHashesByMonth: physicallyMissingSnapshotMapLocked()
+            presence: fullPresenceSnapshotLocked()
         )
     }
 
@@ -63,7 +63,7 @@ final class RepoCommittedView: @unchecked Sendable {
             resources: combined.snapshot.resources,
             assets: combined.snapshot.assets,
             assetResourceLinks: combined.snapshot.assetResourceLinks,
-            physicallyMissingHashesByMonth: physicallyMissingSnapshotMapLocked()
+            presence: fullPresenceSnapshotLocked()
         )
         return (combined.revision, snapshot)
     }
@@ -157,6 +157,11 @@ final class RepoCommittedView: @unchecked Sendable {
     func fullPresenceSnapshot() -> RemotePresenceSnapshot {
         missingLock.lock()
         defer { missingLock.unlock() }
+        return fullPresenceSnapshotLocked()
+    }
+
+    /// Caller MUST hold `missingLock`. Pure read of the overlay + freshness state.
+    private func fullPresenceSnapshotLocked() -> RemotePresenceSnapshot {
         let missingMap = physicallyMissingSnapshotMapLocked()
         var builder = RemotePresenceSnapshot.Builder()
         // Union so authoritative-empty months are represented; physicallyMissingByMonth drops empty entries.
@@ -221,7 +226,7 @@ final class RepoCommittedView: @unchecked Sendable {
     }
 
     @discardableResult
-    func loadFromMaterialize(_ output: RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] {
+    func loadFromMaterialize(_ output: RepoMaterializer.MaterializeOutput) -> RemotePresenceSnapshot {
         missingLock.lock()
         defer { missingLock.unlock() }
         let priorOverlay = physicallyMissingSnapshotMapLocked()
@@ -278,7 +283,7 @@ final class RepoCommittedView: @unchecked Sendable {
                 }
             }
         }
-        return preservedOverlay
+        return RemotePresenceSnapshot.failClosed(missingByMonth: preservedOverlay)
     }
 
     @discardableResult

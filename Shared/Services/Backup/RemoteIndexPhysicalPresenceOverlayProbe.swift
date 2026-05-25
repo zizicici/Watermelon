@@ -54,7 +54,7 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
         snapshot: RemoteLibrarySnapshot,
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        fallback: [LibraryMonthKey: Set<Data>],
+        fallback: RemotePresenceSnapshot,
         budget: RemoteIndexOverlayProbeBudget?,
         staleFallbackPolicy: RemoteIndexOverlayStaleFallbackPolicy,
         concurrencyCap: Int
@@ -88,8 +88,9 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                 case .success(let probe):
                     var missing = probe.missingHashes
                     var resolvedInconclusives: Set<Data> = []
+                    let stale = fallback.month(month).missingHashes
                     if !probe.inconclusiveHashes.isEmpty {
-                        if let stale = fallback[month] {
+                        if !stale.isEmpty {
                             let cover = stale.intersection(probe.inconclusiveHashes)
                             missing.formUnion(cover)
                             let budgetExhaustedCover = cover.intersection(
@@ -114,17 +115,17 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                     if !monthFresh {
                         anyFailure = true
                     }
-                    let priorFallback = fallback[month] ?? []
                     // Without this, a stale prior-missing hash that the probe just verified present
                     // would survive in the overlay whenever any unrelated hash stayed inconclusive
                     // (e.g. budget exhausted on a different hash) — Home would keep treating a
                     // healthy remote asset as incomplete and queue a repair upload.
-                    if monthFresh || !missing.isEmpty || !priorFallback.isEmpty {
+                    if monthFresh || !missing.isEmpty || !stale.isEmpty {
                         builder.set(month, missingHashes: missing, isAuthoritative: monthFresh)
                     }
                 case .failure(let error):
                     anyFailure = true
-                    if let stale = fallback[month] {
+                    let stale = fallback.month(month).missingHashes
+                    if !stale.isEmpty {
                         builder.set(month, missingHashes: stale, isAuthoritative: false)
                     }
                     overlayProbeLog.info("[SyncTiming] probe failed for \(month.text): \(error.localizedDescription)")

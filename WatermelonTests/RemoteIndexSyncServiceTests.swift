@@ -74,6 +74,23 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        "append happens after per-asset commit, so no separate commit-clear is needed")
     }
 
+    func testFullSnapshotPresence_authoritativeEmptyMonth_visibleOnSnapshotField() {
+        let service = RemoteIndexSyncService()
+        // Pre-slice-4 the snapshot's dict-form overlay was built from physicallyMissingByMonth.months
+        // and dropped authoritative-empty entries. Slice 4 routes current()/currentSnapshotWithRevision()
+        // through fullPresenceSnapshotLocked(), which unions missingMap.keys with the fresh-months set.
+        var builder = RemotePresenceSnapshot.Builder()
+        builder.set(monthA, missingHashes: [], isAuthoritative: true)
+        XCTAssertTrue(service.applyPresenceSnapshotForTest(builder.build()))
+
+        let snapshot = service.fullSnapshot()
+        XCTAssertEqual(snapshot.presence.month(monthA).isAuthoritative, true,
+                       "fullSnapshot().presence MUST surface authoritative-empty months via fullPresenceSnapshotLocked()")
+        XCTAssertTrue(snapshot.presence.month(monthA).missingHashes.isEmpty)
+        XCTAssertTrue(snapshot.presence.freshMonths.contains(monthA),
+                      "fresh months union into snapshot.presence.freshMonths")
+    }
+
     func testResumeSafeCoverage_excludesPhantomAsset() {
         let service = RemoteIndexSyncService()
         let fp = TestFixtures.fingerprint(0x42)
@@ -589,7 +606,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
             snapshot: RemoteLibrarySnapshot(resources: resources, assets: []),
             client: serialOnly,
             basePath: basePath,
-            fallback: [:],
+            fallback: RemotePresenceSnapshot(),
             budget: nil,
             staleFallbackPolicy: .preserveFallback,
             concurrencyCap: 4
@@ -734,7 +751,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         _ = try await service.refreshPhysicalPresenceOverlay(
             client: client,
             basePath: basePath,
-            fallback: [monthA: [healed]]
+            fallback: RemotePresenceSnapshot.failClosed(missingByMonth: [monthA: [healed]])
         )
 
         let published = service.physicallyMissingHashesForTest(month: monthA)
@@ -777,7 +794,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         _ = try await service.refreshPhysicalPresenceOverlay(
             client: client,
             basePath: basePath,
-            fallback: [monthA: allHashes]
+            fallback: RemotePresenceSnapshot.failClosed(missingByMonth: [monthA: allHashes])
         )
         let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
         XCTAssertNil(verified,
@@ -816,7 +833,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         _ = try await service.refreshPhysicalPresenceOverlay(
             client: client,
             basePath: basePath,
-            fallback: [monthA: priorMissing]
+            fallback: RemotePresenceSnapshot.failClosed(missingByMonth: [monthA: priorMissing])
         )
 
         let published = service.physicallyMissingHashesForTest(month: monthA)
@@ -1088,7 +1105,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                 snapshot: RemoteLibrarySnapshot(resources: [resource], assets: []),
                 client: client,
                 basePath: basePath,
-                fallback: [:],
+                fallback: RemotePresenceSnapshot(),
                 budget: nil,
                 staleFallbackPolicy: .preserveFallback,
                 concurrencyCap: 4

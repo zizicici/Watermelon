@@ -208,7 +208,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     func syncOverlayAndCaptureHandle(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        fallback: [LibraryMonthKey: Set<Data>]? = nil,
+        fallback: RemotePresenceSnapshot? = nil,
         concurrencyCap: Int = 4
     ) async throws -> RemoteViewHandle {
         let captured = try await syncGate.withLock { [self] in
@@ -217,7 +217,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
                 return (
                     revision: current.revision,
                     snapshot: current.snapshot,
-                    fallback: fallback ?? current.snapshot.physicallyMissingHashesByMonth
+                    fallback: fallback ?? current.snapshot.presence
                 )
             }
         }
@@ -434,10 +434,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         do {
             _ = try await refreshPhysicalPresenceOverlay(client: client, basePath: profile.basePath, fallback: priorOverlay)
         } catch is CancellationError {
-            applyPhysicalPresenceOverlay(RemotePresenceSnapshot.failClosed(missingByMonth: priorOverlay))
+            applyPhysicalPresenceOverlay(priorOverlay)
             throw CancellationError()
         } catch {
-            applyPhysicalPresenceOverlay(RemotePresenceSnapshot.failClosed(missingByMonth: priorOverlay))
+            applyPhysicalPresenceOverlay(priorOverlay)
             syncLog.info("[SyncTiming] overlay refresh skipped: \(error.localizedDescription)")
         }
         committedView.markSynced(Date())
@@ -607,7 +607,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         await state.reset()
     }
 
-    private func loadMaterializedCommittedView(_ output: RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] {
+    private func loadMaterializedCommittedView(_ output: RepoMaterializer.MaterializeOutput) -> RemotePresenceSnapshot {
         optimisticMutationLock.withLock {
             committedView.loadFromMaterialize(output)
         }
@@ -658,11 +658,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             let month = LibraryMonthKey(year: resource.year, month: resource.month)
             resourceHashesByMonth[month, default: []].insert(resource.contentHash)
         }
-        let missingByMonth = snapshot.physicallyMissingHashesByMonth
         var availableHashesByMonth = resourceHashesByMonth
         // Physical-missing overlays keep commit rows but make dependent assets repair work.
-        for (month, missingHashes) in missingByMonth {
-            availableHashesByMonth[month, default: []].subtract(missingHashes)
+        for entry in snapshot.presence.entries where !entry.value.missingHashes.isEmpty {
+            availableHashesByMonth[entry.month, default: []].subtract(entry.value.missingHashes)
         }
         var survivorKeySetsByMonthFP: [LibraryMonthKey: [Data: Set<AssetResourceLinkKey>]] = [:]
         for (month, linksByFingerprint) in linksByMonthFP {
@@ -818,7 +817,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     func refreshPhysicalPresenceOverlay(
         client: any RemoteStorageClientProtocol,
         basePath: String,
-        fallback: [LibraryMonthKey: Set<Data>] = [:],
+        fallback: RemotePresenceSnapshot = RemotePresenceSnapshot(),
         concurrencyCap: Int = 4
     ) async throws -> Bool {
         try Task.checkCancellation()

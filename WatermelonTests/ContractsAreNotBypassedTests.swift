@@ -10,7 +10,7 @@ final class ContractsAreNotBypassedTests: XCTestCase {
 
     func testCanonicalWriteAPIShape() {
         // RepoCommittedView's mutation entry points
-        let _: (RepoMaterializer.MaterializeOutput) -> [LibraryMonthKey: Set<Data>] = RepoCommittedView().loadFromMaterialize
+        let _: (RepoMaterializer.MaterializeOutput) -> RemotePresenceSnapshot = RepoCommittedView().loadFromMaterialize
         let _: (LibraryMonthKey) -> Bool = RepoCommittedView().removeMonth
 
         // Optimistic-cache writes go through the writer handle. Asset appends are
