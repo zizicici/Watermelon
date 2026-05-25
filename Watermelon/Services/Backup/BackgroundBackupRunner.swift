@@ -409,7 +409,7 @@ final class BackgroundBackupRunner {
         defer { eventStream.finish() }
 
         let iCloudMode = ICloudPhotoBackupMode.getValue()
-        var uploadsSinceFlush = 0
+        var flushCounter = AssetBatchFlushCounter(threshold: Self.flushInterval)
         var anyMonthFailed = false
         var connectionUnavailableAbort = false
 
@@ -509,30 +509,37 @@ final class BackgroundBackupRunner {
                             eventStream: eventStream,
                             cancellationController: nil
                         )
-                    } catch is CancellationError {
-                        break
                     } catch {
-                        let displayName = BackupAssetResourcePlanner.assetDisplayName(
-                            asset: asset,
-                            selectedResources: resources
+                        let assetDispatch = BackupFlushFailureClassification.backgroundAssetErrorDispatch(
+                            error: error,
+                            profile: profile
                         )
-                        if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
+                        switch assetDispatch.action {
+                        case .breakAssetLoop:
+                            break
+                        case .abortMonthConnectionUnavailableBreakAssetLoop:
                             anyMonthFailed = true
                             connectionUnavailableAbort = true
                             shouldFlushAfterDataConnectionAbort = true
                             await writer.appendLog(
-                                String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
+                                String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(assetDispatch.error)),
                                 level: .error
                             )
-                            break
+                        case .logGenericFailureAndContinue:
+                            let displayName = BackupAssetResourcePlanner.assetDisplayName(
+                                asset: asset,
+                                selectedResources: resources
+                            )
+                            anyMonthFailed = true
+                            monthHasAssetFailures = true
+                            await writer.appendLog(
+                                String(format: String(localized: "backup.auto.log.assetFailed"), displayName, profile.userFacingStorageErrorMessage(assetDispatch.error)),
+                                level: .error
+                            )
+                            continue
                         }
-                        anyMonthFailed = true
-                        monthHasAssetFailures = true
-                        await writer.appendLog(
-                            String(format: String(localized: "backup.auto.log.assetFailed"), displayName, profile.userFacingStorageErrorMessage(error)),
-                            level: .error
-                        )
-                        continue
+                        // .breakAssetLoop and .abortMonthConnectionUnavailableBreakAssetLoop fall through to here.
+                        break
                     }
 
                     if result.status == .failed {
@@ -541,8 +548,7 @@ final class BackgroundBackupRunner {
                     }
                     // Cached-reuse `.skipped` also writes asset rows; only `.failed` skips the batch counter.
                     guard result.status != .failed else { continue }
-                    uploadsSinceFlush += 1
-                    if uploadsSinceFlush >= Self.flushInterval {
+                    if flushCounter.recordSuccessAndCheckThreshold() {
                         var intervalOutcome: V2MonthFlushOutcome?
                         var shouldBreakAssetLoop = false
                         do {
@@ -555,7 +561,7 @@ final class BackgroundBackupRunner {
                         } catch {
                             switch BackupFlushFailureClassification.classify(error, on: profile).backgroundIntervalAction {
                             case .continueAssetLoopAndResetCounter:
-                                uploadsSinceFlush = 0
+                                flushCounter.reset()
                                 continue
                             case .ignoreSilently:
                                 break
@@ -598,7 +604,7 @@ final class BackgroundBackupRunner {
                             }
                         }
                         if shouldBreakAssetLoop { break }
-                        uploadsSinceFlush = 0
+                        flushCounter.reset()
                     }
                 }
                 if connectionUnavailableAbort { break }
@@ -663,7 +669,7 @@ final class BackgroundBackupRunner {
                     )
                 }
             }
-            uploadsSinceFlush = 0
+            flushCounter.reset()
             if connectionUnavailableAbort {
                 break
             }

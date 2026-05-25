@@ -269,7 +269,7 @@ struct BackupParallelExecutor: Sendable {
                 let fetchBatchSize = 500
                 var missingAssetCount = 0
                 var hasLoggedLocalHashCacheWarning = false
-                var uploadsSinceFlush = 0
+                var flushCounter = AssetBatchFlushCounter(threshold: Self.flushInterval)
                 var shouldFlushAfterDataConnectionLoss = false
 
                 var skippedMonthShortCircuit = false
@@ -404,8 +404,7 @@ struct BackupParallelExecutor: Sendable {
                             // Cached-reuse `.skipped` also writes asset rows; only `.failed`
                             // skips the batch counter.
                             if result.status != .failed {
-                                uploadsSinceFlush += 1
-                                if uploadsSinceFlush >= Self.flushInterval {
+                                if flushCounter.recordSuccessAndCheckThreshold() {
                                     var intervalOutcome: V2MonthFlushOutcome?
                                     var shouldBreakAssetLoop = false
                                     do {
@@ -418,7 +417,7 @@ struct BackupParallelExecutor: Sendable {
                                     } catch {
                                         switch BackupFlushFailureClassification.classify(error, on: profile).foregroundIntervalAction {
                                         case .continueAssetLoopAndResetCounter:
-                                            uploadsSinceFlush = 0
+                                            flushCounter.reset()
                                             continue
                                         case .pauseAndBreakAssetLoop:
                                             workerState.paused = true
@@ -483,22 +482,27 @@ struct BackupParallelExecutor: Sendable {
                                         }
                                     }
                                     if shouldBreakAssetLoop { break }
-                                    uploadsSinceFlush = 0
+                                    flushCounter.reset()
                                 }
                             }
                         } catch {
-                            if error is CancellationError {
-                                workerState.paused = true
-                                break
-                            }
-                            let displayName = BackupAssetResourcePlanner.assetDisplayName(
-                                asset: asset,
-                                selectedResources: selectedResources
+                            let assetDispatch = BackupFlushFailureClassification.foregroundAssetErrorDispatch(
+                                error: error,
+                                profile: profile
                             )
-                            let errorMessage = profile.userFacingStorageErrorMessage(error)
-                            if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
+                            var shouldBreakAssetLoop = false
+                            switch assetDispatch.action {
+                            case .pauseAndBreakAssetLoop:
+                                workerState.paused = true
+                                shouldBreakAssetLoop = true
+                            case .abortMonthDataConnectionLossBreakAssetLoop:
+                                let displayName = BackupAssetResourcePlanner.assetDisplayName(
+                                    asset: asset,
+                                    selectedResources: selectedResources
+                                )
+                                let errorMessage = profile.userFacingStorageErrorMessage(assetDispatch.error)
                                 clientReusable = false
-                                monthFatalError = error
+                                monthFatalError = assetDispatch.error
                                 shouldFlushAfterDataConnectionLoss = true
                                 eventStream.emitLog(
                                     String.localizedStringWithFormat(
@@ -510,33 +514,38 @@ struct BackupParallelExecutor: Sendable {
                                     ),
                                     level: .error
                                 )
-                                break
+                                shouldBreakAssetLoop = true
+                            case .logGenericFailureAndContinue:
+                                let displayName = BackupAssetResourcePlanner.assetDisplayName(
+                                    asset: asset,
+                                    selectedResources: selectedResources
+                                )
+                                let errorMessage = profile.userFacingStorageErrorMessage(assetDispatch.error)
+                                print("[BackupUpload] asset processing FAILED: asset=\(displayName), reason=\(errorMessage)")
+                                eventStream.emitLog(
+                                    String.localizedStringWithFormat(
+                                        String(localized: "backup.parallel.failedAssetLog"),
+                                        displayName,
+                                        errorMessage
+                                    ) + Self.contextSuffix(workerID: workerID + 1, monthText: monthKey.text),
+                                    level: .error
+                                )
+                                let progressState = await aggregator.recordFailure()
+                                emitFailureProgress(
+                                    eventStream: eventStream,
+                                    state: progressState.state,
+                                    asset: asset,
+                                    displayName: displayName,
+                                    errorMessage: errorMessage,
+                                    position: progressState.position,
+                                    workerID: workerID + 1,
+                                    monthText: monthKey.text
+                                )
+                                if let timingSummary = progressState.timingSummary {
+                                    eventStream.emitLog(timingSummary, level: .debug)
+                                }
                             }
-
-                            print("[BackupUpload] asset processing FAILED: asset=\(displayName), reason=\(errorMessage)")
-                            eventStream.emitLog(
-                                String.localizedStringWithFormat(
-                                    String(localized: "backup.parallel.failedAssetLog"),
-                                    displayName,
-                                    errorMessage
-                                ) + Self.contextSuffix(workerID: workerID + 1, monthText: monthKey.text),
-                                level: .error
-                            )
-
-                            let progressState = await aggregator.recordFailure()
-                            emitFailureProgress(
-                                eventStream: eventStream,
-                                state: progressState.state,
-                                asset: asset,
-                                displayName: displayName,
-                                errorMessage: errorMessage,
-                                position: progressState.position,
-                                workerID: workerID + 1,
-                                monthText: monthKey.text
-                            )
-                            if let timingSummary = progressState.timingSummary {
-                                eventStream.emitLog(timingSummary, level: .debug)
-                            }
+                            if shouldBreakAssetLoop { break }
                         }
                     }
 

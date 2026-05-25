@@ -193,6 +193,241 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
                        file: file, line: line)
     }
 
+    private func assertDisplayErrorPreservesUnderlying(
+        _ flushError: V2MonthSession.FlushError,
+        expectedDomain: String,
+        expectedCode: Int,
+        file: StaticString = #file,
+        line: UInt = #line
+    ) {
+        guard case .snapshotWriteFailed(_, _, let underlying) = flushError else {
+            XCTFail("dispatch.displayError must be FlushError.snapshotWriteFailed (the wrapper)",
+                    file: file, line: line)
+            return
+        }
+        let actual = underlying as NSError
+        XCTAssertEqual(actual.domain, expectedDomain,
+                       "displayError must preserve the original underlying error's domain — if this fails, a refactor may have substituted the wrapper's underlying",
+                       file: file, line: line)
+        XCTAssertEqual(actual.code, expectedCode,
+                       "displayError must preserve the original underlying error's code",
+                       file: file, line: line)
+    }
+
+    // C0: classifyPartialOutcome (shared classifier consumed by all four PartialDispatch helpers)
+
+    func testClassifyPartialOutcome_CompletedReturnsNil() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let outcome: V2MonthFlushOutcome = .completed(.none)
+        XCTAssertNil(BackupFlushFailureClassification.classifyPartialOutcome(outcome, on: profile))
+    }
+
+    func testClassifyPartialOutcome_CancellationErrorUnderlying_CategoryCancelled() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let outcome = makePartialOutcome(underlying: CancellationError())
+        guard let classified = BackupFlushFailureClassification.classifyPartialOutcome(outcome, on: profile) else {
+            XCTFail("classified must be non-nil for partial outcome")
+            return
+        }
+        XCTAssertEqual(classified.category, .cancelled)
+        assertDisplayErrorRoundTripsPayload(classified.flushError)
+    }
+
+    func testClassifyPartialOutcome_NSURLErrorCancelledUnderlying_CategoryCancelled() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let outcome = makePartialOutcome(underlying: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+        guard let classified = BackupFlushFailureClassification.classifyPartialOutcome(outcome, on: profile) else {
+            XCTFail("classified must be non-nil for partial outcome")
+            return
+        }
+        XCTAssertEqual(classified.category, .cancelled,
+                       "NSURLErrorCancelled in the underlying chain must surface as cancellationCause via the FlushError walker.")
+        assertDisplayErrorRoundTripsPayload(classified.flushError)
+    }
+
+    func testClassifyPartialOutcome_ConnectionUnavailableUnderlying_CategoryConnectionUnavailable() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let outcome = makePartialOutcome(underlying: NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet))
+        guard let classified = BackupFlushFailureClassification.classifyPartialOutcome(outcome, on: profile) else {
+            XCTFail("classified must be non-nil for partial outcome")
+            return
+        }
+        XCTAssertEqual(classified.category, .connectionUnavailable)
+        assertDisplayErrorRoundTripsPayload(classified.flushError)
+    }
+
+    func testClassifyPartialOutcome_SoftUnderlying_CategoryOther() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let outcome = makePartialOutcome(underlying: NSError(domain: "soft", code: 1))
+        guard let classified = BackupFlushFailureClassification.classifyPartialOutcome(outcome, on: profile) else {
+            XCTFail("classified must be non-nil for partial outcome")
+            return
+        }
+        XCTAssertEqual(classified.category, .other)
+        assertDisplayErrorRoundTripsPayload(classified.flushError)
+    }
+
+    func testClassifyPartialOutcome_BothCancellationAndConnectionUnavailable_CategoryCancelled() {
+        // Cancellation precedence MUST beat connection-unavailable when both predicates fire on the same chain.
+        // Inner = NSURLErrorCancelled (matched by FlushError.cancellationCause walker).
+        // Outer = NSURLErrorNotConnectedToInternet wrapping inner via NSUnderlyingErrorKey
+        //         (matched by isConnectionUnavailableErrorIncludingFlushUnderlying walker).
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let inner = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        let outer = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorNotConnectedToInternet,
+            userInfo: [NSUnderlyingErrorKey: inner]
+        )
+        let outcome = makePartialOutcome(underlying: outer)
+        guard let classified = BackupFlushFailureClassification.classifyPartialOutcome(outcome, on: profile) else {
+            XCTFail("classified must be non-nil for partial outcome")
+            return
+        }
+        XCTAssertEqual(classified.category, .cancelled,
+                       "cancellation precedence MUST beat connection-unavailable when both predicates match the same chain; reversed precedence would classify this as .connectionUnavailable")
+        assertDisplayErrorRoundTripsPayload(classified.flushError)
+    }
+
+    func testClassifyPartialOutcome_DisplayErrorPreservesUnderlyingPayload() {
+        // Pins that the original underlying error survives end-to-end through `classified.flushError`.
+        // The existing round-trip helper only checks committedAssets/committedTombstones; this asserts
+        // the underlying domain+code (the carrier for userFacingStorageErrorMessage / logging) is intact.
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let sentinelDomain = "WatermelonTests.unit033.sentinel"
+        let sentinelCode = 0xDEAD
+        let sentinel = NSError(domain: sentinelDomain, code: sentinelCode)
+        let outcome = makePartialOutcome(underlying: sentinel)
+        guard let classified = BackupFlushFailureClassification.classifyPartialOutcome(outcome, on: profile) else {
+            XCTFail("classified must be non-nil for partial outcome")
+            return
+        }
+        XCTAssertEqual(classified.category, .other,
+                       "sentinel error must not match cancellation or connection-unavailable walkers; if it does, the test premise is broken")
+        assertDisplayErrorPreservesUnderlying(classified.flushError,
+                                              expectedDomain: sentinelDomain,
+                                              expectedCode: sentinelCode)
+    }
+
+    // D0: classifyAssetProcessError (shared classifier consumed by both asset-loop catch arms)
+
+    func testClassifyAssetProcessError_CancellationError_CategoryCancelled() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let classified = BackupFlushFailureClassification.classifyAssetProcessError(CancellationError(), on: profile)
+        XCTAssertEqual(classified.category, .cancelled)
+        XCTAssertTrue(classified.error is CancellationError,
+                      "AssetErrorClassification must carry the original error instance")
+    }
+
+    func testClassifyAssetProcessError_RawNSURLErrorCancelled_CategoryOther() {
+        // Pins NO widening: raw NSURLErrorCancelled outside FlushError is .other, mirroring the
+        // existing top-level rule at testRawNSURLErrorCancelledIsNotCancelledOutsideFlushError.
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let raw = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+        let classified = BackupFlushFailureClassification.classifyAssetProcessError(raw, on: profile)
+        XCTAssertEqual(classified.category, .other,
+                       "Raw NSURLErrorCancelled outside FlushError must NOT classify as .cancelled at the asset-process layer; only `error is CancellationError` does")
+        let actual = classified.error as NSError
+        XCTAssertEqual(actual.domain, NSURLErrorDomain)
+        XCTAssertEqual(actual.code, NSURLErrorCancelled)
+    }
+
+    func testClassifyAssetProcessError_NSURLErrorNotConnectedToInternet_CategoryConnectionUnavailable() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+        let classified = BackupFlushFailureClassification.classifyAssetProcessError(error, on: profile)
+        XCTAssertEqual(classified.category, .connectionUnavailable)
+        let actual = classified.error as NSError
+        XCTAssertEqual(actual.domain, NSURLErrorDomain)
+        XCTAssertEqual(actual.code, NSURLErrorNotConnectedToInternet)
+    }
+
+    func testClassifyAssetProcessError_Soft_CategoryOther() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let error = NSError(domain: "soft", code: 1)
+        let classified = BackupFlushFailureClassification.classifyAssetProcessError(error, on: profile)
+        XCTAssertEqual(classified.category, .other)
+        let actual = classified.error as NSError
+        XCTAssertEqual(actual.domain, "soft")
+        XCTAssertEqual(actual.code, 1)
+    }
+
+    // D1: foregroundAssetErrorDispatch
+
+    func testForegroundAssetErrorDispatch_CancellationError_PauseAndBreak() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let dispatch = BackupFlushFailureClassification.foregroundAssetErrorDispatch(
+            error: CancellationError(),
+            profile: profile
+        )
+        XCTAssertEqual(dispatch.action, .pauseAndBreakAssetLoop)
+        XCTAssertTrue(dispatch.error is CancellationError)
+    }
+
+    func testForegroundAssetErrorDispatch_ConnectionUnavailable_AbortMonthDataConnectionLoss() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+        let dispatch = BackupFlushFailureClassification.foregroundAssetErrorDispatch(
+            error: error,
+            profile: profile
+        )
+        XCTAssertEqual(dispatch.action, .abortMonthDataConnectionLossBreakAssetLoop)
+        let actual = dispatch.error as NSError
+        XCTAssertEqual(actual.domain, NSURLErrorDomain)
+        XCTAssertEqual(actual.code, NSURLErrorNotConnectedToInternet)
+    }
+
+    func testForegroundAssetErrorDispatch_Soft_LogGenericFailureAndContinue() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let error = NSError(domain: "soft", code: 1)
+        let dispatch = BackupFlushFailureClassification.foregroundAssetErrorDispatch(
+            error: error,
+            profile: profile
+        )
+        XCTAssertEqual(dispatch.action, .logGenericFailureAndContinue)
+        let actual = dispatch.error as NSError
+        XCTAssertEqual(actual.domain, "soft")
+        XCTAssertEqual(actual.code, 1)
+    }
+
+    // D2: backgroundAssetErrorDispatch
+
+    func testBackgroundAssetErrorDispatch_CancellationError_BreakAssetLoop() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let dispatch = BackupFlushFailureClassification.backgroundAssetErrorDispatch(
+            error: CancellationError(),
+            profile: profile
+        )
+        XCTAssertEqual(dispatch.action, .breakAssetLoop)
+        XCTAssertTrue(dispatch.error is CancellationError)
+    }
+
+    func testBackgroundAssetErrorDispatch_ConnectionUnavailable_AbortMonthConnectionUnavailable() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+        let dispatch = BackupFlushFailureClassification.backgroundAssetErrorDispatch(
+            error: error,
+            profile: profile
+        )
+        XCTAssertEqual(dispatch.action, .abortMonthConnectionUnavailableBreakAssetLoop)
+        let actual = dispatch.error as NSError
+        XCTAssertEqual(actual.domain, NSURLErrorDomain)
+        XCTAssertEqual(actual.code, NSURLErrorNotConnectedToInternet)
+    }
+
+    func testBackgroundAssetErrorDispatch_Soft_LogGenericFailureAndContinue() {
+        let profile = TestFixtures.makeServerProfile(storageType: .webdav)
+        let error = NSError(domain: "soft", code: 1)
+        let dispatch = BackupFlushFailureClassification.backgroundAssetErrorDispatch(
+            error: error,
+            profile: profile
+        )
+        XCTAssertEqual(dispatch.action, .logGenericFailureAndContinue)
+        let actual = dispatch.error as NSError
+        XCTAssertEqual(actual.domain, "soft")
+        XCTAssertEqual(actual.code, 1)
+    }
+
     // C1–C5: foregroundIntervalPartialDispatch
 
     func testForegroundIntervalPartialDispatch_CompletedReturnsNil() {

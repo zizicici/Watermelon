@@ -89,6 +89,33 @@ enum BackupFlushFailureClassification: Sendable, Equatable {
 }
 
 extension BackupFlushFailureClassification {
+    enum PartialOutcomeCategory: Sendable, Equatable {
+        case cancelled
+        case connectionUnavailable
+        case other
+    }
+
+    struct PartialOutcomeClassification {
+        let category: PartialOutcomeCategory
+        let flushError: V2MonthSession.FlushError
+    }
+
+    static func classifyPartialOutcome(
+        _ outcome: V2MonthFlushOutcome,
+        on profile: ServerProfileRecord
+    ) -> PartialOutcomeClassification? {
+        guard case .commitDurableSnapshotDeferred(_, let flushError) = outcome else { return nil }
+        let category: PartialOutcomeCategory
+        if outcome.cancellationCause != nil {
+            category = .cancelled
+        } else if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(flushError) {
+            category = .connectionUnavailable
+        } else {
+            category = .other
+        }
+        return PartialOutcomeClassification(category: category, flushError: flushError)
+    }
+
     enum ForegroundIntervalPartialAction: Sendable, Equatable {
         case pauseAndBreakAssetLoop
         case abortMonthBreakAssetLoop
@@ -134,16 +161,14 @@ extension BackupFlushFailureClassification {
         outcome: V2MonthFlushOutcome,
         profile: ServerProfileRecord
     ) -> ForegroundIntervalPartialDispatch? {
-        guard case .commitDurableSnapshotDeferred(_, let flushError) = outcome else { return nil }
+        guard let classified = classifyPartialOutcome(outcome, on: profile) else { return nil }
         let action: ForegroundIntervalPartialAction
-        if outcome.cancellationCause != nil {
-            action = .pauseAndBreakAssetLoop
-        } else if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(flushError) {
-            action = .abortMonthBreakAssetLoop
-        } else {
-            action = .logWarningAndContinue
+        switch classified.category {
+        case .cancelled:             action = .pauseAndBreakAssetLoop
+        case .connectionUnavailable: action = .abortMonthBreakAssetLoop
+        case .other:                 action = .logWarningAndContinue
         }
-        return .init(action: action, displayError: flushError)
+        return .init(action: action, displayError: classified.flushError)
     }
 
     static func foregroundEndOfMonthPartialDispatch(
@@ -151,49 +176,115 @@ extension BackupFlushFailureClassification {
         profile: ServerProfileRecord,
         shouldFinishMonth: Bool
     ) -> ForegroundEndOfMonthPartialDispatch? {
-        guard case .commitDurableSnapshotDeferred(_, let flushError) = outcome else { return nil }
+        guard let classified = classifyPartialOutcome(outcome, on: profile) else { return nil }
         let action: ForegroundEndOfMonthPartialAction
-        if outcome.cancellationCause != nil {
-            action = .pauseAndBreakMonthLoop
-        } else if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(flushError) {
-            action = .abortMonthBreakMonthLoop
-        } else if shouldFinishMonth {
-            action = .logErrorAndEmitDeferred
-        } else {
-            action = .logErrorOnly
+        switch classified.category {
+        case .cancelled:             action = .pauseAndBreakMonthLoop
+        case .connectionUnavailable: action = .abortMonthBreakMonthLoop
+        case .other:                 action = shouldFinishMonth ? .logErrorAndEmitDeferred : .logErrorOnly
         }
-        return .init(action: action, displayError: flushError)
+        return .init(action: action, displayError: classified.flushError)
     }
 
     static func backgroundIntervalPartialDispatch(
         outcome: V2MonthFlushOutcome,
         profile: ServerProfileRecord
     ) -> BackgroundIntervalPartialDispatch? {
-        guard case .commitDurableSnapshotDeferred(_, let flushError) = outcome else { return nil }
+        guard let classified = classifyPartialOutcome(outcome, on: profile) else { return nil }
         let action: BackgroundIntervalPartialAction
-        if outcome.cancellationCause != nil {
-            action = .ignoreSilently
-        } else if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(flushError) {
-            action = .abortProfileLogError
-        } else {
-            action = .logErrorAndContinue
+        switch classified.category {
+        case .cancelled:             action = .ignoreSilently
+        case .connectionUnavailable: action = .abortProfileLogError
+        case .other:                 action = .logErrorAndContinue
         }
-        return .init(action: action, displayError: flushError)
+        return .init(action: action, displayError: classified.flushError)
     }
 
     static func backgroundEndOfMonthPartialDispatch(
         outcome: V2MonthFlushOutcome,
         profile: ServerProfileRecord
     ) -> BackgroundEndOfMonthPartialDispatch? {
-        guard case .commitDurableSnapshotDeferred(_, let flushError) = outcome else { return nil }
+        guard let classified = classifyPartialOutcome(outcome, on: profile) else { return nil }
         let action: BackgroundEndOfMonthPartialAction
-        if outcome.cancellationCause != nil {
-            action = .ignoreSilently
-        } else if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(flushError) {
-            action = .abortProfileLogError
-        } else {
-            action = .recordReasonLogError
+        switch classified.category {
+        case .cancelled:             action = .ignoreSilently
+        case .connectionUnavailable: action = .abortProfileLogError
+        case .other:                 action = .recordReasonLogError
         }
-        return .init(action: action, displayError: flushError)
+        return .init(action: action, displayError: classified.flushError)
+    }
+
+    enum AssetErrorCategory: Sendable, Equatable {
+        case cancelled
+        case connectionUnavailable
+        case other
+    }
+
+    struct AssetErrorClassification {
+        let category: AssetErrorCategory
+        let error: Error
+    }
+
+    static func classifyAssetProcessError(
+        _ error: Error,
+        on profile: ServerProfileRecord
+    ) -> AssetErrorClassification {
+        let category: AssetErrorCategory
+        if error is CancellationError {
+            category = .cancelled
+        } else if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
+            category = .connectionUnavailable
+        } else {
+            category = .other
+        }
+        return AssetErrorClassification(category: category, error: error)
+    }
+
+    enum ForegroundAssetErrorAction: Sendable, Equatable {
+        case pauseAndBreakAssetLoop
+        case abortMonthDataConnectionLossBreakAssetLoop
+        case logGenericFailureAndContinue
+    }
+    struct ForegroundAssetErrorDispatch {
+        let action: ForegroundAssetErrorAction
+        let error: Error
+    }
+
+    static func foregroundAssetErrorDispatch(
+        error: Error,
+        profile: ServerProfileRecord
+    ) -> ForegroundAssetErrorDispatch {
+        let classified = classifyAssetProcessError(error, on: profile)
+        let action: ForegroundAssetErrorAction
+        switch classified.category {
+        case .cancelled:             action = .pauseAndBreakAssetLoop
+        case .connectionUnavailable: action = .abortMonthDataConnectionLossBreakAssetLoop
+        case .other:                 action = .logGenericFailureAndContinue
+        }
+        return ForegroundAssetErrorDispatch(action: action, error: classified.error)
+    }
+
+    enum BackgroundAssetErrorAction: Sendable, Equatable {
+        case breakAssetLoop
+        case abortMonthConnectionUnavailableBreakAssetLoop
+        case logGenericFailureAndContinue
+    }
+    struct BackgroundAssetErrorDispatch {
+        let action: BackgroundAssetErrorAction
+        let error: Error
+    }
+
+    static func backgroundAssetErrorDispatch(
+        error: Error,
+        profile: ServerProfileRecord
+    ) -> BackgroundAssetErrorDispatch {
+        let classified = classifyAssetProcessError(error, on: profile)
+        let action: BackgroundAssetErrorAction
+        switch classified.category {
+        case .cancelled:             action = .breakAssetLoop
+        case .connectionUnavailable: action = .abortMonthConnectionUnavailableBreakAssetLoop
+        case .other:                 action = .logGenericFailureAndContinue
+        }
+        return BackgroundAssetErrorDispatch(action: action, error: classified.error)
     }
 }
