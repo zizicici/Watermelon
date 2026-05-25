@@ -534,7 +534,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
 
         let handle = try await overlayService.syncOverlayAndCaptureHandle(client: client, basePath: basePath)
         XCTAssertEqual(handle.overlayFreshness, .stale)
-        let verified = await overlayService.verifiedPhysicallyMissingHashes(for: month)
+        let verified = overlayService.verifiedPhysicallyMissingHashes(for: month)
         XCTAssertNil(verified)
     }
 

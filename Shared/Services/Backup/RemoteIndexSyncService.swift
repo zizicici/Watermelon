@@ -779,7 +779,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
     }
 
-    func verifiedPhysicallyMissingHashes(for month: LibraryMonthKey) async -> Set<Data>? {
+    func verifiedPhysicallyMissingHashes(for month: LibraryMonthKey) -> Set<Data>? {
         optimisticMutationLock.withLock {
             committedView.verifiedPhysicallyMissingHashes(for: month)
         }
@@ -804,12 +804,6 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     @discardableResult
     func applyPresenceSnapshotForTest(_ snapshot: RemotePresenceSnapshot) -> Bool {
         applyPhysicalPresenceOverlay(snapshot)
-    }
-
-    func physicallyMissingSnapshot() -> [LibraryMonthKey: Set<Data>] {
-        optimisticMutationLock.withLock {
-            committedView.physicallyMissingSnapshot()
-        }
     }
 
     @discardableResult

@@ -52,7 +52,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
 
         // No overlay was set; verifiedPhysicallyMissingHashes returns nil since the helper publishes nil
         // missing-hashes for a non-authoritative session, clearing/leaving the freshness flag unset.
-        let post = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let post = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertNil(post, "no overlay was set, freshness flag must remain unset post-publish")
     }
 
@@ -137,7 +137,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
             physicallyMissingHashes: Set<Data>()
         )
 
-        let preFresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let preFresh = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertEqual(preFresh, Set<Data>(),
                        "setup precondition: freshness flag must be set (verified returns the empty committed-view set)")
 
@@ -154,7 +154,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
                       "freshHashes was non-nil → overlayIsAuthoritative=true must propagate")
 
         // The helper publishes physicallyMissingHashes: non-nil (empty set), so freshness flag stays set.
-        let post = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let post = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertEqual(post, Set<Data>(),
                        "overlay-fresh path must keep freshness flag set after the helper's republish")
     }
@@ -166,7 +166,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
         let ris = RemoteIndexSyncService()
 
         // No overlay seeded -> verifiedPhysicallyMissingHashes returns nil; freshness flag is NOT set.
-        let preFresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let preFresh = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertNil(preFresh, "setup precondition: overlay must be absent")
 
         let store = try await V2MonthLoadAndPublish.loadAndPublishSnapshot(
@@ -183,7 +183,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
 
         // overlayIsAuthoritative was false -> presence.isAuthoritative false;
         // helper publishes physicallyMissingHashes: nil; freshness flag must remain unset.
-        let post = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let post = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertNil(post, "non-authoritative publish must leave freshness flag unset")
     }
 
@@ -223,7 +223,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
         }
 
         // Helper must NOT have mutated the freshness flag when load threw before publish.
-        let postFresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let postFresh = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertNil(postFresh,
                      "replaceCachedMonth must not run when V2MonthSession.loadOrCreate throws")
 
@@ -247,7 +247,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
         let staleMissing = TestFixtures.fingerprint(0xDD)
         ris.markPhysicallyMissingV2(month: monthKey, hashes: [staleMissing])
 
-        let preFresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let preFresh = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertNil(preFresh, "setup precondition: freshness flag must NOT be set")
         let preCommitted = ris.physicallyMissingHashes(for: monthKey)
         XCTAssertEqual(preCommitted, [staleMissing],
@@ -267,7 +267,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
 
         // Helper publishes physicallyMissingHashes: nil. replaceMonth then intersects the previous
         // stale set with the now-empty resources → clears the stale missing set.
-        let postFresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let postFresh = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertNil(postFresh, "freshness flag must remain unset post-publish (helper passed nil)")
         let postCommitted = ris.physicallyMissingHashes(for: monthKey)
         XCTAssertTrue(postCommitted.isEmpty,
@@ -336,7 +336,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
         let ris = RemoteIndexSyncService()
         ris.markPhysicallyMissingV2(month: monthKey, hashes: [h])
 
-        let preFresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let preFresh = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertNil(preFresh, "setup precondition: freshness flag must NOT be set")
         let prePresence = ris.presenceSnapshot(for: monthKey)
         XCTAssertEqual(prePresence.missingHashes, [h])
@@ -366,7 +366,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
 
         // (3) Publish step did NOT seed the freshness flag (publishMonthSnapshot passes
         //     physicallyMissingHashes: nil when presence.isAuthoritative is false — Gate B).
-        let postFresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let postFresh = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertNil(postFresh,
                      "non-authoritative publish must leave freshness flag unset")
 

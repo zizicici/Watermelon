@@ -132,12 +132,6 @@ final class RepoCommittedView: @unchecked Sendable {
         return map
     }
 
-    func physicallyMissingSnapshot() -> [LibraryMonthKey: Set<Data>] {
-        missingLock.lock()
-        defer { missingLock.unlock() }
-        return physicallyMissingSnapshotMapLocked()
-    }
-
     func verifiedPhysicallyMissingHashes(for month: LibraryMonthKey) -> Set<Data>? {
         missingLock.lock()
         defer { missingLock.unlock() }

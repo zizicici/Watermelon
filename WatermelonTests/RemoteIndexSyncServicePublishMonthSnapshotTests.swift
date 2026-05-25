@@ -4,7 +4,7 @@ import XCTest
 final class RemoteIndexSyncServicePublishMonthSnapshotTests: XCTestCase {
     private let monthKey = LibraryMonthKey(year: 2026, month: 1)
 
-    func testPublish_authoritativeStore_emptySnapshot_seedsFreshnessFlagWithEmptySet() async {
+    func testPublish_authoritativeStore_emptySnapshot_seedsFreshnessFlagWithEmptySet() {
         let ris = RemoteIndexSyncService()
         let store = FakeMonthStore(year: 2026, month: 1, authoritative: true)
 
@@ -13,12 +13,12 @@ final class RemoteIndexSyncServicePublishMonthSnapshotTests: XCTestCase {
         // Authoritative + empty snapshot ⇒ helper passes physicallyMissingHashes: Set<Data>()
         // ⇒ replaceCachedMonth inserts into physicalPresenceOverlayFreshMonths
         // ⇒ verifiedPhysicallyMissingHashes returns the empty set (flag set, intersection empty).
-        let fresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let fresh = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertEqual(fresh, Set<Data>(),
                        "authoritative empty store must seed freshness flag with empty set")
     }
 
-    func testPublish_nonAuthoritativeStore_emptySnapshot_leavesFreshnessFlagUnset() async {
+    func testPublish_nonAuthoritativeStore_emptySnapshot_leavesFreshnessFlagUnset() {
         let ris = RemoteIndexSyncService()
         let store = FakeMonthStore(year: 2026, month: 1, authoritative: false)
 
@@ -27,12 +27,12 @@ final class RemoteIndexSyncServicePublishMonthSnapshotTests: XCTestCase {
         // Non-authoritative ⇒ helper passes physicallyMissingHashes: nil
         // ⇒ replaceCachedMonth removes from physicalPresenceOverlayFreshMonths
         // ⇒ verifiedPhysicallyMissingHashes returns nil.
-        let fresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let fresh = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertNil(fresh,
                      "non-authoritative store must not seed freshness flag")
     }
 
-    func testPublish_authoritativeStore_nonEmptyMissingSet_propagatesAuthoritativeMissingHashes() async {
+    func testPublish_authoritativeStore_nonEmptyMissingSet_propagatesAuthoritativeMissingHashes() {
         let ris = RemoteIndexSyncService()
         let missingHash = TestFixtures.fingerprint(0xAA)
         // Fixture must include a resource row whose contentHash matches missingHash —
@@ -59,12 +59,12 @@ final class RemoteIndexSyncServicePublishMonthSnapshotTests: XCTestCase {
         // The helper passes the authoritative set into replaceCachedMonth; the stored set
         // is the still-present intersection. Here the seeded resource's contentHash matches
         // missingHash, so the intersection equals the input.
-        let fresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let fresh = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertEqual(fresh, [missingHash],
                        "authoritative store with matching resource must pass missing-set through; intersection preserves it")
     }
 
-    func testPublish_nonAuthoritativeStore_neverPropagatesMissingHashes() async {
+    func testPublish_nonAuthoritativeStore_neverPropagatesMissingHashes() {
         let ris = RemoteIndexSyncService()
         let missingHash = TestFixtures.fingerprint(0xBB)
         // Construct a store whose snapshot() reports a non-empty missing set BUT
@@ -90,7 +90,7 @@ final class RemoteIndexSyncServicePublishMonthSnapshotTests: XCTestCase {
 
         ris.publishMonthSnapshot(of: store, for: monthKey)
 
-        let fresh = await ris.verifiedPhysicallyMissingHashes(for: monthKey)
+        let fresh = ris.verifiedPhysicallyMissingHashes(for: monthKey)
         XCTAssertNil(fresh,
                      "non-authoritative missing set must not seed freshness flag")
     }

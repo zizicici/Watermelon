@@ -657,7 +657,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         let monthMissing = service.physicallyMissingHashesForTest(month: monthA)
         XCTAssertFalse(monthMissing.isEmpty,
                        "budget-exhausted inconclusive hashes must be folded into missing under fail-closed")
-        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        let verified = service.verifiedPhysicallyMissingHashes(for: monthA)
         XCTAssertEqual(verified, monthMissing,
                        "freshness-aware accessor must publish the same missing set for the fresh month")
     }
@@ -698,7 +698,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         let monthMissing = service.physicallyMissingHashesForTest(month: monthA)
         XCTAssertFalse(monthMissing.isEmpty,
                        "fail-closed policy must populate missing with unresolved inconclusives")
-        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        let verified = service.verifiedPhysicallyMissingHashes(for: monthA)
         XCTAssertEqual(verified, monthMissing,
                        "freshness-aware accessor must publish the same missing set under partial fallback")
     }
@@ -796,7 +796,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
             basePath: basePath,
             fallback: RemotePresenceSnapshot.failClosed(missingByMonth: [monthA: allHashes])
         )
-        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        let verified = service.verifiedPhysicallyMissingHashes(for: monthA)
         XCTAssertNil(verified,
                      ".preserveFallback must not advertise the fallback set as verified-missing for a budget-exhausted month")
     }
@@ -841,7 +841,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                        "month-dir 404 must preserve prior fallback; widening to allHashes would publish a transient 404 as verified absence")
         XCTAssertFalse(published == allHashes,
                        "month-dir 404 must NOT publish every manifest hash as physicallyMissing")
-        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        let verified = service.verifiedPhysicallyMissingHashes(for: monthA)
         XCTAssertNil(verified,
                      "month-dir 404 must leave the month not-fresh so callers don't read the fallback as authoritative")
     }
@@ -961,7 +961,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
 
         XCTAssertEqual(handle.overlayFreshness, .stale,
                        "month-dir 404 must yield a stale handle — probe-failure inconclusives carry no signal")
-        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        let verified = service.verifiedPhysicallyMissingHashes(for: monthA)
         XCTAssertNil(verified,
                      "month-dir 404 must NOT publish a fresh overlay for the affected month under fail-closed")
         let published = service.physicallyMissingHashesForTest(month: monthA)
@@ -1003,7 +1003,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
 
         XCTAssertEqual(handle.overlayFreshness, .stale,
                        "fallback covering all probe-failure hashes must NOT flip the month to fresh — .probeFailure carries no current signal")
-        let verified = await service.verifiedPhysicallyMissingHashes(for: monthA)
+        let verified = service.verifiedPhysicallyMissingHashes(for: monthA)
         XCTAssertNil(verified,
                      "all-probe-failure inconclusives must keep verifiedPhysicallyMissingHashes nil even when fully covered by fallback")
         let published = service.physicallyMissingHashesForTest(month: monthA)
