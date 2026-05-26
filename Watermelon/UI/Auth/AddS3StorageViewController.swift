@@ -55,6 +55,10 @@ final class AddS3StorageViewController: UIViewController {
     private var accessKeyText = ""
     private var secretKeyText = ""
     private var pathStyleOverride: Bool?
+    private let hasSavedSecretKey: Bool
+    private var secretKeyChanged = false
+    private var secretKeyRevealed = false
+    private var revealedSavedSecretKey: String?
 
     init(
         dependencies: DependencyContainer,
@@ -66,6 +70,7 @@ final class AddS3StorageViewController: UIViewController {
         self.editingProfile = editingProfile
         self.shouldPopToRootOnSave = shouldPopToRootOnSave
         self.onSaved = onSaved
+        self.hasSavedSecretKey = Self.hasSavedSecretKey(dependencies: dependencies, editingProfile: editingProfile)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -117,6 +122,7 @@ final class AddS3StorageViewController: UIViewController {
         tableView.rowHeight = UITableView.automaticDimension
         tableView.estimatedRowHeight = 44
         tableView.register(SettingsTextFieldCell.self, forCellReuseIdentifier: SettingsTextFieldCell.reuseIdentifier)
+        tableView.register(CredentialTextFieldCell.self, forCellReuseIdentifier: CredentialTextFieldCell.reuseIdentifier)
         tableView.register(S3PathStyleCell.self, forCellReuseIdentifier: S3PathStyleCell.reuseIdentifier)
 
         view.addSubview(tableView)
@@ -211,16 +217,12 @@ final class AddS3StorageViewController: UIViewController {
             throw NSError(domain: "AddS3Storage", code: 3, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.accessKey")])
         }
 
-        let trimmedSecret = secretKeyText.trimmingCharacters(in: .whitespacesAndNewlines)
         let secretKey: String
-        if !trimmedSecret.isEmpty {
-            secretKey = trimmedSecret
-        } else if let editingProfile,
-                  let saved = try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef),
-                  !saved.isEmpty {
-            secretKey = saved
+        if hasSavedSecretKey, !secretKeyChanged, let editingProfile {
+            secretKey = try dependencies.keychainService.readPassword(account: editingProfile.credentialRef)
         } else {
-            throw NSError(domain: "AddS3Storage", code: 4, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.s3.validation.secretKey")])
+            // S3-compatible secrets are opaque and may include edge whitespace.
+            secretKey = secretKeyText
         }
 
         let rawBase = basePathText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -254,6 +256,11 @@ final class AddS3StorageViewController: UIViewController {
             profileName: profileName,
             baseProfile: baseProfile
         )
+    }
+
+    private static func hasSavedSecretKey(dependencies: DependencyContainer, editingProfile: ServerProfileRecord?) -> Bool {
+        guard let editingProfile else { return false }
+        return (try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef)) != nil
     }
 
     private static func verifyConnection(draft: ValidatedDraft) async throws {
@@ -398,9 +405,12 @@ final class AddS3StorageViewController: UIViewController {
         let indexPath = indexPath(for: field)
         tableView.scrollToRow(at: indexPath, at: .middle, animated: true)
         DispatchQueue.main.async { [weak self] in
-            guard let self,
-                  let cell = self.tableView.cellForRow(at: indexPath) as? SettingsTextFieldCell else { return }
-            cell.focus()
+            guard let self else { return }
+            if let cell = self.tableView.cellForRow(at: indexPath) as? SettingsTextFieldCell {
+                cell.focus()
+            } else if let cell = self.tableView.cellForRow(at: indexPath) as? CredentialTextFieldCell {
+                cell.focus()
+            }
         }
     }
 
@@ -421,6 +431,40 @@ final class AddS3StorageViewController: UIViewController {
         case .secretAccessKey:
             return IndexPath(row: 1, section: Section.credentials.rawValue)
         }
+    }
+
+    private func secretKeyDisplayText() -> String {
+        if secretKeyChanged { return secretKeyText }
+        return secretKeyRevealed ? (revealedSavedSecretKey ?? "") : secretKeyText
+    }
+
+    private func shouldMaskSecretKey() -> Bool {
+        !secretKeyRevealed && hasSavedSecretKey && !secretKeyChanged
+    }
+
+    @MainActor
+    private func revealSecretKeyTapped() async {
+        let wasRevealed = secretKeyRevealed
+        view.endEditing(true)
+        if wasRevealed {
+            secretKeyRevealed = false
+            revealedSavedSecretKey = nil
+            tableView.reloadRows(at: [indexPath(for: .secretAccessKey)], with: .none)
+            return
+        }
+        if secretKeyChanged || !hasSavedSecretKey {
+            secretKeyRevealed = true
+            tableView.reloadRows(at: [indexPath(for: .secretAccessKey)], with: .none)
+            return
+        }
+        guard await CredentialRevealAuthenticator.authenticate(localizedReason: String(localized: "auth.s3.secretKey.revealReason")),
+              let editingProfile,
+              let saved = try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef) else {
+            return
+        }
+        revealedSavedSecretKey = saved
+        secretKeyRevealed = true
+        tableView.reloadRows(at: [indexPath(for: .secretAccessKey)], with: .none)
     }
 
     private static func formatEndpoint(scheme: String, host: String, port: Int) -> String {
@@ -485,7 +529,7 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
         case .path:
             return String(localized: "auth.s3.path.footer")
         case .credentials:
-            return editingProfile == nil ? nil : String(localized: "auth.smb.login.footerEdit")
+            return editingProfile == nil ? nil : String(localized: "auth.s3.secretKey.footerEdit")
         case .name:
             return nil
         }
@@ -584,6 +628,7 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
         case 0:
             return makeTextCell(
                 in: tableView, at: indexPath,
+                title: String(localized: "auth.s3.field.accessKeyID", defaultValue: "Access Key ID"),
                 text: accessKeyText,
                 placeholder: String(localized: "auth.s3.placeholder.accessKeyID"),
                 returnKeyType: .next,
@@ -591,23 +636,47 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
                 onReturn: { [weak self] in self?.focusField(.secretAccessKey) }
             )
         default:
-            return makeTextCell(
-                in: tableView, at: indexPath,
-                text: secretKeyText,
-                placeholder: editingProfile == nil
-                    ? String(localized: "auth.s3.placeholder.secretKey")
-                    : String(localized: "auth.passwordPlaceholderEdit"),
-                isSecure: true,
-                returnKeyType: .done,
-                onChanged: { [weak self] in self?.secretKeyText = $0 },
-                onReturn: { [weak self] in self?.focusField(nil) }
+            guard let cell = tableView.dequeueReusableCell(
+                withIdentifier: CredentialTextFieldCell.reuseIdentifier,
+                for: indexPath
+            ) as? CredentialTextFieldCell else { return UITableViewCell() }
+            cell.configure(
+                title: String(localized: "auth.s3.field.secretKey", defaultValue: "Secret Access Key"),
+                text: secretKeyDisplayText(),
+                placeholder: String(localized: "auth.s3.placeholder.secretKey"),
+                isMasked: shouldMaskSecretKey(),
+                isRevealed: secretKeyRevealed,
+                revealAccessibilityLabel: String(localized: "auth.s3.secretKey.reveal"),
+                hideAccessibilityLabel: String(localized: "auth.s3.secretKey.hide"),
+                inputAccessoryView: keyboardToolbar
             )
+            cell.onTextChanged = { [weak self] value in
+                self?.secretKeyChanged = true
+                self?.secretKeyText = value
+            }
+            cell.onMaskedCredentialEdited = { [weak self] value in
+                self?.secretKeyChanged = true
+                self?.secretKeyRevealed = false
+                self?.secretKeyText = value
+            }
+            cell.onRevealTapped = { [weak self] in
+                Task { @MainActor [weak self] in await self?.revealSecretKeyTapped() }
+            }
+            cell.onEndEditing = { [weak self] in
+                guard let self else { return }
+                self.secretKeyRevealed = false
+                self.revealedSavedSecretKey = nil
+                self.tableView.reloadRows(at: [self.indexPath(for: .secretAccessKey)], with: .none)
+            }
+            cell.onReturn = { [weak self] in self?.focusField(nil) }
+            return cell
         }
     }
 
     private func makeTextCell(
         in tableView: UITableView,
         at indexPath: IndexPath,
+        title: String? = nil,
         text: String,
         placeholder: String,
         keyboardType: UIKeyboardType = .default,
@@ -622,7 +691,7 @@ extension AddS3StorageViewController: UITableViewDataSource, UITableViewDelegate
             for: indexPath
         ) as? SettingsTextFieldCell else { return UITableViewCell() }
         cell.configure(
-            title: nil,
+            title: title,
             text: text,
             placeholder: placeholder,
             isSecure: isSecure,

@@ -3,6 +3,7 @@ import SwiftUI
 struct StoragePasswordPromptView: View {
     let profileName: String
     let username: String
+    let storageType: StorageType
     let onSubmit: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -10,12 +11,12 @@ struct StoragePasswordPromptView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(String(localized: "migration.password.title")).font(.headline)
-            Text(String(format: String(localized: "migration.password.message"), profileName, username))
+            Text(title).font(.headline)
+            Text(String(format: message, profileName, username))
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            SecureField(String(localized: "migration.password.field"), text: $password)
+            SecureField(fieldLabel, text: $password)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { submit() }
 
@@ -25,11 +26,28 @@ struct StoragePasswordPromptView: View {
                     .keyboardShortcut(.cancelAction)
                 Button(String(localized: "common.connect")) { submit() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(password.isEmpty)
             }
         }
         .padding(20)
         .frame(width: 400)
+    }
+
+    private var title: String {
+        storageType == .s3
+            ? String(localized: "migration.secretKey.title")
+            : String(localized: "migration.password.title")
+    }
+
+    private var message: String {
+        storageType == .s3
+            ? String(localized: "migration.secretKey.message")
+            : String(localized: "migration.password.message")
+    }
+
+    private var fieldLabel: String {
+        storageType == .s3
+            ? String(localized: "profile.add.s3.secretKey")
+            : String(localized: "migration.password.field")
     }
 
     private func submit() {

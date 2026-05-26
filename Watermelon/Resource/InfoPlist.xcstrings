@@ -181,6 +181,95 @@
         }
       }
     },
+    "NSFaceIDUsageDescription" : {
+      "comment" : "Privacy - Face ID Usage Description",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon verwendet die Geräteauthentifizierung, um gespeicherte Server-Zugangsdaten anzuzeigen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon uses device authentication to reveal saved server credentials."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon usa la autenticación del dispositivo para mostrar las credenciales de servidor guardadas."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon usa la autenticación del dispositivo para mostrar las credenciales de servidor guardadas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon utilise l’authentification de l’appareil pour afficher les identifiants de serveur enregistrés."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelonは、保存済みサーバー認証情報を表示するためにデバイス認証を使用します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon은 저장된 서버 자격 증명을 표시하기 위해 기기 인증을 사용합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon usa a autenticação do dispositivo para mostrar credenciais de servidor salvas."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Watermelon usa a autenticação do dispositivo para mostrar credenciais de servidor guardadas."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon использует аутентификацию устройства, чтобы показать сохранённые учётные данные сервера."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon використовує автентифікацію пристрою, щоб показати збережені облікові дані сервера."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon 使用设备认证来显示已保存的服务器凭据。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon 會使用裝置認證來顯示已儲存的伺服器憑據。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watermelon 會使用裝置認證來顯示已儲存的伺服器憑據。"
+          }
+        }
+      }
+    },
     "NSLocalNetworkUsageDescription" : {
       "comment" : "Privacy - Local Network Usage Description",
       "localizations" : {

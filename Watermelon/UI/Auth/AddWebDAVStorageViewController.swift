@@ -56,6 +56,10 @@ final class AddWebDAVStorageViewController: UIViewController {
     private var basePathText = ""
     private var usernameText = ""
     private var passwordText = ""
+    private let hasSavedPassword: Bool
+    private var passwordChanged = false
+    private var passwordRevealed = false
+    private var revealedSavedPassword: String?
 
     init(
         dependencies: DependencyContainer,
@@ -67,6 +71,7 @@ final class AddWebDAVStorageViewController: UIViewController {
         self.editingProfile = editingProfile
         self.shouldPopToRootOnSave = shouldPopToRootOnSave
         self.onSaved = onSaved
+        self.hasSavedPassword = Self.hasSavedPassword(dependencies: dependencies, editingProfile: editingProfile)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -116,6 +121,7 @@ final class AddWebDAVStorageViewController: UIViewController {
         tableView.rowHeight = UITableView.automaticDimension
         tableView.estimatedRowHeight = 44
         tableView.register(SettingsTextFieldCell.self, forCellReuseIdentifier: SettingsTextFieldCell.reuseIdentifier)
+        tableView.register(CredentialTextFieldCell.self, forCellReuseIdentifier: CredentialTextFieldCell.reuseIdentifier)
         tableView.register(WebDAVSchemeCell.self, forCellReuseIdentifier: WebDAVSchemeCell.reuseIdentifier)
 
         view.addSubview(tableView)
@@ -230,16 +236,12 @@ final class AddWebDAVStorageViewController: UIViewController {
             throw NSError(domain: "AddWebDAVStorage", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.validationUsername")])
         }
 
-        let trimmedPassword = passwordText.trimmingCharacters(in: .whitespacesAndNewlines)
         let password: String
-        if !trimmedPassword.isEmpty {
-            password = trimmedPassword
-        } else if let editingProfile,
-                  let saved = try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef),
-                  !saved.isEmpty {
-            password = saved
+        if hasSavedPassword, !passwordChanged, let editingProfile {
+            password = try dependencies.keychainService.readPassword(account: editingProfile.credentialRef)
         } else {
-            throw NSError(domain: "AddWebDAVStorage", code: 2, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.webdav.validationPassword")])
+            // Remote credentials may intentionally start or end with whitespace.
+            password = passwordText
         }
 
         guard let endpointURL = ServerProfileRecord.buildWebDAVEndpointURL(
@@ -289,6 +291,11 @@ final class AddWebDAVStorageViewController: UIViewController {
             profileName: profileName,
             baseProfile: baseProfile
         )
+    }
+
+    private static func hasSavedPassword(dependencies: DependencyContainer, editingProfile: ServerProfileRecord?) -> Bool {
+        guard let editingProfile else { return false }
+        return (try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef)) != nil
     }
 
     private static func verifyConnection(draft: ValidatedDraft) async throws {
@@ -438,9 +445,12 @@ final class AddWebDAVStorageViewController: UIViewController {
         let indexPath = indexPath(for: field)
         tableView.scrollToRow(at: indexPath, at: .middle, animated: true)
         DispatchQueue.main.async { [weak self] in
-            guard let self,
-                  let cell = self.tableView.cellForRow(at: indexPath) as? SettingsTextFieldCell else { return }
-            cell.focus()
+            guard let self else { return }
+            if let cell = self.tableView.cellForRow(at: indexPath) as? SettingsTextFieldCell {
+                cell.focus()
+            } else if let cell = self.tableView.cellForRow(at: indexPath) as? CredentialTextFieldCell {
+                cell.focus()
+            }
         }
     }
 
@@ -461,6 +471,40 @@ final class AddWebDAVStorageViewController: UIViewController {
         case .password:
             return IndexPath(row: 1, section: Section.credentials.rawValue)
         }
+    }
+
+    private func passwordDisplayText() -> String {
+        if passwordChanged { return passwordText }
+        return passwordRevealed ? (revealedSavedPassword ?? "") : passwordText
+    }
+
+    private func shouldMaskPassword() -> Bool {
+        !passwordRevealed && hasSavedPassword && !passwordChanged
+    }
+
+    @MainActor
+    private func revealPasswordTapped() async {
+        let wasRevealed = passwordRevealed
+        view.endEditing(true)
+        if wasRevealed {
+            passwordRevealed = false
+            revealedSavedPassword = nil
+            tableView.reloadRows(at: [indexPath(for: .password)], with: .none)
+            return
+        }
+        if passwordChanged || !hasSavedPassword {
+            passwordRevealed = true
+            tableView.reloadRows(at: [indexPath(for: .password)], with: .none)
+            return
+        }
+        guard await CredentialRevealAuthenticator.authenticate(localizedReason: String(localized: "auth.password.revealReason")),
+              let editingProfile,
+              let saved = try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef) else {
+            return
+        }
+        revealedSavedPassword = saved
+        passwordRevealed = true
+        tableView.reloadRows(at: [indexPath(for: .password)], with: .none)
     }
 
     private func reloadPortCell() {
@@ -511,7 +555,7 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
         case .paths:
             return String(localized: "auth.webdav.footerNew")
         case .credentials:
-            return editingProfile == nil ? nil : String(localized: "auth.smb.login.footerEdit")
+            return editingProfile == nil ? nil : String(localized: "auth.webdav.footerEdit")
         }
     }
 
@@ -643,14 +687,13 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
     }
 
     private func credentialsCell(in tableView: UITableView, at indexPath: IndexPath) -> UITableViewCell {
-        guard let cell = tableView.dequeueReusableCell(
-            withIdentifier: SettingsTextFieldCell.reuseIdentifier,
-            for: indexPath
-        ) as? SettingsTextFieldCell else {
-            return UITableViewCell()
-        }
-
         if indexPath.row == 0 {
+            guard let cell = tableView.dequeueReusableCell(
+                withIdentifier: SettingsTextFieldCell.reuseIdentifier,
+                for: indexPath
+            ) as? SettingsTextFieldCell else {
+                return UITableViewCell()
+            }
             cell.configure(
                 title: String(localized: "auth.field.username"),
                 text: usernameText,
@@ -660,21 +703,45 @@ extension AddWebDAVStorageViewController: UITableViewDataSource, UITableViewDele
             )
             cell.onTextChanged = { [weak self] in self?.usernameText = $0 }
             cell.onReturn = { [weak self] in self?.focusField(.password) }
+            return cell
         } else {
+            guard let cell = tableView.dequeueReusableCell(
+                withIdentifier: CredentialTextFieldCell.reuseIdentifier,
+                for: indexPath
+            ) as? CredentialTextFieldCell else {
+                return UITableViewCell()
+            }
             cell.configure(
                 title: String(localized: "auth.field.password"),
-                text: passwordText,
-                placeholder: editingProfile == nil
-                    ? String(localized: "auth.webdav.placeholder.password")
-                    : String(localized: "auth.passwordPlaceholderEdit"),
-                isSecure: true,
-                returnKeyType: .done,
+                text: passwordDisplayText(),
+                placeholder: String(localized: "auth.webdav.placeholder.password"),
+                isMasked: shouldMaskPassword(),
+                isRevealed: passwordRevealed,
+                revealAccessibilityLabel: String(localized: "auth.password.reveal"),
+                hideAccessibilityLabel: String(localized: "auth.password.hide"),
                 inputAccessoryView: keyboardToolbar
             )
-            cell.onTextChanged = { [weak self] in self?.passwordText = $0 }
+            cell.onTextChanged = { [weak self] value in
+                self?.passwordChanged = true
+                self?.passwordText = value
+            }
+            cell.onMaskedCredentialEdited = { [weak self] value in
+                self?.passwordChanged = true
+                self?.passwordRevealed = false
+                self?.passwordText = value
+            }
+            cell.onRevealTapped = { [weak self] in
+                Task { @MainActor [weak self] in await self?.revealPasswordTapped() }
+            }
+            cell.onEndEditing = { [weak self] in
+                guard let self else { return }
+                self.passwordRevealed = false
+                self.revealedSavedPassword = nil
+                self.tableView.reloadRows(at: [self.indexPath(for: .password)], with: .none)
+            }
             cell.onReturn = { [weak self] in self?.focusField(nil) }
+            return cell
         }
-        return cell
     }
 }
 

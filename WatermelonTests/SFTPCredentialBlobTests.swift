@@ -9,6 +9,13 @@ final class SFTPCredentialBlobTests: XCTestCase {
         XCTAssertEqual(decoded, blob)
     }
 
+    func testEmptyPasswordRoundTrip() throws {
+        let blob: SFTPCredentialBlob = .password("")
+        let json = try blob.encodedJSONString()
+        let decoded = try SFTPCredentialBlob.decode(from: json)
+        XCTAssertEqual(decoded, blob)
+    }
+
     func testPrivateKeyWithPassphraseRoundTrip() throws {
         let pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----"
         let blob: SFTPCredentialBlob = .privateKey(pem: pem, passphrase: "secret")
@@ -23,6 +30,12 @@ final class SFTPCredentialBlobTests: XCTestCase {
         let json = try blob.encodedJSONString()
         let decoded = try SFTPCredentialBlob.decode(from: json)
         XCTAssertEqual(decoded, blob)
+    }
+
+    func testPrivateKeyEmptyPassphraseDecodesAsNil() throws {
+        let json = #"{"kind":"privateKey","pem":"fake","passphrase":""}"#
+        let decoded = try SFTPCredentialBlob.decode(from: json)
+        XCTAssertEqual(decoded, .privateKey(pem: "fake", passphrase: nil))
     }
 
     func testDecodeRejectsNonJSONString() {

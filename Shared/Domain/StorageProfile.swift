@@ -88,9 +88,10 @@ nonisolated enum SFTPCredentialBlob: Codable, Equatable {
         case .password:
             self = .password(try container.decode(String.self, forKey: .password))
         case .privateKey:
+            let passphrase = try container.decodeIfPresent(String.self, forKey: .passphrase)
             self = .privateKey(
                 pem: try container.decode(String.self, forKey: .pem),
-                passphrase: try container.decodeIfPresent(String.self, forKey: .passphrase)
+                passphrase: passphrase?.isEmpty == true ? nil : passphrase
             )
         }
     }
@@ -382,7 +383,7 @@ extension ServerProfileRecord {
 
     func resolvedSessionPassword(from session: AppSession) -> String? {
         if storageProfile.requiresPassword {
-            guard let password = session.activePassword, !password.isEmpty else { return nil }
+            guard let password = session.activePassword else { return nil }
             return password
         }
         return session.activePassword ?? ""

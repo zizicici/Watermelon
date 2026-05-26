@@ -1409,90 +1409,266 @@
         }
       }
     },
-    "auth.passwordPlaceholderEdit" : {
+    "auth.password.hide" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Leer lassen, um das aktuelle beizubehalten"
+            "value" : "Passwort ausblenden"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Leave blank to keep current"
+            "value" : "Hide password"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dejar en blanco para mantener el actual"
+            "value" : "Ocultar contraseña"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deja en blanco para mantener el actual"
+            "value" : "Ocultar contraseña"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Laisser vide pour conserver l'actuel"
+            "value" : "Masquer le mot de passe"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "現在のパスワードを維持する場合は空欄にしてください"
+            "value" : "パスワードを非表示"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "현재 비밀번호를 유지하려면 비워 두세요"
+            "value" : "비밀번호 숨기기"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deixe em branco para manter a atual"
+            "value" : "Ocultar senha"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deixe em branco para manter a atual"
+            "value" : "Ocultar palavra-passe"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Оставьте пустым, чтобы сохранить текущий"
+            "value" : "Скрыть пароль"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Залиште порожнім, щоб зберегти поточний"
+            "value" : "Сховати пароль"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "留空表示不变"
+            "value" : "隐藏密码"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "留空表示不變"
+            "value" : "隱藏密碼"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "留空表示不變"
+            "value" : "隱藏密碼"
+          }
+        }
+      }
+    },
+    "auth.password.reveal" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passwort anzeigen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show password"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar contraseña"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar contraseña"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher le mot de passe"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスワードを表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "비밀번호 표시"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar senha"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar palavra-passe"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показать пароль"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показати пароль"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示密码"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示密碼"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示密碼"
+          }
+        }
+      }
+    },
+    "auth.password.revealReason" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentifizieren, um das gespeicherte Passwort anzuzeigen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authenticate to reveal the saved password."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentícate para mostrar la contraseña guardada."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentícate para mostrar la contraseña guardada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentifiez-vous pour afficher le mot de passe enregistré."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存済みのパスワードを表示するには認証してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 비밀번호를 보려면 인증하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentique-se para mostrar a senha salva."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentique-se para mostrar a palavra-passe guardada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пройдите аутентификацию, чтобы показать сохранённый пароль."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пройдіть автентифікацію, щоб показати збережений пароль."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过认证以显示已保存的密码。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通過認證以顯示已儲存的密碼。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通過認證以顯示已儲存的密碼。"
           }
         }
       }
@@ -1669,6 +1845,182 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Region 用於 SigV4 簽名,部分 MinIO 部署可接受任意值。"
+          }
+        }
+      }
+    },
+    "auth.s3.field.accessKeyID" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Key ID"
+          }
+        }
+      }
+    },
+    "auth.s3.field.secretKey" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key"
           }
         }
       }
@@ -2553,6 +2905,358 @@
         }
       }
     },
+    "auth.s3.secretKey.footerEdit" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die gespeicherte Secret Access Key wird als ******** angezeigt. Nicht bearbeiten, um sie beizubehalten; Eingaben ersetzen sie. Leeren Sie das Feld, um eine leere Secret Access Key zu speichern."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The saved Secret Access Key is shown as ********. Leave it unchanged to keep it; type to replace it. Clear the field to save an empty Secret Access Key."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La Secret Access Key guardada se muestra como ********. No la edites para conservarla; escribe para reemplazarla. Borra el campo para guardar una Secret Access Key vacía."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La Secret Access Key guardada se muestra como ********. No la edites para conservarla; escribe para reemplazarla. Borra el campo para guardar una Secret Access Key vacía."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La Secret Access Key enregistrée s’affiche sous la forme ********. Ne la modifiez pas pour la conserver ; saisissez une valeur pour la remplacer. Effacez le champ pour enregistrer une Secret Access Key vide."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存済みのSecret Access Keyは ******** と表示されます。変更しなければそのまま使用されます。入力すると置き換わります。空にすると空のSecret Access Keyとして保存されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 Secret Access Key는 ********로 표시됩니다. 그대로 두면 유지되고, 입력하면 교체됩니다. 필드를 비우면 빈 Secret Access Key로 저장됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Secret Access Key salva aparece como ********. Não edite para mantê-la; digite para substituí-la. Limpe o campo para salvar uma Secret Access Key vazia."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Secret Access Key guardada aparece como ********. Não edite para a manter; introduza texto para a substituir. Limpe o campo para guardar uma Secret Access Key vazia."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранённая Secret Access Key отображается как ********. Не изменяйте её, чтобы сохранить; введите новое значение, чтобы заменить. Очистите поле, чтобы сохранить пустую Secret Access Key."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Збережена Secret Access Key відображається як ********. Не змінюйте її, щоб зберегти; введіть нове значення, щоб замінити. Очистьте поле, щоб зберегти порожню Secret Access Key."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的 Secret Access Key 会显示为 ********。不修改会继续使用；输入内容会替换它。清空字段会保存为空 Secret Access Key。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存的 Secret Access Key 會顯示為 ********。不修改會繼續使用；輸入內容會取代它。清空欄位會儲存為空 Secret Access Key。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存的 Secret Access Key 會顯示為 ********。不修改會繼續使用；輸入內容會取代它。清空欄位會儲存為空 Secret Access Key。"
+          }
+        }
+      }
+    },
+    "auth.s3.secretKey.hide" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key ausblenden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide Secret Access Key"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar Secret Access Key"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar Secret Access Key"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Masquer la Secret Access Key"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Keyを非表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key 숨기기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar Secret Access Key"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar Secret Access Key"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скрыть Secret Access Key"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сховати Secret Access Key"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏 Secret Access Key"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隱藏 Secret Access Key"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隱藏 Secret Access Key"
+          }
+        }
+      }
+    },
+    "auth.s3.secretKey.reveal" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key anzeigen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show Secret Access Key"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar Secret Access Key"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar Secret Access Key"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher la Secret Access Key"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Keyを表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key 표시"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar Secret Access Key"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar Secret Access Key"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показать Secret Access Key"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показати Secret Access Key"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示 Secret Access Key"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示 Secret Access Key"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示 Secret Access Key"
+          }
+        }
+      }
+    },
+    "auth.s3.secretKey.revealReason" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentifizieren, um die gespeicherte Secret Access Key anzuzeigen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authenticate to reveal the saved Secret Access Key."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentícate para mostrar la Secret Access Key guardada."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentícate para mostrar la Secret Access Key guardada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentifiez-vous pour afficher la Secret Access Key enregistrée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存済みのSecret Access Keyを表示するには認証してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 Secret Access Key를 보려면 인증하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentique-se para mostrar a Secret Access Key salva."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentique-se para mostrar a Secret Access Key guardada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пройдите аутентификацию, чтобы показать сохранённую Secret Access Key."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пройдіть автентифікацію, щоб показати збережену Secret Access Key."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过认证以显示已保存的 Secret Access Key。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通過認證以顯示已儲存的 Secret Access Key。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通過認證以顯示已儲存的 Secret Access Key。"
+          }
+        }
+      }
+    },
     "auth.s3.section.bucket" : {
       "localizations" : {
         "de" : {
@@ -3165,94 +3869,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Endpoint URL 無效"
-          }
-        }
-      }
-    },
-    "auth.s3.validation.secretKey" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Secret Access Key ist erforderlich"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Secret Access Key is required"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se requiere el Secret Access Key"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se requiere el Secret Access Key"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Secret Access Key requis"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Secret Access Key は必須です"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Secret Access Key 가 필요합니다"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Secret Access Key é obrigatório"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Secret Access Key é obrigatório"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Требуется Secret Access Key"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Secret Access Key є обов’язковим"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "需要填写 Secret Access Key"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "需要填寫 Secret Access Key"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "需要填寫 Secret Access Key"
           }
         }
       }
@@ -5105,6 +5721,270 @@
         }
       }
     },
+    "auth.sftp.passphrase.hide" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passphrase ausblenden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide passphrase"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar frase de contraseña"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar frase de contraseña"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Masquer la phrase secrète"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスフレーズを非表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "암호 문구 숨기기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar frase de senha"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar frase de acesso"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скрыть парольную фразу"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сховати парольну фразу"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏口令"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隱藏密語"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隱藏密語"
+          }
+        }
+      }
+    },
+    "auth.sftp.passphrase.reveal" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passphrase anzeigen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show passphrase"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar frase de contraseña"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar frase de contraseña"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher la phrase secrète"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスフレーズを表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "암호 문구 표시"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar frase de senha"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar frase de acesso"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показать парольную фразу"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показати парольну фразу"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示口令"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示密語"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示密語"
+          }
+        }
+      }
+    },
+    "auth.sftp.passphrase.revealReason" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentifizieren, um die gespeicherte Passphrase anzuzeigen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authenticate to reveal the saved passphrase."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentícate para mostrar la frase de contraseña guardada."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentícate para mostrar la frase de contraseña guardada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentifiez-vous pour afficher la phrase secrète enregistrée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存済みのパスフレーズを表示するには認証してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 암호 문구를 보려면 인증하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentique-se para mostrar a frase de senha salva."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentique-se para mostrar a frase de acesso guardada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пройдите аутентификацию, чтобы показать сохранённую парольную фразу."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пройдіть автентифікацію, щоб показати збережену парольну фразу."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过认证以显示已保存的口令。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通過認證以顯示已儲存的密語。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通過認證以顯示已儲存的密語。"
+          }
+        }
+      }
+    },
     "auth.sftp.placeholder.host" : {
       "localizations" : {
         "de" : {
@@ -5633,6 +6513,446 @@
         }
       }
     },
+    "auth.sftp.privateKey.hide" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privaten Schlüssel ausblenden"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide private key"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar clave privada"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar clave privada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Masquer la clé privée"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "秘密鍵を非表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "개인 키 숨기기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar chave privada"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar chave privada"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скрыть приватный ключ"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сховати приватний ключ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐藏私钥"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隱藏私鑰"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隱藏私鑰"
+          }
+        }
+      }
+    },
+    "auth.sftp.privateKey.reveal" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privaten Schlüssel anzeigen"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show private key"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar clave privada"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar clave privada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Afficher la clé privée"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "秘密鍵を表示"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "개인 키 표시"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar chave privada"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar chave privada"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показать приватный ключ"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показати приватний ключ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示私钥"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示私鑰"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示私鑰"
+          }
+        }
+      }
+    },
+    "auth.sftp.privateKey.revealReason" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentifizieren, um den gespeicherten privaten Schlüssel anzuzeigen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authenticate to reveal the saved private key."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentícate para mostrar la clave privada guardada."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentícate para mostrar la clave privada guardada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentifiez-vous pour afficher la clé privée enregistrée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存済みの秘密鍵を表示するには認証してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 개인 키를 보려면 인증하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentique-se para mostrar a chave privada salva."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autentique-se para mostrar a chave privada guardada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пройдите аутентификацию, чтобы показать сохранённый приватный ключ."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пройдіть автентифікацію, щоб показати збережений приватний ключ."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过认证以显示已保存的私钥。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通過認證以顯示已儲存的私鑰。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通過認證以顯示已儲存的私鑰。"
+          }
+        }
+      }
+    },
+    "auth.sftp.privateKeyReuseFooter" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gespeicherte Schlüssel und Passphrasen werden als ******** angezeigt. Nicht bearbeiten, um sie beizubehalten; Eingaben ersetzen sie. Leeren Sie die Passphrase, um sie zu entfernen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved keys and passphrases are shown as ********. Leave them unchanged to keep them; type to replace them. Clear the passphrase to remove it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las claves y frases de contraseña guardadas se muestran como ********. No las edites para conservarlas; escribe para reemplazarlas. Borra la frase de contraseña para eliminarla."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las claves y frases de contraseña guardadas se muestran como ********. No las edites para conservarlas; escribe para reemplazarlas. Borra la frase de contraseña para eliminarla."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les clés et phrases secrètes enregistrées s’affichent sous la forme ********. Ne les modifiez pas pour les conserver ; saisissez une valeur pour les remplacer. Effacez la phrase secrète pour la supprimer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存済みの鍵とパスフレーズは ******** と表示されます。変更しなければそのまま使用されます。入力すると置き換わります。パスフレーズを空にすると削除されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 키와 암호 문구는 ********로 표시됩니다. 그대로 두면 유지되고, 입력하면 교체됩니다. 암호 문구를 비우면 제거됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chaves e frases de senha salvas aparecem como ********. Não edite para mantê-las; digite para substituí-las. Limpe a frase de senha para removê-la."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chaves e frases de acesso guardadas aparecem como ********. Não edite para as manter; introduza texto para as substituir. Limpe a frase de acesso para a remover."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранённые ключи и парольные фразы отображаются как ********. Не изменяйте их, чтобы сохранить; введите новое значение, чтобы заменить. Очистите парольную фразу, чтобы удалить её."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Збережені ключі та парольні фрази відображаються як ********. Не змінюйте їх, щоб зберегти; введіть нове значення, щоб замінити. Очистьте парольну фразу, щоб видалити її."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的私钥和口令会显示为 ********。不修改会继续使用；输入内容会替换它。清空口令会移除口令。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存的私鑰和密語會顯示為 ********。不修改會繼續使用；輸入內容會取代它。清空密語會移除密語。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存的私鑰和密語會顯示為 ********。不修改會繼續使用；輸入內容會取代它。清空密語會移除密語。"
+          }
+        }
+      }
+    },
+    "auth.sftp.privateKeyReuseUnencryptedFooter" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der gespeicherte Schlüssel wird als ******** angezeigt. Nicht bearbeiten, um ihn beizubehalten; fügen Sie einen neuen Schlüssel ein, um ihn zu ersetzen. Der gespeicherte Schlüssel hat keine Passphrase; fügen Sie einen verschlüsselten Schlüssel ein, um eine hinzuzufügen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The saved key is shown as ********. Leave it unchanged to keep it; paste a new key to replace it. The saved key has no passphrase; paste an encrypted key to add one."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La clave guardada se muestra como ********. No la edites para conservarla; pega una clave nueva para reemplazarla. La clave guardada no tiene frase de contraseña; pega una clave cifrada para añadir una."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La clave guardada se muestra como ********. No la edites para conservarla; pega una clave nueva para reemplazarla. La clave guardada no tiene frase de contraseña; pega una clave cifrada para agregar una."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La clé enregistrée s’affiche sous la forme ********. Ne la modifiez pas pour la conserver ; collez une nouvelle clé pour la remplacer. La clé enregistrée n’a pas de phrase secrète ; collez une clé chiffrée pour en ajouter une."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存済みの鍵は ******** と表示されます。変更しなければそのまま使用されます。新しい鍵を貼り付けると置き換わります。保存済みの鍵にパスフレーズはありません。追加するには暗号化済みの鍵を貼り付けてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 키는 ********로 표시됩니다. 그대로 두면 유지되고, 새 키를 붙여넣으면 교체됩니다. 저장된 키에는 암호 문구가 없습니다. 추가하려면 암호화된 키를 붙여넣으세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A chave salva aparece como ********. Não edite para mantê-la; cole uma nova chave para substituí-la. A chave salva não tem frase de senha; cole uma chave criptografada para adicionar uma."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A chave guardada aparece como ********. Não edite para a manter; cole uma nova chave para a substituir. A chave guardada não tem frase de acesso; cole uma chave encriptada para adicionar uma."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранённый ключ отображается как ********. Не изменяйте его, чтобы сохранить; вставьте новый ключ, чтобы заменить. У сохранённого ключа нет парольной фразы; вставьте зашифрованный ключ, чтобы добавить её."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Збережений ключ відображається як ********. Не змінюйте його, щоб зберегти; вставте новий ключ, щоб замінити. Збережений ключ не має парольної фрази; вставте зашифрований ключ, щоб додати її."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的私钥会显示为 ********。不修改会继续使用；粘贴新私钥会替换它。已保存的私钥没有口令；若要添加口令，请粘贴加密私钥。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存的私鑰會顯示為 ********。不修改會繼續使用；貼上新私鑰會取代它。已儲存的私鑰沒有密語；若要加入密語，請貼上加密私鑰。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存的私鑰會顯示為 ********。不修改會繼續使用；貼上新私鑰會取代它。已儲存的私鑰沒有密語；若要加入密語，請貼上加密私鑰。"
+          }
+        }
+      }
+    },
     "auth.sftp.testConnectionFailed" : {
       "localizations" : {
         "de" : {
@@ -5985,94 +7305,6 @@
         }
       }
     },
-    "auth.sftp.validation.passwordRequired" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Passwort ist erforderlich"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Password is required"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "La contraseña es obligatoria"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "La contraseña es obligatoria"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le mot de passe est requis"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "パスワードは必須です"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "비밀번호는 필수입니다"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A senha é obrigatória"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A palavra-passe é obrigatória"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Требуется пароль"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Пароль обов'язковий"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "密码不能为空"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "密碼不可空白"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "密碼不可空白"
-          }
-        }
-      }
-    },
     "auth.sftp.validation.portRange" : {
       "localizations" : {
         "de" : {
@@ -6333,6 +7565,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "請輸入私鑰"
+          }
+        }
+      }
+    },
+    "auth.sftp.validation.savedKeyHasNoPassphrase" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der gespeicherte Schlüssel hat keine Passphrase. Fügen Sie einen neuen verschlüsselten Schlüssel ein, um eine hinzuzufügen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The saved key has no passphrase. Paste the encrypted key to add one."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La clave guardada no tiene frase de contraseña. Pega la clave cifrada para añadir una."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La clave guardada no tiene frase de contraseña. Pega la clave cifrada para agregar una."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La clé enregistrée n’a pas de phrase secrète. Collez la clé chiffrée pour en ajouter une."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存済みの鍵にパスフレーズはありません。追加するには、暗号化済みの鍵を貼り付けてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 키에는 암호 문구가 없습니다. 추가하려면 암호화된 키를 붙여넣으세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A chave salva não tem frase de senha. Cole a chave criptografada para adicionar uma."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A chave guardada não tem frase de acesso. Cole a chave encriptada para adicionar uma."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У сохранённого ключа нет парольной фразы. Вставьте зашифрованный ключ, чтобы добавить её."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Збережений ключ не має парольної фрази. Вставте зашифрований ключ, щоб додати її."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的私钥没有口令。请粘贴加密私钥来添加口令。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存的私鑰沒有密語。請貼上加密私鑰來加入密語。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存的私鑰沒有密語。請貼上加密私鑰來加入密語。"
           }
         }
       }
@@ -7574,85 +8894,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Lassen Sie das Passwort leer, um das gespeicherte Passwort beizubehalten."
+            "value" : "Das gespeicherte Passwort wird als ******** angezeigt. Nicht bearbeiten, um es beizubehalten; Eingaben ersetzen es. Leeren Sie das Feld, um ein leeres Passwort zu speichern."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Leave the password blank to keep the saved password."
+            "value" : "The saved password is shown as ********. Leave it unchanged to keep it; type to replace it. Clear the field to save an empty password."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deje la contraseña en blanco para mantener la contraseña guardada."
+            "value" : "La contraseña guardada se muestra como ********. No la edites para conservarla; escribe para reemplazarla. Borra el campo para guardar una contraseña vacía."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deja la contraseña en blanco para mantener la contraseña guardada."
+            "value" : "La contraseña guardada se muestra como ********. No la edites para conservarla; escribe para reemplazarla. Borra el campo para guardar una contraseña vacía."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Laissez le mot de passe vide pour conserver le mot de passe enregistré."
+            "value" : "Le mot de passe enregistré s’affiche sous la forme ********. Ne le modifiez pas pour le conserver ; saisissez une valeur pour le remplacer. Effacez le champ pour enregistrer un mot de passe vide."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "パスワードを空欄にすると、保存済みのパスワードが使用されます。"
+            "value" : "保存済みのパスワードは ******** と表示されます。変更しなければそのまま使用されます。入力すると置き換わります。空にすると空のパスワードとして保存されます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "비밀번호를 비워 두면 저장된 비밀번호가 유지됩니다."
+            "value" : "저장된 비밀번호는 ********로 표시됩니다. 그대로 두면 유지되고, 입력하면 교체됩니다. 필드를 비우면 빈 비밀번호로 저장됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deixe a senha em branco para manter a senha salva."
+            "value" : "A senha salva aparece como ********. Não edite para mantê-la; digite para substituí-la. Limpe o campo para salvar uma senha vazia."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deixe a palavra-passe em branco para manter a palavra-passe guardada."
+            "value" : "A palavra-passe guardada aparece como ********. Não edite para a manter; introduza texto para a substituir. Limpe o campo para guardar uma palavra-passe vazia."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Оставьте поле пароля пустым, чтобы сохранить текущий пароль."
+            "value" : "Сохранённый пароль отображается как ********. Не изменяйте его, чтобы сохранить; введите новое значение, чтобы заменить. Очистите поле, чтобы сохранить пустой пароль."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Залиште пароль порожнім, щоб зберегти збережений пароль."
+            "value" : "Збережений пароль відображається як ********. Не змінюйте його, щоб зберегти; введіть нове значення, щоб замінити. Очистьте поле, щоб зберегти порожній пароль."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "密码留空时会继续使用已保存的密码。"
+            "value" : "已保存的密码会显示为 ********。不修改会继续使用；输入内容会替换它。清空字段会保存为空密码。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "密碼留空時會繼續使用已儲存的密碼。"
+            "value" : "已儲存的密碼會顯示為 ********。不修改會繼續使用；輸入內容會取代它。清空欄位會儲存為空密碼。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "密碼留空時會繼續使用已儲存的密碼。"
+            "value" : "已儲存的密碼會顯示為 ********。不修改會繼續使用；輸入內容會取代它。清空欄位會儲存為空密碼。"
           }
         }
       }
@@ -8718,85 +10038,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Bitte Host / Benutzername / Passwort ausfüllen"
+            "value" : "Bitte Host / Benutzername ausfüllen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Please fill in host / username / password"
+            "value" : "Please fill in host / username"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Por favor complete host / nombre de usuario / contraseña"
+            "value" : "Por favor complete host / nombre de usuario"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Por favor completa host / nombre de usuario / contraseña"
+            "value" : "Por favor completa host / nombre de usuario"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Veuillez remplir l'hôte / le nom d'utilisateur / le mot de passe"
+            "value" : "Veuillez remplir l'hôte / le nom d'utilisateur"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ホスト / ユーザー名 / パスワードを入力してください"
+            "value" : "ホスト / ユーザー名を入力してください"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "host / username / password를 입력해 주세요"
+            "value" : "host / username을 입력해 주세요"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Por favor, preencha host / nome de usuário / senha"
+            "value" : "Por favor, preencha host / nome de usuário"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Por favor, preencha host / nome de utilizador / palavra-passe"
+            "value" : "Por favor, preencha host / nome de utilizador"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Заполните хост / имя пользователя / пароль"
+            "value" : "Заполните хост / имя пользователя"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Будь ласка, заповніть host / ім'я користувача / пароль"
+            "value" : "Будь ласка, заповніть host / ім'я користувача"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请填写 host / username / password"
+            "value" : "请填写 host / username"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請填寫 host / username / password"
+            "value" : "請填寫 host / username"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請填寫 host / username / password"
+            "value" : "請填寫 host / username"
           }
         }
       }
@@ -10649,6 +11969,94 @@
         }
       }
     },
+    "auth.webdav.footerEdit" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das gespeicherte Passwort wird als ******** angezeigt. Nicht bearbeiten, um es beizubehalten; Eingaben ersetzen es. Leeren Sie das Feld, um ein leeres Passwort zu speichern."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The saved password is shown as ********. Leave it unchanged to keep it; type to replace it. Clear the field to save an empty password."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La contraseña guardada se muestra como ********. No la edites para conservarla; escribe para reemplazarla. Borra el campo para guardar una contraseña vacía."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La contraseña guardada se muestra como ********. No la edites para conservarla; escribe para reemplazarla. Borra el campo para guardar una contraseña vacía."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le mot de passe enregistré s’affiche sous la forme ********. Ne le modifiez pas pour le conserver ; saisissez une valeur pour le remplacer. Effacez le champ pour enregistrer un mot de passe vide."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存済みのパスワードは ******** と表示されます。変更しなければそのまま使用されます。入力すると置き換わります。空にすると空のパスワードとして保存されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 비밀번호는 ********로 표시됩니다. 그대로 두면 유지되고, 입력하면 교체됩니다. 필드를 비우면 빈 비밀번호로 저장됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A senha salva aparece como ********. Não edite para mantê-la; digite para substituí-la. Limpe o campo para salvar uma senha vazia."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A palavra-passe guardada aparece como ********. Não edite para a manter; introduza texto para a substituir. Limpe o campo para guardar uma palavra-passe vazia."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохранённый пароль отображается как ********. Не изменяйте его, чтобы сохранить; введите новое значение, чтобы заменить. Очистите поле, чтобы сохранить пустой пароль."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Збережений пароль відображається як ********. Не змінюйте його, щоб зберегти; введіть нове значення, щоб замінити. Очистьте поле, щоб зберегти порожній пароль."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存的密码会显示为 ********。不修改会继续使用；输入内容会替换它。清空字段会保存为空密码。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存的密碼會顯示為 ********。不修改會繼續使用；輸入內容會取代它。清空欄位會儲存為空密碼。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存的密碼會顯示為 ********。不修改會繼續使用；輸入內容會取代它。清空欄位會儲存為空密碼。"
+          }
+        }
+      }
+    },
     "auth.webdav.footerNew" : {
       "localizations" : {
         "de" : {
@@ -11613,94 +13021,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "請輸入主機地址。"
-          }
-        }
-      }
-    },
-    "auth.webdav.validationPassword" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bitte geben Sie ein Passwort ein"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Please enter a password"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Por favor ingrese una contraseña"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Por favor ingresa una contraseña"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Veuillez saisir un mot de passe"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "パスワードを入力してください"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "비밀번호를 입력해 주세요"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Por favor, insira uma senha"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Por favor, introduza uma palavra-passe"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Введите пароль"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Будь ласка, введіть пароль"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "请填写密码"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "請填寫密碼"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "請填寫密碼"
           }
         }
       }
@@ -12761,6 +14081,94 @@
         }
       }
     },
+    "backup.auto.log.profileCredentialsReadFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %1$@ übersprungen: gespeicherte Zugangsdaten sind nicht verfügbar (%2$@)"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profile %1$@ skipped: saved credentials are unavailable (%2$@)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@ omitido: las credenciales guardadas no están disponibles (%2$@)"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@ omitido: las credenciales guardadas no están disponibles (%2$@)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profil %1$@ ignoré : identifiants enregistrés indisponibles (%2$@)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プロファイル %1$@ をスキップ: 保存済み認証情報を利用できません（%2$@）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프로파일 %1$@ 건너뜀: 저장된 자격 증명을 사용할 수 없음(%2$@)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@ ignorado: credenciais salvas indisponíveis (%2$@)"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Perfil %1$@ ignorado: credenciais guardadas indisponíveis (%2$@)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профиль %1$@ пропущен: сохранённые учетные данные недоступны (%2$@)"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Профіль %1$@ пропущено: збережені облікові дані недоступні (%2$@)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳过配置 %1$@：已保存的密码或密钥暂不可用（%2$@）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳過設定檔 %1$@：已儲存的密碼或密鑰暫不可用（%2$@）"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳過設定檔 %1$@：已儲存的密碼或密鑰暫不可用（%2$@）"
+          }
+        }
+      }
+    },
     "backup.auto.log.profileEnd" : {
       "localizations" : {
         "de" : {
@@ -12937,178 +14345,90 @@
         }
       }
     },
-    "backup.auto.log.profileMissingPassword" : {
+    "backup.auto.log.profileMissingCredentials" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Profil %@ übersprungen: Passwort fehlt"
+            "value" : "Profil %@ übersprungen: gespeicherte Zugangsdaten fehlen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Profile %@ skipped: missing password"
+            "value" : "Profile %@ skipped: saved credentials missing"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Perfil %@ omitido: falta la contraseña"
+            "value" : "Perfil %@ omitido: faltan las credenciales guardadas"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Perfil %@ omitido: falta la contraseña"
+            "value" : "Perfil %@ omitido: faltan las credenciales guardadas"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Profil %@ ignoré : mot de passe manquant"
+            "value" : "Profil %@ ignoré : identifiants enregistrés manquants"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "プロファイル %@ をスキップ:パスワードがありません"
+            "value" : "プロファイル %@ をスキップ:保存済み認証情報がありません"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "프로파일 %@ 건너뜀: 비밀번호 없음"
+            "value" : "프로파일 %@ 건너뜀: 저장된 자격 증명 없음"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Perfil %@ ignorado: senha ausente"
+            "value" : "Perfil %@ ignorado: credenciais salvas ausentes"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Perfil %@ ignorado: palavra-passe em falta"
+            "value" : "Perfil %@ ignorado: credenciais guardadas em falta"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Профиль %@ пропущен: отсутствует пароль"
+            "value" : "Профиль %@ пропущен: сохранённые учетные данные отсутствуют"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Профіль %@ пропущено: відсутній пароль"
+            "value" : "Профіль %@ пропущено: збережені облікові дані відсутні"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跳过配置 %@：缺少密码"
+            "value" : "跳过配置 %@：缺少已保存的密码或密钥"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跳過設定檔 %@：缺少密碼"
+            "value" : "跳過設定檔 %@：缺少已儲存的密碼或密鑰"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "跳過設定檔 %@：缺少密碼"
-          }
-        }
-      }
-    },
-    "backup.auto.log.profilePasswordReadFailed" : {
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Profil %1$@ übersprungen: Passwort ist nicht verfügbar (%2$@)"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Profile %1$@ skipped: password is unavailable (%2$@)"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perfil %1$@ omitido: la contraseña no está disponible (%2$@)"
-          }
-        },
-        "es-419" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perfil %1$@ omitido: la contraseña no está disponible (%2$@)"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Profil %1$@ ignoré : mot de passe indisponible (%2$@)"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "プロファイル %1$@ をスキップ: パスワードを利用できません（%2$@）"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "프로파일 %1$@ 건너뜀: 비밀번호를 사용할 수 없음(%2$@)"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perfil %1$@ ignorado: senha indisponível (%2$@)"
-          }
-        },
-        "pt-PT" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Perfil %1$@ ignorado: palavra-passe indisponível (%2$@)"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Профиль %1$@ пропущен: пароль недоступен (%2$@)"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Профіль %1$@ пропущено: пароль недоступний (%2$@)"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "跳过配置 %1$@：密码暂不可用（%2$@）"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "跳過設定檔 %1$@：密碼暫不可用（%2$@）"
-          }
-        },
-        "zh-HK" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "跳過設定檔 %1$@：密碼暫不可用（%2$@）"
+            "value" : "跳過設定檔 %@：缺少已儲存的密碼或密鑰"
           }
         }
       }
@@ -23057,6 +24377,94 @@
         }
       }
     },
+    "home.alert.s3SecretKeyPrompt" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key eingeben"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter Secret Access Key"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introducir Secret Access Key"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ingresa Secret Access Key"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saisir la Secret Access Key"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Keyを入力"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Secret Access Key 입력"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inserir Secret Access Key"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introduzir Secret Access Key"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введите Secret Access Key"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введіть Secret Access Key"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入 Secret Access Key"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "輸入 Secret Access Key"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "輸入 Secret Access Key"
+          }
+        }
+      }
+    },
     "home.alert.selectionUnavailable" : {
       "localizations" : {
         "de" : {
@@ -23528,12 +24936,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Резервное копирование %lld месяца"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -23544,6 +24946,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "Резервное копирование %lld месяцев"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Резервное копирование %lld месяца"
                 }
               },
               "other" : {
@@ -23724,12 +25132,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Дополнить %lld месяц"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -23740,6 +25142,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "Дополнить %lld месяцев"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Дополнить %lld месяц"
                 }
               },
               "other" : {
@@ -23920,12 +25328,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Загрузить %lld месяц"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -23936,6 +25338,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "Загрузить %lld месяцев"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Загрузить %lld месяц"
                 }
               },
               "other" : {
@@ -24292,12 +25700,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld элемент будет перемещён в «Недавно удалённые»."
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -24308,6 +25710,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld элементов будут перемещены в «Недавно удалённые»."
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld элемент будет перемещён в «Недавно удалённые»."
                 }
               },
               "other" : {
@@ -25632,12 +27040,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld элемент будет удалён."
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -25648,6 +27050,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld элементов будут удалены."
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld элемент будет удалён."
                 }
               },
               "other" : {
@@ -26532,12 +27940,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld ресурс с ошибкой"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -26548,6 +27950,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld ресурсов с ошибками"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld ресурс с ошибкой"
                 }
               },
               "other" : {
@@ -27256,12 +28664,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld ресурс не удалось прочитать"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -27272,6 +28674,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld ресурсов не удалось прочитать"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld ресурс не удалось прочитать"
                 }
               },
               "other" : {
@@ -29916,12 +31324,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld ресурс не загружен на устройство"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -29932,6 +31334,12 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld ресурсов не загружены на устройство"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld ресурс не загружен на устройство"
                 }
               },
               "other" : {
@@ -43928,12 +45336,6 @@
         "ru" : {
           "variations" : {
             "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld"
-                }
-              },
               "few" : {
                 "stringUnit" : {
                   "state" : "translated",
@@ -43941,6 +45343,12 @@
                 }
               },
               "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld"
+                }
+              },
+              "one" : {
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld"
@@ -44692,19 +46100,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SFTP 配置无效，请检查主机、端口、凭据和根目录。"
+            "value" : "SFTP 配置无效，请检查主机、端口、密码/私钥和根目录。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SFTP 設定無效，請檢查主機、連接埠、憑證和根目錄。"
+            "value" : "SFTP 設定無效，請檢查主機、連接埠、密碼/私鑰和根目錄。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "SFTP 設定無效，請檢查主機、連接埠、憑證和根目錄。"
+            "value" : "SFTP 設定無效，請檢查主機、連接埠、密碼/私鑰同根目錄。"
           }
         }
       }
@@ -45660,19 +47068,19 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将移除该连接，并从钥匙串中删除已保存的凭据。此操作不可撤销。"
+            "value" : "将移除该连接，并从钥匙串中删除已保存的密码或密钥。此操作不可撤销。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將移除該連線，並從鑰匙圈中刪除已儲存的憑證。此操作無法復原。"
+            "value" : "將移除此連線，並從鑰匙圈刪除已儲存的密碼或密鑰。此操作無法復原。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "將移除該連線，並從鑰匙圈中刪除已儲存的憑證。此操作無法復原。"
+            "value" : "將移除此連線，並從鑰匙圈刪除已儲存的密碼或密鑰。此操作無法復原。"
           }
         }
       }

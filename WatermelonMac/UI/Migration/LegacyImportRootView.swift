@@ -58,7 +58,8 @@ struct LegacyImportRootView: View {
         .sheet(isPresented: $passwordPromptVisible) {
             StoragePasswordPromptView(
                 profileName: profile.name,
-                username: profile.username
+                username: profile.username,
+                storageType: profile.resolvedStorageType
             ) { password in
                 Task { await connectAndExecute(action: pendingAction, password: password) }
             }
@@ -188,7 +189,7 @@ struct LegacyImportRootView: View {
             Task { await connectAndExecute(action: action, password: "") }
             return
         }
-        if let stored = try? container.profileStore.password(for: profile), !stored.isEmpty {
+        if let stored = try? container.profileStore.password(for: profile) {
             Task { await connectAndExecute(action: action, password: stored) }
             return
         }

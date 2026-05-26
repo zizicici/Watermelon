@@ -45,6 +45,15 @@ final class AddSFTPStorageViewController: UIViewController {
     private var passwordText = ""
     private var privateKeyText = ""
     private var passphraseText = ""
+    private var passwordChanged = false
+    private var passwordRevealed = false
+    private var revealedSavedPassword: String?
+    private var privateKeyChanged = false
+    private var privateKeyRevealed = false
+    private var revealedSavedPrivateKey: String?
+    private var passphraseChanged = false
+    private var passphraseRevealed = false
+    private var revealedSavedPassphrase: String?
 
     init(
         dependencies: DependencyContainer,
@@ -125,8 +134,9 @@ final class AddSFTPStorageViewController: UIViewController {
         tableView.rowHeight = UITableView.automaticDimension
         tableView.estimatedRowHeight = 44
         tableView.register(SettingsTextFieldCell.self, forCellReuseIdentifier: SettingsTextFieldCell.reuseIdentifier)
+        tableView.register(CredentialTextFieldCell.self, forCellReuseIdentifier: CredentialTextFieldCell.reuseIdentifier)
+        tableView.register(CredentialTextViewCell.self, forCellReuseIdentifier: CredentialTextViewCell.reuseIdentifier)
         tableView.register(SFTPAuthMethodCell.self, forCellReuseIdentifier: SFTPAuthMethodCell.reuseIdentifier)
-        tableView.register(SFTPPrivateKeyCell.self, forCellReuseIdentifier: SFTPPrivateKeyCell.reuseIdentifier)
 
         view.addSubview(tableView)
         tableView.snp.makeConstraints { make in
@@ -270,19 +280,19 @@ final class AddSFTPStorageViewController: UIViewController {
         let credential: SFTPCredentialBlob
         switch authMethod {
         case .password:
-            // Don't trim — leading/trailing whitespace is legal in SSH passwords.
-            if !passwordText.isEmpty {
-                credential = .password(passwordText)
-            } else if case .password(let saved) = stored {
+            if !passwordChanged, case .password(let saved) = stored {
                 credential = .password(saved)
             } else {
-                throw NSError(domain: "AddSFTPStorage", code: 2, userInfo: [
-                    NSLocalizedDescriptionKey: String(localized: "auth.sftp.validation.passwordRequired")
-                ])
+                credential = .password(passwordText)
             }
         case .privateKey:
             let pem = privateKeyText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !pem.isEmpty {
+            if privateKeyChanged {
+                guard !pem.isEmpty else {
+                    throw NSError(domain: "AddSFTPStorage", code: 4, userInfo: [
+                        NSLocalizedDescriptionKey: String(localized: "auth.sftp.validation.privateKeyRequired")
+                    ])
+                }
                 guard pem.contains("-----BEGIN OPENSSH PRIVATE KEY-----") else {
                     throw NSError(domain: "AddSFTPStorage", code: 3, userInfo: [
                         NSLocalizedDescriptionKey: String(localized: "auth.sftp.validation.privateKeyInvalid")
@@ -290,7 +300,12 @@ final class AddSFTPStorageViewController: UIViewController {
                 }
                 credential = .privateKey(pem: pem, passphrase: passphraseText.isEmpty ? nil : passphraseText)
             } else if case .privateKey(let savedPEM, let savedPassphrase) = stored {
-                let effective = passphraseText.isEmpty ? savedPassphrase : passphraseText
+                if !privateKeyChanged, savedPassphrase == nil, passphraseChanged, !passphraseText.isEmpty {
+                    throw NSError(domain: "AddSFTPStorage", code: 12, userInfo: [
+                        NSLocalizedDescriptionKey: String(localized: "auth.sftp.validation.savedKeyHasNoPassphrase")
+                    ])
+                }
+                let effective = passphraseChanged ? (passphraseText.isEmpty ? nil : passphraseText) : savedPassphrase
                 credential = .privateKey(pem: savedPEM, passphrase: effective)
             } else {
                 throw NSError(domain: "AddSFTPStorage", code: 4, userInfo: [
@@ -533,8 +548,132 @@ extension AddSFTPStorageViewController: UITableViewDataSource, UITableViewDelega
         case .name, .server:
             return nil
         case .credentials:
-            return String(localized: "auth.sftp.footerCompatibility")
+            let compatibility = String(localized: "auth.sftp.footerCompatibility")
+            if authMethod == .privateKey, storedCredentialIfMatchingMode() != nil {
+                return [
+                    privateKeyReuseFooterText(),
+                    compatibility
+                ].joined(separator: "\n\n")
+            }
+            return compatibility
         }
+    }
+
+    private func privateKeyReuseFooterText() -> String {
+        guard case .privateKey(_, let savedPassphrase) = storedCredentialIfMatchingMode(),
+              savedPassphrase == nil else {
+            return String(localized: "auth.sftp.privateKeyReuseFooter", defaultValue: "Saved keys and passphrases are shown as ********. Leave them unchanged to keep them; type to replace them. Clear the passphrase to remove it.")
+        }
+        return String(localized: "auth.sftp.privateKeyReuseUnencryptedFooter", defaultValue: "The saved key is shown as ********. Leave it unchanged to keep it; paste a new key to replace it. The saved key has no passphrase; paste an encrypted key to add one.")
+    }
+
+    private func passwordDisplayText() -> String {
+        if passwordChanged { return passwordText }
+        if passwordRevealed { return revealedSavedPassword ?? "" }
+        return passwordText
+    }
+
+    private func shouldMaskPassword() -> Bool {
+        !passwordRevealed && !passwordChanged && storedCredentialIfMatchingMode() != nil
+    }
+
+    private func passphraseDisplayText() -> String {
+        if passphraseChanged { return passphraseText }
+        if passphraseRevealed { return revealedSavedPassphrase ?? "" }
+        return passphraseText
+    }
+
+    private func privateKeyDisplayText() -> String {
+        if privateKeyChanged { return privateKeyText }
+        if privateKeyRevealed { return revealedSavedPrivateKey ?? "" }
+        return privateKeyText
+    }
+
+    private func shouldMaskPrivateKey() -> Bool {
+        !privateKeyRevealed && !privateKeyChanged && storedCredentialIfMatchingMode() != nil
+    }
+
+    private func shouldMaskPassphrase() -> Bool {
+        guard case .privateKey(_, let savedPassphrase) = storedCredentialIfMatchingMode() else {
+            return false
+        }
+        return !passphraseRevealed && !passphraseChanged && savedPassphrase != nil
+    }
+
+    private func resetRevealedCredentials() {
+        passwordRevealed = false
+        revealedSavedPassword = nil
+        privateKeyRevealed = false
+        revealedSavedPrivateKey = nil
+        passphraseRevealed = false
+        revealedSavedPassphrase = nil
+    }
+
+    @MainActor
+    private func revealPasswordTapped() async {
+        let wasRevealed = passwordRevealed
+        view.endEditing(true)
+        if wasRevealed {
+            passwordRevealed = false
+            revealedSavedPassword = nil
+            reloadCredentialsSection()
+            return
+        }
+        if passwordChanged || storedCredentialIfMatchingMode() == nil {
+            passwordRevealed = true
+            reloadCredentialsSection()
+            return
+        }
+        guard await CredentialRevealAuthenticator.authenticate(localizedReason: String(localized: "auth.password.revealReason")),
+              case .password(let saved) = storedCredentialIfMatchingMode() else { return }
+        revealedSavedPassword = saved
+        passwordRevealed = true
+        reloadCredentialsSection()
+    }
+
+    @MainActor
+    private func revealPassphraseTapped() async {
+        let wasRevealed = passphraseRevealed
+        view.endEditing(true)
+        if wasRevealed {
+            passphraseRevealed = false
+            revealedSavedPassphrase = nil
+            reloadCredentialsSection()
+            return
+        }
+        if passphraseChanged {
+            passphraseRevealed = true
+            reloadCredentialsSection()
+            return
+        }
+        guard await CredentialRevealAuthenticator.authenticate(localizedReason: String(localized: "auth.sftp.passphrase.revealReason")),
+              case .privateKey(_, let savedPassphrase) = storedCredentialIfMatchingMode(),
+              let savedPassphrase else { return }
+        revealedSavedPassphrase = savedPassphrase
+        passphraseRevealed = true
+        reloadCredentialsSection()
+    }
+
+    @MainActor
+    private func revealPrivateKeyTapped() async {
+        let wasRevealed = privateKeyRevealed
+        view.endEditing(true)
+        if wasRevealed {
+            privateKeyRevealed = false
+            revealedSavedPrivateKey = nil
+            reloadCredentialsSection()
+            return
+        }
+        if privateKeyChanged || storedCredentialIfMatchingMode() == nil {
+            privateKeyRevealed = true
+            reloadCredentialsSection()
+            return
+        }
+        guard await CredentialRevealAuthenticator.authenticate(localizedReason: String(localized: "auth.sftp.privateKey.revealReason")),
+              case .privateKey(let savedPEM, _) = storedCredentialIfMatchingMode() else { return }
+        revealedSavedPrivateKey = savedPEM
+        privateKeyRevealed = true
+        reloadCredentialsSection()
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -616,6 +755,8 @@ extension AddSFTPStorageViewController: UITableViewDataSource, UITableViewDelega
                 guard let self else { return }
                 let next: SFTPConnectionParams.AuthMethod = index == 0 ? .password : .privateKey
                 guard self.authMethod != next else { return }
+                self.view.endEditing(true)
+                self.resetRevealedCredentials()
                 self.authMethod = next
                 self.reloadCredentialsSection()
             }
@@ -624,39 +765,103 @@ extension AddSFTPStorageViewController: UITableViewDataSource, UITableViewDelega
 
         switch authMethod {
         case .password:
-            return makeTextField(
-                tableView: tableView,
-                indexPath: indexPath,
+            guard let cell = tableView.dequeueReusableCell(
+                withIdentifier: CredentialTextFieldCell.reuseIdentifier,
+                for: indexPath
+            ) as? CredentialTextFieldCell else { return UITableViewCell() }
+            cell.configure(
                 title: String(localized: "auth.field.password"),
-                text: passwordText,
-                placeholder: editingProfile == nil
-                    ? String(localized: "auth.sftp.placeholder.password")
-                    : String(localized: "auth.passwordPlaceholderEdit"),
-                isSecure: true,
-                onChange: { [weak self] in self?.passwordText = $0 }
+                text: passwordDisplayText(),
+                placeholder: String(localized: "auth.sftp.placeholder.password"),
+                isMasked: shouldMaskPassword(),
+                isRevealed: passwordRevealed,
+                revealAccessibilityLabel: String(localized: "auth.password.reveal"),
+                hideAccessibilityLabel: String(localized: "auth.password.hide"),
+                inputAccessoryView: keyboardToolbar
             )
+            cell.onTextChanged = { [weak self] value in
+                self?.passwordChanged = true
+                self?.passwordText = value
+            }
+            cell.onMaskedCredentialEdited = { [weak self] value in
+                self?.passwordChanged = true
+                self?.passwordRevealed = false
+                self?.passwordText = value
+            }
+            cell.onRevealTapped = { [weak self] in
+                Task { @MainActor [weak self] in await self?.revealPasswordTapped() }
+            }
+            cell.onEndEditing = { [weak self] in
+                self?.passwordRevealed = false
+                self?.revealedSavedPassword = nil
+                self?.reloadCredentialsSection()
+            }
+            cell.onReturn = { [weak self] in self?.dismissKeyboard() }
+            return cell
         case .privateKey:
             if indexPath.row == 2 {
                 guard let cell = tableView.dequeueReusableCell(
-                    withIdentifier: SFTPPrivateKeyCell.reuseIdentifier,
+                    withIdentifier: CredentialTextViewCell.reuseIdentifier,
                     for: indexPath
-                ) as? SFTPPrivateKeyCell else { return UITableViewCell() }
+                ) as? CredentialTextViewCell else { return UITableViewCell() }
                 cell.configure(
+                    title: String(localized: "auth.sftp.authMethod.privateKey"),
                     placeholder: String(localized: "auth.sftp.placeholder.privateKey"),
-                    text: privateKeyText
+                    text: privateKeyDisplayText(),
+                    isMasked: shouldMaskPrivateKey(),
+                    isRevealed: privateKeyRevealed,
+                    hidesEnteredText: storedCredentialIfMatchingMode() != nil,
+                    revealAccessibilityLabel: String(localized: "auth.sftp.privateKey.reveal"),
+                    hideAccessibilityLabel: String(localized: "auth.sftp.privateKey.hide")
                 )
-                cell.onTextChanged = { [weak self] in self?.privateKeyText = $0 }
+                cell.onTextChanged = { [weak self] value in
+                    self?.privateKeyChanged = true
+                    self?.privateKeyRevealed = true
+                    self?.privateKeyText = value
+                }
+                cell.onMaskedCredentialEdited = { [weak self] value in
+                    self?.privateKeyChanged = true
+                    self?.privateKeyRevealed = true
+                    self?.privateKeyText = value
+                }
+                cell.onRevealTapped = { [weak self] in
+                    Task { @MainActor [weak self] in await self?.revealPrivateKeyTapped() }
+                }
                 return cell
             }
-            return makeTextField(
-                tableView: tableView,
-                indexPath: indexPath,
+            guard let cell = tableView.dequeueReusableCell(
+                withIdentifier: CredentialTextFieldCell.reuseIdentifier,
+                for: indexPath
+            ) as? CredentialTextFieldCell else { return UITableViewCell() }
+            cell.configure(
                 title: String(localized: "auth.sftp.field.passphrase"),
-                text: passphraseText,
+                text: passphraseDisplayText(),
                 placeholder: String(localized: "auth.sftp.placeholder.passphrase"),
-                isSecure: true,
-                onChange: { [weak self] in self?.passphraseText = $0 }
+                isMasked: shouldMaskPassphrase(),
+                isRevealed: passphraseRevealed,
+                revealAccessibilityLabel: String(localized: "auth.sftp.passphrase.reveal"),
+                hideAccessibilityLabel: String(localized: "auth.sftp.passphrase.hide"),
+                inputAccessoryView: keyboardToolbar
             )
+            cell.onTextChanged = { [weak self] value in
+                self?.passphraseChanged = true
+                self?.passphraseText = value
+            }
+            cell.onMaskedCredentialEdited = { [weak self] value in
+                self?.passphraseChanged = true
+                self?.passphraseRevealed = false
+                self?.passphraseText = value
+            }
+            cell.onRevealTapped = { [weak self] in
+                Task { @MainActor [weak self] in await self?.revealPassphraseTapped() }
+            }
+            cell.onEndEditing = { [weak self] in
+                self?.passphraseRevealed = false
+                self?.revealedSavedPassphrase = nil
+                self?.reloadCredentialsSection()
+            }
+            cell.onReturn = { [weak self] in self?.dismissKeyboard() }
+            return cell
         }
     }
 
@@ -756,79 +961,5 @@ private final class SFTPAuthMethodCell: UITableViewCell {
     @objc
     private func valueChanged() {
         onValueChanged?(segmentedControl.selectedSegmentIndex)
-    }
-}
-
-private final class SFTPPrivateKeyCell: UITableViewCell, UITextViewDelegate {
-    static let reuseIdentifier = "SFTPPrivateKeyCell"
-
-    private let textView = UITextView()
-    private let placeholderLabel = UILabel()
-
-    var onTextChanged: ((String) -> Void)?
-
-    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
-        super.init(style: style, reuseIdentifier: reuseIdentifier)
-        selectionStyle = .none
-
-        var background: UIBackgroundConfiguration
-        if #available(iOS 18.0, *) {
-            background = .listCell()
-        } else {
-            background = .listGroupedCell()
-        }
-        background.backgroundColor = .secondarySystemGroupedBackground
-        backgroundConfiguration = background
-
-        textView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        textView.backgroundColor = .clear
-        textView.autocapitalizationType = .none
-        textView.autocorrectionType = .no
-        textView.spellCheckingType = .no
-        textView.smartQuotesType = .no
-        textView.smartDashesType = .no
-        textView.delegate = self
-        textView.isScrollEnabled = false
-        textView.textContainerInset = .zero
-        textView.textContainer.lineFragmentPadding = 0
-
-        placeholderLabel.font = textView.font
-        placeholderLabel.textColor = .placeholderText
-        placeholderLabel.numberOfLines = 0
-
-        contentView.addSubview(textView)
-        contentView.addSubview(placeholderLabel)
-
-        textView.snp.makeConstraints { make in
-            make.edges.equalToSuperview().inset(UIEdgeInsets(top: 12, left: 16, bottom: 12, right: 16))
-            make.height.greaterThanOrEqualTo(120)
-        }
-        placeholderLabel.snp.makeConstraints { make in
-            make.top.equalTo(textView)
-            make.leading.trailing.equalTo(textView)
-        }
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        onTextChanged = nil
-        textView.text = ""
-        placeholderLabel.isHidden = false
-    }
-
-    func configure(placeholder: String, text: String) {
-        placeholderLabel.text = placeholder
-        textView.text = text
-        placeholderLabel.isHidden = !text.isEmpty
-    }
-
-    func textViewDidChange(_ textView: UITextView) {
-        placeholderLabel.isHidden = !textView.text.isEmpty
-        onTextChanged?(textView.text)
     }
 }

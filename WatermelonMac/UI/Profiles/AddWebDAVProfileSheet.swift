@@ -106,7 +106,7 @@ struct AddWebDAVProfileSheet: View {
     }
 
     private var hasMinimumFields: Bool {
-        !host.trimmed.isEmpty && !username.trimmed.isEmpty && !password.isEmpty
+        !host.trimmed.isEmpty && !username.trimmed.isEmpty
     }
 
     private func resolvedPort() -> Int {
