@@ -238,21 +238,22 @@ sync 月份在上传 flush 后会立刻做该月下载收尾：
 
 1. 首页右下角 FAB
 
-当前自定义项（`WatermelonMoreDataSource`）：
+当前 MoreKit / 自定义项顺序（`WatermelonMoreDataSource`）：
 
-1. `通用` → 系统语言入口
-2. `远端存储` → `管理存储`
-3. `备份` →
+1. `membership`
+2. `通用` → 系统语言入口
+3. `远端存储` → `管理存储`
+   - active profile detail 的远端概览 refresh 行会触发 `RemoteMaintenanceController` 做全量验证
+4. `备份` →
    - `上传并发`
    - `允许访问 iCloud 原件`
-4. `后台备份` → 后台备份入口（Pro）与后台节点计数入口
-5. `画中画进度` →
+5. `后台备份` → 后台备份入口（Pro）与后台节点计数入口
+6. `画中画进度` →
    - `画中画进度`（Pro）
    - 当 PiP 进度处于开启且持有 Pro 时，再露出 `画中画提示音`
-5. `诊断` →
+7. `contact / appjun / about`
+8. `诊断` →
    - `执行日志历史`（`ExecutionLogHistoryViewController`）
    - DEBUG 构建额外露出 `Test Crash`
-
-再叠加 MoreKit 自带的 `membership / contact / appjun / about` 段落。
 
 完成一次执行后，若距 DB 创建已满 7 天，会通过 `RatingPromptService.requestReviewIfEligible(in:)` 调用 `AppStore.requestReview(in:)` 请求系统评价框。

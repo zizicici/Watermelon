@@ -7,6 +7,7 @@
 1. `v1_initial`
 2. `v2_ms_timestamps`
 3. `v3_repo_local_state`
+4. `v4_duplicate_candidate_index`
 
 ### `server_profiles`
 
@@ -109,6 +110,11 @@ WHERE assetFingerprint IS NOT NULL;
 -- v3_repo_local_state
 ALTER TABLE local_assets ADD COLUMN selectionVersion INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE local_assets ADD COLUMN resourceSignature BLOB;
+
+-- v4_duplicate_candidate_index
+CREATE INDEX idx_local_assets_fingerprint_candidates
+ON local_assets(assetFingerprint, assetLocalIdentifier)
+WHERE assetFingerprint IS NOT NULL AND resourceSignature IS NOT NULL;
 ```
 
 说明：
@@ -400,7 +406,7 @@ JSON body 由 `RetentionManifestStore.encode` 以 sorted keys 写出，当前版
 
 ## 9. 内存态远端快照
 
-类型都定义在 `Shared/Domain/RemoteLibraryDomain.swift`。Home 当前不直接反复扫远端文件系统，而是消费 `RemoteLibrarySnapshotCache`（`Shared/Services/Backup/`）暴露的状态。
+快照 / row 类型主要定义在 `Shared/Domain/RemoteLibraryDomain.swift`，presence overlay 定义在 `Shared/Services/Backup/RemotePresenceSnapshot.swift`。Home 当前不直接反复扫远端文件系统，而是消费 `RemoteLibrarySnapshotCache`（`Shared/Services/Backup/`）暴露的状态。
 
 ### 全量快照
 
@@ -409,7 +415,7 @@ struct RemoteLibrarySnapshot {
     let resources: [RemoteManifestResource]
     let assets: [RemoteManifestAsset]
     let assetResourceLinks: [RemoteAssetResourceLink]
-    let physicallyMissingHashesByMonth: [LibraryMonthKey: Set<Data>]
+    let presence: RemotePresenceSnapshot
 }
 ```
 
@@ -427,7 +433,7 @@ struct RemoteLibraryMonthDelta {
     let resources: [RemoteManifestResource]
     let assets: [RemoteManifestAsset]
     let assetResourceLinks: [RemoteAssetResourceLink]
-    let physicallyMissingHashes: Set<Data>
+    let presence: RemotePresenceSnapshot.Month
 }
 ```
 
@@ -449,6 +455,13 @@ struct RemoteAssetResourceInstance {
     let remoteRelativePath: String
     let alternateRemoteRelativePaths: [String]
 }
+
+struct RemotePresenceSnapshot {
+    struct Month {
+        let missingHashes: Set<Data>
+        let isAuthoritative: Bool
+    }
+}
 ```
 
 附属 digest（用于轻量摘要日志、不构造 per-asset 数组）：
@@ -467,7 +480,7 @@ struct RemoteIndexSyncDigest: Sendable {
 1. `revision` 用来让 Home 只消费“上次之后的变化”
 2. `monthDeltas` 是月级增量，不是整库重建
 3. `RemoteIndexSyncDigest` 是远端同步的廉价摘要，避免每次都把 per-asset 数组拷一份给只想看总数的调用方
-4. `physicallyMissingHashes*` 来自 physical-presence overlay；Home / restore 分类时要从 commit/snapshot 的逻辑行里扣掉这些已缺失资源
+4. `presence` 来自 physical-presence overlay，同时表达每月 missing hashes 与 freshness / authority；Home 使用 `delta.presence.missingHashes`，cache health / month / count summaries 通过 `missingHashesByMonth` 兼容 adapter 扣减，restore 消费 Home 生成的可恢复 items 并在下载后校验字节
 5. `alternateRemoteRelativePaths` 记录同 hash 的备用物理路径，`RestoreService` 下载 primary 失败时会 fallback
 6. 这部分是内存状态，不写回 SQLite
 

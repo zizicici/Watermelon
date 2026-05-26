@@ -266,8 +266,8 @@ V1 兼容路径仍由 `MonthManifestStore` 维护 sqlite manifest：本地 sqlit
 `RemoteMaintenanceController`（`Watermelon/Services/Backup/`）是 “验证远端” 入口：
 
 1. 通过 `BackupCoordinator.verifyAllMonths(...)` 检查所有已知月份；V2 月份走 `RepoVerifyMonthService`，可对 cleanup-eligible 项写 tombstone，V1 月份走 legacy manifest verify
-2. 暴露 `isVerifying / progress / lastError` 给 More 页 / 诊断页
-3. 校验运行期间会通过 `Notification.Name` 把 Home 的 `isMaintenanceBlocked` 拉为 `true`，从而让 `isSelectable` 与 `startExecution` 都被阻塞
+2. 暴露 `isVerifying / progress / lastError` 给 `管理存储 → active profile detail → 远端概览` 的刷新 / 验证入口
+3. 校验运行期间会通过 `Notification.Name` 刷新 Home 的 `isRemoteMaintenanceActive` / selectable UI 状态；action guard 通过 live `isMaintenanceBlocked` 阻塞 start / connect / disconnect
 
 它不参与执行链路，但与执行链路互斥。
 

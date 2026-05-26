@@ -329,10 +329,11 @@
 
 ### 本地持久化
 
-1. `DatabaseManager` 使用 GRDB；目前注册了三条迁移：
+1. `DatabaseManager` 使用 GRDB；目前注册了四条迁移：
    - `v1_initial`：建 `server_profiles / sync_state / local_assets / local_asset_resources`
    - `v2_ms_timestamps`：把 `local_assets.modificationDateNs` 重命名为 `modificationDateMs` 并把已有值除以 1_000_000
    - `v3_repo_local_state`：新增 `server_profiles.writerID`、`repo_state(profileID, repoID, writerID, lastClock, lastSeq, migrationCompleted)`、`local_assets.selectionVersion / resourceSignature`
+   - `v4_duplicate_candidate_index`：新增 `idx_local_assets_fingerprint_candidates`，加速 fingerprint 重复候选查询
 
 本地主要表：
 
@@ -370,16 +371,16 @@
 
 1. 首页右下角悬浮 `ellipsis` 按钮
 
-自定义段落（`WatermelonMoreDataSource`）：
+MoreKit / 自定义段落顺序（`WatermelonMoreDataSource`）：
 
-1. `通用` → 系统语言入口
-2. `远端存储` → `管理存储`
-3. `备份` → `上传并发` / `允许访问 iCloud 原件`
-4. `后台备份` → 后台备份入口（Pro）与后台节点计数入口
-5. `画中画进度` → `画中画进度`（Pro），开启后再露出 `画中画提示音`
-6. `诊断` → `执行日志历史`（DEBUG 构建额外露出 `Test Crash`）
-
-再叠加 MoreKit 自带的 `membership / contact / appjun / about` 段落。
+1. `membership`
+2. `通用` → 系统语言入口
+3. `远端存储` → `管理存储`
+4. `备份` → `上传并发` / `允许访问 iCloud 原件`
+5. `后台备份` → 后台备份入口（Pro）与后台节点计数入口
+6. `画中画进度` → `画中画进度`（Pro），开启后再露出 `画中画提示音`
+7. `contact / appjun / about`
+8. `诊断` → `执行日志历史`（DEBUG 构建额外露出 `Test Crash`）
 
 ## 10. 自动化测试
 
@@ -397,14 +398,15 @@
 10. `S3ClientTests` — S3 client 的 request 构造（multipart 分片、key 编码、retry 分类）
 11. `SFTPCredentialBlobTests` — `SFTPCredentialBlob` 与 `SFTPConnectionParams` 的 JSON round-trip
 12. `SFTPErrorClassifierTests` — `SFTPErrorClassifier.isConnectionUnavailable` 表驱动覆盖（Citadel / NIO 类型未链接到测试 target，POSIX domain 与本地错误类型为主）
-13. `RepoMaterializerRoundTripTests` / `RepoMaterializerReadRaceTests` / `V2FlushTests` / `BackupV2RuntimeBuilderTests` / `BackupV2RuntimeBoundaryTests` / `BootstrapStateMachineTests` — V2 repo materialize、flush、runtime 打开边界、bootstrap / migration 状态机
+13. `RepoMaterializerRoundTripTests` / `RepoMaterializerReadRaceTests` / `V2FlushTests` / `BackupV2RuntimeBuilderTests` / `BackupV2RuntimeBoundaryTests` / `BackupV2RepoOpenPlannerTests` / `BackupV2RepoVerifyPlannerTests` / `BackupV2InspectionSharingTests` / `BootstrapStateMachineTests` — V2 repo materialize、flush、runtime 打开 / verify 边界、bootstrap / migration 状态机
 14. `RepoCheckpointServiceTests` / `RepoCheckpointBarrierHookTests` / `RepoCompactionPlannerTests` / `RepoCompactionPolicyTests` — checkpoint、compaction report 与 barrier hook
-15. `RetentionManifestTests` / `RetentionManifestRemoteStoreTests` / `RetentionDeletionSafetyGateTests` / `RetentionLivenessCapabilityTests` / `RepoRetentionBarrierServiceTests` / `RepoRetentionDeletePreflightTests` / `RepoRetentionDeleteExecutorTests` / `RepoRetentionCommitDeleteExecutorTests` / `RepoRetentionEquivalenceTests` / `V2BarrierAwareMonthSessionRefreshTests` — retention manifest、liveness gate、commit 前缀删除与 barrier-aware session refresh
-16. `RepoVerifyMonthServiceTests` / `RemoteIndexSyncServiceTests` / `RemoteIndexV1SyncEngineTests` / `RemoteIndexV2SyncEngineTests` / `RemoteResourcePresenceTests` / `RemoteIndexFormatRouteDecisionTests` / `StorageCapabilityMatrixTests` — verify、remote index、presence overlay、format route、backend capability contract
-17. `RestoreServiceFallbackTests` / `RestoredAssetFingerprintVerifierTests` / `RemoteAssetIntegrityClassifierTests` / `AssetResourceLinkSetPredicateTests` — 下载 fallback、durable fingerprint 校验与远端资产完整性分类
-18. `RepoBootstrapVersionTests` / `RepoIdentityAuthorityTests` / `IdentityClaimStoreTests` / `VersionManifestStoreTests` / `MigrationMarkerStoreTests` / `OrphanMetadataCleanupTests` — version/bootstrap identity、migration marker 与 orphan metadata cleanup
-19. `BackupResumePlannerTests` / `BackupParallelExecutorMonthEventTests` / `BackupSessionReducerTests` / `MonthPlanStateMachineTests` — 恢复去重、月份事件和 Home/backup 状态机的纯逻辑
-20. `TestSupport.swift` — 共享 fixture（确定性日期、样例记录）
+15. `RetentionManifestTests` / `RetentionManifestRemoteStoreTests` / `RetentionDeletionSafetyGateTests` / `RetentionLivenessCapabilityTests` / `RepoRetentionBarrierServiceTests` / `RepoRetentionDeletePreflightTests` / `RepoRetentionDeleteExecutorTests` / `RepoRetentionCommitDeleteExecutorTests` / `RepoRetentionEquivalenceTests` / `RetentionMaintenanceOrchestratorTests` / `V2BarrierAwareMonthSessionRefreshTests` — retention manifest、liveness gate、commit 前缀删除与 barrier-aware session refresh
+16. `RepoVerifyMonthServiceTests` / `RemoteIndexSyncServiceTests` / `RemoteIndexV1SyncEngineTests` / `RemoteIndexV2SyncEngineTests` / `RemoteResourcePresenceTests` / `RemotePresenceSnapshotTests` / `RemoteIndexFormatRouteDecisionTests` / `StorageCapabilityMatrixTests` — verify、remote index、presence overlay / snapshot、format route、backend capability contract
+17. `RestoreServiceFallbackTests` / `RestoredAssetFingerprintVerifierTests` / `RemoteAssetIntegrityClassifierTests` / `AssetResourceLinkSetPredicateTests` / `ExternalStorageUnavailableClassifierTests` / `ExternalStorageUnavailableRunErrorTests` — 下载 fallback、durable fingerprint 校验、远端资产完整性分类与外接存储不可用分类
+18. `RepoBootstrapVersionTests` / `RepoIdentityAuthorityTests` / `IdentityClaimStoreTests` / `VersionManifestStoreTests` / `MigrationMarkerStoreTests` / `OrphanMetadataCleanupTests` / `MetadataWriteVerifierTests` / `MetadataWriteCancellationTests` / `MetadataCreateOrchestratorTests` — version/bootstrap identity、migration marker、orphan metadata cleanup 与 metadata 写入边界
+19. `BackupResumePlannerTests` / `BackupParallelExecutorMonthEventTests` / `BackupSessionReducerTests` / `MonthPlanStateMachineTests` / `ContentHashIndexRepositoryDuplicateCandidateTests` / `DuplicatesCandidateComputationTests` — 恢复去重、月份事件、Home/backup 状态机与重复候选查询的纯逻辑
+20. `RepoJSONLDirectoryListingTests` / `RepoJSONLDownloadTests` / `CommitLogParseTests` / `CommitOpMapperTests` / `SnapshotRowMapperTests` / `RepoWireValidatorTests` / `WireValidationErrorTranslatorTests` — JSONL / wire schema 解析与校验
+21. `DatabaseMigratorTests` / `TestSupport.swift` — DB 迁移与共享 fixture（确定性日期、样例记录）
 
 仍主要依赖真机回归：`HomeExecutionCoordinator` 到真实 PhotoKit / 真实远端的端到端执行、连接切换、暂停恢复、sync 月份内联下载、外接存储拔出、`ProfileReachabilityService` 网络探测。
 

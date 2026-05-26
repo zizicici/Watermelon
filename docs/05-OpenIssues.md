@@ -99,7 +99,7 @@ V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1
 1. `RepoCompactionPlanner` / `RepoCheckpointService`：按 replay commit 数或 bytes 判断是否写 per-month checkpoint snapshot。
 2. `RepoRetentionBarrierService` / `RetentionManifestRemoteStore`：为被接受的 checkpoint 发布 retention barrier。
 3. `RepoRetentionDeletePreflightService` / `RepoRetentionCommitDeleteExecutor`：只删除 barrier 覆盖、accepted snapshot 覆盖、liveness gate 允许、post-delete materialize 等价的 commit 前缀。
-4. `RepoRetentionStartupMaintenance`：启动时扫描足够老的 retention manifest 并尝试继续删除候选。
+4. `BackupV2RuntimeBuilder → RepoMaintenanceStartupRunner → RepoRetentionStartupMaintenance → RetentionMaintenanceOrchestrator`：启动时扫描足够老的 retention manifest 并尝试继续删除候选。
 
 仍需关注的是实际运行中的跳过率和可观测性：SMB / SFTP 这类缺少安全 liveness renewal 的后端不会公布 barrier-aware retention capability，也不会跑 orphan metadata sweep；commit 前缀删除在没有阻塞 peer 时仍可尝试，但会保守受 liveness gate / legacy grace / verification 约束。删除失败、verification inconclusive、barrier set invalid 等目前主要停留在日志 / 测试覆盖层，没有面向用户的维护视图。
 
