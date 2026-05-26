@@ -412,10 +412,26 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         )
         cancelClient.cancelAtomicCreate(containing: RepoLayout.snapshotsDirectoryPath(base: basePath), afterMatches: 1)
 
+        // U01 R04: cancellation in the post-commit checkpoint barrier now surfaces through
+        // `FlushError.snapshotWriteFailed` carrying the durable delta, instead of escaping as
+        // a raw `CancellationError`. This lets `flushMonthStorePublishingDefensiveCommits` map it
+        // to `.commitDurableSnapshotDeferred` and the executor still runs
+        // `applyDurableBatchSideEffects` (intent drain + provisional mark-durable) before the
+        // cancellation routes to pause/abort. `FlushError.cancellationCause` still walks the
+        // underlying chain and matches the wrapped `CancellationError`, so cancellation is still
+        // honored downstream.
         do {
             _ = try await cancelSession.flushToRemote()
-            XCTFail("expected CancellationError")
-        } catch is CancellationError {
+            XCTFail("expected FlushError.snapshotWriteFailed wrapping the barrier cancellation")
+        } catch let flushError as V2MonthSession.FlushError {
+            guard case .snapshotWriteFailed(_, _, let underlying) = flushError else {
+                XCTFail("expected snapshotWriteFailed, got \(flushError)")
+                return
+            }
+            XCTAssertTrue(underlying is CancellationError,
+                          "underlying of barrier cancellation must remain a CancellationError so downstream cancellationCause walker recognizes it")
+            XCTAssertNotNil(flushError.cancellationCause,
+                            "FlushError.cancellationCause must surface the cancellation via the underlying-chain walker")
         }
     }
 

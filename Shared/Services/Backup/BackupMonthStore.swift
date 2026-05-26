@@ -11,6 +11,17 @@ protocol BackupMonthStore: AnyObject {
     var hasAnyAsset: Bool { get }
 
     func containsAssetFingerprint(_ fingerprint: Data) -> Bool
+    /// Same as `containsAssetFingerprint` but rejects in-session pending V2 rows that have not yet
+    /// been covered by a committed commit-log file. Cache-reuse short-circuits that write the local
+    /// hash-index immediately must use this predicate so the "hash-index row ⇒ durable remote
+    /// commit" invariant holds under batch commits.
+    func containsDurableAssetFingerprint(_ fingerprint: Data) -> Bool
+    /// True iff there are V2 row-writes (asset adds or tombstones) that have not yet landed on
+    /// remote. V1 always returns false (V1 commits eagerly inside `upsertAsset`). Callers use
+    /// this to distinguish "all chunks committed, only snapshot failed" (false) from "earlier
+    /// chunks committed, a later chunk failed" (true) — the partial-multi-chunk case requires
+    /// different downstream handling (no publish, rollback chunk-N+1 remainder).
+    var hasUncommittedV2Ops: Bool { get }
     func isAssetIncomplete(_ fingerprint: Data) -> Bool
 
     /// Multi-path hashes resolve lex-min for deterministic legacy callers.
@@ -62,6 +73,12 @@ extension MonthManifestStore: BackupMonthStore {
     var presence: RemotePresenceSnapshot.Month {
         RemotePresenceSnapshot.Month(missingHashes: [], isAuthoritative: true)
     }
+    /// V1 commits eagerly inside `upsertAsset`, so any present fingerprint is durable.
+    func containsDurableAssetFingerprint(_ fingerprint: Data) -> Bool {
+        containsAssetFingerprint(fingerprint)
+    }
+    /// V1 has no batch lifecycle — every `upsertAsset` is durable on return.
+    var hasUncommittedV2Ops: Bool { false }
 }
 
 extension BackupMonthStore {

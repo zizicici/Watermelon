@@ -110,7 +110,10 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         XCTAssertTrue(race, "download failure during hash verify must trigger collision rename")
     }
 
-    func testFinalizeRowWritingAsset_commitFailureBlocksPublishAndHashWrite() async throws {
+    /// U01: V2 finalize no longer commits per-asset; it enqueues a hash-index intent for
+    /// post-batch-commit drain. This test verifies the V1 finalize path keeps its prior contract:
+    /// commit-call → publish → inline hash-index write, with a thrown commit blocking the write.
+    func testFinalizeRowWritingAsset_v1Path_commitFailureBlocksInlineHashWrite() async throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathComponent("test.sqlite")
@@ -120,10 +123,12 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         )
         defer { try? FileManager.default.removeItem(at: databaseURL.deletingLastPathComponent()) }
 
+        let databaseManager = try DatabaseManager(databaseURL: databaseURL)
         let remoteIndexService = RemoteIndexSyncService()
+        let hashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
         let processor = AssetProcessor(
             photoLibraryService: PhotoLibraryService(),
-            hashIndexRepository: ContentHashIndexRepository(databaseManager: try DatabaseManager(databaseURL: databaseURL)),
+            hashIndexRepository: hashIndexRepository,
             remoteIndexService: remoteIndexService
         )
         let month = LibraryMonthKey(year: 2026, month: 1)
@@ -150,28 +155,43 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
             logicalName: "x.jpg"
         )
         let store = ThrowingCommitMonthStore(year: month.year, month: month.month)
+        // Even with shouldThrowCommit=true the V1 path never calls commitPendingAssetToRemote,
+        // so the throw setting is irrelevant — verify the call count is zero.
+        store.shouldThrowCommit = true
         var timing = AssetProcessTiming()
-        var hashWriteCalled = false
+
+        let intent = HashIndexUpsertIntent(
+            assetLocalIdentifier: "local-id-1",
+            assetFingerprint: assetFingerprint,
+            totalFileSizeBytes: 1,
+            modificationDateMs: nil,
+            body: .fingerprintOnly(resourceCount: 1)
+        )
 
         do {
             try await processor.finalizeRowWritingAsset(
                 monthStore: store,
                 manifestAsset: asset,
                 links: [link],
-                timing: &timing
-            ) {
-                hashWriteCalled = true
-            }
-            XCTFail("expected commit failure")
+                timing: &timing,
+                intent: intent
+            )
+            XCTFail("expected commit failure to propagate")
         } catch ThrowingCommitMonthStore.TestError.commitFailed {
+            // expected
         }
 
-        XCTAssertEqual(store.ignoreCancellationValues, [false])
-        XCTAssertFalse(hashWriteCalled)
-        XCTAssertNil(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month])
+        XCTAssertEqual(store.ignoreCancellationValues, [false],
+                       "V1 finalize must call commitPendingAssetToRemote exactly once")
+        let row = try hashIndexRepository.fetchAssetHashCaches(assetIDs: ["local-id-1"])["local-id-1"]
+        XCTAssertNil(row, "V1 commit failure must block the inline hash-index write")
     }
 
-    func testFinalizeRowWritingAsset_commitPrecedesHashWriteAndPublishes() async throws {
+    /// U01 V1 path: finalize publishes the optimistic asset and writes the hash-index inline.
+    /// Replaces the per-asset "commit precedes hashwrite" ordering test — under U01 V1 no longer
+    /// goes through `commitPendingAssetToRemote` here at all (V1 commit was always eager inside
+    /// `upsertAsset`; the per-asset commit call was a no-op for V1).
+    func testFinalizeRowWritingAsset_v1Path_publishesOptimisticAndWritesHashInline() async throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathComponent("test.sqlite")
@@ -181,10 +201,12 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         )
         defer { try? FileManager.default.removeItem(at: databaseURL.deletingLastPathComponent()) }
 
+        let databaseManager = try DatabaseManager(databaseURL: databaseURL)
         let remoteIndexService = RemoteIndexSyncService()
+        let hashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
         let processor = AssetProcessor(
             photoLibraryService: PhotoLibraryService(),
-            hashIndexRepository: ContentHashIndexRepository(databaseManager: try DatabaseManager(databaseURL: databaseURL)),
+            hashIndexRepository: hashIndexRepository,
             remoteIndexService: remoteIndexService
         )
         let month = LibraryMonthKey(year: 2026, month: 1)
@@ -220,27 +242,34 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
             slot: 0,
             logicalName: "x.jpg"
         )
-        let recorder = EventRecorder()
-        let store = ThrowingCommitMonthStore(year: month.year, month: month.month, eventRecorder: recorder)
+        let store = ThrowingCommitMonthStore(year: month.year, month: month.month)
         store.shouldThrowCommit = false
         let writer = remoteIndexService.makeOptimisticAssetWriter()
         writer.appendResource(resource)
         var timing = AssetProcessTiming()
 
+        let intent = HashIndexUpsertIntent(
+            assetLocalIdentifier: "local-id-e4",
+            assetFingerprint: assetFingerprint,
+            totalFileSizeBytes: 1,
+            modificationDateMs: nil,
+            body: .fingerprintOnly(resourceCount: 1)
+        )
+
         try await processor.finalizeRowWritingAsset(
             monthStore: store,
             manifestAsset: asset,
             links: [link],
-            timing: &timing
-        ) {
-            XCTAssertEqual(recorder.events, ["commit"])
-            XCTAssertEqual(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month], [assetFingerprint])
-            recorder.append("hash")
-        }
+            timing: &timing,
+            intent: intent
+        )
 
-        XCTAssertEqual(recorder.events, ["commit", "hash"])
-        XCTAssertEqual(store.ignoreCancellationValues, [false])
+        XCTAssertEqual(store.ignoreCancellationValues, [false],
+                       "V1 finalize calls commitPendingAssetToRemote once (no-op for real V1 store)")
         XCTAssertEqual(remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month], [assetFingerprint])
+        let row = try hashIndexRepository.fetchAssetHashCaches(assetIDs: ["local-id-e4"])["local-id-e4"]
+        XCTAssertNotNil(row)
+        XCTAssertEqual(row?.assetFingerprint, assetFingerprint)
     }
 
     func testFinalizeRowWritingAsset_publishesCommittedSweepFromDelta() async throws {
@@ -336,12 +365,20 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         store.snapshotLinks = [carriedLink, currentLink]
         var timing = AssetProcessTiming()
 
+        let intent = HashIndexUpsertIntent(
+            assetLocalIdentifier: "local-id-current",
+            assetFingerprint: currentFingerprint,
+            totalFileSizeBytes: 1,
+            modificationDateMs: nil,
+            body: .fingerprintOnly(resourceCount: 1)
+        )
         try await processor.finalizeRowWritingAsset(
             monthStore: store,
             manifestAsset: currentAsset,
             links: [currentLink],
-            timing: &timing
-        ) {}
+            timing: &timing,
+            intent: intent
+        )
 
         XCTAssertEqual(
             remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month],
@@ -349,7 +386,10 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         )
     }
 
-    func testFinalizeRowWritingAsset_realV2PendingSweepPublishesBeforeHashWrite() async throws {
+    /// U01: V2 finalize must NOT publish mid-batch (subset tombstones in pending would otherwise
+    /// leak into committedView). Optimistic appendAsset still feeds in-session worker visibility;
+    /// the hash-index intent is enqueued for post-batch-commit drain rather than written inline.
+    func testFinalizeRowWritingAsset_v2_enqueuesIntentAndDoesNotPublishMidBatch() async throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathComponent("test.sqlite")
@@ -396,29 +436,46 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         let current = Self.makeSingleAssetRows(month: month, assetByte: 0xF3, hashByte: 0xF4, name: "current.jpg")
         _ = try store.upsertResource(current.resource)
         try store.upsertAsset(current.asset, links: [current.link])
+        // The real upload path calls `optimisticWriter.appendResource` (AssetProcessor+Upload.swift)
+        // so the resource is available to the committedView's healthy-asset classifier. Seed both
+        // here so the resume-skip computation has the resources it needs.
+        let writer = remoteIndexService.makeOptimisticAssetWriter()
+        writer.appendResource(carried.resource)
+        writer.appendResource(current.resource)
         var timing = AssetProcessTiming()
-        var hashWriteCalled = false
 
+        let intent = HashIndexUpsertIntent(
+            assetLocalIdentifier: "local-id-current",
+            assetFingerprint: current.asset.assetFingerprint,
+            totalFileSizeBytes: 1,
+            modificationDateMs: nil,
+            body: .fingerprintOnly(resourceCount: 1)
+        )
         try await processor.finalizeRowWritingAsset(
             monthStore: store,
             manifestAsset: current.asset,
             links: [current.link],
-            timing: &timing
-        ) {
-            XCTAssertEqual(
-                remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month],
-                [carried.asset.assetFingerprint, current.asset.assetFingerprint]
-            )
-            hashWriteCalled = true
-        }
+            timing: &timing,
+            intent: intent
+        )
 
-        XCTAssertTrue(hashWriteCalled)
+        // Optimistic appendAsset (per-asset, in-process) surfaces `current` to same-session
+        // resume-skip checks. `carried` was added directly via store.upsertAsset which does NOT
+        // touch the optimistic overlay; under U01 there is no mid-batch publishMonthSnapshot, so
+        // carried stays out of the committed view until the batch commit's post-flush publish.
         XCTAssertEqual(
             remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month],
-            [carried.asset.assetFingerprint, current.asset.assetFingerprint]
+            [current.asset.assetFingerprint],
+            "U01: V2 mid-batch must surface only the current asset via optimistic overlay"
         )
+        // No commit landed — seq allocator must still be at 0 (no commit file).
         let seqValue = await v2.seqAllocator.value()
-        XCTAssertEqual(seqValue, 1)
+        XCTAssertEqual(seqValue, 0,
+                       "U01: V2 finalize must not write a commit file per asset; seq stays 0 until batch flush")
+        // Intent must be queued under (current fingerprint, "local-id-current").
+        let queuedCount = await processor.pendingHashIndexIntents.pendingFingerprintCountForTest(month: month)
+        XCTAssertEqual(queuedCount, 1,
+                       "intent for current asset must be queued for post-batch-commit drain")
     }
 
     /// V1 commits eagerly inside upsertAsset, so commitDelta is always `.none`. A
@@ -511,13 +568,21 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         store.snapshotLinks = supersedingLinks
         var timing = AssetProcessTiming()
 
+        let intent = HashIndexUpsertIntent(
+            assetLocalIdentifier: "local-id-superseding",
+            assetFingerprint: supersedingFP,
+            totalFileSizeBytes: 2,
+            modificationDateMs: nil,
+            body: .fingerprintOnly(resourceCount: 2)
+        )
         try await processor.finalizeRowWritingAsset(
             monthStore: store,
             manifestAsset: supersedingAsset,
             links: supersedingLinks,
             timing: &timing,
-            tombstonedSubsetFingerprints: [supersededFP]
-        ) {}
+            tombstonedSubsetFingerprints: [supersededFP],
+            intent: intent
+        )
 
         let safeToSkip = remoteIndexService.resumeSafeToSkipAssetFingerprintsByMonth()[month] ?? []
         XCTAssertFalse(safeToSkip.contains(supersededFP),
@@ -676,6 +741,8 @@ private final class ThrowingCommitMonthStore: BackupMonthStore {
     }
 
     func containsAssetFingerprint(_ fingerprint: Data) -> Bool { false }
+    func containsDurableAssetFingerprint(_ fingerprint: Data) -> Bool { false }
+    var hasUncommittedV2Ops: Bool { false }
     func isAssetIncomplete(_ fingerprint: Data) -> Bool { false }
     func findResourceByHash(_ contentHash: Data) -> RemoteManifestResource? { nil }
     func findByFileName(_ logicalName: String) -> RemoteManifestResource? { nil }

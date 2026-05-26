@@ -21,9 +21,10 @@ struct V2MonthCommitFlusher {
     func flushPending(
         sessionWrittenCovered: CoveredRanges,
         barrierAwareBasis: Basis? = nil,
+        limit: Int? = nil,
         ignoreCancellation: Bool
     ) async throws -> Result? {
-        let pending = indexes.snapshotPending()
+        let pending = indexes.snapshotPending(limit: limit)
         let opCount = pending.assets.count + pending.tombstones.count
         if opCount == 0 { return nil }
 

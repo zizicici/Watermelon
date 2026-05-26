@@ -45,7 +45,11 @@ struct BackupParallelExecutor: Sendable {
     static let flushInterval = BackupV2Constants.batchFlushInterval
 
     static func foregroundFinalFlushIgnoresCancellation(paused: Bool, hasV2Services: Bool) -> Bool {
-        paused && !hasV2Services
+        // U01: V2 batch commits can hold up to BackupV2Constants.batchFlushInterval row-writes in
+        // memory at pause time. Respecting cancellation here would drop the partial batch and
+        // orphan its uploaded resources. Pause-final ignores cancellation for both V1 and V2.
+        _ = hasV2Services
+        return paused
     }
 
     private let hashIndexRepository: ContentHashIndexRepository
@@ -77,6 +81,10 @@ struct BackupParallelExecutor: Sendable {
             await preparedRun.initialClient.disconnectSafely()
             return result
         }
+
+        // AssetProcessor is held by DependencyContainer and shared across runs; queued intents from
+        // a prior aborted run would otherwise drain against this run's commit deltas.
+        await assetProcessor.clearAllPendingHashIndexIntents()
 
         let workerCountSource = workerCountOverride == nil ? "protocol-default" : "user-override"
         if let requestedWorkers = workerCountOverride,
@@ -401,6 +409,36 @@ struct BackupParallelExecutor: Sendable {
                                 eventStream.emitLog(timingSummary, level: .debug)
                             }
 
+                            // U01 provisional tracking — V2 only AND only for results that
+                            // actually added a pending V2 row (`wroteProvisionalV2Row == true`).
+                            // The durable cached-skip short-circuit (`asset_exists_cached`) writes
+                            // its hash-index row inline and never calls `finalizeRowWritingAsset`,
+                            // so its row is already durable and must NOT enter the rollback buffer
+                            // — otherwise a later batch failure would revert an unrelated cached
+                            // skip. V1 is also excluded (eager commit inside upsertAsset).
+                            if v2Services != nil,
+                               result.wroteProvisionalV2Row,
+                               let fingerprint = result.assetFingerprint {
+                                switch result.status {
+                                case .success:
+                                    await aggregator.recordProvisional(
+                                        month: monthKey,
+                                        fingerprint: fingerprint,
+                                        assetLocalIdentifier: asset.localIdentifier,
+                                        status: .success
+                                    )
+                                case .skipped:
+                                    await aggregator.recordProvisional(
+                                        month: monthKey,
+                                        fingerprint: fingerprint,
+                                        assetLocalIdentifier: asset.localIdentifier,
+                                        status: .skipped
+                                    )
+                                case .failed:
+                                    break
+                                }
+                            }
+
                             // Cached-reuse `.skipped` also writes asset rows; only `.failed`
                             // skips the batch counter.
                             if result.status != .failed {
@@ -417,12 +455,26 @@ struct BackupParallelExecutor: Sendable {
                                     } catch {
                                         switch BackupFlushFailureClassification.classify(error, on: profile).foregroundIntervalAction {
                                         case .continueAssetLoopAndResetCounter:
+                                            // No commit landed; pending stays in memory for the
+                                            // next attempt — provisional buffer also carries.
                                             flushCounter.reset()
                                             continue
                                         case .pauseAndBreakAssetLoop:
+                                            // U01 R03: do NOT roll back provisional/intents here.
+                                            // The paused end-of-month flush below runs with
+                                            // ignoreCancellation=true and can still commit these
+                                            // same pending V2 ops; pre-emptive rollback would
+                                            // discard intents/counters for assets that ultimately
+                                            // become durable. Reconciliation happens after EOM
+                                            // (applyDurableBatchSideEffects + hasUncommittedV2Ops
+                                            // branch, EOM catch, or EOM-skip branch below).
                                             workerState.paused = true
                                             shouldBreakAssetLoop = true
                                         case .abortMonthBreakAssetLoop:
+                                            // U01 R03: see above — EOM-skip branch below rolls
+                                            // back any remaining buffer/intents for the
+                                            // connection-unavailable abort path that suppresses
+                                            // the final flush.
                                             clientReusable = false
                                             monthFatalError = error
                                             eventStream.emitLog(
@@ -436,6 +488,9 @@ struct BackupParallelExecutor: Sendable {
                                             )
                                             shouldBreakAssetLoop = true
                                         case .logWarningAndContinue:
+                                            // U01: classifier no longer returns this for V2; kept
+                                            // for compiler-required exhaustive switch over the
+                                            // unchanged enum.
                                             eventStream.emitLog(
                                                 String.localizedStringWithFormat(
                                                     String(localized: "backup.parallel.flushManifestFailed"),
@@ -447,7 +502,46 @@ struct BackupParallelExecutor: Sendable {
                                             )
                                         }
                                     }
+                                    if let outcome = intervalOutcome {
+                                        await Self.applyDurableBatchSideEffects(
+                                            aggregator: aggregator,
+                                            assetProcessor: assetProcessor,
+                                            month: monthKey,
+                                            outcome: outcome,
+                                            eventStream: eventStream,
+                                            profile: profile,
+                                            workerID: workerID + 1
+                                        )
+                                    }
+                                    // U01 R02: partial multi-chunk failure at interval (chunk N+1
+                                    // still pending). Force a hard stop so the asset loop cannot
+                                    // accumulate past the 200-op boundary. R03: do NOT roll back
+                                    // here — the paused EOM flush below can still commit chunk N+1
+                                    // (or the abort-path EOM-skip branch will reconcile it).
                                     if let outcome = intervalOutcome,
+                                       monthStore.hasUncommittedV2Ops {
+                                        let displayError = outcome.displayError
+                                        let underlyingMessage = displayError.map {
+                                            profile.userFacingStorageErrorMessage($0)
+                                        } ?? ""
+                                        eventStream.emitLog(
+                                            String.localizedStringWithFormat(
+                                                String(localized: "backup.parallel.flushManifestFailed"),
+                                                workerID + 1,
+                                                monthKey.text,
+                                                underlyingMessage
+                                            ),
+                                            level: .error
+                                        )
+                                        if let displayError,
+                                           profile.isConnectionUnavailableErrorIncludingFlushUnderlying(displayError) {
+                                            clientReusable = false
+                                            monthFatalError = displayError
+                                        } else {
+                                            workerState.paused = true
+                                        }
+                                        shouldBreakAssetLoop = true
+                                    } else if let outcome = intervalOutcome,
                                        let dispatch = BackupFlushFailureClassification.foregroundIntervalPartialDispatch(
                                             outcome: outcome,
                                             profile: profile
@@ -584,6 +678,17 @@ struct BackupParallelExecutor: Sendable {
                         ),
                         level: .error
                     )
+                    // U01 R03: EOM was skipped — no further flush attempt will commit the
+                    // remaining V2 pending ops. Reconcile any provisional progress / hash-index
+                    // intents left from earlier interval-fail paths (R03 deferred those rollbacks
+                    // for the pause-EOM-may-commit case). For the EOM-skip case (typically
+                    // connection-unavailable abort), the buffer/queue is stale and must be
+                    // rolled back so counters and queued local writes match reality.
+                    await Self.rollBackProvisionalAndIntentsForHardAbort(
+                        aggregator: aggregator,
+                        assetProcessor: assetProcessor,
+                        month: monthKey
+                    )
                 } else {
                     var eomOutcome: V2MonthFlushOutcome?
                     var shouldBreakMonthLoop = false
@@ -603,9 +708,19 @@ struct BackupParallelExecutor: Sendable {
                             // Another flusher owns the pending state.
                             break
                         case .pauseAndBreakMonthLoop:
+                            await Self.rollBackProvisionalAndIntentsForHardAbort(
+                                aggregator: aggregator,
+                                assetProcessor: assetProcessor,
+                                month: monthKey
+                            )
                             workerState.paused = true
                             shouldBreakMonthLoop = true
                         case .abortMonthBreakMonthLoop:
+                            await Self.rollBackProvisionalAndIntentsForHardAbort(
+                                aggregator: aggregator,
+                                assetProcessor: assetProcessor,
+                                month: monthKey
+                            )
                             clientReusable = false
                             monthFatalError = error
                             eventStream.emitErrorLog(
@@ -619,6 +734,11 @@ struct BackupParallelExecutor: Sendable {
                             )
                             shouldBreakMonthLoop = true
                         case .logErrorAndRethrow:
+                            await Self.rollBackProvisionalAndIntentsForHardAbort(
+                                aggregator: aggregator,
+                                assetProcessor: assetProcessor,
+                                month: monthKey
+                            )
                             eventStream.emitErrorLog(
                                 String.localizedStringWithFormat(
                                     String(localized: "backup.parallel.flushManifestFailed"),
@@ -633,7 +753,46 @@ struct BackupParallelExecutor: Sendable {
                     }
 
                     if let outcome = eomOutcome {
-                        if let dispatch = BackupFlushFailureClassification.foregroundEndOfMonthPartialDispatch(
+                        await Self.applyDurableBatchSideEffects(
+                            aggregator: aggregator,
+                            assetProcessor: assetProcessor,
+                            month: monthKey,
+                            outcome: outcome,
+                            eventStream: eventStream,
+                            profile: profile,
+                            workerID: workerID + 1
+                        )
+                        // U01 R02: end-of-month partial multi-chunk failure. The remaining
+                        // V2 pending ops die with this V2MonthSession (no further flush in
+                        // this session for this month), so reconcile counters + intents.
+                        if monthStore.hasUncommittedV2Ops {
+                            await Self.rollBackProvisionalAndIntentsForHardAbort(
+                                aggregator: aggregator,
+                                assetProcessor: assetProcessor,
+                                month: monthKey
+                            )
+                            let displayError = outcome.displayError
+                            let underlyingMessage = displayError.map {
+                                profile.userFacingStorageErrorMessage($0)
+                            } ?? ""
+                            eventStream.emitErrorLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.flushManifestFailed"),
+                                    workerID + 1,
+                                    monthKey.text,
+                                    underlyingMessage
+                                ),
+                                unless: displayError ?? NSError(domain: "U01Partial", code: 0)
+                            )
+                            if let displayError,
+                               profile.isConnectionUnavailableErrorIncludingFlushUnderlying(displayError) {
+                                clientReusable = false
+                                monthFatalError = displayError
+                            } else {
+                                workerState.paused = true
+                            }
+                            shouldBreakMonthLoop = true
+                        } else if let dispatch = BackupFlushFailureClassification.foregroundEndOfMonthPartialDispatch(
                             outcome: outcome,
                             profile: profile,
                             shouldFinishMonth: shouldFinishMonth
@@ -903,7 +1062,93 @@ struct BackupParallelExecutor: Sendable {
     ) {
         let committed = delta.committedAssetFingerprints.union(delta.committedTombstoneFingerprints)
         guard !committed.isEmpty else { return }
+        // U01 R02: under partial multi-chunk failure, `monthStore.unsortedSnapshot()` still carries
+        // the uncommitted chunk-N+1 rows in `assetsByFingerprint`. Publishing here would leak those
+        // non-durable fingerprints into `RemoteIndexSyncService.committedView`. The in-process
+        // optimistic overlay (per-asset `appendAsset` during processing) already surfaces chunk-1
+        // to in-session consumers, and next-session materialize rebuilds the committed view from
+        // durable commit files — skipping the publish here is the conservative choice.
+        guard !monthStore.hasUncommittedV2Ops else { return }
         remoteIndexService.publishMonthSnapshot(of: monthStore, for: month)
+    }
+
+    /// Drain queued hash-index intents for the fingerprints the batch commit just made durable.
+    /// Drain failure is logged but never propagated: remote commit is durable; the asset will
+    /// safely re-process next session via the `containsDurableAssetFingerprint` short-circuit.
+    /// Returns whether any drain failure occurred plus the first error (for callers that want to
+    /// emit log lines in their own format — foreground emits via eventStream, background via the
+    /// session writer).
+    @discardableResult
+    static func drainHashIndexIntentsForDurableFlush(
+        assetProcessor: AssetProcessor,
+        month: LibraryMonthKey,
+        outcome: V2MonthFlushOutcome
+    ) async -> HashIndexDrainOutcome {
+        let durableFingerprints = outcome.delta.committedAssetFingerprints
+        guard !durableFingerprints.isEmpty else { return .allDrained(count: 0) }
+        return await assetProcessor.drainHashIndexIntents(
+            month: month,
+            durableAssetFingerprints: durableFingerprints
+        )
+    }
+
+    /// Foreground post-flush reconciliation for both `.completed` and
+    /// `.commitDurableSnapshotDeferred` — drain intents, clear matching provisional progress
+    /// entries on the aggregator, and emit a warning log on partial drain.
+    static func applyDurableBatchSideEffects(
+        aggregator: ParallelBackupProgressAggregator,
+        assetProcessor: AssetProcessor,
+        month: LibraryMonthKey,
+        outcome: V2MonthFlushOutcome,
+        eventStream: BackupEventStream,
+        profile: ServerProfileRecord,
+        workerID: Int
+    ) async {
+        let durableFingerprints = outcome.delta.committedAssetFingerprints
+        guard !durableFingerprints.isEmpty else { return }
+        let drainOutcome = await drainHashIndexIntentsForDurableFlush(
+            assetProcessor: assetProcessor,
+            month: month,
+            outcome: outcome
+        )
+        if case .partial(_, let failedCount, let firstError) = drainOutcome {
+            eventStream.emitLog(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.parallel.hashIndexDrainPartial"),
+                    workerID,
+                    month.text,
+                    failedCount,
+                    profile.userFacingStorageErrorMessage(firstError)
+                ),
+                level: .warning
+            )
+        }
+        await aggregator.markBatchDurable(
+            month: month,
+            committedAssetFingerprints: durableFingerprints
+        )
+    }
+
+    /// Foreground hard-abort reconciliation. Counters revert for fingerprints we provisionally
+    /// counted as success/skipped but whose commit never landed; the matching hash-index intents
+    /// are discarded so a same-session retry does not double-write. The optimistic month overlay
+    /// in `RemoteIndexSyncService.committedView` is also dropped (U01 R05) so the per-asset
+    /// `optimisticWriter.appendAsset` calls that ran before the failed commit do not keep
+    /// surfacing non-durable fingerprints through `remoteMonthRawData(for:)` /
+    /// `resumeSafeToSkipAssetFingerprintsByMonth()`.
+    static func rollBackProvisionalAndIntentsForHardAbort(
+        aggregator: ParallelBackupProgressAggregator,
+        assetProcessor: AssetProcessor,
+        month: LibraryMonthKey
+    ) async {
+        let rolledBackFingerprints = await aggregator.rollBackProvisionalBatch(month: month)
+        if !rolledBackFingerprints.isEmpty {
+            await assetProcessor.rollBackHashIndexIntents(
+                month: month,
+                fingerprints: rolledBackFingerprints
+            )
+        }
+        assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: month)
     }
 
     @discardableResult

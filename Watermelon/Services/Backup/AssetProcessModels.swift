@@ -38,6 +38,12 @@ struct AssetProcessResult: Sendable {
     let timing: AssetProcessTiming
     let totalFileSizeBytes: Int64
     let uploadedFileSizeBytes: Int64
+    /// True iff this result added a pending V2 row to `V2MonthIndexes` AND queued a hash-index
+    /// intent that will need post-batch-commit reconciliation. The cached-durable short-circuit
+    /// (`reason == "asset_exists_cached"`) writes its hash-index row inline and never reaches
+    /// `finalizeRowWritingAsset`, so it sets this to `false`. The provisional progress buffer
+    /// in `ParallelBackupProgressAggregator` only records results where this is `true`.
+    var wroteProvisionalV2Row: Bool = false
 }
 
 struct AssetProcessTiming: Sendable {

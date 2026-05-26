@@ -602,6 +602,22 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
     }
 
+    /// U01 R05: drop the in-process optimistic view of a month whose V2 batch hard-aborted.
+    /// V2 finalize calls `appendAsset` per asset before the commit lands, which mutates
+    /// `committedView`. On hard abort (no commit will land for this month in this session),
+    /// the non-durable rows must not stay observable through `remoteMonthRawData(for:)` /
+    /// `resumeSafeToSkipAssetFingerprintsByMonth()` / `currentState(since:)`. A coarse
+    /// per-month drop is correct because the asset loop for this month has already terminated
+    /// — no other in-session worker is still processing it. A later successful flush within
+    /// the same session can re-publish via `publishDefensiveFlushSnapshotIfNeeded`; a hard
+    /// abort that prevents any further flush leaves the month invisible until next session's
+    /// materialize, which is the desired fail-closed behaviour.
+    func dropOptimisticMonthIfStale(month: LibraryMonthKey) {
+        optimisticMutationLock.withLock {
+            _ = committedView.removeMonth(month)
+        }
+    }
+
     func resetForProfileSwitch() async {
         resetCommittedViewAndOverlayFreshness()
         await state.reset()

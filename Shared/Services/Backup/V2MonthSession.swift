@@ -170,6 +170,17 @@ final class V2MonthSession: BackupMonthStore {
         indexes.containsAssetFingerprint(fingerprint)
     }
 
+    func containsDurableAssetFingerprint(_ fingerprint: Data) -> Bool {
+        // Pending adds are in-memory only until the batch commit covering them lands;
+        // cache-reuse short-circuits that trust durability must reject those.
+        indexes.containsAssetFingerprint(fingerprint)
+            && !indexes.pendingV2AssetFingerprints.contains(fingerprint)
+    }
+
+    var hasUncommittedV2Ops: Bool {
+        indexes.hasUncommittedOps
+    }
+
     func findStrictSubsetAssetFingerprints(
         forResourceKeys keys: Set<AssetResourceLinkKey>
     ) -> [Data] {
@@ -245,7 +256,12 @@ final class V2MonthSession: BackupMonthStore {
             throw FlushError.concurrentFlushRejected
         }
         defer { endFlush() }
-        return try await commitPendingAssetToRemoteLocked(ignoreCancellation: ignoreCancellation)
+        let drain = try await commitPendingAssetDrainLocked(force: true, ignoreCancellation: ignoreCancellation)
+        return BackupMonthFlushDelta(
+            didFlush: drain.lastSeq != nil,
+            committedAssetFingerprints: drain.committedAssets,
+            committedTombstoneFingerprints: drain.committedTombstones
+        )
     }
 
     @discardableResult
@@ -259,12 +275,9 @@ final class V2MonthSession: BackupMonthStore {
         }
         if !ignoreCancellation { try Task.checkCancellation() }
 
-        let commitResult: V2MonthCommitFlusher.Result?
+        let drainResult: (lastSeq: UInt64?, committedAssets: Set<Data>, committedTombstones: Set<Data>)
         do {
-            commitResult = try await commitPendingAssetToRemoteLockedResult(
-                services: services,
-                ignoreCancellation: ignoreCancellation
-            )
+            drainResult = try await commitPendingAssetDrainLocked(force: true, ignoreCancellation: ignoreCancellation)
         } catch {
             throw error
         }
@@ -276,23 +289,40 @@ final class V2MonthSession: BackupMonthStore {
         } catch {
             dirty = true
             throw FlushError.snapshotWriteFailed(
-                committedAssets: commitResult?.committedAssets ?? [],
-                committedTombstones: commitResult?.committedTombstones ?? [],
+                committedAssets: drainResult.committedAssets,
+                committedTombstones: drainResult.committedTombstones,
                 underlying: error
             )
         }
 
-        let didFlush = commitResult != nil || wroteSnapshot
+        let didFlush = drainResult.lastSeq != nil || wroteSnapshot
         if !ignoreCancellation,
            didFlush,
            !dirty {
-            try await runCheckpointBarrierHook(services: services)
+            do {
+                try await runCheckpointBarrierHook(services: services)
+            } catch {
+                // U01 R04: the checkpoint-barrier hook propagates `CancellationError` (and any
+                // other unexpected throws) AFTER the commit + snapshot are already durable.
+                // Surface the durable delta through the same channel used for snapshot-write
+                // failures so `flushMonthStorePublishingDefensiveCommits` returns
+                // `.commitDurableSnapshotDeferred` and the executor still runs
+                // `applyDurableBatchSideEffects` (intent drain + provisional mark-durable)
+                // before the cancellation routes to pause/abort. Without this, a cancellation
+                // landing during the post-commit barrier window would orphan the local
+                // hash-index intents for a durable remote commit.
+                throw FlushError.snapshotWriteFailed(
+                    committedAssets: drainResult.committedAssets,
+                    committedTombstones: drainResult.committedTombstones,
+                    underlying: error
+                )
+            }
         }
 
         return BackupMonthFlushDelta(
             didFlush: didFlush,
-            committedAssetFingerprints: commitResult?.committedAssets ?? [],
-            committedTombstoneFingerprints: commitResult?.committedTombstones ?? []
+            committedAssetFingerprints: drainResult.committedAssets,
+            committedTombstoneFingerprints: drainResult.committedTombstones
         )
     }
 
@@ -314,23 +344,61 @@ final class V2MonthSession: BackupMonthStore {
         }
     }
 
-    private func commitPendingAssetToRemoteLocked(ignoreCancellation: Bool) async throws -> BackupMonthFlushDelta {
-        guard let services = v2Services else { return .none }
-        guard let result = try await commitPendingAssetToRemoteLockedResult(
-            services: services,
-            ignoreCancellation: ignoreCancellation
-        ) else {
-            return .none
+    /// Drain pending V2 ops in commit-file chunks bounded by `BackupV2Constants.batchFlushInterval`.
+    /// `force == true` drains until pending is empty; `force == false` only commits when pending
+    /// already meets the threshold and stops once it drops below. Per-chunk `recordCommitted(seq:)`
+    /// makes every committed seq reach `snapshotFlusher.sessionWrittenCovered` before the trailing
+    /// snapshot is built (U01 hard-cap + multi-commit covered-range correctness).
+    private func commitPendingAssetDrainLocked(
+        force: Bool,
+        ignoreCancellation: Bool
+    ) async throws -> (lastSeq: UInt64?, committedAssets: Set<Data>, committedTombstones: Set<Data>) {
+        guard let services = v2Services else {
+            return (nil, [], [])
         }
-        return BackupMonthFlushDelta(
-            didFlush: true,
-            committedAssetFingerprints: result.committedAssets,
-            committedTombstoneFingerprints: result.committedTombstones
-        )
+        let threshold = BackupV2Constants.batchFlushInterval
+        var lastSeq: UInt64?
+        var committedAssets: Set<Data> = []
+        var committedTombstones: Set<Data> = []
+        while indexes.hasUncommittedOps {
+            if !force, indexes.pendingOpsCount < threshold {
+                break
+            }
+            let chunk: V2MonthCommitFlusher.Result?
+            do {
+                chunk = try await commitPendingAssetToRemoteLockedResult(
+                    services: services,
+                    limit: threshold,
+                    ignoreCancellation: ignoreCancellation
+                )
+            } catch {
+                // Multi-chunk partial durability: if earlier chunks already landed, surface them
+                // via FlushError.snapshotWriteFailed so the downstream catches the partial as
+                // `commitDurableSnapshotDeferred`, drains the matching hash-index intents, and
+                // publishes the durable sweep before propagating the failure. Without this,
+                // already-durable fingerprints would be rolled back in the foreground catch path
+                // and their hash-index intents discarded — violating the "at most last batch is
+                // redone" goal for U01.
+                if !committedAssets.isEmpty || !committedTombstones.isEmpty {
+                    throw FlushError.snapshotWriteFailed(
+                        committedAssets: committedAssets,
+                        committedTombstones: committedTombstones,
+                        underlying: error
+                    )
+                }
+                throw error
+            }
+            guard let chunk else { break }
+            committedAssets.formUnion(chunk.committedAssets)
+            committedTombstones.formUnion(chunk.committedTombstones)
+            lastSeq = chunk.lastSeq
+        }
+        return (lastSeq, committedAssets, committedTombstones)
     }
 
     private func commitPendingAssetToRemoteLockedResult(
         services: BackupV2RuntimeServices,
+        limit: Int? = nil,
         ignoreCancellation: Bool
     ) async throws -> V2MonthCommitFlusher.Result? {
         if !ignoreCancellation { try Task.checkCancellation() }
@@ -366,6 +434,7 @@ final class V2MonthSession: BackupMonthStore {
         guard let result = try await commitFlusher.flushPending(
             sessionWrittenCovered: snapshotFlusher.sessionWrittenCovered,
             barrierAwareBasis: barrierAwareBasis,
+            limit: limit,
             ignoreCancellation: ignoreCancellation
         ) else {
             return nil

@@ -145,10 +145,24 @@ actor MonthWorkQueue {
 
 // MARK: - Progress Aggregation
 
+enum ProvisionalRecordStatus: Sendable, Equatable {
+    case success
+    case skipped
+}
+
 actor ParallelBackupProgressAggregator {
     private var state: BackupRunState
     private var stageTimingWindow = StageTimingWindow()
     private var scheduledCount = 0
+    /// Per-month, per-fingerprint, per-`assetLocalIdentifier` buffer of provisional success/skipped
+    /// records. Two local assets that hash to the same content fingerprint each contribute their
+    /// own row (matching the hash-index intent queue's `(month, fingerprint, assetLocalIdentifier)`
+    /// key); collapsing by fingerprint would under-count the rollback when one batch holds both
+    /// duplicates and the commit fails. Entries stay until either `markBatchDurable` (the batch
+    /// commit covering them landed) or `rollBackProvisionalBatch` (hard-abort flush failure)
+    /// processes them. Counters advance at `record(result:)` time and revert on rollback so the
+    /// visible progress matches durable outcomes after reconciliation.
+    private var provisionalByMonth: [LibraryMonthKey: [Data: [String: ProvisionalRecordStatus]]] = [:]
 
     init(total: Int) {
         state = BackupRunState(total: total)
@@ -218,6 +232,57 @@ actor ParallelBackupProgressAggregator {
             position: max(state.processed, 1),
             timingSummary: summary
         )
+    }
+
+    func recordProvisional(
+        month: LibraryMonthKey,
+        fingerprint: Data,
+        assetLocalIdentifier: String,
+        status: ProvisionalRecordStatus
+    ) {
+        provisionalByMonth[month, default: [:]][fingerprint, default: [:]][assetLocalIdentifier] = status
+    }
+
+    func markBatchDurable(
+        month: LibraryMonthKey,
+        committedAssetFingerprints: Set<Data>
+    ) {
+        guard var byFingerprint = provisionalByMonth[month] else { return }
+        for fp in committedAssetFingerprints {
+            byFingerprint.removeValue(forKey: fp)
+        }
+        if byFingerprint.isEmpty {
+            provisionalByMonth.removeValue(forKey: month)
+        } else {
+            provisionalByMonth[month] = byFingerprint
+        }
+    }
+
+    /// Hard-abort reconciliation. Returns the affected fingerprints so callers can roll back the
+    /// matching hash-index intents on the AssetProcessor side. Counter decrements happen per
+    /// `(fingerprint, assetLocalIdentifier)` cell so duplicate-fingerprint local assets each
+    /// revert their provisional row exactly once.
+    @discardableResult
+    func rollBackProvisionalBatch(month: LibraryMonthKey) -> Set<Data> {
+        guard let byFingerprint = provisionalByMonth.removeValue(forKey: month) else {
+            return []
+        }
+        for (_, byLocalID) in byFingerprint {
+            for (_, status) in byLocalID {
+                switch status {
+                case .success:
+                    state.succeeded = max(state.succeeded - 1, 0)
+                case .skipped:
+                    state.skipped = max(state.skipped - 1, 0)
+                }
+                state.failed += 1
+            }
+        }
+        return Set(byFingerprint.keys)
+    }
+
+    func provisionalCountForTest(month: LibraryMonthKey) -> Int {
+        provisionalByMonth[month]?.count ?? 0
     }
 
     func markPaused() {

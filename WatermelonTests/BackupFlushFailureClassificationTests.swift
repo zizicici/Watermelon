@@ -93,8 +93,12 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
                        .abortMonthBreakAssetLoop)
     }
     func testForegroundIntervalAction_other() {
+        // U01: V2 batch commit failures must pause the worker rather than warn-and-continue —
+        // continuing past a failed batch commit accumulates orphan resources and provisional
+        // progress that cannot be honestly reconciled. The classifier's `.other` branch now maps
+        // to `.pauseAndBreakAssetLoop` for the interval-flush path.
         XCTAssertEqual(BackupFlushFailureClassification.other.foregroundIntervalAction,
-                       .logWarningAndContinue)
+                       .pauseAndBreakAssetLoop)
     }
 
     func testForegroundEndOfMonthAction_concurrentFlushRejected() {
@@ -130,8 +134,11 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
                        .abortProfileLogError)
     }
     func testBackgroundIntervalAction_other() {
+        // U01: V2 batch commit failures in the background must break the asset loop (so orphan
+        // resources don't accumulate beyond the 200-op redo bound) rather than warn-and-continue.
+        // V1 never reaches this branch — V1's `flushToRemote` returns `.none` and never throws.
         XCTAssertEqual(BackupFlushFailureClassification.other.backgroundIntervalAction,
-                       .logErrorAndContinue)
+                       .logErrorAndBreakAssetLoop)
     }
 
     func testBackgroundEndOfMonthAction_concurrentFlushRejected() {

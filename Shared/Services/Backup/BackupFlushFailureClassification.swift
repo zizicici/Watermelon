@@ -35,7 +35,12 @@ enum BackupFlushFailureClassification: Sendable, Equatable {
         case .concurrentFlushRejected: return .continueAssetLoopAndResetCounter
         case .cancelled:               return .pauseAndBreakAssetLoop
         case .connectionUnavailable:   return .abortMonthBreakAssetLoop
-        case .other:                   return .logWarningAndContinue
+        // U01: V2 batch commit failures must pause rather than warn-and-continue. Continuing past
+        // a failed batch commit would keep accumulating orphan resources + provisional progress
+        // that we cannot honestly reconcile. V1 has no batch lifecycle (commit is eager), but
+        // V1 interval flushes are also no-ops in the new contract (`flushToRemote` on V1 returns
+        // `.none`), so this branch will only ever be reached for V2.
+        case .other:                   return .pauseAndBreakAssetLoop
         }
     }
 
@@ -60,6 +65,11 @@ enum BackupFlushFailureClassification: Sendable, Equatable {
         case ignoreSilently
         case abortProfileLogError
         case logErrorAndContinue
+        /// U01: V2 interval commit failed with no commit landed. Log the error and stop the
+        /// month's asset loop (end-of-month flush still runs). Continuing past a failed batch
+        /// would accumulate orphan resources and queued hash-index intents beyond the 200-op
+        /// redo bound that U01 promises.
+        case logErrorAndBreakAssetLoop
     }
 
     var backgroundIntervalAction: BackgroundIntervalAction {
@@ -67,7 +77,9 @@ enum BackupFlushFailureClassification: Sendable, Equatable {
         case .concurrentFlushRejected: return .continueAssetLoopAndResetCounter
         case .cancelled:               return .ignoreSilently
         case .connectionUnavailable:   return .abortProfileLogError
-        case .other:                   return .logErrorAndContinue
+        // U01 (background equivalent of foregroundIntervalAction.other → .pauseAndBreakAssetLoop).
+        // V1 interval flushes return `.none` and never throw, so this branch fires only for V2.
+        case .other:                   return .logErrorAndBreakAssetLoop
         }
     }
 

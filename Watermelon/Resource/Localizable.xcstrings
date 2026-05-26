@@ -17689,6 +17689,94 @@
         }
       }
     },
+    "backup.parallel.hashIndexDrainPartial" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parallelität #%1$lld Monat %2$@: %3$lld lokale Hash-Index-Einträge konnten nach Commit nicht geschrieben werden: %4$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrent #%1$lld month %2$@: %3$lld local hash-index entries could not be written after commit: %4$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld mes %2$@: no se pudieron escribir %3$lld entradas del índice hash local tras el commit: %4$@"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concurrencia #%1$lld mes %2$@: no se pudieron escribir %3$lld entradas del índice hash local tras el commit: %4$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simultanéité #%1$lld mois %2$@ : %3$lld entrées de l'index de hachage local n'ont pas pu être écrites après le commit : %4$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同時実行 #%1$lld の月 %2$@: コミット後にローカルハッシュインデックスのエントリ %3$lld 件を書き込めませんでした: %4$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동시 실행 #%1$lld의 %2$@월: 커밋 후 로컬 해시 인덱스 항목 %3$lld개를 쓰지 못했습니다: %4$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld mês %2$@: %3$lld entradas do índice hash local não puderam ser gravadas após o commit: %4$@"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concorrência #%1$lld mês %2$@: %3$lld entradas do índice hash local não puderam ser gravadas após o commit: %4$@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Поток #%1$lld месяца %2$@: не удалось записать %3$lld записей локального хеш-индекса после коммита: %4$@"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Паралельність #%1$lld місяця %2$@: не вдалося записати %3$lld записів локального геш-індексу після коміту: %4$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "并发 #%1$lld 的月份 %2$@：commit 后有 %3$lld 条本地哈希索引未能写入：%4$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 的月份 %2$@：commit 後有 %3$lld 筆本地雜湊索引無法寫入：%4$@"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "並行 #%1$lld 的月份 %2$@：commit 後有 %3$lld 筆本地雜湊索引無法寫入：%4$@"
+          }
+        }
+      }
+    },
     "backup.parallel.loadManifestFailed" : {
       "localizations" : {
         "de" : {

@@ -2,6 +2,89 @@ import CryptoKit
 import Foundation
 import Photos
 
+/// Captures the arguments today's per-asset hash-index closure passed; under U01 the intent is
+/// queued at row-write time and drained after the batch commit covering its fingerprint succeeds.
+struct HashIndexUpsertIntent: Sendable {
+    enum Body: Sendable {
+        case snapshot(
+            resources: [LocalAssetResourceHashRecord],
+            selectionVersion: Int,
+            resourceSignature: Data
+        )
+        case fingerprintOnly(resourceCount: Int)
+    }
+    let assetLocalIdentifier: String
+    let assetFingerprint: Data
+    let totalFileSizeBytes: Int64
+    let modificationDateMs: Int64?
+    let body: Body
+}
+
+enum HashIndexDrainOutcome {
+    case allDrained(count: Int)
+    case partial(succeededCount: Int, failedCount: Int, firstError: Error)
+}
+
+/// Per-month, per-fingerprint, per-localIdentifier multimap. Distinct local assets that hash to the
+/// same content fingerprint each need their own `local_assets` row keyed by `assetLocalIdentifier`,
+/// so collapsing by fingerprint alone would lose cache coverage.
+actor PendingHashIndexIntentQueue {
+    private var byMonth: [LibraryMonthKey: [Data: [String: HashIndexUpsertIntent]]] = [:]
+
+    func enqueue(month: LibraryMonthKey, intent: HashIndexUpsertIntent) {
+        var byFingerprint = byMonth[month] ?? [:]
+        var byLocalID = byFingerprint[intent.assetFingerprint] ?? [:]
+        byLocalID[intent.assetLocalIdentifier] = intent
+        byFingerprint[intent.assetFingerprint] = byLocalID
+        byMonth[month] = byFingerprint
+    }
+
+    func drain(month: LibraryMonthKey, durableAssetFingerprints: Set<Data>) -> [HashIndexUpsertIntent] {
+        guard var byFingerprint = byMonth[month] else { return [] }
+        var drained: [HashIndexUpsertIntent] = []
+        for fp in durableAssetFingerprints {
+            if let bucket = byFingerprint.removeValue(forKey: fp) {
+                drained.append(contentsOf: bucket.values)
+            }
+        }
+        if byFingerprint.isEmpty {
+            byMonth.removeValue(forKey: month)
+        } else {
+            byMonth[month] = byFingerprint
+        }
+        return drained
+    }
+
+    func rollBack(month: LibraryMonthKey, fingerprints: Set<Data>) {
+        guard var byFingerprint = byMonth[month] else { return }
+        for fp in fingerprints {
+            byFingerprint.removeValue(forKey: fp)
+        }
+        if byFingerprint.isEmpty {
+            byMonth.removeValue(forKey: month)
+        } else {
+            byMonth[month] = byFingerprint
+        }
+    }
+
+    func clearAll(month: LibraryMonthKey) {
+        byMonth.removeValue(forKey: month)
+    }
+
+    func clearEverything() {
+        byMonth.removeAll()
+    }
+
+    func pendingFingerprintCountForTest(month: LibraryMonthKey) -> Int {
+        let buckets = byMonth[month] ?? [:]
+        var count = 0
+        for bucket in buckets.values {
+            count += bucket.count
+        }
+        return count
+    }
+}
+
 final class AssetProcessor: Sendable {
     static let smallFileThresholdBytes: Int64 = 5 * 1024 * 1024
     static let hashBufferSize = 64 * 1024
@@ -12,6 +95,7 @@ final class AssetProcessor: Sendable {
     private let hashIndexRepository: ContentHashIndexRepository
     let remoteIndexService: RemoteIndexSyncService
     let optimisticWriter: OptimisticAssetWriter
+    let pendingHashIndexIntents: PendingHashIndexIntentQueue
 
     init(
         photoLibraryService: PhotoLibraryService,
@@ -22,6 +106,7 @@ final class AssetProcessor: Sendable {
         self.hashIndexRepository = hashIndexRepository
         self.remoteIndexService = remoteIndexService
         self.optimisticWriter = remoteIndexService.makeOptimisticAssetWriter()
+        self.pendingHashIndexIntents = PendingHashIndexIntentQueue()
     }
 
     static func monthKey(for date: Date?) -> LibraryMonthKey {
@@ -322,16 +407,12 @@ final class AssetProcessor: Sendable {
         let resourceSignature = BackupAssetResourcePlanner.resourceSignature(
             orderedResources: context.selectedResources
         )
-        try await finalizeRowWritingAsset(
-            monthStore: context.monthStore,
-            manifestAsset: manifestAsset,
-            links: links,
-            timing: &timing,
-            tombstonedSubsetFingerprints: subsetFingerprints
-        ) { [hashIndexRepository] in
-            try hashIndexRepository.upsertAssetHashSnapshot(
-                assetLocalIdentifier: context.asset.localIdentifier,
-                assetFingerprint: assetFingerprint,
+        let snapshotIntent = HashIndexUpsertIntent(
+            assetLocalIdentifier: context.asset.localIdentifier,
+            assetFingerprint: assetFingerprint,
+            totalFileSizeBytes: totalFileSizeBytes,
+            modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch,
+            body: .snapshot(
                 resources: preparedResources.map {
                     LocalAssetResourceHashRecord(
                         role: $0.local.resourceRole,
@@ -340,12 +421,18 @@ final class AssetProcessor: Sendable {
                         fileSize: $0.fileSize
                     )
                 },
-                totalFileSizeBytes: totalFileSizeBytes,
-                modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch,
                 selectionVersion: BackupAssetResourcePlanner.currentSelectionVersion,
                 resourceSignature: resourceSignature
             )
-        }
+        )
+        try await finalizeRowWritingAsset(
+            monthStore: context.monthStore,
+            manifestAsset: manifestAsset,
+            links: links,
+            timing: &timing,
+            tombstonedSubsetFingerprints: subsetFingerprints,
+            intent: snapshotIntent
+        )
 
         if successCount == 0 {
             return AssetProcessResult(
@@ -355,7 +442,8 @@ final class AssetProcessor: Sendable {
                 assetFingerprint: assetFingerprint,
                 timing: timing,
                 totalFileSizeBytes: totalFileSizeBytes,
-                uploadedFileSizeBytes: uploadedFileSizeBytes
+                uploadedFileSizeBytes: uploadedFileSizeBytes,
+                wroteProvisionalV2Row: true
             )
         }
 
@@ -366,7 +454,8 @@ final class AssetProcessor: Sendable {
             assetFingerprint: assetFingerprint,
             timing: timing,
             totalFileSizeBytes: totalFileSizeBytes,
-            uploadedFileSizeBytes: uploadedFileSizeBytes
+            uploadedFileSizeBytes: uploadedFileSizeBytes,
+            wroteProvisionalV2Row: true
         )
     }
 
@@ -415,7 +504,11 @@ final class AssetProcessor: Sendable {
                 AssetResourceLinkKey(role: $0.role, slot: $0.slot, hash: $0.contentHash)
             }
         )
-        if context.monthStore.containsAssetFingerprint(cachedFingerprint),
+        // `containsDurableAssetFingerprint` rejects in-session pending V2 rows; under per-asset
+        // commit, `containsAssetFingerprint` was already durable, but batch commit defers
+        // durability until the next batch flush. Writing a hash-index row for a not-yet-durable
+        // fingerprint would violate the "hash-index row ⇒ remote durable commit" invariant.
+        if context.monthStore.containsDurableAssetFingerprint(cachedFingerprint),
            !context.monthStore.isAssetIncomplete(cachedFingerprint),
            !context.monthStore.hasStrictSubsetAssetFingerprint(
                forResourceKeys: cachedResourceKeys
@@ -501,21 +594,21 @@ final class AssetProcessor: Sendable {
         )
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
 
+        let fingerprintOnlyIntent = HashIndexUpsertIntent(
+            assetLocalIdentifier: context.asset.localIdentifier,
+            assetFingerprint: cachedFingerprint,
+            totalFileSizeBytes: totalFileSizeBytes,
+            modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch,
+            body: .fingerprintOnly(resourceCount: context.selectedResources.count)
+        )
         try await finalizeRowWritingAsset(
             monthStore: context.monthStore,
             manifestAsset: manifestAsset,
             links: links,
             timing: &timing,
-            tombstonedSubsetFingerprints: subsetFingerprints
-        ) { [hashIndexRepository] in
-            try hashIndexRepository.upsertAssetFingerprint(
-                assetLocalIdentifier: context.asset.localIdentifier,
-                assetFingerprint: cachedFingerprint,
-                resourceCount: context.selectedResources.count,
-                totalFileSizeBytes: totalFileSizeBytes,
-                modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch
-            )
-        }
+            tombstonedSubsetFingerprints: subsetFingerprints,
+            intent: fingerprintOnlyIntent
+        )
 
         return AssetProcessResult(
             status: .skipped,
@@ -524,7 +617,8 @@ final class AssetProcessor: Sendable {
             assetFingerprint: cachedFingerprint,
             timing: timing,
             totalFileSizeBytes: totalFileSizeBytes,
-            uploadedFileSizeBytes: 0
+            uploadedFileSizeBytes: 0,
+            wroteProvisionalV2Row: true
         )
     }
 
@@ -534,22 +628,116 @@ final class AssetProcessor: Sendable {
         links: [RemoteAssetResourceLink],
         timing: inout AssetProcessTiming,
         tombstonedSubsetFingerprints: Set<Data> = [],
-        hashIndexWrite: () throws -> Void
+        intent: HashIndexUpsertIntent
     ) async throws {
-        let commitStart = CFAbsoluteTimeGetCurrent()
-        let delta = try await monthStore.commitPendingAssetToRemote(ignoreCancellation: false)
-        timing.databaseSeconds += Self.elapsedSeconds(since: commitStart)
-        publishCommittedSweepIfNeeded(
-            monthStore: monthStore,
-            manifestAsset: manifestAsset,
-            delta: delta,
-            tombstonedSubsetFingerprints: tombstonedSubsetFingerprints
-        )
+        if monthStore.v2Services == nil {
+            // V1: bytes + manifest are durable after upsertAsset (eager commit). The protocol's
+            // `commitPendingAssetToRemote` default is a no-op for real V1 (`MonthManifestStore`);
+            // we still call it so test fakes can surface a configured delta for the carve-out
+            // publish below. Then publish + write the hash-index inline.
+            let commitStart = CFAbsoluteTimeGetCurrent()
+            let delta = try await monthStore.commitPendingAssetToRemote(ignoreCancellation: false)
+            timing.databaseSeconds += Self.elapsedSeconds(since: commitStart)
+            publishCommittedSweepIfNeeded(
+                monthStore: monthStore,
+                manifestAsset: manifestAsset,
+                delta: delta,
+                tombstonedSubsetFingerprints: tombstonedSubsetFingerprints
+            )
+            optimisticWriter.appendAsset(manifestAsset, links: links)
+            let dbStart = CFAbsoluteTimeGetCurrent()
+            try Self.writeIntent(intent, repository: hashIndexRepository)
+            timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
+            return
+        }
+        // V2: per-asset publish is suppressed (publishCommittedSweepIfNeeded would otherwise leak
+        // an uncommitted subset-tombstoned snapshot mid-batch). Optimistic appendAsset feeds the
+        // in-process committed view for same-session worker visibility; the hash-index intent is
+        // queued and drained only after the batch commit covering this fingerprint lands.
         optimisticWriter.appendAsset(manifestAsset, links: links)
+        await pendingHashIndexIntents.enqueue(
+            month: LibraryMonthKey(year: monthStore.year, month: monthStore.month),
+            intent: intent
+        )
+    }
 
-        let dbStart = CFAbsoluteTimeGetCurrent()
-        try hashIndexWrite()
-        timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
+    /// Drain queued intents for fingerprints the batch commit just made durable. Non-throwing:
+    /// remote commit is durable; a missing local hash-index row safely degrades to a re-process
+    /// on the next session (which `containsDurableAssetFingerprint` will then short-circuit).
+    @discardableResult
+    func drainHashIndexIntents(
+        month: LibraryMonthKey,
+        durableAssetFingerprints: Set<Data>
+    ) async -> HashIndexDrainOutcome {
+        let intents = await pendingHashIndexIntents.drain(
+            month: month,
+            durableAssetFingerprints: durableAssetFingerprints
+        )
+        if intents.isEmpty {
+            return .allDrained(count: 0)
+        }
+        var succeeded = 0
+        var firstError: Error?
+        for intent in intents {
+            do {
+                try Self.writeIntent(intent, repository: hashIndexRepository)
+                succeeded += 1
+            } catch {
+                if firstError == nil { firstError = error }
+            }
+        }
+        if let firstError {
+            return .partial(
+                succeededCount: succeeded,
+                failedCount: intents.count - succeeded,
+                firstError: firstError
+            )
+        }
+        return .allDrained(count: succeeded)
+    }
+
+    /// Discard queued intents whose fingerprint will not be re-attempted (hard abort).
+    func rollBackHashIndexIntents(
+        month: LibraryMonthKey,
+        fingerprints: Set<Data>
+    ) async {
+        await pendingHashIndexIntents.rollBack(month: month, fingerprints: fingerprints)
+    }
+
+    /// Drop all queued intents for a month. Used by background runner on profile-abort and by
+    /// session bootstrap to isolate runs that share the AssetProcessor instance.
+    func clearPendingHashIndexIntents(month: LibraryMonthKey) async {
+        await pendingHashIndexIntents.clearAll(month: month)
+    }
+
+    func clearAllPendingHashIndexIntents() async {
+        await pendingHashIndexIntents.clearEverything()
+    }
+
+    private static func writeIntent(
+        _ intent: HashIndexUpsertIntent,
+        repository: ContentHashIndexRepository
+    ) throws {
+        switch intent.body {
+        case .snapshot(let resources, let selectionVersion, let resourceSignature):
+            try repository.upsertAssetHashSnapshot(
+                assetLocalIdentifier: intent.assetLocalIdentifier,
+                assetFingerprint: intent.assetFingerprint,
+                resources: resources,
+                totalFileSizeBytes: intent.totalFileSizeBytes,
+                modificationDateMs: intent.modificationDateMs,
+                selectionVersion: selectionVersion,
+                resourceSignature: resourceSignature
+            )
+        case .fingerprintOnly(let resourceCount):
+            try repository.upsertAssetFingerprint(
+                assetLocalIdentifier: intent.assetLocalIdentifier,
+                assetFingerprint: intent.assetFingerprint,
+                resourceCount: resourceCount,
+                totalFileSizeBytes: intent.totalFileSizeBytes,
+                modificationDateMs: intent.modificationDateMs
+            )
+        }
     }
 
     private func publishCommittedSweepIfNeeded(
@@ -558,9 +746,10 @@ final class AssetProcessor: Sendable {
         delta: BackupMonthFlushDelta,
         tombstonedSubsetFingerprints: Set<Data>
     ) {
-        // V1 commits eagerly inside upsertAsset, so `delta` always reports no tombstones —
-        // the `tombstonedSubsetFingerprints` argument is the only signal that subset rows
-        // were just removed and the cache needs eviction.
+        // V1-only path. V2's per-asset upsertAsset records subset tombstones in pending state, so
+        // publishing here mid-batch would push uncommitted state to RemoteIndexSyncService; the V2
+        // gate at the caller prevents that. For V1, delta is always empty and tombstonedSubsetFingerprints
+        // is the only signal that subset rows were just removed.
         guard !delta.committedTombstoneFingerprints.isEmpty ||
             !tombstonedSubsetFingerprints.subtracting([manifestAsset.assetFingerprint]).isEmpty ||
             delta.committedAssetFingerprints.subtracting([manifestAsset.assetFingerprint]).isEmpty == false else {

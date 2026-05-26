@@ -155,6 +155,9 @@ final class BackgroundBackupRunner {
     ) async -> ProfileRunResult {
         // BG runner reuses one RemoteIndexSyncService across profiles; mixed-profile state would corrupt resume coverage.
         await assetProcessor.remoteIndexService.resetForProfileSwitch()
+        // Same reason for the hash-index intent queue (keyed by month, not profile): leftover
+        // intents from profile A would drain against profile B's commit deltas.
+        await assetProcessor.clearAllPendingHashIndexIntents()
         await writer.appendLog(
             String(format: String(localized: "backup.auto.log.profileStart"), profile.name),
             level: .info
@@ -559,6 +562,10 @@ final class BackgroundBackupRunner {
                             case .ignoreSilently:
                                 break
                             case .abortProfileLogError:
+                                // U01 R03: do NOT clear intents here. EOM-skip branch (below)
+                                // clears any remaining intents once we know the final flush won't
+                                // commit them. (For paths where EOM still runs, applyDurableBatch
+                                // drains durable intents and only then can stale ones be cleared.)
                                 connectionUnavailableAbort = true
                                 anyMonthFailed = true
                                 await writer.appendLog(
@@ -571,9 +578,61 @@ final class BackgroundBackupRunner {
                                     String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
                                     unless: error
                                 )
+                            case .logErrorAndBreakAssetLoop:
+                                // U01: V2 interval commit failed with nothing durable. Log and
+                                // break the asset loop; the trailing end-of-month flush is the
+                                // last chance to drain pending V2 ops in this session. If end-of-month
+                                // also fails, its catch path (`.recordReasonLogError` /
+                                // `.abortProfileLogError`) clears the queued hash-index intents.
+                                await writer.appendErrorLog(
+                                    String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, profile.userFacingStorageErrorMessage(error)),
+                                    unless: error
+                                )
+                                anyMonthFailed = true
+                                shouldBreakAssetLoop = true
+                            }
+                        }
+                        if let outcome = intervalOutcome {
+                            let drainOutcome = await BackupParallelExecutor.drainHashIndexIntentsForDurableFlush(
+                                assetProcessor: assetProcessor,
+                                month: monthKey,
+                                outcome: outcome
+                            )
+                            if case .partial(_, let failedCount, let firstError) = drainOutcome {
+                                await writer.appendLog(
+                                    String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, "hash-index drain partial (\(failedCount) failed): \(profile.userFacingStorageErrorMessage(firstError))"),
+                                    level: .warning
+                                )
                             }
                         }
                         if let outcome = intervalOutcome,
+                           monthStore.hasUncommittedV2Ops {
+                            // U01 R02: partial multi-chunk failure. Force a hard stop so the
+                            // asset loop cannot accumulate past the 200-op boundary. R03: do NOT
+                            // clear queued intents here — the trailing EOM flush may still commit
+                            // chunk N+1 (with applyDurableBatchSideEffects draining its intents);
+                            // the EOM-skip branch below clears intents when EOM is suppressed.
+                            let displayError = outcome.displayError
+                            let underlyingMessage = displayError.map {
+                                profile.userFacingStorageErrorMessage($0)
+                            } ?? ""
+                            if let displayError,
+                               profile.isConnectionUnavailableErrorIncludingFlushUnderlying(displayError) {
+                                connectionUnavailableAbort = true
+                                anyMonthFailed = true
+                                await writer.appendLog(
+                                    String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, underlyingMessage),
+                                    level: .error
+                                )
+                            } else {
+                                anyMonthFailed = true
+                                await writer.appendErrorLog(
+                                    String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, underlyingMessage),
+                                    unless: displayError ?? NSError(domain: "U01Partial", code: 0)
+                                )
+                            }
+                            shouldBreakAssetLoop = true
+                        } else if let outcome = intervalOutcome,
                            let dispatch = BackupFlushFailureClassification.backgroundIntervalPartialDispatch(
                                 outcome: outcome,
                                 profile: profile
@@ -606,6 +665,16 @@ final class BackgroundBackupRunner {
             var monthFlushFailureReason: String?
             if connectionUnavailableAbort && !shouldFlushAfterDataConnectionAbort {
                 // Connection-unavailable already terminated this profile; another remote write would just re-log the same failure.
+                // U01 R03: EOM is skipped. Any queued V2 hash-index intents from earlier
+                // interval-fail / partial multi-chunk paths now have no chance of being committed
+                // by a later flush in this session — clear them so the next session re-processes
+                // those assets (`containsDurableAssetFingerprint` already short-circuits if any
+                // chunk landed durably).
+                await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
+                // U01 R05: drop the in-process optimistic month overlay so stale per-asset
+                // `appendAsset` rows from the aborted batch don't keep surfacing through
+                // `RemoteIndexSyncService.committedView`.
+                assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: monthKey)
                 break
             }
             var eomOutcome: V2MonthFlushOutcome?
@@ -619,10 +688,14 @@ final class BackgroundBackupRunner {
             } catch {
                 switch BackupFlushFailureClassification.classify(error, on: profile).backgroundEndOfMonthAction {
                 case .continueMonthLoop:
+                    await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
+                    assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: monthKey)
                     continue
                 case .ignoreSilently:
                     break
                 case .abortProfileLogError:
+                    await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
+                    assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: monthKey)
                     connectionUnavailableAbort = true
                     anyMonthFailed = true
                     await writer.appendLog(
@@ -630,6 +703,8 @@ final class BackgroundBackupRunner {
                         level: .error
                     )
                 case .recordReasonLogError:
+                    await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
+                    assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: monthKey)
                     let reason = profile.userFacingStorageErrorMessage(error)
                     monthFlushFailureReason = reason
                     await writer.appendLog(
@@ -638,7 +713,50 @@ final class BackgroundBackupRunner {
                     )
                 }
             }
+            if let outcome = eomOutcome {
+                let drainOutcome = await BackupParallelExecutor.drainHashIndexIntentsForDurableFlush(
+                    assetProcessor: assetProcessor,
+                    month: monthKey,
+                    outcome: outcome
+                )
+                if case .partial(_, let failedCount, let firstError) = drainOutcome {
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, "hash-index drain partial (\(failedCount) failed): \(profile.userFacingStorageErrorMessage(firstError))"),
+                        level: .warning
+                    )
+                }
+            }
             if let outcome = eomOutcome,
+               monthStore.hasUncommittedV2Ops {
+                // U01 R02: end-of-month partial multi-chunk failure. The chunk-N+1 remainder dies
+                // with this session — clear its queued hash-index intents and surface the failure
+                // through `monthFlushFailureReason` (or profile abort for connection loss) so the
+                // month is reported as failed in this run. Counters are not maintained in
+                // background; no aggregator rollback needed.
+                await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
+                // U01 R05: drop the optimistic month overlay so chunk-N+1's stale appendAsset
+                // rows don't leak into the in-process committed view after the abort.
+                assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: monthKey)
+                let displayError = outcome.displayError
+                let underlyingMessage = displayError.map {
+                    profile.userFacingStorageErrorMessage($0)
+                } ?? ""
+                if let displayError,
+                   profile.isConnectionUnavailableErrorIncludingFlushUnderlying(displayError) {
+                    connectionUnavailableAbort = true
+                    anyMonthFailed = true
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, underlyingMessage),
+                        level: .error
+                    )
+                } else {
+                    monthFlushFailureReason = underlyingMessage
+                    await writer.appendLog(
+                        String(format: String(localized: "backup.auto.log.flushFailed"), monthKey.displayText, underlyingMessage),
+                        level: .error
+                    )
+                }
+            } else if let outcome = eomOutcome,
                let dispatch = BackupFlushFailureClassification.backgroundEndOfMonthPartialDispatch(
                     outcome: outcome,
                     profile: profile

@@ -132,6 +132,8 @@ private final class FakeMonthStore: BackupMonthStore, @unchecked Sendable {
     var hasAnyAsset: Bool { !assets.isEmpty }
 
     func containsAssetFingerprint(_ fingerprint: Data) -> Bool { false }
+    func containsDurableAssetFingerprint(_ fingerprint: Data) -> Bool { false }
+    var hasUncommittedV2Ops: Bool { false }
     func isAssetIncomplete(_ fingerprint: Data) -> Bool { false }
     func findResourceByHash(_ contentHash: Data) -> RemoteManifestResource? { nil }
     func findByFileName(_ logicalName: String) -> RemoteManifestResource? { nil }

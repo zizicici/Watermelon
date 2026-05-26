@@ -160,7 +160,10 @@ final class V2FlushTests: XCTestCase {
     }
 
     func testFlushIgnoreCancellationBoundaryDecisions() {
-        XCTAssertFalse(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
+        // U01: pause-final ignores cancellation for both V1 and V2 — V2 batch pending may hold
+        // up to BackupV2Constants.batchFlushInterval row-writes that would orphan their uploaded
+        // resources if cancellation interrupted the final flush.
+        XCTAssertTrue(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
             paused: true,
             hasV2Services: true
         ))
@@ -171,6 +174,10 @@ final class V2FlushTests: XCTestCase {
         XCTAssertFalse(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
             paused: false,
             hasV2Services: false
+        ))
+        XCTAssertFalse(BackupParallelExecutor.foregroundFinalFlushIgnoresCancellation(
+            paused: false,
+            hasV2Services: true
         ))
         XCTAssertFalse(BackgroundBackupRunner.backgroundIntervalFlushIgnoresCancellation())
         XCTAssertTrue(BackgroundBackupRunner.backgroundFinalFlushIgnoresCancellation())

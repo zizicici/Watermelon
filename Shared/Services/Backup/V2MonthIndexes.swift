@@ -51,6 +51,10 @@ final class V2MonthIndexes {
         !pendingV2AssetFingerprints.isEmpty || !pendingV2TombstoneFingerprints.isEmpty
     }
 
+    var pendingOpsCount: Int {
+        pendingV2AssetFingerprints.count + pendingV2TombstoneFingerprints.count
+    }
+
     var hasAnyAsset: Bool { !assetsByFingerprint.isEmpty }
 
     init(
@@ -441,11 +445,20 @@ final class V2MonthIndexes {
     }
 
     /// Pop pending fingerprints in deterministic order; caller stamps committed rows
-    /// via `recordCommit(...)` after the commit log write succeeds.
-    func snapshotPending() -> (assets: [Data], tombstones: [Data]) {
+    /// via `recordCommit(...)` after the commit log write succeeds. `limit` caps the
+    /// total ops (assets + tombstones) returned, draining assets first then tombstones.
+    /// A non-nil `limit` enables the U01 hard-cap chunked-flush contract.
+    func snapshotPending(limit: Int? = nil) -> (assets: [Data], tombstones: [Data]) {
         let assets = pendingV2AssetFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) })
         let tombstones = pendingV2TombstoneFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) })
-        return (assets, tombstones)
+        guard let limit, limit >= 0 else {
+            return (assets, tombstones)
+        }
+        if assets.count >= limit {
+            return (Array(assets.prefix(limit)), [])
+        }
+        let remaining = limit - assets.count
+        return (assets, Array(tombstones.prefix(remaining)))
     }
 
     func asset(forFingerprint fp: Data) -> RemoteManifestAsset? {
@@ -495,8 +508,15 @@ final class V2MonthIndexes {
                 stamp: stamp
             )
         }
-        pendingV2AssetFingerprints.removeAll()
-        pendingV2TombstoneFingerprints.removeAll()
+        // Remove only the fingerprints this commit actually stamped — chunked flushes
+        // (U01 hard cap) write the remainder in subsequent commit files; `removeAll()`
+        // here would silently drop them from the pending set in memory.
+        for fp in assetClocks.keys {
+            pendingV2AssetFingerprints.remove(fp)
+        }
+        for fp in tombstoneClocks.keys {
+            pendingV2TombstoneFingerprints.remove(fp)
+        }
     }
 
     /// Snapshot state must remain unfiltered so covered ranges equal replayed commits.
