@@ -288,8 +288,11 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         let output = try await RepoMaterializer(client: serialOnly, basePath: basePath).materialize(expectedRepoID: repoID)
 
         XCTAssertEqual(output.observedSeqByWriter[writerA], 4)
-        XCTAssertEqual(serialOnly.listCount(), 2)
-        XCTAssertEqual(serialOnly.metadataCount(), 0)
+        // Materializer LISTs three subdirectories now: snapshots/, commits/, and the new
+        // index/ (U02 cross-repo index discovery). The empty index/ directory triggers one
+        // metadata fallback via RepoJSONLDirectoryListing's not-found path.
+        XCTAssertEqual(serialOnly.listCount(), 3)
+        XCTAssertEqual(serialOnly.metadataCount(), 1)
         XCTAssertEqual(serialOnly.downloadCount(), 5)
         XCTAssertEqual(serialOnly.maxConcurrentDownloads(), 1)
         XCTAssertEqual(serialOnly.maxConcurrentOperations(), 1)

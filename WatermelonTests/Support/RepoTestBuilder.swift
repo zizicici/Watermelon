@@ -124,4 +124,26 @@ struct RepoTestBuilder {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         return try await materializer.materializeMonth(month, expectedRepoID: repoID)
     }
+
+    /// Publishes a cross-repo index from the supplied materialize output. Test setup helper
+    /// that drives the same publish path the open service uses, with a configurable lamport.
+    @discardableResult
+    func publishCrossRepoIndex(
+        from output: RepoMaterializer.MaterializeOutput,
+        lamport: UInt64,
+        writerID overrideWriter: String? = nil,
+        runID overrideRunID: String? = nil,
+        respectTaskCancellation: Bool = false
+    ) async throws -> RepoCrossRepoIndexFile {
+        try await client.createDirectory(path: "\(basePath)/.watermelon/index")
+        let writer = RepoCrossRepoIndexWriter(client: client, basePath: basePath)
+        return try await writer.write(
+            materialized: output,
+            expectedRepoID: repoID,
+            writerID: overrideWriter ?? writerID,
+            runID: overrideRunID ?? runID,
+            lamport: lamport,
+            respectTaskCancellation: respectTaskCancellation
+        )
+    }
 }

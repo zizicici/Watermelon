@@ -11,6 +11,7 @@ enum RepoLayout {
     static let retentionDirectory = "retention"
     static let identityDirectory = "identity"
     static let migrationsDirectory = "migrations"
+    static let indexDirectory = "index"
     /// Optional V2 fields keep the wire format additive until a non-additive change forces a bump.
     static let formatVersion = 2
     static let currentSupportedFormatVersion = 2
@@ -34,6 +35,10 @@ enum RepoLayout {
 
     static func commitsDirectoryPath(base: String) -> String {
         normalize(joining: [base, watermelonDirectory, commitsDirectory])
+    }
+
+    static func indexDirectoryPath(base: String) -> String {
+        normalize(joining: [base, watermelonDirectory, indexDirectory])
     }
 
     static func livenessDirectoryPath(base: String) -> String {
@@ -89,6 +94,19 @@ enum RepoLayout {
         "\(month.text)--\(writerID)--\(format16Hex(seq)).jsonl"
     }
 
+    static func crossRepoIndexFileName(lamport: UInt64, writerID: String, runID: String) -> String {
+        "\(format16Hex(lamport))--\(writerID)--\(runIDPrefix(runID)).jsonl"
+    }
+
+    static func crossRepoIndexFilePath(base: String, lamport: UInt64, writerID: String, runID: String) -> String {
+        normalize(joining: [
+            base,
+            watermelonDirectory,
+            indexDirectory,
+            crossRepoIndexFileName(lamport: lamport, writerID: writerID, runID: runID)
+        ])
+    }
+
     static func snapshotFilePath(base: String, month: LibraryMonthKey, lamport: UInt64, writerID: String, runID: String) -> String {
         normalize(joining: [
             base,
@@ -142,6 +160,12 @@ enum RepoLayout {
         let seq: UInt64
     }
 
+    struct ParsedCrossRepoIndexFilename: Equatable, Sendable {
+        let lamport: UInt64
+        let writerID: String
+        let runIDPrefix: String
+    }
+
     struct ParsedMigrationMarkerFilename: Equatable, Sendable {
         let writerID: String
         let phase: Int?
@@ -171,6 +195,30 @@ enum RepoLayout {
             lamport: lamport,
             writerID: parts[2],
             runIDPrefix: parts[3]
+        )
+    }
+
+    static func parseCrossRepoIndexFilename(_ name: String) -> ParsedCrossRepoIndexFilename? {
+        guard let stripped = stripRequiredJsonlSuffix(name) else { return nil }
+        let parts = stripped.components(separatedBy: "--")
+        guard parts.count == 3 else { return nil }
+        guard isLowercaseHex(parts[0], count: 16),
+              let lamport = UInt64(parts[0], radix: 16),
+              lamport > 0,
+              isValidWriterID(parts[1]) else {
+            return nil
+        }
+        guard name == crossRepoIndexFileName(
+            lamport: lamport,
+            writerID: parts[1],
+            runID: parts[2]
+        ) else {
+            return nil
+        }
+        return ParsedCrossRepoIndexFilename(
+            lamport: lamport,
+            writerID: parts[1],
+            runIDPrefix: parts[2]
         )
     }
 

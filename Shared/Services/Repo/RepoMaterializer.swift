@@ -6,12 +6,14 @@ private let materializerLog = Logger(subsystem: "com.zizicici.watermelon", categ
 actor RepoMaterializer {
     private let snapshotReader: SnapshotReader
     private let commitReader: CommitLogReader
+    private let crossRepoIndexReader: RepoCrossRepoIndexReader
 
     init(client: any RemoteStorageClientProtocol, basePath: String) {
         // Internal TaskGroups fan out N concurrent read ops; `.serialOnly` backends need serialization.
         let effective = wrapIfSerial(client)
         self.snapshotReader = SnapshotReader(client: effective, basePath: basePath)
         self.commitReader = CommitLogReader(client: effective, basePath: basePath)
+        self.crossRepoIndexReader = RepoCrossRepoIndexReader(client: effective, basePath: basePath)
     }
 
     struct AcceptedSnapshotBaselineInfo: Sendable, Equatable {
@@ -23,17 +25,49 @@ actor RepoMaterializer {
         let covered: CoveredRanges
     }
 
+    struct AcceptedCrossRepoIndexBaselineInfo: Sendable, Equatable {
+        let filename: String
+        let lamport: UInt64
+        let writerID: String
+        let runIDPrefix: String
+        let coveredForMonth: CoveredRanges
+    }
+
     struct MaterializeOutput: Sendable {
         let state: RepoSnapshotState
         let observedSeqByWriter: [String: UInt64]
         /// Final fold coverage after accepted snapshot baseline plus replayed commits.
         let coveredByMonth: [LibraryMonthKey: CoveredRanges]
+        /// Months whose active baseline came from a per-month snapshot file. Mutually
+        /// exclusive with `acceptedCrossRepoIndexBaselineByMonth` (exactly one is non-nil
+        /// per month that has any baseline).
         let acceptedSnapshotBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaselineInfo]
+        /// Months whose active baseline came from a cross-repo index file. See above for
+        /// mutual exclusion. Both nil for months with no baseline.
+        let acceptedCrossRepoIndexBaselineByMonth: [LibraryMonthKey: AcceptedCrossRepoIndexBaselineInfo]
         /// Months where every snapshot candidate was corrupt — commit replay rebuilt state
         /// from empty. Caller can flip these months' next flush to emit a fresh baseline
         /// even when `dirty == false`, preventing O(commit log) replay every materialize.
         let corruptedSnapshotMonths: Set<LibraryMonthKey>
         let repoID: String?
+
+        init(
+            state: RepoSnapshotState,
+            observedSeqByWriter: [String: UInt64],
+            coveredByMonth: [LibraryMonthKey: CoveredRanges],
+            acceptedSnapshotBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaselineInfo],
+            acceptedCrossRepoIndexBaselineByMonth: [LibraryMonthKey: AcceptedCrossRepoIndexBaselineInfo] = [:],
+            corruptedSnapshotMonths: Set<LibraryMonthKey>,
+            repoID: String?
+        ) {
+            self.state = state
+            self.observedSeqByWriter = observedSeqByWriter
+            self.coveredByMonth = coveredByMonth
+            self.acceptedSnapshotBaselinesByMonth = acceptedSnapshotBaselinesByMonth
+            self.acceptedCrossRepoIndexBaselineByMonth = acceptedCrossRepoIndexBaselineByMonth
+            self.corruptedSnapshotMonths = corruptedSnapshotMonths
+            self.repoID = repoID
+        }
     }
 
     enum MetadataReadRaceError: Error, Equatable {
@@ -95,15 +129,29 @@ actor RepoMaterializer {
             }
         case .snapshotVanished(let filename, let month, let lamport, let writerID, let runIDPrefix):
             // Unit 5 invariant: unreadable accepted snapshot candidates cannot downgrade.
-            guard let baseline = output.acceptedSnapshotBaselinesByMonth[month],
-                  Self.snapshotReferenceIsSameOrNewer(
+            // Recovery accepted via EITHER a per-month snapshot OR a cross-repo index baseline
+            // whose (lamport, writerID, runIDPrefix) is same-or-newer per the existing tiebreak.
+            let perMonthRecovers: Bool = output.acceptedSnapshotBaselinesByMonth[month].map { baseline in
+                Self.snapshotReferenceIsSameOrNewer(
                     lamport: baseline.lamport,
                     writerID: baseline.writerID,
                     runIDPrefix: baseline.runIDPrefix,
                     thanLamport: lamport,
                     writerID: writerID,
                     runIDPrefix: runIDPrefix
-                  ) else {
+                )
+            } ?? false
+            let crossRepoRecovers: Bool = output.acceptedCrossRepoIndexBaselineByMonth[month].map { crossRepo in
+                Self.snapshotReferenceIsSameOrNewer(
+                    lamport: crossRepo.lamport,
+                    writerID: crossRepo.writerID,
+                    runIDPrefix: crossRepo.runIDPrefix,
+                    thanLamport: lamport,
+                    writerID: writerID,
+                    runIDPrefix: runIDPrefix
+                )
+            } ?? false
+            guard perMonthRecovers || crossRepoRecovers else {
                 throw MetadataReadRaceError.snapshotVanishedWithoutRecovery(
                     filename: filename,
                     month: month,
@@ -128,11 +176,56 @@ actor RepoMaterializer {
         return runIDPrefix >= otherRunIDPrefix
     }
 
+    /// Lists cross-repo index filenames but treats non-cancellation storage errors as "index
+    /// directory unavailable" (return `[]`) so per-month snapshot + commit fallback still
+    /// runs. The cross-repo index is an OPTIONAL acceleration artifact — its LIST failing
+    /// must never abort materialization. Cancellation is still propagated.
+    private static func listCrossRepoIndexFilenamesBestEffort(
+        reader: RepoCrossRepoIndexReader
+    ) async throws -> [String] {
+        do {
+            return try await reader.listIndexFilenames()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            materializerLog.warning("cross-repo index list failed; falling back to per-month snapshots: \(String(describing: error), privacy: .public)")
+            return []
+        }
+    }
+
+    /// Drops per-month snapshot references for months where the cross-repo baseline already
+    /// holds (or shares) the lex-max tiebreak. Lex tiebreak is `(lamport desc, writerID desc,
+    /// runIDPrefix desc)` per the existing `SnapshotTrustPipeline.accept` ordering. A
+    /// per-month reference whose `(lamport, writerID, runIDPrefix)` is STRICTLY newer than
+    /// the cross-repo baseline's still gets read — it might win the merge. Otherwise the
+    /// cross-repo baseline wins regardless of whether we read the per-month file, so the
+    /// download is elided. This is the U02 hot-path read-elision invariant.
+    private static func filterSnapshotReferences(
+        _ references: [MaterializerSnapshotReference],
+        against crossRepoBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaseline]
+    ) -> [MaterializerSnapshotReference] {
+        guard !crossRepoBaselinesByMonth.isEmpty else { return references }
+        return references.filter { ref in
+            guard let crossRepo = crossRepoBaselinesByMonth[ref.month] else {
+                return true
+            }
+            let crossLamport = crossRepo.lamport
+            let crossWriter = crossRepo.info.writerID
+            let crossRunPrefix = crossRepo.info.runIDPrefix
+            if ref.lamport != crossLamport { return ref.lamport > crossLamport }
+            if ref.writerID != crossWriter { return ref.writerID > crossWriter }
+            return ref.runIDPrefix > crossRunPrefix
+        }
+    }
+
     private func materializeOnce(filterMonth: LibraryMonthKey?, expectedRepoID: String) async throws -> MaterializeOutput {
         async let snapshotFilenames = snapshotReader.listSnapshotFilenames()
         async let commitFilenames = commitReader.listCommitFilenames()
+        async let indexFilenames = Self.listCrossRepoIndexFilenamesBestEffort(reader: crossRepoIndexReader)
         let snapshots = try await snapshotFilenames
         let commits = try await commitFilenames
+        let indexes = try await indexFilenames
 
         var snapshotReferences: [MaterializerSnapshotReference] = []
         var filenameRejectedMonths: Set<LibraryMonthKey> = []
@@ -153,10 +246,82 @@ actor RepoMaterializer {
             ))
         }
 
+        var indexReferences: [MaterializerCrossRepoIndexReference] = []
+        for filename in indexes {
+            guard let parsed = RepoLayout.parseCrossRepoIndexFilename(filename) else { continue }
+            guard parsed.lamport < LamportClock.maxAdoptableValue else {
+                materializerLog.warning("skip cross-repo index with unworkable lamport in filename: \(filename, privacy: .public)")
+                continue
+            }
+            indexReferences.append(MaterializerCrossRepoIndexReference(
+                filename: filename,
+                lamport: parsed.lamport,
+                writerID: parsed.writerID,
+                runIDPrefix: parsed.runIDPrefix
+            ))
+        }
+
+        // Cross-repo trust runs FIRST so we can prune per-month snapshot reads for months whose
+        // cross-repo baseline cannot lose the lex-max tiebreak. Per-month snapshot candidates
+        // for those months are reference-only (filename + parsed lamport/writer/run prefix —
+        // no read) until we know they could plausibly beat the cross-repo baseline.
+        let indexRefs = indexReferences
+        let crossRepoTrust = try await CrossRepoIndexTrustPipeline(reader: crossRepoIndexReader).accept(
+            references: indexRefs,
+            expectedRepoID: expectedRepoID,
+            filterMonth: filterMonth
+        )
+
+        let filteredSnapshotRefs = Self.filterSnapshotReferences(
+            snapshotReferences,
+            against: crossRepoTrust.acceptedBaselinesByMonth
+        )
         let snapshotTrust = try await SnapshotTrustPipeline(reader: snapshotReader).accept(
-            references: snapshotReferences,
+            references: filteredSnapshotRefs,
             expectedRepoID: expectedRepoID
         )
+
+        // Merge per-month baselines: cross-repo and per-month compete lex-max via
+        // (lamport desc, writerID desc, runIDPrefix desc).
+        var mergedBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaseline] = [:]
+        var crossRepoWinningMonths: Set<LibraryMonthKey> = []
+        var emptyBaselineMonths = snapshotTrust.emptyBaselineMonths
+        var acceptedLamportByMonth = snapshotTrust.acceptedSnapshotLamportByMonth
+
+        let allMonthsWithCandidates = Set(snapshotTrust.acceptedBaselinesByMonth.keys)
+            .union(crossRepoTrust.acceptedBaselinesByMonth.keys)
+        for month in allMonthsWithCandidates {
+            let perMonth = snapshotTrust.acceptedBaselinesByMonth[month]
+            let crossRepo = crossRepoTrust.acceptedBaselinesByMonth[month]
+            switch (perMonth, crossRepo) {
+            case (let per?, nil):
+                mergedBaselinesByMonth[month] = per
+            case (nil, let cross?):
+                mergedBaselinesByMonth[month] = cross
+                crossRepoWinningMonths.insert(month)
+                acceptedLamportByMonth[month] = cross.lamport
+                emptyBaselineMonths.remove(month)
+            case (let per?, let cross?):
+                if Self.snapshotReferenceIsSameOrNewer(
+                    lamport: cross.lamport,
+                    writerID: cross.info.writerID,
+                    runIDPrefix: cross.info.runIDPrefix,
+                    thanLamport: per.lamport,
+                    writerID: per.info.writerID,
+                    runIDPrefix: per.info.runIDPrefix
+                ) && !(cross.lamport == per.lamport && cross.info.writerID == per.info.writerID && cross.info.runIDPrefix == per.info.runIDPrefix) {
+                    // strictly newer cross-repo wins; equal-keys is a degenerate tie, keep per-month
+                    mergedBaselinesByMonth[month] = cross
+                    crossRepoWinningMonths.insert(month)
+                    acceptedLamportByMonth[month] = cross.lamport
+                    emptyBaselineMonths.remove(month)
+                } else {
+                    mergedBaselinesByMonth[month] = per
+                }
+            case (nil, nil):
+                break
+            }
+        }
 
         var commitReferences: [MaterializerCommitReference] = []
         for filename in commits {
@@ -170,8 +335,8 @@ actor RepoMaterializer {
             ))
         }
 
-        var baselineCoveredByMonth = snapshotTrust.acceptedBaselinesByMonth.mapValues(\.covered)
-        for month in snapshotTrust.emptyBaselineMonths where baselineCoveredByMonth[month] == nil {
+        var baselineCoveredByMonth = mergedBaselinesByMonth.mapValues(\.covered)
+        for month in emptyBaselineMonths where baselineCoveredByMonth[month] == nil {
             baselineCoveredByMonth[month] = .empty
         }
         let commitTrust = try await CommitTrustPipeline(reader: commitReader).accept(
@@ -180,14 +345,19 @@ actor RepoMaterializer {
             expectedRepoID: expectedRepoID
         )
         let state = MaterializerReplayProjector().project(
-            baselinesByMonth: snapshotTrust.acceptedBaselinesByMonth,
-            emptyBaselineMonths: snapshotTrust.emptyBaselineMonths,
+            baselinesByMonth: mergedBaselinesByMonth,
+            emptyBaselineMonths: emptyBaselineMonths,
             acceptedCommits: commitTrust.acceptedCommits,
-            acceptedSnapshotLamportByMonth: snapshotTrust.acceptedSnapshotLamportByMonth
+            acceptedSnapshotLamportByMonth: acceptedLamportByMonth
         )
 
         var corruptedSnapshotMonths = snapshotTrust.corruptedSnapshotMonths
-        for month in filenameRejectedMonths where snapshotTrust.acceptedSnapshotLamportByMonth[month] == nil {
+        // A month whose per-month snapshots all failed but where cross-repo took over
+        // is NOT corrupt-without-baseline anymore.
+        for month in crossRepoWinningMonths {
+            corruptedSnapshotMonths.remove(month)
+        }
+        for month in filenameRejectedMonths where acceptedLamportByMonth[month] == nil {
             corruptedSnapshotMonths.insert(month)
         }
         let ceiling = RepoStateAuthority.maxPersistableSeq
@@ -215,15 +385,46 @@ actor RepoMaterializer {
                 observedSeqByWriter[reference.writerID] = reference.seq
             }
         }
+        // Cross-repo index header carries observedSeqByWriter from the time the index was
+        // written. Advance our return with any higher values it observed — same advance-only
+        // policy as RepoStateAuthority.observeSameWriterSeq.
+        if let crossRepoAccepted = crossRepoTrust.acceptedFile {
+            for (writer, seq) in crossRepoAccepted.tail.observedSeqByWriter where seq < ceiling {
+                let prior = observedSeqByWriter[writer] ?? 0
+                if seq > prior {
+                    observedSeqByWriter[writer] = seq
+                }
+            }
+        }
 
         if !corruptedSnapshotMonths.isEmpty {
             materializerLog.warning("materialize: \(corruptedSnapshotMonths.count, privacy: .public) month(s) had all snapshots corrupt; commit replay rebuilt state — caller should force a fresh baseline on next flush")
         }
+
+        var acceptedSnapshotBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaselineInfo] = [:]
+        for (month, baseline) in snapshotTrust.acceptedBaselinesByMonth where !crossRepoWinningMonths.contains(month) {
+            acceptedSnapshotBaselinesByMonth[month] = baseline.info
+        }
+        var acceptedCrossRepoIndexBaselineByMonth: [LibraryMonthKey: AcceptedCrossRepoIndexBaselineInfo] = [:]
+        if let crossRepoAccepted = crossRepoTrust.acceptedFile {
+            for month in crossRepoWinningMonths {
+                guard let covered = crossRepoAccepted.header.coveredByMonth[month] else { continue }
+                acceptedCrossRepoIndexBaselineByMonth[month] = AcceptedCrossRepoIndexBaselineInfo(
+                    filename: crossRepoTrust.acceptedFilename ?? "",
+                    lamport: crossRepoAccepted.header.lamport,
+                    writerID: crossRepoAccepted.header.writerID,
+                    runIDPrefix: crossRepoAccepted.header.runIDPrefix,
+                    coveredForMonth: covered
+                )
+            }
+        }
+
         return MaterializeOutput(
             state: state,
             observedSeqByWriter: observedSeqByWriter,
             coveredByMonth: commitTrust.coveredByMonth,
-            acceptedSnapshotBaselinesByMonth: snapshotTrust.acceptedBaselinesByMonth.mapValues(\.info),
+            acceptedSnapshotBaselinesByMonth: acceptedSnapshotBaselinesByMonth,
+            acceptedCrossRepoIndexBaselineByMonth: acceptedCrossRepoIndexBaselineByMonth,
             corruptedSnapshotMonths: corruptedSnapshotMonths,
             repoID: expectedRepoID
         )
@@ -674,5 +875,191 @@ private func snapshotHasUnworkableRowStamp(_ file: SnapshotFile, filenameLamport
 private func isUnworkableStampClock(_ clock: UInt64, filenameLamport: UInt64) -> Bool {
     if clock >= LamportClock.maxAdoptableValue { return true }
     if clock > filenameLamport { return true }
+    return false
+}
+
+// MARK: - Cross-repo index trust pipeline
+
+private struct MaterializerCrossRepoIndexReference: Sendable {
+    let filename: String
+    let lamport: UInt64
+    let writerID: String
+    let runIDPrefix: String
+}
+
+private struct CrossRepoIndexTrustResult: Sendable {
+    let acceptedFile: RepoCrossRepoIndexFile?
+    let acceptedFilename: String?
+    let acceptedBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaseline]
+}
+
+private struct CrossRepoIndexTrustPipeline {
+    let reader: RepoCrossRepoIndexReader
+
+    func accept(
+        references: [MaterializerCrossRepoIndexReference],
+        expectedRepoID: String,
+        filterMonth: LibraryMonthKey?
+    ) async throws -> CrossRepoIndexTrustResult {
+        // Lex-desc: same tiebreak as SnapshotTrustPipeline at the per-month level,
+        // applied here to one whole-repo file.
+        let sorted = references.sorted { lhs, rhs in
+            if lhs.lamport != rhs.lamport { return lhs.lamport > rhs.lamport }
+            if lhs.writerID != rhs.writerID { return lhs.writerID > rhs.writerID }
+            return lhs.runIDPrefix > rhs.runIDPrefix
+        }
+        for candidate in sorted {
+            do {
+                let file = try await reader.read(filename: candidate.filename)
+                guard Self.fileMatchesReference(file, reference: candidate) else {
+                    materializerLog.warning("skip cross-repo index whose filename disagrees with header: \(candidate.filename, privacy: .public)")
+                    continue
+                }
+                guard file.header.repoID == expectedRepoID else {
+                    materializerLog.warning("skip foreign-repo cross-repo index \(candidate.filename, privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expectedRepoID, privacy: .public)")
+                    continue
+                }
+                guard file.header.schemaVersion == RepoCrossRepoIndexSchema.currentVersion else {
+                    materializerLog.warning("skip cross-repo index with unsupported schemaVersion \(file.header.schemaVersion, privacy: .public): \(candidate.filename, privacy: .public)")
+                    continue
+                }
+                if crossRepoIndexHasUnworkableRowStamp(file) {
+                    materializerLog.warning("skip cross-repo index with poisoned row stamp or per-section month mismatch: \(candidate.filename, privacy: .public)")
+                    continue
+                }
+                let baselines = Self.buildBaselines(from: file, filterMonth: filterMonth, candidate: candidate)
+                return CrossRepoIndexTrustResult(
+                    acceptedFile: file,
+                    acceptedFilename: candidate.filename,
+                    acceptedBaselinesByMonth: baselines
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as RepoJSONLReadError {
+                switch error {
+                case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
+                    materializerLog.warning("skip corrupt cross-repo index \(candidate.filename, privacy: .public): \(String(describing: error), privacy: .public)")
+                    continue
+                case .notFound:
+                    // Cross-repo index files are best-effort; a vanished candidate just falls
+                    // through to the next lex-lower one. Unlike per-month snapshots, no retry
+                    // race is needed because we don't claim invariant coverage from the index.
+                    materializerLog.info("cross-repo index vanished mid-read; trying next candidate: \(candidate.filename, privacy: .public)")
+                    continue
+                }
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                // Non-cancellation download / local-temp-file errors during the OPTIONAL fast-path
+                // read must not abort materialization. Treat this candidate as unavailable and try
+                // the next lex-lower one; if all candidates fail, materializeOnce falls back to
+                // per-month snapshots + commit replay exactly as today.
+                materializerLog.warning("cross-repo index read failed (transport or local IO); skipping candidate: \(candidate.filename, privacy: .public): \(String(describing: error), privacy: .public)")
+                continue
+            }
+        }
+        return CrossRepoIndexTrustResult(acceptedFile: nil, acceptedFilename: nil, acceptedBaselinesByMonth: [:])
+    }
+
+    private static func fileMatchesReference(_ file: RepoCrossRepoIndexFile, reference: MaterializerCrossRepoIndexReference) -> Bool {
+        file.header.lamport == reference.lamport
+            && file.header.writerID == reference.writerID
+            && file.header.runIDPrefix == reference.runIDPrefix
+    }
+
+    private static func buildBaselines(
+        from file: RepoCrossRepoIndexFile,
+        filterMonth: LibraryMonthKey?,
+        candidate: MaterializerCrossRepoIndexReference
+    ) -> [LibraryMonthKey: AcceptedSnapshotBaseline] {
+        var sectionsByMonth: [LibraryMonthKey: RepoCrossRepoIndexMonthSection] = [:]
+        for section in file.monthSections {
+            sectionsByMonth[section.month] = section
+        }
+
+        var result: [LibraryMonthKey: AcceptedSnapshotBaseline] = [:]
+        for (month, covered) in file.header.coveredByMonth {
+            if let filterMonth, month != filterMonth { continue }
+            let section = sectionsByMonth[month]
+            var monthState = RepoMonthState.empty
+            var baselineStamps: [Data: OpStamp] = [:]
+            if let section {
+                for asset in section.assets {
+                    monthState.assets[asset.assetFingerprint] = asset
+                    baselineStamps[asset.assetFingerprint] = asset.stamp
+                }
+                for resource in section.resources {
+                    monthState.resources[resource.physicalRemotePath] = resource
+                }
+                for ar in section.assetResources {
+                    let key = AssetResourceKey(assetFingerprint: ar.assetFingerprint, role: ar.role, slot: ar.slot)
+                    monthState.assetResources[key] = ar
+                }
+                for d in section.deletedKeys {
+                    guard d.keyType == .asset else { continue }
+                    let fp: Data
+                    do {
+                        fp = try RepoWireValidator.validateHash(d.keyValue, field: "keyValue")
+                    } catch {
+                        continue
+                    }
+                    monthState.deletedAssetStamps[fp] = d.stamp
+                }
+            }
+            let info = RepoMaterializer.AcceptedSnapshotBaselineInfo(
+                filename: candidate.filename,
+                month: month,
+                lamport: candidate.lamport,
+                writerID: candidate.writerID,
+                runIDPrefix: candidate.runIDPrefix,
+                covered: covered
+            )
+            result[month] = AcceptedSnapshotBaseline(
+                state: monthState,
+                covered: covered,
+                baselineStamps: baselineStamps,
+                info: info,
+                lamport: candidate.lamport
+            )
+        }
+        return result
+    }
+}
+
+private func crossRepoIndexHasUnworkableRowStamp(_ file: RepoCrossRepoIndexFile) -> Bool {
+    let filenameLamport = file.header.lamport
+    for section in file.monthSections {
+        guard let covered = file.header.coveredByMonth[section.month] else {
+            return true
+        }
+        for asset in section.assets {
+            let stamp = asset.stamp
+            if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
+            if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
+        }
+        for resource in section.resources {
+            let stamp = resource.stamp
+            if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
+            if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
+            if !materializerResourcePath(resource.physicalRemotePath, belongsTo: section.month) {
+                return true
+            }
+        }
+        for d in section.deletedKeys {
+            let stamp = d.stamp
+            if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
+            if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
+            // Mirror SnapshotTrustPipeline.makeBaseline strictness: only `.asset` keyType is
+            // a valid baseline entry, and the keyValue must parse as a 32-byte hash. Silently
+            // skipping these would make the cross-repo trust contract weaker than per-month
+            // snapshot trust — dropping legitimate tombstone state while still claiming the
+            // commit range is covered.
+            guard d.keyType == .asset else { return true }
+            do {
+                _ = try RepoWireValidator.validateHash(d.keyValue, field: "keyValue")
+            } catch {
+                return true
+            }
+        }
+    }
     return false
 }
