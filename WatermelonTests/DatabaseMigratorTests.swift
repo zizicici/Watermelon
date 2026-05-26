@@ -6,7 +6,7 @@ import GRDB
 /// - v2 ns→ms: rename + divide; NULL preserved; 0 preserved
 /// - v3 repo local state: writerID nullable for existing rows (NOT NULL would crash legacy data)
 /// - v3 repo local state: composite PK on (profileID, repoID)
-/// - v4 duplicate candidate index: additive partial fingerprint index for duplicate discovery
+/// - v3 repo local state: repo_state plus duplicate-discovery local asset indexes
 /// - v1 SMB unique: partial on storageType='smb'; IFNULL(domain,'') collapses NULL/""
 /// - Re-open idempotency: re-running migrator preserves data and indexes
 final class DatabaseMigratorTests: XCTestCase {
@@ -173,8 +173,7 @@ final class DatabaseMigratorTests: XCTestCase {
         XCTAssertEqual(appliedIdentifiers, Set([
             "v1_initial",
             "v2_ms_timestamps",
-            "v3_repo_local_state",
-            "v4_duplicate_candidate_index"
+            "v3_repo_local_state"
         ]))
     }
 
@@ -339,12 +338,11 @@ final class DatabaseMigratorTests: XCTestCase {
         XCTAssertEqual(appliedIdentifiers, Set([
             "v1_initial",
             "v2_ms_timestamps",
-            "v3_repo_local_state",
-            "v4_duplicate_candidate_index"
+            "v3_repo_local_state"
         ]))
     }
 
-    func testV4DuplicateCandidateIndex_isRegisteredAfterV3AndKeepsExistingIndex() throws {
+    func testV3RepoLocalState_registersDuplicateCandidateIndexAndKeepsExistingIndex() throws {
         let url = tempDir.appendingPathComponent("db.sqlite")
         let dbm = try DatabaseManager(databaseURL: url)
 
@@ -354,8 +352,7 @@ final class DatabaseMigratorTests: XCTestCase {
         XCTAssertEqual(appliedIdentifiers, [
             "v1_initial",
             "v2_ms_timestamps",
-            "v3_repo_local_state",
-            "v4_duplicate_candidate_index"
+            "v3_repo_local_state"
         ])
 
         let indexNames = try dbm.read { db in

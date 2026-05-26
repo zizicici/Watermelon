@@ -102,9 +102,7 @@ final class DatabaseManager: @unchecked Sendable {
             // Default 0 forces a re-hash on next index build before the skip predicate trusts the row.
             try db.execute(sql: "ALTER TABLE local_assets ADD COLUMN selectionVersion INTEGER NOT NULL DEFAULT 0")
             try db.execute(sql: "ALTER TABLE local_assets ADD COLUMN resourceSignature BLOB")
-        }
 
-        migrator.registerMigration("v4_duplicate_candidate_index") { db in
             try db.execute(sql: """
                 CREATE INDEX idx_local_assets_fingerprint_candidates
                 ON local_assets(assetFingerprint, assetLocalIdentifier)

@@ -7,7 +7,6 @@
 1. `v1_initial`
 2. `v2_ms_timestamps`
 3. `v3_repo_local_state`
-4. `v4_duplicate_candidate_index`
 
 ### `server_profiles`
 
@@ -111,7 +110,6 @@ WHERE assetFingerprint IS NOT NULL;
 ALTER TABLE local_assets ADD COLUMN selectionVersion INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE local_assets ADD COLUMN resourceSignature BLOB;
 
--- v4_duplicate_candidate_index
 CREATE INDEX idx_local_assets_fingerprint_candidates
 ON local_assets(assetFingerprint, assetLocalIdentifier)
 WHERE assetFingerprint IS NOT NULL AND resourceSignature IS NOT NULL;

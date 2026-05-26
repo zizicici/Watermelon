@@ -329,11 +329,10 @@
 
 ### 本地持久化
 
-1. `DatabaseManager` 使用 GRDB；目前注册了四条迁移：
+1. `DatabaseManager` 使用 GRDB；目前注册了三条迁移：
    - `v1_initial`：建 `server_profiles / sync_state / local_assets / local_asset_resources`
    - `v2_ms_timestamps`：把 `local_assets.modificationDateNs` 重命名为 `modificationDateMs` 并把已有值除以 1_000_000
-   - `v3_repo_local_state`：新增 `server_profiles.writerID`、`repo_state(profileID, repoID, writerID, lastClock, lastSeq, migrationCompleted)`、`local_assets.selectionVersion / resourceSignature`
-   - `v4_duplicate_candidate_index`：新增 `idx_local_assets_fingerprint_candidates`，加速 fingerprint 重复候选查询
+   - `v3_repo_local_state`：新增 `server_profiles.writerID`、`repo_state(profileID, repoID, writerID, lastClock, lastSeq, migrationCompleted)`、`local_assets.selectionVersion / resourceSignature`、`idx_local_assets_fingerprint_candidates`
 
 本地主要表：
 
