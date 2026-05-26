@@ -23,6 +23,7 @@ struct RetentionManifestPolicy: Codable, Equatable, Sendable {
 struct RetentionLivenessGate: Codable, Equatable, Sendable {
     var requiredCompleteView: Bool
     var requiredNoActiveNonSelfWriters: Bool
+    // Wire-compat name; semantically this is unknown retention capability grace.
     var legacyClientGraceMs: Int64
 
     enum CodingKeys: String, CodingKey {

@@ -681,7 +681,14 @@ final class V1MigrationServiceTests: XCTestCase {
         _ = try await commitWriter.write(
             header: tombHeader,
             ops: [CommitOp(opSeq: 0, clock: 20, body: .tombstoneAsset(
-                CommitTombstoneBody(assetFingerprint: tombstoneFP, reason: .userDeleted)
+                CommitTombstoneBody(
+                    assetFingerprint: tombstoneFP,
+                    reason: .userDeleted,
+                    observedBasis: TombstoneObservationBasis(
+                        perWriterMaxSeq: [writerID: 1],
+                        lamportWatermark: 10
+                    )
+                )
             ))],
             month: month, respectTaskCancellation: false
         )
@@ -713,7 +720,7 @@ final class V1MigrationServiceTests: XCTestCase {
         let monthState = try XCTUnwrap(output.state.months[month])
         XCTAssertNil(monthState.assets[tombstoneFP],
                      "tombstoned fingerprint must not be resurrected by migration")
-        XCTAssertTrue(monthState.deletedAssetFingerprints.contains(tombstoneFP),
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(tombstoneFP),
                       "tombstone must survive migration")
     }
 

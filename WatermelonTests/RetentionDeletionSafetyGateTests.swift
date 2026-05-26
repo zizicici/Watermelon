@@ -91,13 +91,13 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         XCTAssertTrue(decision.allowed)
     }
 
-    func testStaleLegacyPeerWithinGraceBlocks() {
+    func testStaleLegacyPeerBlocks() {
         let decision = evaluate(peers: [
             peer(writerA, .stale(lastSeenMs: nowMs - msDays(3)), nil)
         ])
 
         XCTAssertEqual(decision.blockers, [
-            .legacyPeerWithinGrace(writerID: writerA, lastSeenMs: nowMs - msDays(3))
+            .legacyPeer(writerID: writerA, lastSeenMs: nowMs - msDays(3))
         ])
     }
 
@@ -109,7 +109,18 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         XCTAssertTrue(decision.allowed)
     }
 
-    func testUnsupportedAndMalformedCapabilityFollowLegacyGracePath() throws {
+    func testManifestGateCanRaiseUnknownCapabilityGrace() {
+        let decision = evaluate(
+            peers: [peer(writerA, .stale(lastSeenMs: nowMs - msDays(10)), nil)],
+            manifestGate: gate(unknownCapabilityGraceMs: msDays(14))
+        )
+
+        XCTAssertEqual(decision.blockers, [
+            .legacyPeer(writerID: writerA, lastSeenMs: nowMs - msDays(10))
+        ])
+    }
+
+    func testUnsupportedAndMalformedCapabilityBlockAsLegacyPeers() throws {
         let unsupported = try LivenessHeartbeat.decode(data([
             "ts": nowMs - msDays(3),
             "retention": [
@@ -132,34 +143,8 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         ])
 
         XCTAssertEqual(decision.blockers, [
-            .legacyPeerWithinGrace(writerID: writerA, lastSeenMs: nowMs - msDays(3)),
-            .legacyPeerWithinGrace(writerID: writerB, lastSeenMs: nowMs - msDays(3))
-        ])
-    }
-
-    func testManifestLegacyGraceCanRaisePolicyFloor() {
-        let policy = policy(legacySeconds: secDays(7))
-        let decision = evaluate(
-            peers: [peer(writerA, .stale(lastSeenMs: nowMs - msDays(10)), nil)],
-            policy: policy,
-            manifestGate: gate(legacyGraceMs: msDays(14))
-        )
-
-        XCTAssertEqual(decision.blockers, [
-            .legacyPeerWithinGrace(writerID: writerA, lastSeenMs: nowMs - msDays(10))
-        ])
-    }
-
-    func testPolicyLegacyGraceCanRaiseManifestFloor() {
-        let policy = policy(legacySeconds: secDays(30))
-        let decision = evaluate(
-            peers: [peer(writerA, .stale(lastSeenMs: nowMs - msDays(14)), nil)],
-            policy: policy,
-            manifestGate: gate(legacyGraceMs: msDays(7))
-        )
-
-        XCTAssertEqual(decision.blockers, [
-            .legacyPeerWithinGrace(writerID: writerA, lastSeenMs: nowMs - msDays(14))
+            .legacyPeer(writerID: writerA, lastSeenMs: nowMs - msDays(3)),
+            .legacyPeer(writerID: writerB, lastSeenMs: nowMs - msDays(3))
         ])
     }
 
@@ -266,15 +251,13 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
     }
 
     private func policy(
-        retentionSeconds: Int = BackupV2Constants.retentionStalenessThresholdSeconds,
-        legacySeconds: Int = BackupV2Constants.legacyClientGraceSeconds
+        retentionSeconds: Int = BackupV2Constants.retentionStalenessThresholdSeconds
     ) -> RepoCompactionPolicy {
         RepoCompactionPolicy(
             checkpointCommitThreshold: 1,
             checkpointByteThreshold: 1,
             minimumCheckpointIntervalSeconds: 1,
             retentionStalenessThresholdSeconds: retentionSeconds,
-            legacyClientGraceSeconds: legacySeconds,
             snapshotFallbackKeepCount: 2
         )
     }
@@ -282,12 +265,12 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
     private func gate(
         requiredComplete: Bool = true,
         requiredNoActive: Bool = true,
-        legacyGraceMs: Int64 = Int64(BackupV2Constants.legacyClientGraceSeconds) * 1_000
+        unknownCapabilityGraceMs: Int64 = Int64(BackupV2Constants.unknownRetentionCapabilityGraceSeconds) * 1000
     ) -> RetentionLivenessGate {
         RetentionLivenessGate(
             requiredCompleteView: requiredComplete,
             requiredNoActiveNonSelfWriters: requiredNoActive,
-            legacyClientGraceMs: legacyGraceMs
+            legacyClientGraceMs: unknownCapabilityGraceMs
         )
     }
 

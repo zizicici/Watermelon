@@ -15,7 +15,7 @@ struct OpenedBackupV2Repo: Sendable {
     let isLocalVolume: Bool
     /// Inspection result safe to forward to `RemoteIndexSyncService.syncIndex(preInspection:)`
     /// when non-nil. Non-nil ONLY when the open action was `.openExistingV2` — that path writes
-    /// `repo.json` (identity) and creates subdirectories but does NOT touch `version.json`,
+    /// identity metadata and creates subdirectories but does NOT touch `version.json`,
     /// migration markers, or V1 manifests, so pre-open and post-open inspections are observably
     /// identical. On `.openWithCleanupV2` / `.bootstrapFresh` / `.migrateFromV1` the open
     /// mutated format-marker state, so this is `nil` and sync MUST re-inspect to observe the

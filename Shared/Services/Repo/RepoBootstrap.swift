@@ -3,7 +3,7 @@ import os.log
 
 private let bootstrapLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoBootstrap")
 
-/// Finalized identity supersedes repo.json so wipe-and-reuse can converge.
+/// Finalized identity and claims are authoritative; repo.json is a write-only compatibility marker.
 actor RepoBootstrap {
     enum BootstrapError: Error {
         case ioFailure(Error)
@@ -24,23 +24,17 @@ actor RepoBootstrap {
 
     @discardableResult
     func initializeFreshRepo(writerID: String) async throws -> String {
-        // Identity / repo.json BEFORE version.json: crash between leaves the repo at
+        // Identity marker before version.json: crash between leaves the repo at
         // (marker + no version.json) → inspect falls through to `.fresh`, retry path
         // adopts our existing claim and continues. Reverse order produces
         // (version.json present + no claim) → sync routes to `.v2` and immediately
-        // throws "missing repo.json" since no claim/identity exists.
+        // refuses to open because no canonical identity exists.
         let suggested = UUID().uuidString.lowercased()
         var resolvedID = try await ensureRepoJSON(repoID: suggested, writerID: writerID)
         try await ensureSubdirectories()
         resolvedID = try await ensureIdentityFinalization(repoID: resolvedID, writerID: writerID)
         try await VersionManifestStore(client: client, basePath: basePath).writeIfAbsent(writerID: writerID)
         return try await ensureRepoJSON(repoID: resolvedID, writerID: writerID)
-    }
-
-    /// Thin compatibility wrapper for callers/tests that still target the legacy
-    /// bootstrap entry point. Real IO lives in `VersionManifestStore`.
-    func ensureVersionJSON(writerID: String) async throws {
-        try await VersionManifestStore(client: client, basePath: basePath).writeIfAbsent(writerID: writerID)
     }
 
     // WebDAV/SMB/SFTP don't auto-create parents on PUT.
@@ -66,17 +60,10 @@ actor RepoBootstrap {
 
             let firstFinalizedRepoID = try await loadFinalizedRepoID()
 
-            let bootstrapForLegacy = self
             let election = try await claims.runOwnClaimElection(
                 requestedRepoID: requestedRepoID,
                 writerID: writerID,
-                firstFinalizedRepoID: firstFinalizedRepoID,
-                loadLegacyCacheRepoID: {
-                    switch try await bootstrapForLegacy.loadRepoJSONStrictForElection() {
-                    case .absent: return nil
-                    case .found(let id): return id
-                    }
-                }
+                firstFinalizedRepoID: firstFinalizedRepoID
             )
 
             // Peer-finalize observation must precede any post-write claim re-read.
@@ -97,7 +84,7 @@ actor RepoBootstrap {
                 try await claims.writeOwnClaim(repoID: canonical, writerID: writerID, createdAtMs: election.createdAtMs)
             }
 
-            // repo.json is a read-cache; finalized identity/claims are authoritative.
+            // repo.json is retained as a write-only marker for older tooling and diagnostics.
             do {
                 try await writeRepoJSONCache(canonical: canonical, writerID: writerID, createdAtMs: election.createdAtMs)
             } catch {
@@ -184,34 +171,6 @@ actor RepoBootstrap {
                     code: 12,
                     userInfo: [NSLocalizedDescriptionKey: "repo identity finalization marker at \(markerPath) is malformed"]
                 ))
-            }
-        } catch let bootstrap as BootstrapError {
-            throw bootstrap
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            throw BootstrapError.ioFailure(error)
-        }
-    }
-
-    func loadRepoJSONStrictForElection() async throws -> RepoIDLoad {
-        try await loadRepoJSONStrict()
-    }
-
-    private func loadRepoJSONStrict() async throws -> RepoIDLoad {
-        let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("repo-load-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: temp) }
-        let path = RepoLayout.repoFilePath(base: basePath)
-        guard try await metadataFileIfPresent(path: path, description: "repo identity cache", code: 14) != nil else {
-            return .absent
-        }
-        do {
-            try await client.download(remotePath: path, localURL: temp)
-            let data = try Data(contentsOf: temp)
-            do {
-                return .found(try RepoCacheWire(data: data).repoID)
-            } catch {
-                throw BootstrapError.ioFailure(NSError(domain: "RepoBootstrap", code: 1, userInfo: [NSLocalizedDescriptionKey: "repo.json malformed"]))
             }
         } catch let bootstrap as BootstrapError {
             throw bootstrap
@@ -337,7 +296,7 @@ actor RepoBootstrap {
         if let canonical = try await claims.canonicalRepoID() {
             return .found(canonical)
         }
-        return try await loadRepoJSONStrict()
+        return .absent
     }
 
     func loadRepoID() async throws -> String? {

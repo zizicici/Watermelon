@@ -133,8 +133,11 @@ final class RemoteIndexV2SyncEngineTests: XCTestCase {
     func testMaterializePreMaterialized_remoteSwapped_throwsIdentityMismatch() async throws {
         let builderA = try await RepoTestBuilder.freshRepo(basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         let preMaterializedA = try await builderA.materialize()
-        // Simulate remote swap: overwrite repo.json with repo-b
-        try await TestFixtures.injectRepoJSON(builderA.client, basePath: basePath, repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectIdentityFinalization(
+            builderA.client,
+            basePath: basePath,
+            repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
+        )
 
         do {
             _ = try await RemoteIndexV2SyncEngine().materialize(

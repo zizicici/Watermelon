@@ -133,10 +133,18 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         let writerA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         let writerB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
         let opA = CommitOp(opSeq: 0, clock: 1, body: .tombstoneAsset(
-            CommitTombstoneBody(assetFingerprint: TestFixtures.fingerprint(0x01), reason: .verifyFailed, observedBasis: nil)
+            CommitTombstoneBody(
+                assetFingerprint: TestFixtures.fingerprint(0x01),
+                reason: .verifyFailed,
+                observedBasis: TombstoneObservationBasis(perWriterMaxSeq: [:], lamportWatermark: 1)
+            )
         ))
         let opB = CommitOp(opSeq: 0, clock: 1, body: .tombstoneAsset(
-            CommitTombstoneBody(assetFingerprint: TestFixtures.fingerprint(0x02), reason: .verifyFailed, observedBasis: nil)
+            CommitTombstoneBody(
+                assetFingerprint: TestFixtures.fingerprint(0x02),
+                reason: .verifyFailed,
+                observedBasis: TombstoneObservationBasis(perWriterMaxSeq: [:], lamportWatermark: 1)
+            )
         ))
         _ = try await writer.write(
             header: TestFixtures.makeCommitHeader(repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: writerA, seq: 1, runID: "r", month: month),
@@ -175,6 +183,7 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
 
         let identity = RepoIdentity(database: databaseManager)
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
@@ -211,7 +220,6 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         let ownWriterID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
         // Our own claim file proves we already participated in repo B (would have
         // been written by RepoBootstrap.initializeFreshRepo before the partial die).
         try await injectOwnClaim(client: client, writerID: ownWriterID, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
@@ -247,6 +255,7 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
 
         let identity = RepoIdentity(database: databaseManager)
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: ownWriterID, basePath: basePath, storageType: .webdav)
@@ -281,7 +290,6 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         let foreignWriterID = "22222222-2222-2222-2222-bbbbbbbbbbbb"
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
         // Foreign peer participated in repo B but we did not.
         try await injectOwnClaim(client: client, writerID: foreignWriterID, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
 
@@ -317,7 +325,6 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         let peerWriterID = "00000000-0000-0000-0000-000000000001"  // lex-min < own → wins election
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
         // Peer's claim wins canonical (lower writerID under equal createdAtMs).
         try await injectOwnClaim(client: client, writerID: peerWriterID, repoID: "cccccccc-cccc-dddd-eeee-ffffffffffff")
         // Our own writer's claim still names the stale repo.
@@ -369,6 +376,7 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee")
 
         let identity = RepoIdentity(database: databaseManager)
         let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)

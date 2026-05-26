@@ -41,7 +41,7 @@ struct V2MonthCommitFlusher {
         var committedAddAssetClocks: [Data: UInt64] = [:]
         var committedTombstoneClocks: [Data: UInt64] = [:]
         // Build rows with replay's projection so snapshot baselines equal materialized commits.
-        var committedResources: [String: SnapshotResourceRow] = [:]
+        var committedResources: [String: RemoteManifestResource] = [:]
         // Defer row stamps until seq allocation completes.
         var committedResourceClocks: [String: UInt64] = [:]
         while true {
@@ -83,7 +83,9 @@ struct V2MonthCommitFlusher {
                         slot: link.slot,
                         crypto: resource.crypto
                     ))
-                    committedResources[resource.physicalRemotePath] = SnapshotResourceRow(
+                    committedResources[resource.physicalRemotePath] = RemoteManifestResource(
+                        year: monthKey.year,
+                        month: monthKey.month,
                         physicalRemotePath: resource.physicalRemotePath,
                         contentHash: link.resourceHash,
                         fileSize: resource.fileSize,

@@ -4,22 +4,17 @@ struct RepoMonthState: Equatable, Sendable {
     var assets: [Data: SnapshotAssetRow]
     var resources: [String: SnapshotResourceRow]
     var assetResources: [AssetResourceKey: SnapshotAssetResourceRow]
-    var deletedAssetFingerprints: Set<Data>
-    /// Materializer's addAsset apply checks this to block a stale add from
-    /// resurrecting a fp that was tombstoned at a higher clock.
     var deletedAssetStamps: [Data: OpStamp]
 
     init(
         assets: [Data: SnapshotAssetRow],
         resources: [String: SnapshotResourceRow],
         assetResources: [AssetResourceKey: SnapshotAssetResourceRow],
-        deletedAssetFingerprints: Set<Data>,
-        deletedAssetStamps: [Data: OpStamp] = [:]
+        deletedAssetStamps: [Data: OpStamp]
     ) {
         self.assets = assets
         self.resources = resources
         self.assetResources = assetResources
-        self.deletedAssetFingerprints = deletedAssetFingerprints
         self.deletedAssetStamps = deletedAssetStamps
     }
 
@@ -28,7 +23,7 @@ struct RepoMonthState: Equatable, Sendable {
             assets: [:],
             resources: [:],
             assetResources: [:],
-            deletedAssetFingerprints: []
+            deletedAssetStamps: [:]
         )
     }
 }

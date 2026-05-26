@@ -6,7 +6,7 @@ final class ExternalStorageUnavailableRunErrorTests: XCTestCase {
     // MARK: - Repo-open / repo-ID read mapping preserves external cause
 
     func testNormalizeOpenErrorPreservesExternalCauseFromBootstrapIOFailure() {
-        // RepoBootstrap.loadFinalizedRepoID / loadRepoJSONStrict wrap download failures
+        // Canonical identity reads wrap download failures
         // as BootstrapError.ioFailure(error). For a local external-volume profile, that
         // error is RemoteStorageClientError.externalStorageUnavailable. The classifier
         // doesn't walk BootstrapError, so the mapping site must surface the underlying

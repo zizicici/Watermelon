@@ -22,6 +22,7 @@ struct RepoTestBuilder {
         // peer-commit overwrite hazard.
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
         try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
@@ -103,7 +104,11 @@ struct RepoTestBuilder {
         _ = try await writer.write(
             header: header,
             ops: [CommitOp(opSeq: 0, clock: clock ?? seq, body: .tombstoneAsset(
-                CommitTombstoneBody(assetFingerprint: fingerprint, reason: reason, observedBasis: observedBasis)
+                CommitTombstoneBody(
+                    assetFingerprint: fingerprint,
+                    reason: reason,
+                    observedBasis: observedBasis ?? TombstoneObservationBasis(perWriterMaxSeq: [:], lamportWatermark: clock ?? seq)
+                )
             ))],
             month: month, respectTaskCancellation: false
         )

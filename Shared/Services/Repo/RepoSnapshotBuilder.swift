@@ -43,11 +43,11 @@ enum RepoSnapshotBuilder {
                 logicalName: row.logicalName
             )
         }
-        let deletedKeys = state.deletedAssetFingerprints.map { fp in
+        let deletedKeys = state.deletedAssetStamps.map { fp, stamp in
             SnapshotDeletedKeyRow(
                 keyType: .asset,
                 keyValue: fp.hexString,
-                stamp: state.deletedAssetStamps[fp]
+                stamp: stamp
             )
         }
         return (assets: assets, resources: resources, assetResources: assetResources, deletedKeys: deletedKeys)

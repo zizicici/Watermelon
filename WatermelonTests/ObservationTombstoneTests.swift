@@ -54,7 +54,7 @@ final class ObservationTombstoneTests: XCTestCase {
         seq: UInt64,
         clock: UInt64,
         fp: Data,
-        basis: TombstoneObservationBasis?
+        basis: TombstoneObservationBasis
     ) async throws {
         let writer = CommitLogWriter(client: client, basePath: basePath)
         let header = TestFixtures.makeCommitHeader(
@@ -87,7 +87,7 @@ final class ObservationTombstoneTests: XCTestCase {
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[monthKey])
         XCTAssertNil(monthState.assets[fp], "tombstone must apply when no heal arrived")
-        XCTAssertTrue(monthState.deletedAssetFingerprints.contains(fp))
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(fp))
     }
 
     /// TOCTOU close: writer B heals fp AFTER writer A's verify-observation,
@@ -117,7 +117,7 @@ final class ObservationTombstoneTests: XCTestCase {
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[monthKey])
         XCTAssertNotNil(monthState.assets[fp], "concurrent heal must survive — tombstone skipped")
-        XCTAssertFalse(monthState.deletedAssetFingerprints.contains(fp))
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp))
     }
 
     /// Heal happened BEFORE observation (already seen at observation time) →
@@ -143,22 +143,6 @@ final class ObservationTombstoneTests: XCTestCase {
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[monthKey])
         XCTAssertNil(monthState.assets[fp], "all heals were observed; tombstone valid")
-    }
-
-    /// Legacy (no basis) tombstones still apply unconditionally — backward
-    /// compat with v2 tombstones in pre-existing repos.
-    func testLegacyTombstone_appliesWithoutBasis() async throws {
-        let client = InMemoryRemoteStorageClient()
-        try await client.connect()
-        let hash = TestFixtures.fingerprint(0xDD)
-        let fp = computedFP(hash: hash)
-        try await writeAddAsset(client: client, writerID: writerA, seq: 1, clock: 1, fp: fp, hash: hash)
-        try await writeTombstone(client: client, writerID: writerA, seq: 2, clock: 2, fp: fp, basis: nil)
-
-        let materializer = RepoMaterializer(client: client, basePath: basePath)
-        let output = try await materializer.materialize(expectedRepoID: repoID)
-        let monthState = try XCTUnwrap(output.state.months[monthKey])
-        XCTAssertNil(monthState.assets[fp], "legacy tombstone must still apply for v2 backward compat")
     }
 
     /// Heal from a writer NOT in basis (joined post-observation) is treated as

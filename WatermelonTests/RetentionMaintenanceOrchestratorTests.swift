@@ -208,6 +208,7 @@ final class RetentionMaintenanceOrchestratorTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerID)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
         try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
         try await client.createDirectory(path: RepoLayout.snapshotsDirectoryPath(base: basePath))
@@ -323,7 +324,6 @@ final class RetentionMaintenanceOrchestratorTests: XCTestCase {
             checkpointByteThreshold: Int64.max,
             minimumCheckpointIntervalSeconds: 0,
             retentionStalenessThresholdSeconds: retentionStalenessThresholdSeconds,
-            legacyClientGraceSeconds: 604_800,
             snapshotFallbackKeepCount: 2
         )
     }

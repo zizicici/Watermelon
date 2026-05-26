@@ -163,7 +163,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let after = try await RepoMaterializer(client: client, basePath: basePath).materializeMonth(month, expectedRepoID: repoID)
         XCTAssertTrue(RepoRetentionEquivalence.matches(before, after, month: month, mode: .retentionSuperset))
         XCTAssertNotNil(after.state.months[month]?.resources["2026/05/asset-61.jpg"])
-        XCTAssertTrue(after.state.months[month]?.deletedAssetFingerprints.contains(TestFixtures.fingerprint(0x62)) == true)
+        XCTAssertTrue(after.state.months[month]?.deletedAssetStamps.keys.contains(TestFixtures.fingerprint(0x62)) == true)
     }
 
     func testCancellationPropagatesUnwrappedFromWriterAndReaderSurfaces() async throws {
@@ -454,7 +454,6 @@ final class RepoCheckpointServiceTests: XCTestCase {
             checkpointByteThreshold: Int64.max,
             minimumCheckpointIntervalSeconds: 0,
             retentionStalenessThresholdSeconds: 86_400,
-            legacyClientGraceSeconds: 604_800,
             snapshotFallbackKeepCount: 2
         )
     }

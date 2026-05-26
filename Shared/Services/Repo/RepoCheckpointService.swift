@@ -251,7 +251,6 @@ private extension RepoMonthState {
         assets.isEmpty
             && resources.isEmpty
             && assetResources.isEmpty
-            && deletedAssetFingerprints.isEmpty
             && deletedAssetStamps.isEmpty
     }
 }

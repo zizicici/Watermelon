@@ -36,10 +36,8 @@ final class V2MonthIndexes {
     private var remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata]
     private var existingFileNameSet: Set<String>
 
-    /// Mirror of `RepoMonthState.deletedAssetStamps`; survives flushes so snapshot
-    /// emits deletedKey rows. Legacy unstamped tombstones live in the Set side.
+    /// Mirror of `RepoMonthState.deletedAssetStamps`; survives flushes so snapshot emits deletedKey rows.
     private(set) var deletedAssetStamps: [Data: OpStamp]
-    private(set) var legacyDeletedAssetFingerprints: Set<Data>
 
     /// Snapshot emission reads committed rows so live same-path overwrites cannot enter the covered baseline.
     private var committedResourceByPath: [String: SnapshotResourceRow]
@@ -150,8 +148,6 @@ final class V2MonthIndexes {
         self.linksByFingerprint = linksByFingerprint
 
         self.deletedAssetStamps = materializedState.deletedAssetStamps
-        self.legacyDeletedAssetFingerprints = materializedState.deletedAssetFingerprints
-            .subtracting(materializedState.deletedAssetStamps.keys)
         // Seed committed rows faithfully so post-tombstone orphan resources survive covered snapshots.
         self.committedResourceByPath = materializedState.resources
         rebuildLinkIndexes()
@@ -418,7 +414,6 @@ final class V2MonthIndexes {
         // Resurrect: mirrors RepoMaterializer's apply-addAsset gate so the snapshot
         // baseline doesn't carry both an asset row and its historical tombstone.
         deletedAssetStamps.removeValue(forKey: asset.assetFingerprint)
-        legacyDeletedAssetFingerprints.remove(asset.assetFingerprint)
     }
 
     func markRemoteFile(name: String, size: Int64) {
@@ -465,7 +460,7 @@ final class V2MonthIndexes {
     func recordCommit(
         assetClocks: [Data: UInt64],
         tombstoneClocks: [Data: UInt64],
-        committedResources: [String: SnapshotResourceRow],
+        committedResources: [String: RemoteManifestResource],
         committedResourceClocks: [String: UInt64],
         writerID: String,
         seq: UInt64
@@ -485,10 +480,10 @@ final class V2MonthIndexes {
         }
         for (fp, clock) in tombstoneClocks {
             deletedAssetStamps[fp] = OpStamp(writerID: writerID, seq: seq, clock: clock)
-            legacyDeletedAssetFingerprints.remove(fp)
         }
         for (path, row) in committedResources {
-            let stamp = committedResourceClocks[path].map { OpStamp(writerID: writerID, seq: seq, clock: $0) }
+            guard let clock = committedResourceClocks[path] else { continue }
+            let stamp = OpStamp(writerID: writerID, seq: seq, clock: clock)
             committedResourceByPath[path] = SnapshotResourceRow(
                 physicalRemotePath: row.physicalRemotePath,
                 contentHash: row.contentHash,
@@ -508,13 +503,16 @@ final class V2MonthIndexes {
     func currentMaterializedState() -> RepoMonthState {
         var state = RepoMonthState.empty
         for (fp, asset) in assetsByFingerprint {
+            guard let stamp = asset.stamp else {
+                preconditionFailure("currentMaterializedState requires committed asset stamp for \(asset.assetFingerprint.hexString)")
+            }
             state.assets[fp] = SnapshotAssetRow(
                 assetFingerprint: asset.assetFingerprint,
                 creationDateMs: asset.creationDateMs,
                 backedUpAtMs: asset.backedUpAtMs,
                 resourceCount: asset.resourceCount,
                 totalFileSizeBytes: asset.totalFileSizeBytes,
-                stamp: asset.stamp
+                stamp: stamp
             )
         }
         // Use committed rows, not live resources, to keep snapshots equal to fold(commits in covered).
@@ -534,7 +532,6 @@ final class V2MonthIndexes {
             }
         }
         state.deletedAssetStamps = deletedAssetStamps
-        state.deletedAssetFingerprints = legacyDeletedAssetFingerprints.union(deletedAssetStamps.keys)
         return state
     }
 }

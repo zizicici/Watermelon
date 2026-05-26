@@ -120,11 +120,9 @@ nonisolated struct IdentityClaimWire: Sendable, Equatable {
 
     init(data: Data) throws {
         let dict = try repoMetadataJSONObject(from: data)
-        if dict["v"] != nil {
-            let version = try RepoWireValidator.requireInt(dict["v"], field: "v")
-            guard version == Self.currentVersion else {
-                throw WireValidationError.malformed("v unsupported")
-            }
+        let version = try RepoWireValidator.requireInt(dict["v"], field: "v")
+        guard version == Self.currentVersion else {
+            throw WireValidationError.malformed("v unsupported")
         }
         self.repoID = try RepoWireValidator.validateRepoID(
             try RepoWireValidator.requireString(dict, "repo_id"),
@@ -161,11 +159,9 @@ nonisolated struct RepoIdentityFinalizationWire: Sendable, Equatable {
 
     init(data: Data) throws {
         let dict = try repoMetadataJSONObject(from: data)
-        if dict["v"] != nil {
-            let version = try RepoWireValidator.requireInt(dict["v"], field: "v")
-            guard version == Self.currentVersion else {
-                throw WireValidationError.malformed("v unsupported")
-            }
+        let version = try RepoWireValidator.requireInt(dict["v"], field: "v")
+        guard version == Self.currentVersion else {
+            throw WireValidationError.malformed("v unsupported")
         }
         self.repoID = try RepoWireValidator.validateRepoID(
             try RepoWireValidator.requireString(dict, "repo_id"),
@@ -203,11 +199,9 @@ nonisolated struct RepoCacheWire: Sendable, Equatable {
 
     init(data: Data) throws {
         let dict = try repoMetadataJSONObject(from: data)
-        if dict["v"] != nil {
-            let version = try RepoWireValidator.requireInt(dict["v"], field: "v")
-            guard version == Self.currentVersion else {
-                throw WireValidationError.malformed("v unsupported")
-            }
+        let version = try RepoWireValidator.requireInt(dict["v"], field: "v")
+        guard version == Self.currentVersion else {
+            throw WireValidationError.malformed("v unsupported")
         }
         self.repoID = try RepoWireValidator.validateRepoID(
             try RepoWireValidator.requireString(dict, "repo_id"),

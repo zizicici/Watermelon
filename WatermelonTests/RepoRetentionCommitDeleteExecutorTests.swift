@@ -36,6 +36,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
                 path.contains("/.watermelon/retention/") ||
                 path.contains("/.watermelon/liveness/") ||
                 path == RepoLayout.versionFilePath(base: basePath) ||
+                path == RepoLayout.identityFinalizationFilePath(base: basePath) ||
                 path == RepoLayout.repoFilePath(base: basePath) ||
                 path == assetPath
         }
@@ -467,6 +468,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
         client.setAtomicCreateGuarantee(.exclusive)
         try await client.connect()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerA)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerA)
         if injectVersion {
             try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerA)
         }
@@ -591,7 +593,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
             livenessGate: RetentionLivenessGate(
                 requiredCompleteView: true,
                 requiredNoActiveNonSelfWriters: true,
-                legacyClientGraceMs: Int64(policy.legacyClientGraceSeconds) * 1000
+                legacyClientGraceMs: 0
             )
         )
         await client.injectFile(
@@ -669,7 +671,6 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
         checkpointByteThreshold: 1,
         minimumCheckpointIntervalSeconds: 0,
         retentionStalenessThresholdSeconds: 60,
-        legacyClientGraceSeconds: 120,
         snapshotFallbackKeepCount: 2
     )
 }

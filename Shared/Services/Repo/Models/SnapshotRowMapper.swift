@@ -10,16 +10,14 @@ enum SnapshotWireError: Error, Equatable {
 
 enum SnapshotRowMapper {
     static func encodeHeaderLine(_ header: SnapshotHeader) throws -> String {
-        var dict: [String: Any] = [
+        let dict: [String: Any] = [
             "t": "header",
             "v": header.version,
             "scope": header.scope,
             "writerID": header.writerID,
+            "repoID": header.repoID,
             "covered": header.covered.encodedAsRangeArrayMap()
         ]
-        if !header.repoID.isEmpty {
-            dict["repoID"] = header.repoID
-        }
         return try CommitOpMapper.jsonLine(dict: dict)
     }
 
@@ -31,11 +29,9 @@ enum SnapshotRowMapper {
             "totalFileSizeBytes": row.totalFileSizeBytes
         ]
         inner["creationDateMs"] = row.creationDateMs as Any? ?? NSNull()
-        if let stamp = row.stamp {
-            inner["lastWriterID"] = stamp.writerID
-            inner["lastSeq"] = stamp.seq
-            inner["lastClock"] = stamp.clock
-        }
+        inner["lastWriterID"] = row.stamp.writerID
+        inner["lastSeq"] = row.stamp.seq
+        inner["lastClock"] = row.stamp.clock
         let dict: [String: Any] = ["t": "asset", "r": inner]
         return try CommitOpMapper.jsonLine(dict: dict)
     }
@@ -54,11 +50,9 @@ enum SnapshotRowMapper {
         } else {
             inner["crypto"] = NSNull()
         }
-        if let stamp = row.stamp {
-            inner["lastWriterID"] = stamp.writerID
-            inner["lastSeq"] = stamp.seq
-            inner["lastClock"] = stamp.clock
-        }
+        inner["lastWriterID"] = row.stamp.writerID
+        inner["lastSeq"] = row.stamp.seq
+        inner["lastClock"] = row.stamp.clock
         let dict: [String: Any] = ["t": "resource", "r": inner]
         return try CommitOpMapper.jsonLine(dict: dict)
     }
@@ -80,11 +74,9 @@ enum SnapshotRowMapper {
             "keyType": row.keyType.rawValue,
             "keyValue": row.keyValue
         ]
-        if let stamp = row.stamp {
-            inner["lastWriterID"] = stamp.writerID
-            inner["lastSeq"] = stamp.seq
-            inner["lastClock"] = stamp.clock
-        }
+        inner["lastWriterID"] = row.stamp.writerID
+        inner["lastSeq"] = row.stamp.seq
+        inner["lastClock"] = row.stamp.clock
         let dict: [String: Any] = ["t": "deleted_key", "r": inner]
         return try CommitOpMapper.jsonLine(dict: dict)
     }
@@ -133,15 +125,9 @@ enum SnapshotRowMapper {
         // would discard the safety boundary and replay commits that should be considered baked in.
         let normalized = try Self.normalizeCovered(coveredAny)
         let covered = CoveredRanges.decode(normalized)
-        // Field-absent legacy snapshots are tolerated; explicit empty repoID is corruption.
-        let repoID: String
-        if dict["repoID"] == nil {
-            repoID = ""
-        } else {
-            repoID = try mapValidation {
-                let raw = try RepoWireValidator.requireString(dict, "repoID")
-                return try RepoWireValidator.validateRepoID(raw, field: "repoID")
-            }
+        let repoID = try mapValidation {
+            let raw = try RepoWireValidator.requireString(dict, "repoID")
+            return try RepoWireValidator.validateRepoID(raw, field: "repoID")
         }
         let writerID = try mapValidation { try RepoWireValidator.requireNonEmptyString(dict, "writerID") }
         return SnapshotHeader(
@@ -221,7 +207,7 @@ enum SnapshotRowMapper {
             try RepoWireValidator.validateNonNegativeInt64(r["totalFileSizeBytes"], field: "totalFileSizeBytes")
         }
         let backedUpAtMs = try mapValidation { try RepoWireValidator.validateNonNegativeInt64(r["backedUpAtMs"], field: "backedUpAtMs") }
-        let stamp = try decodeOptionalStamp(r)
+        let stamp = try decodeStamp(r)
         return SnapshotAssetRow(
             assetFingerprint: fp,
             creationDateMs: creation,
@@ -232,17 +218,13 @@ enum SnapshotRowMapper {
         )
     }
 
-    /// All-or-nothing on the stamp triple; partial-present is rejected so a
-    /// half-stamp can't accidentally pass an LWW gate.
-    private static func decodeOptionalStamp(_ r: [String: Any]) throws -> OpStamp? {
+    private static func decodeStamp(_ r: [String: Any]) throws -> OpStamp {
         let writerIDRaw = r["lastWriterID"]
         let seqRaw = r["lastSeq"]
         let clockRaw = r["lastClock"]
-        let allMissing = (writerIDRaw == nil) && (seqRaw == nil) && (clockRaw == nil)
-        if allMissing { return nil }
         let allPresent = (writerIDRaw != nil) && (seqRaw != nil) && (clockRaw != nil)
         guard allPresent, let writerID = writerIDRaw as? String else {
-            throw SnapshotWireError.malformed("partial stamp triple")
+            throw SnapshotWireError.missingField("stamp")
         }
         return try mapValidation {
             try RepoWireValidator.validateOpStamp(writerID: writerID, seqRaw: seqRaw, clockRaw: clockRaw)
@@ -276,7 +258,7 @@ enum SnapshotRowMapper {
             )
         }
         let backedUpAtMs = try mapValidation { try RepoWireValidator.validateNonNegativeInt64(r["backedUpAtMs"], field: "backedUpAtMs") }
-        let stamp = try decodeOptionalStamp(r)
+        let stamp = try decodeStamp(r)
         return SnapshotResourceRow(
             physicalRemotePath: physicalRemotePath,
             contentHash: hash,
@@ -336,12 +318,7 @@ enum SnapshotRowMapper {
                 try RepoWireValidator.validateHash(keyValue, field: "keyValue")
             }
         }
-        // Decode stamp on any keyType but ignore semantically on non-asset — V3 may
-        // introduce resource/assetResource deletedKey rows; rejecting a future-format
-        // stamp here would throw the whole snapshot away and force commit-log replay
-        // when the materializer would have safely skipped that row anyway.
-        let stamp = try decodeOptionalStamp(r)
-        let effectiveStamp = key == .asset ? stamp : nil
-        return SnapshotDeletedKeyRow(keyType: key, keyValue: keyValue, stamp: effectiveStamp)
+        let stamp = try decodeStamp(r)
+        return SnapshotDeletedKeyRow(keyType: key, keyValue: keyValue, stamp: stamp)
     }
 }

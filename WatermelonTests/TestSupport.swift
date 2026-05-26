@@ -177,6 +177,14 @@ enum TestFixtures {
         Data(repeating: byte, count: 32)
     }
 
+    static func tombstoneBasis(lamportWatermark: UInt64 = 0) -> TombstoneObservationBasis {
+        TombstoneObservationBasis(perWriterMaxSeq: [:], lamportWatermark: lamportWatermark)
+    }
+
+    static func opStamp(writerID: String = "11111111-1111-1111-1111-aaaaaaaaaaaa", seq: UInt64 = 1, clock: UInt64 = 1) -> OpStamp {
+        OpStamp(writerID: writerID, seq: seq, clock: clock)
+    }
+
     static func makeServerProfile(
         id: Int64? = nil,
         name: String = "Test",
@@ -263,6 +271,21 @@ enum TestFixtures {
         await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), data: data)
     }
 
+    static func injectIdentityFinalization(
+        _ client: InMemoryRemoteStorageClient,
+        basePath: String,
+        repoID: String,
+        writerID: String = "test"
+    ) async throws {
+        let data = try RepoIdentityFinalizationWire(
+            repoID: repoID,
+            formatVersion: RepoLayout.formatVersion,
+            createdAtMs: 0,
+            createdByWriter: writerID
+        ).encode()
+        await client.injectFile(path: RepoLayout.identityFinalizationFilePath(base: basePath), data: data)
+    }
+
     static func injectVersionJSON(
         _ client: InMemoryRemoteStorageClient,
         basePath: String,
@@ -290,5 +313,63 @@ enum TestFixtures {
     ) async {
         let path = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", year, month)
         await client.injectFile(path: path, data: Data([0x01]))
+    }
+}
+
+extension CommitTombstoneBody {
+    init(assetFingerprint: Data, reason: Reason) {
+        self.init(
+            assetFingerprint: assetFingerprint,
+            reason: reason,
+            observedBasis: TestFixtures.tombstoneBasis(lamportWatermark: 1)
+        )
+    }
+}
+
+extension SnapshotAssetRow {
+    init(
+        assetFingerprint: Data,
+        creationDateMs: Int64?,
+        backedUpAtMs: Int64,
+        resourceCount: Int,
+        totalFileSizeBytes: Int64
+    ) {
+        self.init(
+            assetFingerprint: assetFingerprint,
+            creationDateMs: creationDateMs,
+            backedUpAtMs: backedUpAtMs,
+            resourceCount: resourceCount,
+            totalFileSizeBytes: totalFileSizeBytes,
+            stamp: TestFixtures.opStamp()
+        )
+    }
+}
+
+extension SnapshotResourceRow {
+    init(
+        physicalRemotePath: String,
+        contentHash: Data,
+        fileSize: Int64,
+        resourceType: Int,
+        creationDateMs: Int64?,
+        backedUpAtMs: Int64,
+        crypto: ResourceCryptoMetadata?
+    ) {
+        self.init(
+            physicalRemotePath: physicalRemotePath,
+            contentHash: contentHash,
+            fileSize: fileSize,
+            resourceType: resourceType,
+            creationDateMs: creationDateMs,
+            backedUpAtMs: backedUpAtMs,
+            crypto: crypto,
+            stamp: TestFixtures.opStamp()
+        )
+    }
+}
+
+extension SnapshotDeletedKeyRow {
+    init(keyType: KeyType, keyValue: String) {
+        self.init(keyType: keyType, keyValue: keyValue, stamp: TestFixtures.opStamp())
     }
 }

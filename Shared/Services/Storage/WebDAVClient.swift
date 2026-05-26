@@ -741,8 +741,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             }
             // 200/201/204 on .overwritePossible backends does NOT prove If-None-Match
             // was honored — some Nextcloud versions and self-implemented WebDAV servers
-            // silently overwrite. Return .bestEffortRetry so callers (MetadataCreateGate,
-            // CommitLogWriter, ensureVersionJSON) activate their post-write verify path.
+            // silently overwrite. Return .bestEffortRetry so metadata and commit writers verify after write.
             return .bestEffortRetry
         } catch let storageError as RemoteStorageClientError {
             if case .underlying(let inner) = storageError,

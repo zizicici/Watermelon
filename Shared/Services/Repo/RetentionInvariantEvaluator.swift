@@ -67,7 +67,6 @@ enum RetentionInvariantEvaluator {
         dictionaryIsSuperset(before: before.assets, after: after.assets) &&
         dictionaryIsSuperset(before: before.resources, after: after.resources) &&
         dictionaryIsSuperset(before: before.assetResources, after: after.assetResources) &&
-        after.deletedAssetFingerprints.isSuperset(of: before.deletedAssetFingerprints) &&
         dictionaryIsSuperset(before: before.deletedAssetStamps, after: after.deletedAssetStamps)
     }
 

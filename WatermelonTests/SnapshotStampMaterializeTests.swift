@@ -114,7 +114,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
                 )
             ],
             assetResources: [:],
-            deletedAssetFingerprints: []
+            deletedAssetStamps: [:]
         )
         let parts = RepoSnapshotBuilder.build(
             header: SnapshotHeader(
@@ -139,8 +139,8 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let asset = try XCTUnwrap(output.state.months[month]?.assets[fp])
-        XCTAssertEqual(asset.stamp?.clock, 200, "stale add at clock=100 must NOT overwrite newer baseline")
-        XCTAssertEqual(asset.stamp?.writerID, writerB)
+        XCTAssertEqual(asset.stamp.clock, 200, "stale add at clock=100 must NOT overwrite newer baseline")
+        XCTAssertEqual(asset.stamp.writerID, writerB)
         XCTAssertEqual(asset.backedUpAtMs, 2, "B's row data must survive replay")
     }
 
@@ -165,7 +165,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
                 stamp: OpStamp(writerID: writerB, seq: 1, clock: 300)
             )],
             resources: [:], assetResources: [:],
-            deletedAssetFingerprints: []
+            deletedAssetStamps: [:]
         )
         let parts = RepoSnapshotBuilder.build(
             header: SnapshotHeader(
@@ -202,7 +202,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[month])
         XCTAssertNotNil(monthState.assets[fp], "heal in baseline must survive observation tombstone whose basis predates it")
-        XCTAssertFalse(monthState.deletedAssetFingerprints.contains(fp))
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp))
     }
 
 
@@ -233,7 +233,6 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         covered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
         let snapState = RepoMonthState(
             assets: [:], resources: [:], assetResources: [:],
-            deletedAssetFingerprints: [fp],
             deletedAssetStamps: [fp: OpStamp(writerID: writerB, seq: 1, clock: 200)]
         )
         let parts = RepoSnapshotBuilder.build(
@@ -260,7 +259,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[month])
         XCTAssertNil(monthState.assets[fp], "stale add at clock=100 must NOT resurrect a clock=200 tombstone")
-        XCTAssertTrue(monthState.deletedAssetFingerprints.contains(fp))
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(fp))
     }
 
     func testTombstoneStampSurvivesSnapshotRoundTrip() throws {
@@ -270,29 +269,17 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         XCTAssertEqual(parsed.stamp, OpStamp(writerID: "11111111-1111-1111-1111-aaaaaaaaaaaa", seq: 7, clock: 42))
     }
 
-    func testLegacyTombstoneWithoutStampDecodes() throws {
-        let raw = "{\"t\":\"deleted_key\",\"r\":{\"keyType\":\"asset\",\"keyValue\":\"\(String(repeating: "ab", count: 32))\"}}"
-        let decoded = try SnapshotRowMapper.decodeLine(raw)
-        guard case .deletedKey(let parsed) = decoded else { XCTFail("deletedKey"); return }
-        XCTAssertNil(parsed.stamp, "legacy deletedKey rows must decode with stamp=nil")
-    }
-
-
-    func testLegacySnapshotWithoutStampDecodes() throws {
-        // Encoder writes legacy-shape (no stamp triple). Decoder must accept,
-        // returning stamp=nil — the materializer falls back to replay-only behavior.
+    func testSnapshotWithoutStampRejects() {
         let raw = #"{"t":"asset","r":{"assetFingerprint":"\#(String(repeating: "ab", count: 32))","backedUpAtMs":1,"creationDateMs":null,"resourceCount":0,"totalFileSizeBytes":0}}"#
-        let decoded = try SnapshotRowMapper.decodeLine(raw)
-        guard case .asset(let parsed) = decoded else { XCTFail("asset"); return }
-        XCTAssertNil(parsed.stamp, "legacy snapshot rows must decode with stamp=nil")
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw))
     }
 
     func testPartialStampTripleRejected() {
         // Atomic null-or-present: lastWriterID without lastSeq/lastClock is malformed.
         let raw = #"{"t":"asset","r":{"assetFingerprint":"\#(String(repeating: "ab", count: 32))","backedUpAtMs":1,"creationDateMs":null,"resourceCount":0,"totalFileSizeBytes":0,"lastWriterID":"11111111-1111-1111-1111-aaaaaaaaaaaa"}}"#
         XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
-            guard case SnapshotWireError.malformed = err else {
-                XCTFail("expected .malformed, got \(err)"); return
+            guard case SnapshotWireError.missingField("stamp") = err else {
+                XCTFail("expected missing stamp, got \(err)"); return
             }
         }
     }
@@ -353,7 +340,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
                         resourceHash: hashH2, logicalName: "shared.jpg"
                     )
             ],
-            deletedAssetFingerprints: []
+            deletedAssetStamps: [:]
         )
         let parts = RepoSnapshotBuilder.build(
             header: SnapshotHeader(
@@ -381,7 +368,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let row = try XCTUnwrap(monthState.resources[sharedPath])
         XCTAssertEqual(row.contentHash, hashH2,
                        "stale uncovered add at clock=100 must NOT replace baseline H2 row at the shared path")
-        XCTAssertEqual(row.stamp?.clock, 200, "winning row's stamp must be B's")
+        XCTAssertEqual(row.stamp.clock, 200, "winning row's stamp must be B's")
         // Both assets still recorded — neither's add is dropped, only the per-path
         // resource overwrite is gated.
         XCTAssertNotNil(monthState.assets[fpA])
@@ -403,14 +390,12 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let decoded = try SnapshotRowMapper.decodeLine(line)
         guard case .resource(let parsed) = decoded else { XCTFail("resource"); return }
         XCTAssertEqual(parsed, row)
-        XCTAssertEqual(parsed.stamp?.clock, 77)
+        XCTAssertEqual(parsed.stamp.clock, 77)
     }
 
-    func testLegacyResourceRowWithoutStampDecodes() throws {
+    func testResourceRowWithoutStampRejects() {
         let raw = #"{"t":"resource","r":{"physicalRemotePath":"2026/05/IMG.HEIC","contentHash":"\#(String(repeating: "ab", count: 32))","fileSize":100,"resourceType":1,"creationDateMs":null,"backedUpAtMs":100,"crypto":null}}"#
-        let decoded = try SnapshotRowMapper.decodeLine(raw)
-        guard case .resource(let parsed) = decoded else { XCTFail("resource"); return }
-        XCTAssertNil(parsed.stamp, "legacy resource rows must decode with stamp=nil")
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw))
     }
 
 
@@ -432,7 +417,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
                 stamp: OpStamp(writerID: writerA, seq: 5, clock: 100)
             )],
             resources: [:], assetResources: [:],
-            deletedAssetFingerprints: [], deletedAssetStamps: [:]
+            deletedAssetStamps: [:]
         )
         let parts = RepoSnapshotBuilder.build(
             header: SnapshotHeader(
@@ -476,7 +461,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
                 stamp: OpStamp(writerID: writerA, seq: 1, clock: 10)
             )],
             resources: [:], assetResources: [:],
-            deletedAssetFingerprints: [], deletedAssetStamps: [:]
+            deletedAssetStamps: [:]
         )
         let header = SnapshotHeader(
             version: SnapshotHeader.currentVersion,

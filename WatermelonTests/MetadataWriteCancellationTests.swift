@@ -192,7 +192,6 @@ final class MetadataWriteCancellationTests: XCTestCase {
         let watermelonDir = RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory])
         let identityDir = RepoLayout.identityDirectoryPath(base: basePath)
         let finalizationPath = RepoLayout.identityFinalizationFilePath(base: basePath)
-        let repoPath = RepoLayout.repoFilePath(base: basePath)
         let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
         for error in cancellationShapes() {
             await assertThrowsCancellation {
@@ -217,15 +216,6 @@ final class MetadataWriteCancellationTests: XCTestCase {
             }
             await assertThrowsCancellation {
                 let client = OperationFailureClient(error: error, failingOperation: .list, failingRemotePath: identityDir)
-                _ = try await RepoBootstrap(client: client, basePath: self.basePath)
-                    .ensureRepoJSON(repoID: self.repoID, writerID: self.writerID)
-            }
-            await assertThrowsCancellation {
-                let client = OperationFailureClient(error: error, failingOperation: .download, failingRemotePath: repoPath)
-                await client.injectFile(
-                    path: repoPath,
-                    data: try RepoCacheWire(repoID: self.repoID, createdAtMs: 1, createdByWriter: self.writerID).encode()
-                )
                 _ = try await RepoBootstrap(client: client, basePath: self.basePath)
                     .ensureRepoJSON(repoID: self.repoID, writerID: self.writerID)
             }

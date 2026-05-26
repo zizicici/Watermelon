@@ -58,12 +58,12 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
         XCTAssertEqual(load, .found(claimRepoID))
     }
 
-    func testLoadCanonical_FinalizedAbsent_ClaimAbsent_LegacyCachePresent_ReturnsLegacyID() async throws {
+    func testLoadCanonical_FinalizedAbsent_ClaimAbsent_LegacyCachePresent_ReturnsAbsent() async throws {
         let client = await makeClient()
         try await installLegacyCache(client, repoID: legacyRepoID)
         let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
         let load = try await reader.loadCanonical()
-        XCTAssertEqual(load, .found(legacyRepoID))
+        XCTAssertEqual(load, .absent)
     }
 
     func testLoadCanonical_AllAbsent_ReturnsAbsent() async throws {
@@ -97,10 +97,9 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
         }
     }
 
-    func testRequireCanonical_BootstrapError_PropagatedUnchanged() async throws {
+    func testRequireCanonical_FinalizedMarkerMalformed_PropagatesBootstrapError() async throws {
         let client = await makeClient()
-        // Plant a malformed legacy cache to force loadRepoIDStrict to throw BootstrapError.ioFailure.
-        await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), data: Data("malformed".utf8))
+        await client.injectFile(path: RepoLayout.identityFinalizationFilePath(base: basePath), data: Data("malformed".utf8))
         let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
         do {
             _ = try await reader.requireCanonical(absentError: {
@@ -111,7 +110,7 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
             if case .ioFailure(let underlying) = bootstrap {
                 let nsError = underlying as NSError
                 XCTAssertEqual(nsError.domain, "RepoBootstrap")
-                XCTAssertEqual(nsError.code, 1)
+                XCTAssertEqual(nsError.code, 12)
             } else {
                 XCTFail("expected BootstrapError.ioFailure, got \(bootstrap)")
             }

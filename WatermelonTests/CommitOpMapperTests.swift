@@ -241,11 +241,11 @@ final class CommitOpMapperTests: XCTestCase {
         let line = try CommitOpMapper.encodeOpLine(op)
         let decoded = try CommitOpMapper.decodeLine(line)
         guard case .op(let parsed) = decoded,
-              case .tombstoneAsset(let parsedBody) = parsed.body,
-              let parsedBasis = parsedBody.observedBasis else {
+              case .tombstoneAsset(let parsedBody) = parsed.body else {
             XCTFail("expected tombstone with basis, got \(decoded)")
             return
         }
+        let parsedBasis = parsedBody.observedBasis
         XCTAssertEqual(parsedBasis.perWriterMaxSeq["writer-high"], highSeq)
         XCTAssertEqual(parsedBasis.perWriterMaxSeq["writer-max"], UInt64.max)
         XCTAssertEqual(parsedBasis.perWriterMaxSeq["writer-low"], 7)

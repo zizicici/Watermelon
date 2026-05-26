@@ -5,7 +5,6 @@ struct RepoCompactionPolicy: Equatable, Sendable {
     var checkpointByteThreshold: Int64
     var minimumCheckpointIntervalSeconds: Int
     var retentionStalenessThresholdSeconds: Int
-    var legacyClientGraceSeconds: Int
     var snapshotFallbackKeepCount: Int
 
     static var `default`: RepoCompactionPolicy {
@@ -14,7 +13,6 @@ struct RepoCompactionPolicy: Equatable, Sendable {
             checkpointByteThreshold: BackupV2Constants.checkpointByteThreshold,
             minimumCheckpointIntervalSeconds: BackupV2Constants.minimumCheckpointIntervalSeconds,
             retentionStalenessThresholdSeconds: BackupV2Constants.retentionStalenessThresholdSeconds,
-            legacyClientGraceSeconds: BackupV2Constants.legacyClientGraceSeconds,
             snapshotFallbackKeepCount: BackupV2Constants.snapshotFallbackKeepCount
         )
     }

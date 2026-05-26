@@ -210,7 +210,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let materializer = RepoMaterializer(client: scaffold.client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[month])
-        XCTAssertTrue(monthState.deletedAssetFingerprints.contains(fp), "tombstone must be written when file truly gone")
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(fp), "tombstone must be written when file truly gone")
     }
 
     func testApplyTombstones_healedBetweenVerifyAndApply_doesNotWriteTombstone() async throws {
@@ -240,7 +240,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let materializer = RepoMaterializer(client: scaffold.client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[month])
-        XCTAssertFalse(monthState.deletedAssetFingerprints.contains(fp),
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp),
                        "healed candidate must NOT be tombstoned on re-verify")
         XCTAssertNotNil(monthState.assets[fp])
     }
@@ -274,7 +274,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let materializer = RepoMaterializer(client: scaffold.client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[month])
-        XCTAssertFalse(monthState.deletedAssetFingerprints.contains(fp),
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp),
                        "OR-check across paths: pathB present is sufficient to keep asset healthy")
     }
 

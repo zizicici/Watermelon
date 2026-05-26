@@ -253,6 +253,7 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
         let plan = try await readyPlan(client: inner)
         let swappedRepoID = "ffffffff-0000-1111-2222-333333333333"
         try await TestFixtures.injectRepoJSON(inner, basePath: basePath, repoID: swappedRepoID, writerID: writerA)
+        try await TestFixtures.injectIdentityFinalization(inner, basePath: basePath, repoID: swappedRepoID, writerID: writerA)
 
         let verification = await RepoRetentionPostDeleteVerifier(client: inner, basePath: basePath).verify(
             month: month,
@@ -272,7 +273,7 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
     func testVerifierFailsClosedWhenRepoIdentityIsMissing() async throws {
         let inner = try await makeReadyClient()
         let plan = try await readyPlan(client: inner)
-        try await inner.delete(path: RepoLayout.repoFilePath(base: basePath))
+        try await inner.delete(path: RepoLayout.identityFinalizationFilePath(base: basePath))
 
         let verification = await RepoRetentionPostDeleteVerifier(client: inner, basePath: basePath).verify(
             month: month,
@@ -289,7 +290,7 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
     func testVerifierIsInconclusiveWhenRepoIdentityIsUnreadable() async throws {
         let inner = try await makeReadyClient()
         let plan = try await readyPlan(client: inner)
-        await inner.injectFile(path: RepoLayout.repoFilePath(base: basePath), contents: "{not-json")
+        await inner.injectFile(path: RepoLayout.identityFinalizationFilePath(base: basePath), contents: "{not-json")
 
         let verification = await RepoRetentionPostDeleteVerifier(client: inner, basePath: basePath).verify(
             month: month,
@@ -377,6 +378,7 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
         client.setAtomicCreateGuarantee(.exclusive)
         try await client.connect()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerA)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerA)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerA)
         try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
         try await client.createDirectory(path: RepoLayout.snapshotsDirectoryPath(base: basePath))
@@ -505,7 +507,7 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
             livenessGate: RetentionLivenessGate(
                 requiredCompleteView: true,
                 requiredNoActiveNonSelfWriters: true,
-                legacyClientGraceMs: Int64(policy.legacyClientGraceSeconds) * 1000
+                legacyClientGraceMs: 0
             )
         )
         await client.injectFile(
@@ -628,7 +630,6 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
         checkpointByteThreshold: 1,
         minimumCheckpointIntervalSeconds: 0,
         retentionStalenessThresholdSeconds: 60,
-        legacyClientGraceSeconds: 120,
         snapshotFallbackKeepCount: 1
     )
 }

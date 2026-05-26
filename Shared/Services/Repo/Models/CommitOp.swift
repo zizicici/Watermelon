@@ -75,10 +75,9 @@ struct CommitTombstoneBody: Equatable, Sendable {
     }
     let assetFingerprint: Data
     let reason: Reason
-    /// Observation-style tombstones can skip newer healing adds while legacy nil remains unconditional.
-    let observedBasis: TombstoneObservationBasis?
+    let observedBasis: TombstoneObservationBasis
 
-    init(assetFingerprint: Data, reason: Reason, observedBasis: TombstoneObservationBasis? = nil) {
+    init(assetFingerprint: Data, reason: Reason, observedBasis: TombstoneObservationBasis) {
         self.assetFingerprint = assetFingerprint
         self.reason = reason
         self.observedBasis = observedBasis

@@ -323,7 +323,7 @@ struct BackupRunPreparationService: Sendable {
                     NSError(
                         domain: "BackupRunPreparation",
                         code: -51,
-                        userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json - run a backup to repair before verifying"]
+                        userInfo: [NSLocalizedDescriptionKey: "V2 repo missing canonical identity - run a backup to repair before verifying"]
                     )
                 })
         } catch let bootstrap as RepoBootstrap.BootstrapError {

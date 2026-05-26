@@ -437,8 +437,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
             if case .tombstoneAsset(let body) = op.body { return body }
             return nil
         }.first)
-        let basis = try XCTUnwrap(tombstone.observedBasis)
-        return (client, commit, basis, oldFP, replacement.asset.assetFingerprint)
+        return (client, commit, tombstone.observedBasis, oldFP, replacement.asset.assetFingerprint)
     }
 
     private func makeClient() async throws -> InMemoryRemoteStorageClient {

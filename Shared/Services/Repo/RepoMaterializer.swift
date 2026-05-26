@@ -42,15 +42,15 @@ actor RepoMaterializer {
         case metadataChangedAgainAfterRetry
     }
 
-    func materialize(expectedRepoID: String? = nil) async throws -> MaterializeOutput {
+    func materialize(expectedRepoID: String) async throws -> MaterializeOutput {
         try await materialize(filterMonth: nil, expectedRepoID: expectedRepoID)
     }
 
-    func materializeMonth(_ month: LibraryMonthKey, expectedRepoID: String? = nil) async throws -> MaterializeOutput {
+    func materializeMonth(_ month: LibraryMonthKey, expectedRepoID: String) async throws -> MaterializeOutput {
         try await materialize(filterMonth: month, expectedRepoID: expectedRepoID)
     }
 
-    private func materialize(filterMonth: LibraryMonthKey?, expectedRepoID: String?) async throws -> MaterializeOutput {
+    private func materialize(filterMonth: LibraryMonthKey?, expectedRepoID: String) async throws -> MaterializeOutput {
         do {
             return try await materializeOnce(filterMonth: filterMonth, expectedRepoID: expectedRepoID)
         } catch {
@@ -128,7 +128,7 @@ actor RepoMaterializer {
         return runIDPrefix >= otherRunIDPrefix
     }
 
-    private func materializeOnce(filterMonth: LibraryMonthKey?, expectedRepoID: String?) async throws -> MaterializeOutput {
+    private func materializeOnce(filterMonth: LibraryMonthKey?, expectedRepoID: String) async throws -> MaterializeOutput {
         async let snapshotFilenames = snapshotReader.listSnapshotFilenames()
         async let commitFilenames = commitReader.listCommitFilenames()
         let snapshots = try await snapshotFilenames
@@ -270,7 +270,7 @@ private struct SnapshotTrustPipeline {
 
     func accept(
         references: [MaterializerSnapshotReference],
-        expectedRepoID: String?
+        expectedRepoID: String
     ) async throws -> SnapshotTrustResult {
         var snapshotsByMonth: [LibraryMonthKey: [MaterializerSnapshotReference]] = [:]
         for reference in references {
@@ -296,15 +296,9 @@ private struct SnapshotTrustPipeline {
                                 materializerLog.warning("skip snapshot whose filename disagrees with header: \(candidate.filename, privacy: .public)")
                                 continue
                             }
-                            if let expected {
-                                guard !file.header.repoID.isEmpty else {
-                                    materializerLog.warning("skip unstamped legacy snapshot \(candidate.filename, privacy: .public) while materializing repo=\(expected, privacy: .public)")
-                                    continue
-                                }
-                                guard file.header.repoID == expected else {
-                                    materializerLog.warning("skip foreign-repo snapshot \(candidate.filename, privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expected, privacy: .public)")
-                                    continue
-                                }
+                            guard file.header.repoID == expected else {
+                                materializerLog.warning("skip foreign-repo snapshot \(candidate.filename, privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expected, privacy: .public)")
+                                continue
                             }
                             if snapshotHasUnworkableRowStamp(file, filenameLamport: candidate.lamport) {
                                 materializerLog.warning("skip snapshot with poisoned row stamp: \(candidate.filename, privacy: .public)")
@@ -373,9 +367,7 @@ private struct SnapshotTrustPipeline {
         var baselineStamps: [Data: OpStamp] = [:]
         for asset in file.assets {
             state.assets[asset.assetFingerprint] = asset
-            if let stamp = asset.stamp {
-                baselineStamps[asset.assetFingerprint] = stamp
-            }
+            baselineStamps[asset.assetFingerprint] = asset.stamp
         }
         for resource in file.resources {
             guard materializerResourcePath(resource.physicalRemotePath, belongsTo: month) else {
@@ -400,16 +392,7 @@ private struct SnapshotTrustPipeline {
                 materializerLog.warning("reject snapshot with malformed deletedKey hash for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
                 return nil
             }
-            state.deletedAssetFingerprints.insert(fp)
-            if let stamp = d.stamp {
-                state.deletedAssetStamps[fp] = stamp
-            }
-        }
-        if !state.assets.isEmpty && baselineStamps.count < state.assets.count {
-            let stampless = state.assets.count - baselineStamps.count
-            materializerLog.info(
-                "baseline stamp coverage partial month=\(month.text, privacy: .public) total=\(state.assets.count, privacy: .public) stampless=\(stampless, privacy: .public) — LWW gate degrades for those assets"
-            )
+            state.deletedAssetStamps[fp] = d.stamp
         }
         return AcceptedSnapshotBaseline(
             state: state,
@@ -446,7 +429,7 @@ private struct CommitTrustPipeline {
     func accept(
         references: [MaterializerCommitReference],
         coveredByMonth initialCoveredByMonth: [LibraryMonthKey: CoveredRanges],
-        expectedRepoID: String?
+        expectedRepoID: String
     ) async throws -> CommitTrustResult {
         var observedSeqByWriter: [String: UInt64] = [:]
         var commitsToRead: [MaterializerCommitReference] = []
@@ -482,7 +465,7 @@ private struct CommitTrustPipeline {
 
     private func readAcceptedFiles(
         references: [MaterializerCommitReference],
-        expectedRepoID: String?
+        expectedRepoID: String
     ) async throws -> [AcceptedCommit] {
         try await withThrowingTaskGroup(of: AcceptedCommit?.self) { group in
             for reference in references {
@@ -498,7 +481,7 @@ private struct CommitTrustPipeline {
                             materializerLog.warning("skip commit whose filename disagrees with header: \(reference.filename, privacy: .public)")
                             return nil
                         }
-                        if let expected, file.header.repoID != expected {
+                        if file.header.repoID != expected {
                             materializerLog.warning("skip commit with mismatched repoID file=\(String(describing: reference.month), privacy: .public) header=\(file.header.repoID, privacy: .public) expected=\(expected, privacy: .public)")
                             return nil
                         }
@@ -585,7 +568,6 @@ private struct MaterializerReplayProjector {
                    opStampPrecedes(incoming, deletedStamp) {
                     continue
                 }
-                state.deletedAssetFingerprints.remove(body.assetFingerprint)
                 state.deletedAssetStamps.removeValue(forKey: body.assetFingerprint)
                 state.assets[body.assetFingerprint] = SnapshotAssetRow(
                     assetFingerprint: body.assetFingerprint,
@@ -596,8 +578,8 @@ private struct MaterializerReplayProjector {
                     stamp: incoming
                 )
                 for resource in body.resources {
-                    let keepExistingResource = state.resources[resource.physicalRemotePath]?.stamp
-                        .map { opStampPrecedes(incoming, $0) } ?? false
+                    let keepExistingResource = state.resources[resource.physicalRemotePath]
+                        .map { opStampPrecedes(incoming, $0.stamp) } ?? false
                     if !keepExistingResource {
                         state.resources[resource.physicalRemotePath] = SnapshotResourceRow(
                             physicalRemotePath: resource.physicalRemotePath,
@@ -629,14 +611,12 @@ private struct MaterializerReplayProjector {
                 if let existingStamp = state.assets[body.assetFingerprint]?.stamp,
                    opStampPrecedes(tombstoneStamp, existingStamp) {
                     materializerLog.info("skip tombstone superseded by newer addAsset stamp in baseline")
-                } else if let basis = body.observedBasis,
-                          let lastAdd = lastAddByMonthFP[sorted.month]?[body.assetFingerprint],
-                          materializerIsAfterBasis(lastAdd, basis: basis) {
+                } else if let lastAdd = lastAddByMonthFP[sorted.month]?[body.assetFingerprint],
+                          materializerIsAfterBasis(lastAdd, basis: body.observedBasis) {
                     materializerLog.info("skip observation-tombstone for fp; healing add observed after basis")
                 } else {
                     state.assets.removeValue(forKey: body.assetFingerprint)
                     state.assetResources = state.assetResources.filter { $0.key.assetFingerprint != body.assetFingerprint }
-                    state.deletedAssetFingerprints.insert(body.assetFingerprint)
                     if state.deletedAssetStamps[body.assetFingerprint].map({ opStampPrecedes($0, tombstoneStamp) }) ?? true {
                         state.deletedAssetStamps[body.assetFingerprint] = tombstoneStamp
                     }
@@ -674,22 +654,19 @@ private func materializerResourcePath(_ path: String, belongsTo month: LibraryMo
 private func snapshotHasUnworkableRowStamp(_ file: SnapshotFile, filenameLamport: UInt64) -> Bool {
     let covered = file.header.covered
     for asset in file.assets {
-        if let stamp = asset.stamp {
-            if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
-            if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
-        }
+        let stamp = asset.stamp
+        if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
+        if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
     }
     for resource in file.resources {
-        if let stamp = resource.stamp {
-            if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
-            if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
-        }
+        let stamp = resource.stamp
+        if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
+        if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
     }
     for d in file.deletedKeys {
-        if let stamp = d.stamp {
-            if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
-            if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
-        }
+        let stamp = d.stamp
+        if isUnworkableStampClock(stamp.clock, filenameLamport: filenameLamport) { return true }
+        if !covered.contains(writerID: stamp.writerID, seq: stamp.seq) { return true }
     }
     return false
 }

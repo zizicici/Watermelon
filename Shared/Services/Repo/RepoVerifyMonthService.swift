@@ -6,7 +6,7 @@ actor RepoVerifyMonthService {
 
     private let client: any RemoteStorageClientProtocol
     private let basePath: String
-    private let expectedRepoID: String?
+    private let expectedRepoID: String
 
     private struct TombstonePlan {
         let tombstones: [(item: VerifyMonthReportItem, reason: CommitTombstoneBody.Reason)]
@@ -32,7 +32,7 @@ actor RepoVerifyMonthService {
         }
     }
 
-    init(client: any RemoteStorageClientProtocol, basePath: String, expectedRepoID: String? = nil) {
+    init(client: any RemoteStorageClientProtocol, basePath: String, expectedRepoID: String) {
         self.client = client
         self.basePath = basePath
         self.expectedRepoID = expectedRepoID

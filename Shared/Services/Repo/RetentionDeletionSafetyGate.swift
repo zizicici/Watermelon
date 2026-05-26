@@ -25,7 +25,7 @@ enum RetentionDeletionSafetyBlocker: Equatable, Sendable {
     case unknownPeer(writerID: String)
     case activePeer(writerID: String)
     case stalePeerWithinRetentionThreshold(writerID: String, lastSeenMs: Int64)
-    case legacyPeerWithinGrace(writerID: String, lastSeenMs: Int64)
+    case legacyPeer(writerID: String, lastSeenMs: Int64)
 }
 
 struct RetentionDeletionSafetyDecision: Equatable, Sendable {
@@ -48,9 +48,9 @@ enum RetentionDeletionSafetyGate {
         }
 
         let retentionThresholdMs = Int64(policy.retentionStalenessThresholdSeconds) * 1000
-        let legacyGraceMs = max(
-            Int64(policy.legacyClientGraceSeconds) * 1000,
-            manifestGate.legacyClientGraceMs
+        let unknownCapabilityGraceMs = max(
+            manifestGate.legacyClientGraceMs,
+            Int64(BackupV2Constants.unknownRetentionCapabilityGraceSeconds) * 1000
         )
         var blockers: [RetentionDeletionSafetyBlocker] = []
 
@@ -74,11 +74,13 @@ enum RetentionDeletionSafetyGate {
                             lastSeenMs: lastSeenMs
                         ))
                     }
-                } else if ageMs < legacyGraceMs {
-                    blockers.append(.legacyPeerWithinGrace(
-                        writerID: peer.writerID,
-                        lastSeenMs: lastSeenMs
-                    ))
+                } else {
+                    if ageMs < unknownCapabilityGraceMs {
+                        blockers.append(.legacyPeer(
+                            writerID: peer.writerID,
+                            lastSeenMs: lastSeenMs
+                        ))
+                    }
                 }
             }
         }

@@ -5,7 +5,6 @@ struct SnapshotHeader: Equatable, Sendable {
     let version: Int
     let scope: String
     let writerID: String
-    /// Empty means "legacy snapshot without repoID stamp"; resolved-repo materializers skip it.
     let repoID: String
     let covered: CoveredRanges
 }
@@ -16,8 +15,7 @@ struct SnapshotAssetRow: Equatable, Sendable {
     let backedUpAtMs: Int64
     let resourceCount: Int
     let totalFileSizeBytes: Int64
-    /// nil only for legacy snapshots written before stamps existed.
-    let stamp: OpStamp?
+    let stamp: OpStamp
 
     init(
         assetFingerprint: Data,
@@ -25,7 +23,7 @@ struct SnapshotAssetRow: Equatable, Sendable {
         backedUpAtMs: Int64,
         resourceCount: Int,
         totalFileSizeBytes: Int64,
-        stamp: OpStamp? = nil
+        stamp: OpStamp
     ) {
         self.assetFingerprint = assetFingerprint
         self.creationDateMs = creationDateMs
@@ -44,11 +42,7 @@ struct SnapshotResourceRow: Equatable, Sendable {
     let creationDateMs: Int64?
     let backedUpAtMs: Int64
     let crypto: ResourceCryptoMetadata?
-    /// Producing addAsset's stamp. Path-level LWW: a stale uncovered add at the
-    /// same `physicalRemotePath` (different fp) must not overwrite a newer row
-    /// already baked into the baseline. nil = legacy snapshot row, LWW gate falls
-    /// back to last-write-wins-by-replay-order (pre-stamp behaviour).
-    let stamp: OpStamp?
+    let stamp: OpStamp
 
     init(
         physicalRemotePath: String,
@@ -58,7 +52,7 @@ struct SnapshotResourceRow: Equatable, Sendable {
         creationDateMs: Int64?,
         backedUpAtMs: Int64,
         crypto: ResourceCryptoMetadata?,
-        stamp: OpStamp? = nil
+        stamp: OpStamp
     ) {
         self.physicalRemotePath = physicalRemotePath
         self.contentHash = contentHash
@@ -87,11 +81,9 @@ struct SnapshotDeletedKeyRow: Equatable, Sendable {
     }
     let keyType: KeyType
     let keyValue: String
-    /// Asset keyType only. nil for legacy rows or non-asset keyTypes.
-    /// Mirrors `SnapshotAssetRow.stamp` for the deleted side of LWW.
-    let stamp: OpStamp?
+    let stamp: OpStamp
 
-    init(keyType: KeyType, keyValue: String, stamp: OpStamp? = nil) {
+    init(keyType: KeyType, keyValue: String, stamp: OpStamp) {
         self.keyType = keyType
         self.keyValue = keyValue
         self.stamp = stamp

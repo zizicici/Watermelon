@@ -37,7 +37,7 @@ final class RepoRetentionBarrierServiceTests: XCTestCase {
         XCTAssertEqual(result.manifest.livenessGate, RetentionLivenessGate(
             requiredCompleteView: true,
             requiredNoActiveNonSelfWriters: true,
-            legacyClientGraceMs: Int64(policy.legacyClientGraceSeconds) * 1000
+            legacyClientGraceMs: Int64(BackupV2Constants.unknownRetentionCapabilityGraceSeconds) * 1000
         ))
         XCTAssertTrue(result.barrierSet.unionCovered.superset(of: result.manifest.coveredRanges))
         XCTAssertEqual(result.loadInvalidEntries, [])
@@ -291,6 +291,7 @@ final class RepoRetentionBarrierServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerA)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerA)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerA)
         try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
         try await client.createDirectory(path: RepoLayout.snapshotsDirectoryPath(base: basePath))
@@ -503,7 +504,6 @@ final class RepoRetentionBarrierServiceTests: XCTestCase {
         checkpointByteThreshold: Int64.max,
         minimumCheckpointIntervalSeconds: 0,
         retentionStalenessThresholdSeconds: 86_400,
-        legacyClientGraceSeconds: 604_800,
         snapshotFallbackKeepCount: 2
     )
 

@@ -449,7 +449,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         XCTAssertTrue((fromSnapshot.coveredByMonth[month] ?? .empty).superset(of: fromGenesis.coveredByMonth[month] ?? .empty))
         XCTAssertEqual(monthState.resources[baseResource.physicalRemotePath]?.contentHash, baseHash)
         XCTAssertEqual(monthState.assetResources[AssetResourceKey(assetFingerprint: baseFP, role: baseResource.role, slot: baseResource.slot)]?.resourceHash, baseHash)
-        XCTAssertTrue(monthState.deletedAssetFingerprints.contains(deletedFP))
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(deletedFP))
         XCTAssertEqual(monthState.deletedAssetStamps[deletedFP], OpStamp(writerID: writerA, seq: 1, clock: 2))
     }
 

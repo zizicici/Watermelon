@@ -57,7 +57,7 @@ actor RepoIdentity {
         }
     }
 
-    // Allocator state is keyed by repoID; reuse the local row when remote repo.json is missing/unreachable.
+    // Allocator state is keyed by repoID; reuse the local row when remote identity is missing/unreachable.
     func findRepoStateByProfile(profileID: Int64) throws -> RepoStateRecord? {
         try database.read { db in
             let rows = try RepoStateRecord

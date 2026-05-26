@@ -1,7 +1,7 @@
 import XCTest
 @testable import Watermelon
 
-/// `ensureVersionJSON`'s collision-recovery path verifies the remote version is
+/// Version manifest collision recovery verifies the remote version is
 /// compatible. Higher format → back off (`unsupportedRemoteFormat`); read failure
 /// → unreadable (never silently treated as compatible).
 final class RepoBootstrapVersionTests: XCTestCase {
@@ -28,9 +28,9 @@ final class RepoBootstrapVersionTests: XCTestCase {
             client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9", writerID: "future"
         )
 
-        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
+        let store = VersionManifestStore(client: client, basePath: basePath)
         do {
-            try await bootstrap.ensureVersionJSON(writerID: "us")
+            try await store.writeIfAbsent(writerID: "us")
             XCTFail("expected higherFormatVersion")
         } catch RepoBootstrap.VersionConflict.higherFormatVersion(let remote, let local, let minApp) {
             XCTAssertEqual(remote, 99)
@@ -44,9 +44,9 @@ final class RepoBootstrapVersionTests: XCTestCase {
         try await client.connect()
         await client.injectFile(path: RepoLayout.versionFilePath(base: basePath), data: Data("not json at all".utf8))
 
-        let bootstrap = RepoBootstrap(client: client, basePath: basePath)
+        let store = VersionManifestStore(client: client, basePath: basePath)
         do {
-            try await bootstrap.ensureVersionJSON(writerID: "us")
+            try await store.writeIfAbsent(writerID: "us")
             XCTFail("expected unreadable")
         } catch RepoBootstrap.VersionConflict.unreadable {
             // expected
@@ -64,7 +64,7 @@ final class RepoBootstrapVersionTests: XCTestCase {
         }
     }
 
-    func testLoadRepoIDStrict_malformed_throws() async throws {
+    func testLoadRepoIDStrict_malformedRepoJSONCache_returnsAbsent() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let bad: [String: Any] = ["v": 1]
@@ -72,11 +72,10 @@ final class RepoBootstrapVersionTests: XCTestCase {
         await client.injectFile(path: RepoLayout.repoFilePath(base: basePath), data: data)
 
         let bootstrap = RepoBootstrap(client: client, basePath: basePath)
-        do {
-            _ = try await bootstrap.loadRepoIDStrict()
-            XCTFail("expected throw on malformed repo.json")
-        } catch is RepoBootstrap.BootstrapError {
-            // expected
+        let result = try await bootstrap.loadRepoIDStrict()
+        guard case .absent = result else {
+            XCTFail("expected .absent, got \(result)")
+            return
         }
     }
 

@@ -11,7 +11,7 @@ struct RemoteManifestAsset: Hashable, Identifiable {
     let backedUpAtMs: Int64
     let resourceCount: Int
     let totalFileSizeBytes: Int64
-    /// nil for legacy entries or in-flight session entries before flush.
+    /// nil for in-flight session entries before flush.
     let stamp: OpStamp?
 
     init(

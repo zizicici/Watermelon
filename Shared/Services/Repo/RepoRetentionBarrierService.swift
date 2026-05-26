@@ -113,7 +113,7 @@ struct RepoRetentionBarrierService: Sendable {
                 livenessGate: RetentionLivenessGate(
                     requiredCompleteView: true,
                     requiredNoActiveNonSelfWriters: true,
-                    legacyClientGraceMs: Int64(policy.legacyClientGraceSeconds) * 1000
+                    legacyClientGraceMs: Int64(BackupV2Constants.unknownRetentionCapabilityGraceSeconds) * 1000
                 )
             )
             let store = RetentionManifestRemoteStore(client: client, basePath: basePath)

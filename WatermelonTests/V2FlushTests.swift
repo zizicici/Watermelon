@@ -399,7 +399,7 @@ final class V2FlushTests: XCTestCase {
         let monthState = try XCTUnwrap(output.state.months[monthKey])
         XCTAssertNotNil(monthState.assets[newFP], "superseding asset must be present after replay")
         XCTAssertNil(monthState.assets[fp], "subset-replaced asset must not be present")
-        XCTAssertTrue(monthState.deletedAssetFingerprints.contains(fp),
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(fp),
                       "tombstone must survive snapshot baseline so LWW gate against stale adds keeps working")
         XCTAssertNotNil(monthState.deletedAssetStamps[fp],
                         "tombstone stamp must persist for cross-writer LWW comparison")
@@ -449,7 +449,7 @@ final class V2FlushTests: XCTestCase {
         let monthState = try XCTUnwrap(output.state.months[monthKey])
 
         XCTAssertNil(monthState.assets[fp])
-        XCTAssertTrue(monthState.deletedAssetFingerprints.contains(fp))
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(fp))
         let stamp = try XCTUnwrap(monthState.deletedAssetStamps[fp])
         XCTAssertEqual(stamp.writerID, writerID)
         XCTAssertGreaterThan(stamp.clock, 0)
@@ -557,10 +557,10 @@ final class V2FlushTests: XCTestCase {
             if case .tombstoneAsset = op.body { return true }
             return false
         }
-        guard let op = tombstone, case let .tombstoneAsset(body) = op.body,
-              let basis = body.observedBasis else {
+        guard let op = tombstone, case let .tombstoneAsset(body) = op.body else {
             XCTFail("expected tombstone with basis"); return
         }
+        let basis = body.observedBasis
         XCTAssertGreaterThanOrEqual(basis.lamportWatermark, lamportAfterFlush1,
                                      "basis must reflect lamport AFTER flush 1, not load-time only")
         XCTAssertGreaterThanOrEqual(basis.perWriterMaxSeq[writerID] ?? 0, 1,
@@ -999,7 +999,6 @@ final class V2FlushTests: XCTestCase {
             resourceHash: livingHash,
             logicalName: "living.jpg"
         )
-        materialized.deletedAssetFingerprints.insert(tombstonedFP)
         materialized.deletedAssetStamps[tombstonedFP] = OpStamp(writerID: writerID, seq: 2, clock: 2)
 
         let indexes = V2MonthIndexes(
@@ -1534,7 +1533,7 @@ final class V2FlushTests: XCTestCase {
                 backedUpAtMs: 1,
                 resourceCount: 1,
                 totalFileSizeBytes: 1,
-                stamp: nil
+                stamp: TestFixtures.opStamp(seq: UInt64(index + 1), clock: UInt64(index + 1))
             )
             state.assetResources[AssetResourceKey(
                 assetFingerprint: fingerprint,
@@ -1559,7 +1558,7 @@ final class V2FlushTests: XCTestCase {
                 backedUpAtMs: 1,
                 resourceCount: 1,
                 totalFileSizeBytes: 1,
-                stamp: nil
+                stamp: TestFixtures.opStamp(seq: 90_001, clock: 90_001)
             )
             state.assetResources[AssetResourceKey(
                 assetFingerprint: partialFingerprint,
@@ -2439,7 +2438,7 @@ final class V2FlushTests: XCTestCase {
                      "strict-subset heal: partial A must be gone from materialized state after flush")
         XCTAssertNotNil(monthState.assets[fullFP],
                         "strict-subset heal: full B must remain after flush")
-        XCTAssertTrue(monthState.deletedAssetFingerprints.contains(partialFP),
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(partialFP),
                       "strict-subset heal: A must appear as tombstoned for LWW gating against stale peer adds")
     }
 

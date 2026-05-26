@@ -63,9 +63,8 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
         let dataClient = InMemoryRemoteStorageClient()
         dataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await dataClient.connect()
-        // Corrupt repo.json forces BootstrapError.ioFailure → mapped to damagedV2Repo.
         try await TestFixtures.injectVersionJSON(dataClient, basePath: basePath)
-        await dataClient.injectFile(path: RepoLayout.repoFilePath(base: basePath), contents: "{not-json")
+        await dataClient.injectFile(path: RepoLayout.identityFinalizationFilePath(base: basePath), contents: "{not-json")
         let metadataClient = InMemoryRemoteStorageClient()
         metadataClient.setMoveIfAbsentGuarantee(.exclusive)
         let profile = try insertProfile()
@@ -144,8 +143,12 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
         dataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await dataClient.connect()
         try await TestFixtures.injectVersionJSON(dataClient, basePath: basePath)
-        try await TestFixtures.injectRepoJSON(dataClient, basePath: basePath, repoID: "cccccccc-1111-2222-3333-444444444444")
-        await dataClient.injectDownloadCancellation(for: RepoLayout.repoFilePath(base: basePath))
+        try await TestFixtures.injectIdentityFinalization(
+            dataClient,
+            basePath: basePath,
+            repoID: "cccccccc-1111-2222-3333-444444444444"
+        )
+        await dataClient.injectDownloadCancellation(for: RepoLayout.identityFinalizationFilePath(base: basePath))
         let metadataClient = InMemoryRemoteStorageClient()
         metadataClient.setMoveIfAbsentGuarantee(.exclusive)
         let profile = try insertProfile()
@@ -277,8 +280,12 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
         dataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await dataClient.connect()
         try await TestFixtures.injectVersionJSON(dataClient, basePath: basePath)
-        try await TestFixtures.injectRepoJSON(dataClient, basePath: basePath, repoID: "cccccccc-1111-2222-3333-444444444444")
-        await dataClient.injectDownloadCancellation(for: RepoLayout.repoFilePath(base: basePath))
+        try await TestFixtures.injectIdentityFinalization(
+            dataClient,
+            basePath: basePath,
+            repoID: "cccccccc-1111-2222-3333-444444444444"
+        )
+        await dataClient.injectDownloadCancellation(for: RepoLayout.identityFinalizationFilePath(base: basePath))
         let metadataClient = InMemoryRemoteStorageClient()
         metadataClient.setMoveIfAbsentGuarantee(.exclusive)
         let profile = try insertProfile()
@@ -346,6 +353,7 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
         // Seed an existing V2 repo with matching local state so .openExistingV2 fires.
         let canonicalRepoID = "bbbbbbbb-1111-2222-3333-444444444444"
         try await TestFixtures.injectRepoJSON(dataClient, basePath: basePath, repoID: canonicalRepoID)
+        try await TestFixtures.injectIdentityFinalization(dataClient, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectVersionJSON(dataClient, basePath: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
         metadataClient.setMoveIfAbsentGuarantee(.exclusive)
@@ -407,8 +415,12 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
         dataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await dataClient.connect()
         try await TestFixtures.injectVersionJSON(dataClient, basePath: basePath)
-        try await TestFixtures.injectRepoJSON(dataClient, basePath: basePath, repoID: "cccccccc-1111-2222-3333-444444444444")
-        await dataClient.injectDownloadCancellation(for: RepoLayout.repoFilePath(base: basePath))
+        try await TestFixtures.injectIdentityFinalization(
+            dataClient,
+            basePath: basePath,
+            repoID: "cccccccc-1111-2222-3333-444444444444"
+        )
+        await dataClient.injectDownloadCancellation(for: RepoLayout.identityFinalizationFilePath(base: basePath))
         let metadataClient = InMemoryRemoteStorageClient()
         metadataClient.setMoveIfAbsentGuarantee(.exclusive)
         try await metadataClient.connect()
@@ -437,6 +449,7 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
         try await dataClient.connect()
         let canonicalRepoID = "bbbbbbbb-1111-2222-3333-444444444444"
         try await TestFixtures.injectRepoJSON(dataClient, basePath: basePath, repoID: canonicalRepoID)
+        try await TestFixtures.injectIdentityFinalization(dataClient, basePath: basePath, repoID: canonicalRepoID)
         try await TestFixtures.injectVersionJSON(dataClient, basePath: basePath)
         let metadataClient = InMemoryRemoteStorageClient()
         metadataClient.setMoveIfAbsentGuarantee(.exclusive)

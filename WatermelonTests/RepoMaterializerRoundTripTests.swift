@@ -80,7 +80,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[month])
         XCTAssertNil(monthState.assets[fp])
-        XCTAssertTrue(monthState.deletedAssetFingerprints.contains(fp))
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(fp))
     }
 
     func testTombstoneBeforeAddByClockOrderResurrectsAsset() async throws {
@@ -119,7 +119,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[month])
         XCTAssertNotNil(monthState.assets[fp])
-        XCTAssertFalse(monthState.deletedAssetFingerprints.contains(fp))
+        XCTAssertFalse(monthState.deletedAssetStamps.keys.contains(fp))
     }
 
     func testReplayTieBreaksByWriterSeqAndOpSeq() async throws {
@@ -284,13 +284,15 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
         let fp = Self.fingerprint(0x13)
 
+        var goodCovered = CoveredRanges()
+        goodCovered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
         _ = try await snapshotWriter.write(
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: .empty
+                covered: goodCovered
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: fp,
@@ -326,7 +328,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         XCTAssertEqual(output.state.observedClock, 0)
     }
 
-    func testLegacyUnstampedSnapshotRejectedWhenExpectedRepoIDProvided() async throws {
+    func testSnapshotWithEmptyRepoIDRejectedWhenExpectedRepoIDProvided() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
@@ -352,7 +354,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             deletedKeys: [],
             month: month,
             lamport: 5,
-            runID: "legacy",
+            runID: "empty-repo-id",
             respectTaskCancellation: false
         )
 
@@ -436,7 +438,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
 
         XCTAssertTrue(state.assets.isEmpty)
         XCTAssertTrue(state.resources.isEmpty)
-        XCTAssertTrue(state.deletedAssetFingerprints.isEmpty)
+        XCTAssertTrue(state.deletedAssetStamps.isEmpty)
         XCTAssertTrue(output.corruptedSnapshotMonths.contains(month))
     }
 
@@ -447,13 +449,15 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let goodFP = Self.fingerprint(0x08)
         let badFP = Self.fingerprint(0x09)
 
+        var goodCovered = CoveredRanges()
+        goodCovered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
         _ = try await snapshotWriter.write(
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: .empty
+                covered: goodCovered
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP,
@@ -1682,7 +1686,8 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: boundaryFP, creationDateMs: nil, backedUpAtMs: 1,
-                resourceCount: 0, totalFileSizeBytes: 0
+                resourceCount: 0, totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerB, seq: 1, clock: LamportClock.maxAdoptableValue)
             )],
             resources: [],
             assetResources: [],
@@ -1854,7 +1859,8 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: boundaryFP, creationDateMs: nil, backedUpAtMs: 1,
-                resourceCount: 0, totalFileSizeBytes: 0
+                resourceCount: 0, totalFileSizeBytes: 0,
+                stamp: OpStamp(writerID: writerB, seq: 1, clock: boundaryLamport)
             )],
             resources: [],
             assetResources: [],

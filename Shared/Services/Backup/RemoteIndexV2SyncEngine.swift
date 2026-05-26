@@ -37,7 +37,7 @@ struct RemoteIndexV2SyncEngine: Sendable {
                     NSError(
                         domain: "RemoteIndexSyncService",
                         code: -50,
-                        userInfo: [NSLocalizedDescriptionKey: "V2 repo missing .watermelon/repo.json - backup-flow can repair, sync cannot"]
+                        userInfo: [NSLocalizedDescriptionKey: "V2 repo missing canonical identity - backup-flow can repair, sync cannot"]
                     )
                 })
         } catch let bootstrap as RepoBootstrap.BootstrapError {

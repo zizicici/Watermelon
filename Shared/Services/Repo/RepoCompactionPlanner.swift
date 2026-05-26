@@ -16,7 +16,7 @@ struct RepoCompactionPlanner: Sendable {
     }
 
     func makeReport(
-        expectedRepoID: String?,
+        expectedRepoID: String,
         preMaterialized: RepoMaterializer.MaterializeOutput? = nil
     ) async throws -> RepoCompactionReport {
         async let commitEntries = listMetadataEntries(path: RepoLayout.commitsDirectoryPath(base: basePath))

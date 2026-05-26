@@ -139,7 +139,7 @@ actor V1MigrationService {
                 if let existingAssets = existingState?.assets {
                     existingFingerprints.formUnion(existingAssets.keys)
                 }
-                if let deleted = existingState?.deletedAssetFingerprints {
+                if let deleted = existingState?.deletedAssetStamps.keys {
                     existingFingerprints.formUnion(deleted)
                 }
                 if !existingFingerprints.isEmpty {

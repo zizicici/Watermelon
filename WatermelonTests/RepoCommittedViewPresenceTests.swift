@@ -337,7 +337,7 @@ final class RepoCommittedViewPresenceTests: XCTestCase {
                 )
             ],
             assetResources: [:],
-            deletedAssetFingerprints: []
+            deletedAssetStamps: [:]
         )
         let output = RepoMaterializer.MaterializeOutput(
             state: RepoSnapshotState(months: [monthA: monthState], observedClock: 0),

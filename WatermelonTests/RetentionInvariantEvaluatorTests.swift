@@ -76,7 +76,7 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
         let evidence = makeEvidence()
         let contract = makeContract()
         var afterMonth = monthStateWithAsset()
-        afterMonth.deletedAssetFingerprints = []
+        afterMonth.deletedAssetStamps = [:]
         let outcome = RetentionInvariantEvaluator.evaluatePostDeleteContract(
             evidence: evidence,
             afterState: RepoSnapshotState(months: [month: afterMonth], observedClock: preDeleteObservedClock),
@@ -227,8 +227,9 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
             assets: preDeleteMonthAssets,
             resources: [:],
             assetResources: [:],
-            deletedAssetFingerprints: [TestFixtures.fingerprint(0xA2)],
-            deletedAssetStamps: [:]
+            deletedAssetStamps: [
+                TestFixtures.fingerprint(0xA2): OpStamp(writerID: writerA, seq: 4, clock: 90)
+            ]
         )
     }
 

@@ -39,7 +39,6 @@ enum RepoRetentionEquivalence {
         dictionaryIsSuperset(before: before.assets, after: after.assets) &&
         dictionaryIsSuperset(before: before.resources, after: after.resources) &&
         dictionaryIsSuperset(before: before.assetResources, after: after.assetResources) &&
-        after.deletedAssetFingerprints.isSuperset(of: before.deletedAssetFingerprints) &&
         dictionaryIsSuperset(before: before.deletedAssetStamps, after: after.deletedAssetStamps)
     }
 
@@ -88,14 +87,9 @@ final class RepoRetentionEquivalenceTests: XCTestCase {
         var after = before
         var monthState = after.state.months[month]!
         monthState.resources.removeValue(forKey: resourcePath)
-        monthState.deletedAssetFingerprints.insert(fp)
+        monthState.deletedAssetStamps[fp] = OpStamp(writerID: Self.writerA, seq: 6, clock: 110)
         after = replacingMonth(after, with: monthState)
         XCTAssertFalse(RepoRetentionEquivalence.matches(before, after, month: month, mode: .retentionSuperset))
-    }
-
-    func testStrictAcceptsLegacyUnstampedRowsOnBothSides() {
-        let output = makeOutput(assetStamp: nil, resourceStamp: nil)
-        XCTAssertTrue(RepoRetentionEquivalence.matches(output, output, month: month, mode: .strict))
     }
 
     func testSupersetAcceptsExtraRowsButRejectsMissingRows() {
@@ -126,8 +120,8 @@ final class RepoRetentionEquivalenceTests: XCTestCase {
     }
 
     private func makeOutput(
-        assetStamp: OpStamp? = OpStamp(writerID: RepoRetentionEquivalenceTests.writerA, seq: 5, clock: 100),
-        resourceStamp: OpStamp? = OpStamp(writerID: RepoRetentionEquivalenceTests.writerA, seq: 5, clock: 100),
+        assetStamp: OpStamp = OpStamp(writerID: RepoRetentionEquivalenceTests.writerA, seq: 5, clock: 100),
+        resourceStamp: OpStamp = OpStamp(writerID: RepoRetentionEquivalenceTests.writerA, seq: 5, clock: 100),
         covered: CoveredRanges? = nil,
         observedClock: UInt64 = 100,
         observedSeq: [String: UInt64]? = nil
@@ -144,7 +138,6 @@ final class RepoRetentionEquivalenceTests: XCTestCase {
                     logicalName: "a.jpg"
                 )
             ],
-            deletedAssetFingerprints: [deletedFP],
             deletedAssetStamps: [deletedFP: OpStamp(writerID: Self.writerA, seq: 4, clock: 90)]
         )
         return RepoMaterializer.MaterializeOutput(
@@ -175,7 +168,7 @@ final class RepoRetentionEquivalenceTests: XCTestCase {
         )
     }
 
-    private func asset(stamp: OpStamp?) -> SnapshotAssetRow {
+    private func asset(stamp: OpStamp) -> SnapshotAssetRow {
         SnapshotAssetRow(
             assetFingerprint: fp,
             creationDateMs: nil,
@@ -186,7 +179,7 @@ final class RepoRetentionEquivalenceTests: XCTestCase {
         )
     }
 
-    private func resource(stamp: OpStamp?) -> SnapshotResourceRow {
+    private func resource(stamp: OpStamp) -> SnapshotResourceRow {
         SnapshotResourceRow(
             physicalRemotePath: resourcePath,
             contentHash: resourceHash,

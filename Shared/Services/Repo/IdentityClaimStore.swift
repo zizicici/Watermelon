@@ -164,8 +164,7 @@ nonisolated struct IdentityClaimStore: Sendable {
     func runOwnClaimElection(
         requestedRepoID: String,
         writerID: String,
-        firstFinalizedRepoID: String?,
-        loadLegacyCacheRepoID: () async throws -> String?
+        firstFinalizedRepoID: String?
     ) async throws -> OwnClaimElectionResult {
         try await healZeroByteSelfClaim(writerID: writerID)
 
@@ -183,9 +182,6 @@ nonisolated struct IdentityClaimStore: Sendable {
             isElectingFresh = false
         } else if let existingCanonical = claimElection.repoID {
             suggested = existingCanonical
-            isElectingFresh = false
-        } else if let legacyID = try await loadLegacyCacheRepoID() {
-            suggested = legacyID
             isElectingFresh = false
         } else if claimElection.ignoredSelfCorrupt {
             throw RepoBootstrap.BootstrapError.ioFailure(NSError(

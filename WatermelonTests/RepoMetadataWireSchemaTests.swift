@@ -32,10 +32,18 @@ final class RepoMetadataWireSchemaTests: XCTestCase {
         XCTAssertNil(parsed.createdAtMs)
     }
 
-    func testMigrationMarkerWire_legacyMissingVersionDefaultsMissingPhaseToPhase1() throws {
-        let parsed = try MigrationMarkerWire(data: Data("{}".utf8))
-        XCTAssertEqual(parsed.phase, .phase1)
-        XCTAssertNil(parsed.writerID)
+    func testMigrationMarkerWire_legacyMissingVersionDefaultsToPhase1() throws {
+        let legacy = try MigrationMarkerWire(data: Data("{}".utf8))
+        XCTAssertEqual(legacy.phase, .phase1)
+        XCTAssertNil(legacy.writerID)
+
+        let missingPhase = try JSONSerialization.data(withJSONObject: ["v": 2])
+        XCTAssertThrowsError(try MigrationMarkerWire(data: missingPhase)) { error in
+            guard case MigrationMarkerError.phaseWrongType = error else {
+                XCTFail("expected phaseWrongType, got \(error)")
+                return
+            }
+        }
     }
 
     func testMigrationMarkerWire_presentMalformedOrUnsupportedVersionRejects() throws {
@@ -53,14 +61,6 @@ final class RepoMetadataWireSchemaTests: XCTestCase {
     }
 
     func testMigrationMarkerWire_presentVersionRequiresValidPhase() throws {
-        let missingPhase = try JSONSerialization.data(withJSONObject: ["v": 2])
-        XCTAssertThrowsError(try MigrationMarkerWire(data: missingPhase)) { error in
-            guard case MigrationMarkerError.phaseWrongType = error else {
-                XCTFail("expected phaseWrongType, got \(error)")
-                return
-            }
-        }
-
         let booleanPhase = try JSONSerialization.data(withJSONObject: ["v": 2, "phase": false])
         XCTAssertThrowsError(try MigrationMarkerWire(data: booleanPhase)) { error in
             guard case MigrationMarkerError.phaseWrongType = error else {
@@ -70,15 +70,23 @@ final class RepoMetadataWireSchemaTests: XCTestCase {
         }
     }
 
-    func testIdentityClaimWire_acceptsMissingVersionAndRejectsBadPresentVersion() throws {
+    func testIdentityClaimWire_requiresVersionAndRejectsBadVersion() throws {
         let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        let legacy = try JSONSerialization.data(withJSONObject: [
+        let valid = try JSONSerialization.data(withJSONObject: [
+            "v": 1,
             "repo_id": repoID.uppercased(),
             "created_at_ms": 1,
             "writer_id": "writer"
         ])
-        let parsed = try IdentityClaimWire(data: legacy)
+        let parsed = try IdentityClaimWire(data: valid)
         XCTAssertEqual(parsed.repoID, repoID)
+
+        let missingVersion = try JSONSerialization.data(withJSONObject: [
+            "repo_id": repoID,
+            "created_at_ms": 1,
+            "writer_id": "writer"
+        ])
+        XCTAssertThrowsError(try IdentityClaimWire(data: missingVersion))
 
         let unsupported = try JSONSerialization.data(withJSONObject: [
             "v": 999,
@@ -100,15 +108,17 @@ final class RepoMetadataWireSchemaTests: XCTestCase {
 
     func testRepoIdentityFinalizationAndCacheWireRequireRepoIDOnlyForAuthority() throws {
         let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        let final = try RepoIdentityFinalizationWire(data: Data(#"{"repo_id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"}"#.utf8))
+        let final = try RepoIdentityFinalizationWire(data: Data(#"{"v":1,"repo_id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"}"#.utf8))
         XCTAssertEqual(final.repoID, repoID)
         XCTAssertNil(final.formatVersion)
 
         let cache = try RepoCacheWire(repoID: repoID, createdAtMs: 10, createdByWriter: "writer").encode()
         XCTAssertEqual(try RepoCacheWire(data: cache).repoID, repoID)
 
+        XCTAssertThrowsError(try RepoIdentityFinalizationWire(data: Data(#"{"repo_id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"}"#.utf8)))
         XCTAssertThrowsError(try RepoIdentityFinalizationWire(data: Data(#"{"repo_id":"repo"}"#.utf8)))
         XCTAssertThrowsError(try RepoIdentityFinalizationWire(data: Data(#"{"v":999,"repo_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#.utf8)))
+        XCTAssertThrowsError(try RepoCacheWire(data: Data(#"{"repo_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#.utf8)))
         XCTAssertThrowsError(try RepoCacheWire(data: Data(#"{"v":true,"repo_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}"#.utf8)))
     }
 }

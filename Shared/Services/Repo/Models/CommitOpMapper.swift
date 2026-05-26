@@ -39,20 +39,15 @@ enum CommitOpMapper {
                 "assetFingerprint": payload.assetFingerprint.hexString,
                 "reason": payload.reason.rawValue
             ]
-            if let basis = payload.observedBasis {
-                // Additive v2 field — older v2 readers ignore it and apply the
-                // tombstone unconditionally (command-style). LWW gate against
-                // stale adds covers them once snapshots carry stamps.
-                var basisDict: [String: Any] = [
-                    "lamportWatermark": basis.lamportWatermark
-                ]
-                if !basis.perWriterMaxSeq.isEmpty {
-                    // Direct UInt64; Int64(bitPattern:) flipped values > Int64.max to
-                    // negatives which the decoder rejected on round-trip.
-                    basisDict["perWriterMaxSeq"] = basis.perWriterMaxSeq
-                }
-                dict["observedBasis"] = basisDict
+            var basisDict: [String: Any] = [
+                "lamportWatermark": payload.observedBasis.lamportWatermark
+            ]
+            if !payload.observedBasis.perWriterMaxSeq.isEmpty {
+                // Direct UInt64; Int64(bitPattern:) flipped values > Int64.max to
+                // negatives which the decoder rejected on round-trip.
+                basisDict["perWriterMaxSeq"] = payload.observedBasis.perWriterMaxSeq
             }
+            dict["observedBasis"] = basisDict
             body = dict
         }
         let dict: [String: Any] = [
@@ -161,23 +156,22 @@ enum CommitOpMapper {
             guard let reason = CommitTombstoneBody.Reason(rawValue: reasonRaw) else {
                 throw CommitWireError.unknownReason(reasonRaw)
             }
-            var basis: TombstoneObservationBasis?
-            if let basisDict = bodyDict["observedBasis"] as? [String: Any] {
-                let watermark = try requireUInt64(basisDict, "lamportWatermark")
-                var perWriter: [String: UInt64] = [:]
-                if let raw = basisDict["perWriterMaxSeq"] as? [String: Any] {
-                    for (writer, value) in raw {
-                        perWriter[writer] = try mapValidation {
-                            try RepoWireValidator.requireUInt64(value, field: "perWriterMaxSeq[\(writer)]")
-                        }
+            guard let basisDict = bodyDict["observedBasis"] as? [String: Any] else {
+                throw CommitWireError.missingField("observedBasis")
+            }
+            let watermark = try requireUInt64(basisDict, "lamportWatermark")
+            var perWriter: [String: UInt64] = [:]
+            if let raw = basisDict["perWriterMaxSeq"] as? [String: Any] {
+                for (writer, value) in raw {
+                    perWriter[writer] = try mapValidation {
+                        try RepoWireValidator.requireUInt64(value, field: "perWriterMaxSeq[\(writer)]")
                     }
                 }
-                basis = TombstoneObservationBasis(perWriterMaxSeq: perWriter, lamportWatermark: watermark)
             }
             body = .tombstoneAsset(CommitTombstoneBody(
                 assetFingerprint: fp,
                 reason: reason,
-                observedBasis: basis
+                observedBasis: TombstoneObservationBasis(perWriterMaxSeq: perWriter, lamportWatermark: watermark)
             ))
         default:
             throw CommitWireError.unknownOpKind(kind)

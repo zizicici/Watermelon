@@ -236,7 +236,7 @@ struct RepoRetentionDeletePreflightService: Sendable {
             return .blocked(blockers: blockers, report: report)
         }
 
-        // Authoritative identity check against repo.json, not the materializer echo.
+        // Authoritative identity check against finalized identity/claims, not the materializer echo.
         do {
             switch try await RepoCanonicalIdentityReader(client: client, basePath: basePath).loadCanonical() {
             case .absent:

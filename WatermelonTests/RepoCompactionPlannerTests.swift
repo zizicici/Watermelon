@@ -85,7 +85,6 @@ final class RepoCompactionPlannerTests: XCTestCase {
             checkpointByteThreshold: 500,
             minimumCheckpointIntervalSeconds: 0,
             retentionStalenessThresholdSeconds: 86_400,
-            legacyClientGraceSeconds: 604_800,
             snapshotFallbackKeepCount: 2
         )
         let client = try await makeClient()

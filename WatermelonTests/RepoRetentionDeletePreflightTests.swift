@@ -362,7 +362,7 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
 
     func testAuthoritativeRepoIdentityMismatch_blocksAfterValidBarriers() async throws {
         let client = try await makeReadyClient()
-        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: foreignRepoID, writerID: writerA)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: foreignRepoID, writerID: writerA)
 
         let result = try await service(client: client).makePlan(
             month: month,
@@ -406,7 +406,7 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
             ], listComplete: true)
         ).makePlan(month: month, expectedRepoID: repoID, mode: .dryRun, nowMs: nowMs)
         XCTAssertTrue(blockers(in: result).contains(.retentionLivenessBlocked([
-            .legacyPeerWithinGrace(writerID: writerB, lastSeenMs: nowMs - 1_000)
+            .legacyPeer(writerID: writerB, lastSeenMs: nowMs - 1_000)
         ])))
 
         let selfOnly = try await makeReadyClient()
@@ -907,6 +907,7 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
         client.setAtomicCreateGuarantee(.exclusive)
         try await client.connect()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: repoID, writerID: writerA)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID, writerID: writerA)
         if injectVersion {
             try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerA)
         }
@@ -1045,7 +1046,7 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
             livenessGate: livenessGate ?? RetentionLivenessGate(
                 requiredCompleteView: true,
                 requiredNoActiveNonSelfWriters: true,
-                legacyClientGraceMs: Int64(policy.legacyClientGraceSeconds) * 1000
+                legacyClientGraceMs: 0
             )
         )
         await client.injectFile(
@@ -1140,7 +1141,6 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
         checkpointByteThreshold: 1,
         minimumCheckpointIntervalSeconds: 0,
         retentionStalenessThresholdSeconds: 60,
-        legacyClientGraceSeconds: 120,
         snapshotFallbackKeepCount: 2
     )
 }

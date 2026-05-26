@@ -446,6 +446,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         try await client.createDirectory(path: basePath)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
 
         let service = RemoteIndexSyncService()
@@ -1163,6 +1164,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.createDirectory(path: basePath)
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
         try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
@@ -1182,6 +1184,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.createDirectory(path: basePath)
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
         try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
         try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")

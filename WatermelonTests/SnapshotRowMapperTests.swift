@@ -88,17 +88,17 @@ final class SnapshotRowMapperTests: XCTestCase {
         }
     }
 
-    func testHeaderAcceptsMissingRepoIDAsLegacy() throws {
-        // Legacy snapshots (pre-Iter4) don't carry repoID; decoder yields empty string
-        // and materializer accepts (foreign-id filter then no-ops on empty).
+    func testHeaderRejectsMissingRepoID() {
         let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","covered":{}}"#
-        let row = try SnapshotRowMapper.decodeLine(raw)
-        guard case .header(let header) = row else { XCTFail("expected header"); return }
-        XCTAssertEqual(header.repoID, "")
+        XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
+            guard case SnapshotWireError.missingField("repoID") = err else {
+                XCTFail("expected missing repoID, got \(err)")
+                return
+            }
+        }
     }
 
     func testHeaderRejectsExplicitEmptyRepoID() {
-        // Field-absent legacy snapshots are tolerated; explicit empty string is corruption.
         let raw = #"{"t":"header","v":1,"scope":"month:2026-05","writerID":"w","repoID":"","covered":{}}"#
         XCTAssertThrowsError(try SnapshotRowMapper.decodeLine(raw)) { err in
             guard case SnapshotWireError.malformed = err else {
@@ -234,17 +234,13 @@ final class SnapshotRowMapperTests: XCTestCase {
         XCTAssertEqual(parsed, row)
     }
 
-    /// Forward-compat: stamps on non-asset keyTypes (future V3 resource-level tombstones)
-    /// must NOT make the whole snapshot unreadable. Decoder accepts the row, strips the
-    /// stamp (asset-only field semantically), and the materializer's skip-by-keyType
-    /// handles the rest.
-    func testDeletedKeyNonAssetKeyTypeAcceptsAndIgnoresStamp() throws {
+    func testDeletedKeyNonAssetKeyTypeRequiresStamp() throws {
         let raw = #"{"t":"deleted_key","r":{"keyType":"resource","keyValue":"some-resource-id","lastWriterID":"00000000-0000-0000-0000-000000000000","lastSeq":1,"lastClock":1}}"#
         let decoded = try SnapshotRowMapper.decodeLine(raw)
         guard case .deletedKey(let row) = decoded else { XCTFail("deletedKey"); return }
         XCTAssertEqual(row.keyType, .resource)
         XCTAssertEqual(row.keyValue, "some-resource-id")
-        XCTAssertNil(row.stamp, "non-asset keyType drops the stamp at decode")
+        XCTAssertEqual(row.stamp, OpStamp(writerID: "00000000-0000-0000-0000-000000000000", seq: 1, clock: 1))
     }
 
     /// asset deletedKey is the dedup-suppression boundary; truncated hex would collide
