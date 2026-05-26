@@ -163,23 +163,16 @@ final class BackgroundBackupRunner {
         if profile.storageProfile.requiresPassword {
             do {
                 let pw = try keychainService.readPassword(account: profile.credentialRef)
-                guard !pw.isEmpty else {
-                    await writer.appendLog(
-                        String(format: String(localized: "backup.auto.log.profileMissingPassword"), profile.name),
-                        level: .warning
-                    )
-                    return .skipped
-                }
                 password = pw
             } catch KeychainError.unhandled(let status) where status == errSecItemNotFound {
                 await writer.appendLog(
-                    String(format: String(localized: "backup.auto.log.profileMissingPassword"), profile.name),
+                    String(format: String(localized: "backup.auto.log.profileMissingCredentials"), profile.name),
                     level: .warning
                 )
                 return .skipped
             } catch {
                 await writer.appendLog(
-                    String(format: String(localized: "backup.auto.log.profilePasswordReadFailed"), profile.name, error.localizedDescription),
+                    String(format: String(localized: "backup.auto.log.profileCredentialsReadFailed"), profile.name, error.localizedDescription),
                     level: .warning
                 )
                 return .skipped

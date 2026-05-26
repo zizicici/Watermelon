@@ -111,7 +111,7 @@ struct AddS3ProfileSheet: View {
     }
 
     private var hasMinimumFields: Bool {
-        !endpoint.trimmed.isEmpty && !bucket.trimmed.isEmpty && !accessKey.trimmed.isEmpty && !secretKey.isEmpty
+        !endpoint.trimmed.isEmpty && !bucket.trimmed.isEmpty && !accessKey.trimmed.isEmpty
     }
 
     private func verify() {

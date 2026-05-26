@@ -835,7 +835,7 @@ final class HomeViewController: UIViewController {
                     .init(type: .version, value: SpecificationsViewController.getAppVersion() ?? ""),
                     .init(type: .manufacturer, value: "@App君"),
                     .init(type: .publisher, value: "ZIZICICI LIMITED"),
-                    .init(type: .dateOfProduction, value: "2026/05/08"),
+                    .init(type: .dateOfProduction, value: "2026/05/26"),
                     .init(type: .license, value: "粤ICP备2025448771号-6A"),
                 ],
                 thirdPartyLibraries: [
@@ -1526,14 +1526,25 @@ final class HomeViewController: UIViewController {
     }
 
     private func presentPasswordPrompt(for profile: ServerProfileRecord, completion: @escaping (String) -> Void) {
-        let alert = UIAlertController(title: String(localized: "home.alert.passwordPrompt"), message: profile.name, preferredStyle: .alert)
+        let title: String
+        let placeholder: String
+        switch profile.resolvedStorageType {
+        case .s3:
+            title = String(localized: "home.alert.s3SecretKeyPrompt")
+            placeholder = String(localized: "auth.s3.placeholder.secretKey")
+        default:
+            title = String(localized: "home.alert.passwordPrompt")
+            placeholder = String(localized: "home.alert.passwordPlaceholder")
+        }
+
+        let alert = UIAlertController(title: title, message: profile.name, preferredStyle: .alert)
         alert.addTextField { textField in
-            textField.placeholder = String(localized: "home.alert.passwordPlaceholder")
+            textField.placeholder = placeholder
             textField.isSecureTextEntry = true
         }
         alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
         alert.addAction(UIAlertAction(title: String(localized: "common.connect"), style: .default) { _ in
-            guard let password = alert.textFields?.first?.text, !password.isEmpty else { return }
+            guard let password = alert.textFields?.first?.text else { return }
             completion(password)
         })
         present(alert, animated: true)

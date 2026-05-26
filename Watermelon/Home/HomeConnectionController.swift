@@ -57,8 +57,7 @@ final class HomeConnectionController {
         }
 
         if profile.storageProfile.requiresPassword {
-            guard let password = try? dependencies.keychainService.readPassword(account: profile.credentialRef),
-                  !password.isEmpty else {
+            guard let password = try? dependencies.keychainService.readPassword(account: profile.credentialRef) else {
                 return
             }
             try? dependencies.keychainService.save(password: password, account: profile.credentialRef)
@@ -76,8 +75,7 @@ final class HomeConnectionController {
             return
         }
 
-        if let saved = try? dependencies.keychainService.readPassword(account: profile.credentialRef),
-           !saved.isEmpty {
+        if let saved = try? dependencies.keychainService.readPassword(account: profile.credentialRef) {
             try? dependencies.keychainService.save(password: saved, account: profile.credentialRef)
             connect(profile: profile, password: saved)
             return

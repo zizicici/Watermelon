@@ -52,6 +52,10 @@ final class AddSMBServerLoginViewController: UIViewController {
     private var usernameText = ""
     private var passwordText = ""
     private var domainText = ""
+    private let hasSavedPassword: Bool
+    private var passwordChanged = false
+    private var passwordRevealed = false
+    private var revealedSavedPassword: String?
 
     init(
         dependencies: DependencyContainer,
@@ -65,6 +69,7 @@ final class AddSMBServerLoginViewController: UIViewController {
         self.editingProfile = editingProfile
         self.shouldPopToRootOnSave = shouldPopToRootOnSave
         self.onSaved = onSaved
+        self.hasSavedPassword = Self.hasSavedPassword(dependencies: dependencies, editingProfile: editingProfile)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -105,10 +110,12 @@ final class AddSMBServerLoginViewController: UIViewController {
         tableView.rowHeight = UITableView.automaticDimension
         tableView.estimatedRowHeight = 44
         tableView.register(SettingsTextFieldCell.self, forCellReuseIdentifier: SettingsTextFieldCell.reuseIdentifier)
+        tableView.register(CredentialTextFieldCell.self, forCellReuseIdentifier: CredentialTextFieldCell.reuseIdentifier)
 
         view.addSubview(tableView)
         tableView.snp.makeConstraints { make in
-            make.edges.equalTo(view.safeAreaLayoutGuide)
+            make.top.equalToSuperview()
+            make.leading.trailing.bottom.equalTo(view.safeAreaLayoutGuide)
         }
     }
 
@@ -163,22 +170,18 @@ final class AddSMBServerLoginViewController: UIViewController {
     private func buildAuthContext() throws -> SMBServerAuthContext {
         let host = hostText.trimmingCharacters(in: .whitespacesAndNewlines)
         let username = usernameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let passwordInput = passwordText.trimmingCharacters(in: .whitespacesAndNewlines)
         let domain = domainText.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let password: String
-        if !passwordInput.isEmpty {
-            password = passwordInput
-        } else if let editingProfile,
-                  let saved = try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef),
-                  !saved.isEmpty {
-            password = saved
+        if hasSavedPassword, !passwordChanged, let editingProfile {
+            password = try dependencies.keychainService.readPassword(account: editingProfile.credentialRef)
         } else {
-            password = ""
+            // Remote credentials may intentionally start or end with whitespace.
+            password = passwordText
         }
 
-        guard !host.isEmpty, !username.isEmpty, !password.isEmpty else {
+        guard !host.isEmpty, !username.isEmpty else {
             throw NSError(domain: "AddSMBServerLogin", code: 1, userInfo: [NSLocalizedDescriptionKey: String(localized: "auth.smb.login.validation")])
         }
 
@@ -190,6 +193,11 @@ final class AddSMBServerLoginViewController: UIViewController {
             password: password,
             domain: domain.isEmpty ? nil : domain
         )
+    }
+
+    private static func hasSavedPassword(dependencies: DependencyContainer, editingProfile: ServerProfileRecord?) -> Bool {
+        guard let editingProfile else { return false }
+        return (try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef)) != nil
     }
 
     @MainActor
@@ -255,9 +263,12 @@ final class AddSMBServerLoginViewController: UIViewController {
         let indexPath = indexPath(for: field)
         tableView.scrollToRow(at: indexPath, at: .middle, animated: true)
         DispatchQueue.main.async { [weak self] in
-            guard let self,
-                  let cell = self.tableView.cellForRow(at: indexPath) as? SettingsTextFieldCell else { return }
-            cell.focus()
+            guard let self else { return }
+            if let cell = self.tableView.cellForRow(at: indexPath) as? SettingsTextFieldCell {
+                cell.focus()
+            } else if let cell = self.tableView.cellForRow(at: indexPath) as? CredentialTextFieldCell {
+                cell.focus()
+            }
         }
     }
 
@@ -276,6 +287,40 @@ final class AddSMBServerLoginViewController: UIViewController {
         case .domain:
             return IndexPath(row: 2, section: Section.credentials.rawValue)
         }
+    }
+
+    private func passwordDisplayText() -> String {
+        if passwordChanged { return passwordText }
+        return passwordRevealed ? (revealedSavedPassword ?? "") : passwordText
+    }
+
+    private func shouldMaskPassword() -> Bool {
+        !passwordRevealed && hasSavedPassword && !passwordChanged
+    }
+
+    @MainActor
+    private func revealPasswordTapped() async {
+        let wasRevealed = passwordRevealed
+        view.endEditing(true)
+        if wasRevealed {
+            passwordRevealed = false
+            revealedSavedPassword = nil
+            tableView.reloadRows(at: [indexPath(for: .password)], with: .none)
+            return
+        }
+        if passwordChanged || !hasSavedPassword {
+            passwordRevealed = true
+            tableView.reloadRows(at: [indexPath(for: .password)], with: .none)
+            return
+        }
+        guard await CredentialRevealAuthenticator.authenticate(localizedReason: String(localized: "auth.password.revealReason")),
+              let editingProfile,
+              let saved = try? dependencies.keychainService.readPassword(account: editingProfile.credentialRef) else {
+            return
+        }
+        revealedSavedPassword = saved
+        passwordRevealed = true
+        tableView.reloadRows(at: [indexPath(for: .password)], with: .none)
     }
 }
 
@@ -311,24 +356,30 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
     func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         guard let section = Section(rawValue: section) else { return nil }
         switch section {
-        case .name, .server:
+        case .name:
             return nil
+        case .server:
+            return String(localized: "auth.smb.login.footerServer")
         case .credentials:
             return editingProfile == nil ? String(localized: "auth.smb.login.footerNew") : String(localized: "auth.smb.login.footerEdit")
         }
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        guard let section = Section(rawValue: indexPath.section),
-              let cell = tableView.dequeueReusableCell(
+        guard let section = Section(rawValue: indexPath.section) else {
+            return UITableViewCell()
+        }
+
+        func makeTextCell() -> SettingsTextFieldCell? {
+            tableView.dequeueReusableCell(
                 withIdentifier: SettingsTextFieldCell.reuseIdentifier,
                 for: indexPath
-              ) as? SettingsTextFieldCell else {
-            return UITableViewCell()
+            ) as? SettingsTextFieldCell
         }
 
         switch section {
         case .name:
+            guard let cell = makeTextCell() else { return UITableViewCell() }
             cell.configure(
                 title: nil,
                 text: nameText,
@@ -339,7 +390,9 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
             )
             cell.onTextChanged = { [weak self] in self?.nameText = $0 }
             cell.onReturn = { [weak self] in self?.focusField(.host) }
+            return cell
         case .server:
+            guard let cell = makeTextCell() else { return UITableViewCell() }
             if indexPath.row == 0 {
                 cell.configure(
                     title: String(localized: "auth.field.host"),
@@ -362,9 +415,11 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
                 cell.onTextChanged = { [weak self] in self?.portText = $0 }
                 cell.onReturn = { [weak self] in self?.focusField(.username) }
             }
+            return cell
         case .credentials:
             switch indexPath.row {
             case 0:
+                guard let cell = makeTextCell() else { return UITableViewCell() }
                 cell.configure(
                     title: String(localized: "auth.field.username"),
                     text: usernameText,
@@ -374,20 +429,44 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
                 )
                 cell.onTextChanged = { [weak self] in self?.usernameText = $0 }
                 cell.onReturn = { [weak self] in self?.focusField(.password) }
+                return cell
             case 1:
+                guard let cell = tableView.dequeueReusableCell(
+                    withIdentifier: CredentialTextFieldCell.reuseIdentifier,
+                    for: indexPath
+                ) as? CredentialTextFieldCell else { return UITableViewCell() }
                 cell.configure(
                     title: String(localized: "auth.field.password"),
-                    text: passwordText,
-                    placeholder: editingProfile == nil
-                        ? String(localized: "auth.smb.login.placeholder.password")
-                        : String(localized: "auth.passwordPlaceholderEdit"),
-                    isSecure: true,
-                    returnKeyType: .next,
+                    text: passwordDisplayText(),
+                    placeholder: String(localized: "auth.smb.login.placeholder.password"),
+                    isMasked: shouldMaskPassword(),
+                    isRevealed: passwordRevealed,
+                    revealAccessibilityLabel: String(localized: "auth.password.reveal"),
+                    hideAccessibilityLabel: String(localized: "auth.password.hide"),
                     inputAccessoryView: keyboardToolbar
                 )
-                cell.onTextChanged = { [weak self] in self?.passwordText = $0 }
+                cell.onTextChanged = { [weak self] value in
+                    self?.passwordChanged = true
+                    self?.passwordText = value
+                }
+                cell.onMaskedCredentialEdited = { [weak self] value in
+                    self?.passwordChanged = true
+                    self?.passwordRevealed = false
+                    self?.passwordText = value
+                }
+                cell.onRevealTapped = { [weak self] in
+                    Task { @MainActor [weak self] in await self?.revealPasswordTapped() }
+                }
+                cell.onEndEditing = { [weak self] in
+                    guard let self else { return }
+                    self.passwordRevealed = false
+                    self.revealedSavedPassword = nil
+                    self.tableView.reloadRows(at: [self.indexPath(for: .password)], with: .none)
+                }
                 cell.onReturn = { [weak self] in self?.focusField(.domain) }
+                return cell
             default:
+                guard let cell = makeTextCell() else { return UITableViewCell() }
                 cell.configure(
                     title: String(localized: "auth.field.domain"),
                     text: domainText,
@@ -397,9 +476,8 @@ extension AddSMBServerLoginViewController: UITableViewDataSource, UITableViewDel
                 )
                 cell.onTextChanged = { [weak self] in self?.domainText = $0 }
                 cell.onReturn = { [weak self] in self?.focusField(nil) }
+                return cell
             }
         }
-
-        return cell
     }
 }

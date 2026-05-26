@@ -137,7 +137,6 @@ struct AddSMBProfileSheet: View {
     private var credentialsValid: Bool {
         !host.trimmed.isEmpty &&
         !username.trimmed.isEmpty &&
-        !password.isEmpty &&
         Int(portString) != nil
     }
 
