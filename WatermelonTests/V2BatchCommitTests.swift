@@ -341,6 +341,150 @@ final class V2BatchCommitTests: XCTestCase {
                        "failed must bump by the number of provisional cells rolled back (2), not by unique fingerprints (1)")
     }
 
+    // Bug-IX P01 R01 Finding 1: when a same-batch subset-tombstone lands durably (commit op
+    // `tombstoneAsset(F_A)` co-resident with `addAsset(F_B)`), the aggregator buffer must clear
+    // F_A as well as F_B. Without this, a later hard-abort would revert F_A's provisional success
+    // into a spurious `failed` even though F_A's durable outcome is "row absent, tombstone stamped,
+    // bytes preserved via F_B".
+    func testAggregator_MarkBatchDurable_WithTombstones_ClearsTombstonedBuffer() async {
+        let aggregator = ParallelBackupProgressAggregator(total: 2)
+        let fpA = TestFixtures.assetFingerprint(0xAA)
+        let fpB = TestFixtures.assetFingerprint(0xBB)
+        _ = await aggregator.record(result: AssetProcessResult(
+            status: .success, reason: nil, displayName: "a",
+            assetFingerprint: fpA,
+            timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 1
+        ))
+        _ = await aggregator.record(result: AssetProcessResult(
+            status: .success, reason: nil, displayName: "b",
+            assetFingerprint: fpB,
+            timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 1
+        ))
+        await aggregator.recordProvisional(
+            month: monthKey, fingerprint: fpA,
+            assetLocalIdentifier: "local-a", status: .success
+        )
+        await aggregator.recordProvisional(
+            month: monthKey, fingerprint: fpB,
+            assetLocalIdentifier: "local-b", status: .success
+        )
+        // Commit lands with addAsset(F_B) and tombstoneAsset(F_A).
+        await aggregator.markBatchDurable(
+            month: monthKey,
+            committedAssetFingerprints: [fpB],
+            committedTombstoneFingerprints: [fpA]
+        )
+
+        let pending = await aggregator.provisionalCountForTest(month: monthKey)
+        XCTAssertEqual(pending, 0,
+                       "tombstoned fingerprint F_A must be cleared from the buffer once its tombstone commit lands")
+
+        // A later hard-abort must NOT revert F_A or F_B — both are durable.
+        let rolledBack = await aggregator.rollBackProvisionalBatch(month: monthKey)
+        XCTAssertTrue(rolledBack.isEmpty,
+                      "no provisional cells should survive past the durable commit of F_A's tombstone + F_B's add")
+        let state = await aggregator.snapshot()
+        XCTAssertEqual(state.succeeded, 2,
+                       "succeeded counters must stay; durable tombstone is a valid outcome for F_A")
+        XCTAssertEqual(state.failed, 0,
+                       "tombstoned-but-durable F_A must not flip into failed on a later rollback")
+    }
+
+    // Bug-IX P01 R04 Claude B Finding 1: when an upsertAsset(B, replacingSubsetFingerprints={F_A})
+    // tombstones F_A in-memory, F_A's earlier provisional success record (for A_localID) must be
+    // cleared once F_B's `addAsset` op commits durably — even if F_A's `tombstoneAsset` op never
+    // reaches a durable commit (e.g. multi-chunk drain whose tombstone-only chunk fails on
+    // connection loss). Without the carrier→subsets cascade, a subsequent hard-abort rollback
+    // would revert A_localID's provisional success into a spurious `failed` despite F_B carrying
+    // A's bytes durably.
+    func testAggregator_MarkBatchDurable_TombstoneOpDeferred_CarrierCascadesToSubset() async {
+        let aggregator = ParallelBackupProgressAggregator(total: 2)
+        let fpA = TestFixtures.assetFingerprint(0xA1)
+        let fpB = TestFixtures.assetFingerprint(0xB2)
+        _ = await aggregator.record(result: AssetProcessResult(
+            status: .success, reason: nil, displayName: "a",
+            assetFingerprint: fpA,
+            timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 1
+        ))
+        _ = await aggregator.record(result: AssetProcessResult(
+            status: .success, reason: nil, displayName: "b",
+            assetFingerprint: fpB,
+            timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 1
+        ))
+        // Asset A processed first with no subset replacement.
+        await aggregator.recordProvisional(
+            month: monthKey, fingerprint: fpA,
+            assetLocalIdentifier: "local-a", status: .success
+        )
+        // Asset B's `upsertAsset(B, replacingSubsetFingerprints={fpA})` tombstones fpA in-memory.
+        await aggregator.recordProvisional(
+            month: monthKey, fingerprint: fpB,
+            assetLocalIdentifier: "local-b", status: .success,
+            tombstonedSubsets: [fpA]
+        )
+
+        // The same-batch tombstone op falls into a later chunk that fails — only the chunk
+        // carrying B's addAsset commits durably. Outcome shape: adds={fpB}, tombstones=[].
+        await aggregator.markBatchDurable(
+            month: monthKey,
+            committedAssetFingerprints: [fpB],
+            committedTombstoneFingerprints: []
+        )
+
+        let pending = await aggregator.provisionalCountForTest(month: monthKey)
+        XCTAssertEqual(pending, 0,
+                       "carrier→subsets cascade must clear fpA even when its tombstone op didn't land durably")
+
+        // A subsequent hard-abort must NOT revert A_localID — F_B carries A's bytes durably.
+        let rolledBack = await aggregator.rollBackProvisionalBatch(month: monthKey)
+        XCTAssertTrue(rolledBack.isEmpty,
+                      "no provisional cells should survive past the carrier's durable commit")
+        let state = await aggregator.snapshot()
+        XCTAssertEqual(state.succeeded, 2,
+                       "succeeded counters stay put; A_localID's bytes are reachable via F_B")
+        XCTAssertEqual(state.failed, 0,
+                       "A_localID must not flip into failed on a hard-abort after F_B's durable commit")
+    }
+
+    // Bug-IX P01 R04 Claude B Finding 1 — companion: if the carrier itself fails (no chunk lands),
+    // BOTH F_A and F_B must roll back. The carrier→subsets map must not pre-clear F_A in the
+    // all-fail path.
+    func testAggregator_AllChunksFail_RollBackRevertsBothCarrierAndSubset() async {
+        let aggregator = ParallelBackupProgressAggregator(total: 2)
+        let fpA = TestFixtures.assetFingerprint(0xA3)
+        let fpB = TestFixtures.assetFingerprint(0xB4)
+        _ = await aggregator.record(result: AssetProcessResult(
+            status: .success, reason: nil, displayName: "a",
+            assetFingerprint: fpA,
+            timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 1
+        ))
+        _ = await aggregator.record(result: AssetProcessResult(
+            status: .success, reason: nil, displayName: "b",
+            assetFingerprint: fpB,
+            timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 1
+        ))
+        await aggregator.recordProvisional(
+            month: monthKey, fingerprint: fpA,
+            assetLocalIdentifier: "local-a", status: .success
+        )
+        await aggregator.recordProvisional(
+            month: monthKey, fingerprint: fpB,
+            assetLocalIdentifier: "local-b", status: .success,
+            tombstonedSubsets: [fpA]
+        )
+
+        // No durable commit at all (e.g. the single-chunk flush failed entirely before any op
+        // reached the remote).
+        let rolledBack = await aggregator.rollBackProvisionalBatch(month: monthKey)
+        XCTAssertEqual(rolledBack, [fpA, fpB],
+                       "both carrier and its subset must roll back when nothing committed")
+        let state = await aggregator.snapshot()
+        XCTAssertEqual(state.succeeded, 0,
+                       "succeeded counters must revert when no commit landed for either fingerprint")
+        XCTAssertEqual(state.failed, 2,
+                       "both A_localID and B_localID must flip into failed under the all-fail path")
+    }
+
     // U01 fixer R01: multi-chunk partial-fail must surface chunk-1 durability so downstream can
     // drain intents + publish the durable sweep. Without surfacing, the executor's hard-abort
     // catch would roll back chunk-1's fingerprints and discard their hash-index intents despite

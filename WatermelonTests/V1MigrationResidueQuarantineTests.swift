@@ -157,6 +157,29 @@ final class V1MigrationResidueQuarantineTests: XCTestCase {
         XCTAssertTrue(markerSurvived)
     }
 
+    // Bug-IX P01 R05 Codex A / Checker Finding 2: a directory squatting at the reserved
+    // partial-migration marker path must gate residue deletion. This matches the R04 (F10)
+    // fail-closed handling in RepoRetentionDeletePreflightService and
+    // RepoSnapshotDeletePreflightService — a damaged marker is not proof of marker absence.
+    func testSweep_partialMigrationMarkerAsDirectory_preservesResidue() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+
+        let residuePath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let markerPath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        await client.injectFile(path: residuePath, data: Data("residue".utf8))
+        try await client.createDirectory(path: markerPath)
+
+        let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        try await quarantine.sweepResidueManifests()
+
+        let residueSurvived = await client.hasFile(residuePath)
+        XCTAssertTrue(
+            residueSurvived,
+            "a directory-shaped partial-migration marker must preserve residue; deleting it would lose evidence the later destructive preflights need"
+        )
+    }
+
     func testSweep_noPartialMigrationMarker_deletesResidue() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

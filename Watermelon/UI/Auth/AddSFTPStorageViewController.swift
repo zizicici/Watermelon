@@ -149,6 +149,15 @@ final class AddSFTPStorageViewController: UIViewController {
     private func saveTapped() {
         dismissKeyboard()
         guard saveTask == nil else { return }
+        // Editor may stay open across a background V2 run claiming the shared execution lease;
+        // committing now would mutate `server_profiles` / keychain under that in-flight runtime.
+        if editingProfile != nil, ProfileEditorMutationGate.isBlocked(dependencies: dependencies) {
+            presentAlert(
+                title: String(localized: "common.error"),
+                message: String(localized: "home.alert.maintenanceInProgress")
+            )
+            return
+        }
 
         let draft: ValidatedDraft
         do {

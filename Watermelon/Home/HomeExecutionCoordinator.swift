@@ -125,6 +125,16 @@ final class HomeExecutionCoordinator {
     // MARK: - Enter / Exit
 
     func enter(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey]) {
+        // Atomic claim against any background V2 runtime or manual verify in flight. Without this,
+        // a BGProcessingTask that started while the app was backgrounded could still own the V2
+        // lease when the user foregrounds and taps Backup — two runtimes against one repo.
+        guard dependencies.appRuntimeFlags.tryBeginExecution() else {
+            onAlert?(
+                String(localized: "common.error"),
+                String(localized: "home.alert.maintenanceInProgress")
+            )
+            return
+        }
         executionTask = nil
         transientControlState = nil
         executionSettingsSnapshot = ExecutionSettingsSnapshot.fromCurrentSettings()
@@ -142,7 +152,6 @@ final class HomeExecutionCoordinator {
         }
         backupBridge = BackupSessionAsyncBridge(backupSessionController: controller)
         downloadHelper = DownloadWorkflowHelper(dependencies: dependencies)
-        dependencies.appRuntimeFlags.setExecuting(true)
         notifyStateChanged()
         startExecution()
     }
@@ -158,16 +167,30 @@ final class HomeExecutionCoordinator {
             backupSessionController?.removeEventObserver(backupEventObserverID)
             self.backupEventObserverID = nil
         }
+        let bridgeToAwait = backupBridge
         backupBridge?.cancel()
         downloadHelper?.cancel()
         session.reset()
         setStatusText(String(localized: "home.execution.notStarted"), notifyState: false)
         logEntries.removeAll(keepingCapacity: true)
         finalizeSessionLogWriter()
-        // Must precede `notifyStateChanged` — guards reading `isExecuting` need the cleared value.
-        dependencies.appRuntimeFlags.setExecuting(false)
         notifyLogObservers()
         notifyStateChanged()
+        // Defer the shared execution lease release until the cancelled BackupSessionController
+        // run finishes unwinding. `BackupSessionAsyncBridge.cancel()` resumes the upload
+        // continuation immediately, but the underlying BackupRunDriver `runTask` still owns the
+        // V2 runtime services / metadata client / data client cleanup until its `defer` blocks
+        // fire. Releasing `isExecuting` before that finishes would let a new foreground run or
+        // scheduled BG task open a second V2 runtime against the same repo mid-shutdown.
+        let flags = dependencies.appRuntimeFlags
+        if let bridgeToAwait {
+            Task { @MainActor in
+                await bridgeToAwait.awaitCleanup()
+                flags.setExecuting(false)
+            }
+        } else {
+            flags.setExecuting(false)
+        }
     }
 
     func consumePendingDataChangedMonths() -> Set<LibraryMonthKey> {

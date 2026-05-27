@@ -128,6 +128,14 @@ final class BackupSessionAsyncBridge {
         resetUploadReporting()
     }
 
+    /// Await the underlying `BackupSessionController` run task's unwind. Pair with `cancel()` so
+    /// the caller can resolve the upload continuation eagerly (UI state moves to failed/stopped)
+    /// while still gating shared-resource release (e.g. `AppRuntimeFlags.setExecuting(false)`) on
+    /// the cancelled run's actual cleanup.
+    func awaitCleanup() async {
+        await backupSessionController.awaitRunCleanup()
+    }
+
     private func handleUploadSnapshot(
         _ snapshot: BackupSessionController.Snapshot,
         onProgress: (UploadProgress) -> Void

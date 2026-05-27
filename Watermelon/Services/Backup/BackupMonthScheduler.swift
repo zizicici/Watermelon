@@ -164,6 +164,15 @@ actor ParallelBackupProgressAggregator {
     /// visible progress matches durable outcomes after reconciliation.
     private var provisionalByMonth: [LibraryMonthKey: [AssetFingerprint: [PhotoKitLocalIdentifier: ProvisionalRecordStatus]]] = [:]
 
+    /// Per-month map from a carrier fingerprint (the superset asset that subset-tombstoned others
+    /// in `upsertAsset`) to the set of subset fingerprints it absorbed. When the carrier's
+    /// `addAsset` op lands durably, `markBatchDurable` cascades the clear to the carried subsets'
+    /// buffer entries — even when the matching `tombstoneAsset` op never reaches a durable commit
+    /// (e.g., multi-chunk drain whose tombstone-only chunk fails on connection loss). Without this,
+    /// the subsets' buffer entries leak past the carrier's durable commit and a subsequent hard
+    /// abort flips their provisional success into a spurious `failed`.
+    private var subsetTombstonedByCarrier: [LibraryMonthKey: [AssetFingerprint: Set<AssetFingerprint>]] = [:]
+
     init(total: Int) {
         state = BackupRunState(total: total)
     }
@@ -238,23 +247,89 @@ actor ParallelBackupProgressAggregator {
         month: LibraryMonthKey,
         fingerprint: AssetFingerprint,
         assetLocalIdentifier: PhotoKitLocalIdentifier,
-        status: ProvisionalRecordStatus
+        status: ProvisionalRecordStatus,
+        tombstonedSubsets: Set<AssetFingerprint> = []
     ) {
         provisionalByMonth[month, default: [:]][fingerprint, default: [:]][assetLocalIdentifier] = status
+        if !tombstonedSubsets.isEmpty {
+            subsetTombstonedByCarrier[month, default: [:]][fingerprint, default: []].formUnion(tombstonedSubsets)
+        }
+        // Resurrect: if `fingerprint` itself was previously absorbed by some carrier (e.g. an
+        // earlier asset's superset replaced it), removing it from that carrier's subset set
+        // matches `V2MonthIndexes.upsertAsset`'s in-memory resurrect — it's actively pending
+        // again and must not be cascade-cleared when that older carrier's commit lands.
+        if var byCarrier = subsetTombstonedByCarrier[month] {
+            var mutated = false
+            for (carrier, subs) in byCarrier where subs.contains(fingerprint) {
+                var updated = subs
+                updated.remove(fingerprint)
+                if updated.isEmpty {
+                    byCarrier.removeValue(forKey: carrier)
+                } else {
+                    byCarrier[carrier] = updated
+                }
+                mutated = true
+            }
+            if mutated {
+                if byCarrier.isEmpty {
+                    subsetTombstonedByCarrier.removeValue(forKey: month)
+                } else {
+                    subsetTombstonedByCarrier[month] = byCarrier
+                }
+            }
+        }
     }
 
     func markBatchDurable(
         month: LibraryMonthKey,
-        committedAssetFingerprints: Set<AssetFingerprint>
+        committedAssetFingerprints: Set<AssetFingerprint>,
+        committedTombstoneFingerprints: Set<AssetFingerprint> = []
     ) {
-        guard var byFingerprint = provisionalByMonth[month] else { return }
+        guard var byFingerprint = provisionalByMonth[month] else {
+            // No buffer entries for this month, but a durable carrier still needs to clear its
+            // carrier→subsets map so a later flush doesn't try to cascade against stale state.
+            if var byCarrier = subsetTombstonedByCarrier[month] {
+                for fp in committedAssetFingerprints {
+                    byCarrier.removeValue(forKey: fp)
+                }
+                for fp in committedTombstoneFingerprints {
+                    byCarrier.removeValue(forKey: fp)
+                }
+                if byCarrier.isEmpty {
+                    subsetTombstonedByCarrier.removeValue(forKey: month)
+                } else {
+                    subsetTombstonedByCarrier[month] = byCarrier
+                }
+            }
+            return
+        }
+        var byCarrier = subsetTombstonedByCarrier[month] ?? [:]
+        // Same-batch subset tombstones land durably as `tombstoneAsset(F_sub)` ops; the buffer
+        // entry for F_sub must be cleared at commit time, otherwise a later hard-abort would
+        // revert F_sub's provisional success/skipped record into a spurious `failed`. The carrier
+        // map covers the multi-chunk case where the subset's tombstone op never reaches a durable
+        // commit but its absorbing carrier's `addAsset` op did.
         for fp in committedAssetFingerprints {
             byFingerprint.removeValue(forKey: fp)
+            if let subs = byCarrier.removeValue(forKey: fp) {
+                for sub in subs {
+                    byFingerprint.removeValue(forKey: sub)
+                }
+            }
+        }
+        for fp in committedTombstoneFingerprints {
+            byFingerprint.removeValue(forKey: fp)
+            byCarrier.removeValue(forKey: fp)
         }
         if byFingerprint.isEmpty {
             provisionalByMonth.removeValue(forKey: month)
         } else {
             provisionalByMonth[month] = byFingerprint
+        }
+        if byCarrier.isEmpty {
+            subsetTombstonedByCarrier.removeValue(forKey: month)
+        } else {
+            subsetTombstonedByCarrier[month] = byCarrier
         }
     }
 
@@ -264,6 +339,7 @@ actor ParallelBackupProgressAggregator {
     /// revert their provisional row exactly once.
     @discardableResult
     func rollBackProvisionalBatch(month: LibraryMonthKey) -> Set<AssetFingerprint> {
+        subsetTombstonedByCarrier.removeValue(forKey: month)
         guard let byFingerprint = provisionalByMonth.removeValue(forKey: month) else {
             return []
         }

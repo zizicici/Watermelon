@@ -201,6 +201,18 @@ final class DatabaseManager: @unchecked Sendable {
         }
     }
 
+    /// Repointing a profile to another remote must drop its repo binding; the next open then
+    /// adopts the new remote's canonical identity instead of throwing repoFormatRegression
+    /// against the old repoID.
+    func clearRepoState(profileID: Int64) throws {
+        try write { db in
+            try db.execute(
+                sql: "DELETE FROM \(RepoStateRecord.databaseTableName) WHERE profileID = ?",
+                arguments: [profileID]
+            )
+        }
+    }
+
     func saveServerProfileSortOrder(profileIDs: [Int64]) throws {
         try write { db in
             for (index, id) in profileIDs.enumerated() {

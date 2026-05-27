@@ -62,6 +62,13 @@ final class BackgroundBackupRunner {
     func run() async -> Bool {
         guard await ProStatus.verifyEntitlement() else { return true }
         guard BackgroundBackupSetting.getValue() == .enable else { return true }
+        // Atomic process-wide claim: refuses to start while a foreground run or manual verify is
+        // active, AND blocks foreground/verify from starting while this BG run owns the lease.
+        // Released via `defer` so every exit (early-return, throw inside awaits, cancellation)
+        // clears the flag — otherwise the lease would strand and block subsequent foreground work.
+        let runtimeFlags = AppRuntimeFlags.shared
+        guard runtimeFlags.tryBeginExecution() else { return true }
+        defer { runtimeFlags.setExecuting(false) }
         guard await isWiFiAvailable() else { return true }
 
         let profiles: [ServerProfileRecord]

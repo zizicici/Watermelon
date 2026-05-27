@@ -115,6 +115,15 @@ final class AddExternalStorageViewController: UIViewController {
     @objc
     private func saveTapped() {
         dismissKeyboard()
+        // Editor may stay open across a background V2 run claiming the shared execution lease;
+        // committing now would mutate `server_profiles` / keychain under that in-flight runtime.
+        if editingProfile != nil, ProfileEditorMutationGate.isBlocked(dependencies: dependencies) {
+            presentAlert(
+                title: String(localized: "common.error"),
+                message: String(localized: "home.alert.maintenanceInProgress")
+            )
+            return
+        }
         do {
             let selectedDisplayPath: String
             let encodedParams: Data

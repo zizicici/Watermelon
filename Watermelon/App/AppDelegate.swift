@@ -80,12 +80,21 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
         task.expirationHandler = {
             backupTask.cancel()
-            let isFirst = completionGuard.withLock { (done: inout Bool) -> Bool in
-                guard !done else { return false }
-                done = true
-                return true
+            // Defer the system completion signal until the runner has finished unwinding so the
+            // process-wide AppRuntimeFlags execution lease (held inside `run()` via
+            // `defer { setExecuting(false) }`) is released before iOS suspends the app. Signaling
+            // complete before the runner unwinds risks stranding the lease across suspension; on
+            // next foreground resume that would block foreground execution and manual verify until
+            // process relaunch.
+            Task {
+                _ = await backupTask.value
+                let isFirst = completionGuard.withLock { (done: inout Bool) -> Bool in
+                    guard !done else { return false }
+                    done = true
+                    return true
+                }
+                if isFirst { task.setTaskCompleted(success: false) }
             }
-            if isFirst { task.setTaskCompleted(success: false) }
         }
     }
 

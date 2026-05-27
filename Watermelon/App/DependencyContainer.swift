@@ -73,7 +73,9 @@ final class DependencyContainer {
             storageClientFactory: storageClientFactory
         )
 
-        let appRuntimeFlags = AppRuntimeFlags()
+        // Process singleton so a BGProcessingTask container can see a still-active foreground
+        // run's isExecuting / isVerifying and refuse to open the V2 runtime concurrently.
+        let appRuntimeFlags = AppRuntimeFlags.shared
         self.appRuntimeFlags = appRuntimeFlags
         self.remoteMaintenanceController = RemoteMaintenanceController(
             backupCoordinator: backupCoordinator,

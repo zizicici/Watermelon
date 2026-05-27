@@ -107,6 +107,17 @@ actor V1MigrationService {
                     try await deleteIfPresent(path: scanned.manifestAbsolutePath)
                 } else {
                     v1MigrationLog.warning("V1 manifest for \(scanned.year, privacy: .public)-\(scanned.month, privacy: .public) has \(snapshot.resources.count, privacy: .public) resources / \(snapshot.links.count, privacy: .public) links but no assets — quarantining as legacy residue")
+                    // Write partial-migration marker before quarantine so phase-3 sweep preserves
+                    // the residue: a structurally inconsistent V1 manifest (resources/links without
+                    // assets) is forensic evidence later repair tooling needs, not orphan data.
+                    try await writePartialMigrationMarker(
+                        year: scanned.year,
+                        month: scanned.month,
+                        runID: runID,
+                        migratedAssetCount: 0,
+                        totalAssetCount: 0,
+                        failures: ["inconsistent V1 manifest: \(snapshot.resources.count) resources / \(snapshot.links.count) links / 0 assets"]
+                    )
                     try await residueQuarantine.quarantine(year: scanned.year, month: scanned.month, sourcePath: scanned.manifestAbsolutePath)
                 }
                 continue

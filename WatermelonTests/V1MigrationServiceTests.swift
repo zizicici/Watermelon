@@ -803,4 +803,78 @@ final class V1MigrationServiceTests: XCTestCase {
         try dbQueue.close()
         return try Data(contentsOf: dbURL)
     }
+
+    /// Resources but no assets — V1 manifest is structurally inconsistent. Drives runPhase1
+    /// into the "snapshot.assets.isEmpty && !snapshot.resources.isEmpty" quarantine branch.
+    private static func buildInconsistentV1ManifestSqlite(
+        resourceHash: Data,
+        logicalName: String
+    ) throws -> Data {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let dbURL = tempDir.appendingPathComponent("v1-inconsistent.sqlite")
+        let dbQueue = try DatabaseQueue(path: dbURL.path)
+        try MonthManifestStore.migrate(dbQueue)
+        try dbQueue.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO resources (fileName, contentHash, fileSize, resourceType, creationDateMs, backedUpAtMs)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [logicalName, resourceHash, Int64(2048), ResourceTypeCode.photo, Int64(1_700_000_000_000), Int64(1_700_000_001_000)]
+            )
+        }
+        try dbQueue.close()
+        return try Data(contentsOf: dbURL)
+    }
+
+    // Bug-IX P01 R07 Codex A Finding 1: a V1 manifest with resources/links but no assets is
+    // structurally inconsistent and was being quarantined without a partial-migration marker.
+    // Phase 3's sweep then deleted the only legacy metadata evidence for that month. The
+    // marker-before-quarantine pairing matches the assets-but-no-migrable path and protects
+    // the residue across the same foreground migration that identified it.
+    func testRunFullMigration_inconsistentV1Manifest_preservesResidueUnderPartialMarker() async throws {
+        let client = InMemoryRemoteStorageClient()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.connect()
+
+        let resourceHash = TestFixtures.fingerprint(0xEF)
+        let manifestBytes = try Self.buildInconsistentV1ManifestSqlite(
+            resourceHash: resourceHash,
+            logicalName: "IMG_inconsistent.HEIC"
+        )
+        let year = 2025
+        let month = 6
+        let manifestPath = String(format: "\(basePath)/%04d/%02d/\(MonthManifestStore.manifestFileName)", year, month)
+        await client.injectFile(path: manifestPath, data: manifestBytes)
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        let identity = RepoIdentity(database: databaseManager)
+        let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        _ = try await identity.lazyEnsureRepoState(profileID: profileID, repoID: repoID, writerID: "w")
+
+        let service = makeService(client: client, profileID: profileID)
+        _ = try await service.runFullMigration(
+            profileID: profileID,
+            repoID: repoID,
+            writerID: "w",
+            runID: "run-inconsistent"
+        )
+
+        let monthRel = String(format: "%04d/%02d", year, month)
+        let residuePath = "\(basePath)/\(monthRel)/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let markerPath = "\(basePath)/\(monthRel)/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+
+        let residueSurvived = await client.hasFile(residuePath)
+        XCTAssertTrue(
+            residueSurvived,
+            "residue must survive phase-3 sweep so future repair tooling retains the original V1 metadata"
+        )
+        let markerSurvived = await client.hasFile(markerPath)
+        XCTAssertTrue(
+            markerSurvived,
+            "partial-migration marker must be written before quarantine so the sweep preservation gate fires"
+        )
+    }
 }

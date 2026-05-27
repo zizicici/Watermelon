@@ -58,8 +58,14 @@ final class RemoteMaintenanceController {
     @discardableResult
     func startFullVerify(profile: ServerProfileRecord, password: String) -> Bool {
         guard case .idle = phase else { return false }
-        guard !appRuntimeFlags.isExecuting else { return false }
-        guard let profileID = profile.id else { return false }
+        // Atomic process-wide claim so a concurrent foreground execution or background BGProcessingTask
+        // can't sneak in between the check and the verify-task start. Fails if any execution lease is
+        // already held, including by a BG runner.
+        guard appRuntimeFlags.tryBeginVerifying() else { return false }
+        guard let profileID = profile.id else {
+            appRuntimeFlags.setVerifying(false)
+            return false
+        }
 
         lastError = nil
         phase = .verifying(profileID: profileID, progress: RemoteSyncProgress(current: 0, total: 0))
@@ -110,12 +116,14 @@ final class RemoteMaintenanceController {
         try? databaseManager.setRemoteVerifiedAt(Date(), profileID: profileID)
         verifyTask = nil
         phase = .idle
+        appRuntimeFlags.setVerifying(false)
         postNow()
     }
 
     private func handleCancellation() {
         verifyTask = nil
         phase = .idle
+        appRuntimeFlags.setVerifying(false)
         postNow()
     }
 
@@ -126,6 +134,7 @@ final class RemoteMaintenanceController {
             message: UserFacingErrorLocalizer.message(for: error, profile: profile)
         )
         phase = .idle
+        appRuntimeFlags.setVerifying(false)
         postNow()
     }
 

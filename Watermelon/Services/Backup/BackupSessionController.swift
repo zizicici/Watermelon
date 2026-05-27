@@ -199,6 +199,14 @@ enum State {
         observers[id] = nil
     }
 
+    /// Await the in-flight run task's full unwind so the V2 runtime / metadata client / data
+    /// client cleanup `defer`s have all fired. Foreground callers use this before releasing the
+    /// shared execution lease so a new V2 runtime cannot open against the same repo while the
+    /// cancelled run is still mid-shutdown.
+    func awaitRunCleanup() async {
+        await runDriver.awaitRunTaskCompletion()
+    }
+
     @discardableResult
     func addEventObserver(_ observer: @escaping @MainActor (BackupEvent) -> Void) -> UUID {
         let id = UUID()

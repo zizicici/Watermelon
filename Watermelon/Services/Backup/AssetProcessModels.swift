@@ -44,6 +44,12 @@ struct AssetProcessResult: Sendable {
     /// `finalizeRowWritingAsset`, so it sets this to `false`. The provisional progress buffer
     /// in `ParallelBackupProgressAggregator` only records results where this is `true`.
     var wroteProvisionalV2Row: Bool = false
+    /// Subset fingerprints that this asset's `upsertAsset` tombstoned in-memory because their
+    /// resource link sets are strict subsets of this asset's superset. The aggregator pairs these
+    /// with this asset's carrier fingerprint so a later `markBatchDurable(adds:F_carrier)` cascade
+    /// clears the subset entries — including the case where the in-batch tombstone op never
+    /// reaches a durable commit (e.g. it lands in a later chunk that fails on connection loss).
+    var tombstonedSubsetFingerprints: Set<AssetFingerprint> = []
 }
 
 struct AssetProcessTiming: Sendable {

@@ -557,6 +557,10 @@ final class StorageProfileDetailViewController: UIViewController {
         }
         if let profileID = profile.id {
             try? dependencies.databaseManager.clearRemoteVerifiedAt(profileID: profileID)
+            // Drop the local repo binding so a fresh open against the new endpoint can adopt
+            // its canonical identity. Without this, .bootstrapFresh fails-closed on the stale
+            // repoID and the user must delete/recreate the profile to recover.
+            try? dependencies.databaseManager.clearRepoState(profileID: profileID)
         }
         onProfilesChanged()
     }
@@ -576,6 +580,9 @@ final class StorageProfileDetailViewController: UIViewController {
 
     private func deleteProfile() {
         guard let id = profile.id else { return }
+        // Re-check at the destructive call site: execution/verify can start between alert
+        // presentation and tap, after `confirmDelete` already passed the gate.
+        guard !rejectIfProfileMutationBlocked() else { return }
         do {
             try dependencies.databaseManager.deleteServerProfile(id: id)
             if profile.storageProfile.requiresPassword {

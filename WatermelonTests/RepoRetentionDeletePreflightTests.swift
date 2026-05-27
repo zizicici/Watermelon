@@ -200,6 +200,53 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
         XCTAssertTrue(blockers(in: result).contains(.migrationInProgress))
     }
 
+    // Bug-IX P01 R01 Codex A Finding 1: phase-3 sweep preserves a month's partial-migration
+    // marker + legacy residue when not every V1 asset could migrate, then deletes the central
+    // marker. A subsequent retention preflight must still treat that month as migration-unresolved
+    // and refuse irreversible commit-prefix deletion.
+    func testMonthPartialMigrationMarkerBlocksPreflight() async throws {
+        let client = try await makeReadyClient()
+        let markerPath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: String(format: "%04d/%02d/%@", month.year, month.month, V1MigrationResidueFileNames.partialMigrationMarkerFileName)
+        )
+        await client.injectFile(path: markerPath, contents: "{}")
+
+        let result = try await service(client: client).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+
+        XCTAssertTrue(blockers(in: result).contains(.migrationResiduePresent(month: month)),
+                      "month-local partial migration marker must block retention deletion even after the central marker is gone")
+    }
+
+    // Bug-IX P01 R04 Codex A Finding 1: a directory squatting at the month-local partial-migration
+    // marker path is damaged remote state, not proof that the marker is absent. The retention
+    // preflight must fail-closed before any irreversible commit-prefix deletion runs.
+    func testMonthPartialMigrationMarkerDirectorySentinelFailsClosed() async throws {
+        let client = try await makeReadyClient()
+        let markerPath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: String(format: "%04d/%02d/%@", month.year, month.month, V1MigrationResidueFileNames.partialMigrationMarkerFileName)
+        )
+        try await client.createDirectory(path: markerPath)
+
+        let result = try await service(client: client).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+
+        XCTAssertTrue(blockers(in: result).contains(.migrationResidueCheckFailed(month: month)),
+                      "directory-shaped month-local marker must fail-closed via migrationResidueCheckFailed")
+        XCTAssertFalse(blockers(in: result).contains(.migrationResiduePresent(month: month)),
+                       "directory shape isn't a marker present claim; it's uncertain corrupt state")
+    }
+
     func testBarrierAgeAndLivenessCapabilityBlockers() async throws {
         let tooYoung = try await makeClient()
         try await writeCommits(client: tooYoung, seqs: 1...1)

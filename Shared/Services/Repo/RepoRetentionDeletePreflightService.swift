@@ -30,6 +30,8 @@ enum RepoRetentionDeletePreflightBlocker: Equatable, Sendable {
     case repoIdentityMismatch(expected: String, observed: String)
     case migrationInProgress
     case migrationCheckFailed
+    case migrationResiduePresent(month: LibraryMonthKey)
+    case migrationResidueCheckFailed(month: LibraryMonthKey)
     case invalidBarrierSet([InvalidRetentionManifestEntry])
     case barrierSetReadFailed
     case emptyBarrierSet
@@ -133,6 +135,7 @@ struct RepoRetentionDeletePreflightReport: Equatable, Sendable {
     var versionStatus: RepoRetentionPreflightVersionStatus?
     var remoteRepoID: String?
     var migrationMarkerPresent: Bool?
+    var monthPartialMigrationMarkerPresent: Bool?
     var barrierLoad: RetentionManifestBarrierLoadResult?
     var composedLivenessGate: RetentionLivenessGate?
     var livenessDecision: RetentionDeletionSafetyDecision?
@@ -194,6 +197,7 @@ struct RepoRetentionDeletePreflightService: Sendable {
 
         blockers.append(contentsOf: try await checkVersion(report: &report))
         blockers.append(contentsOf: try await checkMigrationMarkers(report: &report))
+        blockers.append(contentsOf: try await checkMonthPartialMigrationMarker(month: month, report: &report))
         if !blockers.isEmpty {
             return .blocked(blockers: blockers, report: report)
         }
@@ -465,6 +469,44 @@ struct RepoRetentionDeletePreflightService: Sendable {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             report.migrationMarkerPresent = nil
             return [.migrationCheckFailed]
+        }
+    }
+
+    // The phase-3 sweep preserves `.watermelon_manifest.legacy-partial-migration.json` plus its
+    // `.watermelon_manifest.legacy-residue.sqlite*` siblings on months where the migration could not
+    // import every V1 asset. The central migration marker is gone by then, so existsAny() returns
+    // false. Treat the per-month partial marker as a per-month "migration unresolved" gate so
+    // retention/commit-prefix/snapshot deletion stays conservative until the residue is cleared.
+    private func checkMonthPartialMigrationMarker(
+        month: LibraryMonthKey,
+        report: inout RepoRetentionDeletePreflightReport
+    ) async throws -> [RepoRetentionDeletePreflightBlocker] {
+        let markerPath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: String(format: "%04d/%02d/%@", month.year, month.month, V1MigrationResidueFileNames.partialMigrationMarkerFileName)
+        )
+        do {
+            guard let entry = try await client.metadata(path: markerPath) else {
+                report.monthPartialMigrationMarkerPresent = false
+                return []
+            }
+            if entry.isDirectory {
+                // Directory squatting at the reserved marker path is damaged remote state, not
+                // proof that the marker is absent. Fail-closed so commit-prefix deletion can't
+                // run while migration residue uncertainty remains.
+                report.monthPartialMigrationMarkerPresent = nil
+                return [.migrationResidueCheckFailed(month: month)]
+            }
+            report.monthPartialMigrationMarkerPresent = true
+            return [.migrationResiduePresent(month: month)]
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            if isStorageNotFoundError(error) {
+                report.monthPartialMigrationMarkerPresent = false
+                return []
+            }
+            report.monthPartialMigrationMarkerPresent = nil
+            return [.migrationResidueCheckFailed(month: month)]
         }
     }
 

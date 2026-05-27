@@ -443,7 +443,8 @@ final class AssetProcessor: Sendable {
                 timing: timing,
                 totalFileSizeBytes: totalFileSizeBytes,
                 uploadedFileSizeBytes: uploadedFileSizeBytes,
-                wroteProvisionalV2Row: true
+                wroteProvisionalV2Row: true,
+                tombstonedSubsetFingerprints: subsetFingerprints
             )
         }
 
@@ -455,7 +456,8 @@ final class AssetProcessor: Sendable {
             timing: timing,
             totalFileSizeBytes: totalFileSizeBytes,
             uploadedFileSizeBytes: uploadedFileSizeBytes,
-            wroteProvisionalV2Row: true
+            wroteProvisionalV2Row: true,
+            tombstonedSubsetFingerprints: subsetFingerprints
         )
     }
 
@@ -618,7 +620,8 @@ final class AssetProcessor: Sendable {
             timing: timing,
             totalFileSizeBytes: totalFileSizeBytes,
             uploadedFileSizeBytes: 0,
-            wroteProvisionalV2Row: true
+            wroteProvisionalV2Row: true,
+            tombstonedSubsetFingerprints: subsetFingerprints
         )
     }
 

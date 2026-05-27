@@ -75,10 +75,16 @@ struct BackupParallelExecutor: Sendable {
         onMonthUploaded: BackupMonthFinalizer? = nil
     ) async throws -> BackupExecutionResult {
         guard preparedRun.totalAssetCount > 0 else {
-            let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
-            eventStream.emit(.finished(result))
+            // Match the normal completion path: shutdown V2 runtime and disconnect the data
+            // client BEFORE emitting .finished. .finished triggers BSC.handleEvent →
+            // clearActiveRunState which nils runTask; if shutdown lagged the emit, the
+            // foreground exit cleanup chain (HomeExecutionCoordinator → awaitCleanup →
+            // awaitRunTaskCompletion → await runTask?.value) could observe nil and release
+            // the AppRuntimeFlags execution lease while the runtime is still tearing down.
             await preparedRun.v2Services?.shutdown()
             await preparedRun.initialClient.disconnectSafely()
+            let result = BackupExecutionResult(total: 0, succeeded: 0, failed: 0, skipped: 0, paused: false)
+            eventStream.emit(.finished(result))
             return result
         }
 
@@ -425,14 +431,16 @@ struct BackupParallelExecutor: Sendable {
                                         month: monthKey,
                                         fingerprint: fingerprint,
                                         assetLocalIdentifier: PhotoKitLocalIdentifier(asset),
-                                        status: .success
+                                        status: .success,
+                                        tombstonedSubsets: result.tombstonedSubsetFingerprints
                                     )
                                 case .skipped:
                                     await aggregator.recordProvisional(
                                         month: monthKey,
                                         fingerprint: fingerprint,
                                         assetLocalIdentifier: PhotoKitLocalIdentifier(asset),
-                                        status: .skipped
+                                        status: .skipped,
+                                        tombstonedSubsets: result.tombstonedSubsetFingerprints
                                     )
                                 case .failed:
                                     break
@@ -1125,7 +1133,8 @@ struct BackupParallelExecutor: Sendable {
         }
         await aggregator.markBatchDurable(
             month: month,
-            committedAssetFingerprints: durableFingerprints
+            committedAssetFingerprints: durableFingerprints,
+            committedTombstoneFingerprints: outcome.delta.committedTombstoneFingerprints
         )
     }
 

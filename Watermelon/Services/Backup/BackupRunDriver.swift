@@ -111,6 +111,13 @@ final class BackupRunDriver {
         runTask?.cancel()
     }
 
+    /// Wait for the in-flight backup run task to finish unwinding. The task body owns the V2
+    /// runtime services / metadata client / data client cleanup via `defer`, so once this returns
+    /// the cancelled run no longer holds any shared resources. Safe no-op when no run is active.
+    func awaitRunTaskCompletion() async {
+        await runTask?.value
+    }
+
     func drainActiveEventListener() async {
         await eventListenerTask?.value
     }

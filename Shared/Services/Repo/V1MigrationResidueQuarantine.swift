@@ -88,12 +88,22 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
                     if isStorageNotFoundError(error) { continue }
                     throw error
                 }
-                let hasPartialMigrationMarker = files.contains { !$0.isDirectory && $0.name == V1MigrationResidueFileNames.partialMigrationMarkerFileName }
+                // Treat ANY entry at the partial-marker path (file OR directory) as a
+                // preservation gate. A directory at the reserved marker path is damaged
+                // remote state, not proof of marker absence, so retention preflights downstream
+                // need the residue evidence preserved.
+                let partialMarkerEntry = files.first(where: { $0.name == V1MigrationResidueFileNames.partialMigrationMarkerFileName })
                 let residueFiles = files.filter { !$0.isDirectory && Self.isResidueManifestName($0.name) }
-                if hasPartialMigrationMarker && !residueFiles.isEmpty {
-                    v1MigrationResidueQuarantineLog.info(
-                        "preserving \(residueFiles.count, privacy: .public) V1 residue manifest(s) under partial migration marker at \(monthPath, privacy: .public)"
-                    )
+                if partialMarkerEntry != nil && !residueFiles.isEmpty {
+                    if partialMarkerEntry?.isDirectory == true {
+                        v1MigrationResidueQuarantineLog.warning(
+                            "preserving \(residueFiles.count, privacy: .public) V1 residue manifest(s) under directory-shaped partial migration marker at \(monthPath, privacy: .public)"
+                        )
+                    } else {
+                        v1MigrationResidueQuarantineLog.info(
+                            "preserving \(residueFiles.count, privacy: .public) V1 residue manifest(s) under partial migration marker at \(monthPath, privacy: .public)"
+                        )
+                    }
                     continue
                 }
                 for file in residueFiles {

@@ -13,6 +13,8 @@ enum RepoSnapshotDeletePreflightBlocker: Equatable, Sendable {
     case repoIdentityMismatch(expected: String, observed: String)
     case migrationInProgress
     case migrationCheckFailed
+    case migrationResiduePresent(month: LibraryMonthKey)
+    case migrationResidueCheckFailed(month: LibraryMonthKey)
     case invalidBarrierSet([InvalidRetentionManifestEntry])
     case barrierSetReadFailed
     case emptyBarrierSet
@@ -94,6 +96,7 @@ struct RepoSnapshotDeletePreflightReport: Equatable, Sendable {
     var versionStatus: RepoRetentionPreflightVersionStatus?
     var remoteRepoID: String?
     var migrationMarkerPresent: Bool?
+    var monthPartialMigrationMarkerPresent: Bool?
     var barrierLoad: RetentionManifestBarrierLoadResult?
     var composedLivenessGate: RetentionLivenessGate?
     var livenessDecision: RetentionDeletionSafetyDecision?
@@ -151,6 +154,7 @@ struct RepoSnapshotDeletePreflightService: Sendable {
         var blockers: [RepoSnapshotDeletePreflightBlocker] = []
         blockers.append(contentsOf: try await checkVersion(report: &report))
         blockers.append(contentsOf: try await checkMigrationMarkers(report: &report))
+        blockers.append(contentsOf: try await checkMonthPartialMigrationMarker(month: month, report: &report))
         if !blockers.isEmpty {
             return .blocked(blockers: blockers, report: report)
         }
@@ -182,9 +186,18 @@ struct RepoSnapshotDeletePreflightService: Sendable {
 
         let composedLivenessGate = barrierSet.composedLivenessGate
         report.composedLivenessGate = composedLivenessGate
+        // Compute the retained-barrier union now so pre-delete evidence validation covers the
+        // same set the protection contract later uses (eligible + fresh too-young unsuperseded).
+        // Authorization and liveness gates continue to use the age-eligible `barrierSet` only.
+        let retainedManifestsUnion = retainedBarrierManifests(
+            eligible: barrierSet,
+            allValid: allBarrierSet
+        )
         // Retained barrier checkpoint evidence must be present, readable, and consistent
-        // BEFORE any irreversible deletion. Parity with commit-prefix preflight.
-        blockers.append(contentsOf: try await barrierCheckpointEvidenceBlockers(barrierSet: barrierSet))
+        // BEFORE any irreversible deletion. Validate the same union F5 protects post-delete;
+        // otherwise a fresh too-young barrier's missing/tampered checkpoint would only be
+        // caught by the post-delete verifier — after irreversible mutation.
+        blockers.append(contentsOf: try await barrierCheckpointEvidenceBlockers(manifests: retainedManifestsUnion))
         blockers.append(contentsOf: try await livenessBlockers(
             composedGate: composedLivenessGate,
             nowMs: nowMs,
@@ -270,7 +283,12 @@ struct RepoSnapshotDeletePreflightService: Sendable {
             return .blocked(blockers: [.materializerReadFailed], report: report)
         }
 
-        let barrierReferenced: Set<String> = Set(barrierSet.unsuperseded.map(\.checkpointSnapshotName))
+        // Reuse the union computed above for pre-delete evidence validation. Union of (a)
+        // age-eligible barriers' checkpoints — these authorize the current deletion, and (b)
+        // all valid unsuperseded barriers' checkpoints — fresh too-young barriers that supersede
+        // the eligible ones in the full set still have authoritative checkpoint evidence that
+        // must stay protected until that barrier itself ages into eligibility.
+        let barrierReferenced: Set<String> = Set(retainedManifestsUnion.map(\.checkpointSnapshotName))
         let scanner = SnapshotDeleteCandidateScanner(
             client: client,
             basePath: basePath,
@@ -301,6 +319,16 @@ struct RepoSnapshotDeletePreflightService: Sendable {
             return .blocked(blockers: [.noDeleteCandidates], report: report)
         }
 
+        // Retained barriers stamp the deletion authorization contract; their published
+        // `policy.snapshotKeepCount` is the floor for fallback retention even if the current
+        // runtime policy is lower (e.g. an app update changed the constant). Take the max so
+        // narrowing the local policy after a barrier is already published does not retroactively
+        // permit deleting snapshots the barrier authorized to keep. Floor from both eligible and
+        // too-young unsuperseded barriers — a fresh barrier's keepCount still binds the runtime.
+        let retainedSnapshotKeepCountMax = retainedManifestsUnion.reduce(0) { partial, manifest in
+            max(partial, manifest.policy.snapshotKeepCount)
+        }
+        let effectiveSnapshotKeepCount = max(policy.snapshotFallbackKeepCount, retainedSnapshotKeepCountMax)
         let protectionInput = RepoSnapshotProtectionSet.Input(
             acceptedBaselineFilename: acceptedSnapshot.filename,
             acceptedBaselineLamport: acceptedSnapshot.lamport,
@@ -312,7 +340,7 @@ struct RepoSnapshotDeletePreflightService: Sendable {
                     writerID: $0.writerID
                 )
             },
-            snapshotKeepCount: policy.snapshotFallbackKeepCount
+            snapshotKeepCount: effectiveSnapshotKeepCount
         )
         let protection = RepoSnapshotProtectionSet.compute(protectionInput)
         report.protectedFilenames = protection.protectedFilenames
@@ -324,10 +352,16 @@ struct RepoSnapshotDeletePreflightService: Sendable {
             return .blocked(blockers: [.noDeleteCandidates], report: report)
         }
 
+        // Include checkpoints from both eligible and too-young unsuperseded barriers in the
+        // post-delete contract so the verifier confirms every retained barrier's evidence
+        // survived the deletion, not just the ones that authorized it. `Dictionary(_:uniquingKeysWith:)`
+        // keeps the last entry's SHA on collision — same checkpoint filename → same SHA in practice,
+        // so the dedup is content-stable.
         let retainedSHAByFilename: [String: String] = Dictionary(
-            uniqueKeysWithValues: barrierSet.unsuperseded.map {
+            retainedManifestsUnion.map {
                 ($0.checkpointSnapshotName, $0.checkpointSHA256Hex)
-            }
+            },
+            uniquingKeysWith: { _, new in new }
         )
 
         let contract = RepoSnapshotPostDeleteEquivalenceContract(
@@ -360,6 +394,24 @@ struct RepoSnapshotDeletePreflightService: Sendable {
             postDeleteContract: contract
         )
         return .planned(plan: plan, report: report)
+    }
+
+    /// Union of unsuperseded barriers from the age-eligible set (deletion-authorizing) and the
+    /// full valid set (all currently-active barriers). Deduplicates by manifest filename so the
+    /// same barrier present in both sets is not counted twice.
+    private func retainedBarrierManifests(
+        eligible: RetentionBarrierSet,
+        allValid: RetentionBarrierSet
+    ) -> [RetentionManifest] {
+        var seenFilenames: Set<String> = []
+        var result: [RetentionManifest] = []
+        for manifest in eligible.unsuperseded + allValid.unsuperseded {
+            let filename = RetentionManifestStore.filename(for: manifest.ref)
+            if seenFilenames.insert(filename).inserted {
+                result.append(manifest)
+            }
+        }
+        return result
     }
 
     // MARK: - Shared with commit-prefix delete
@@ -422,6 +474,43 @@ struct RepoSnapshotDeletePreflightService: Sendable {
         }
     }
 
+    // Parity with commit-prefix retention preflight: the phase-3 sweep preserves
+    // `.watermelon_manifest.legacy-partial-migration.json` on months whose V1 manifest could not be
+    // fully migrated, and the central migration marker is gone by then. Block snapshot GC for any
+    // month where this per-month residue marker is still visible.
+    private func checkMonthPartialMigrationMarker(
+        month: LibraryMonthKey,
+        report: inout RepoSnapshotDeletePreflightReport
+    ) async throws -> [RepoSnapshotDeletePreflightBlocker] {
+        let markerPath = RemotePathBuilder.absolutePath(
+            basePath: basePath,
+            remoteRelativePath: String(format: "%04d/%02d/%@", month.year, month.month, V1MigrationResidueFileNames.partialMigrationMarkerFileName)
+        )
+        do {
+            guard let entry = try await client.metadata(path: markerPath) else {
+                report.monthPartialMigrationMarkerPresent = false
+                return []
+            }
+            if entry.isDirectory {
+                // Directory squatting at the reserved marker path is damaged remote state, not
+                // proof that the marker is absent. Fail-closed so snapshot deletion can't run
+                // while migration residue uncertainty remains.
+                report.monthPartialMigrationMarkerPresent = nil
+                return [.migrationResidueCheckFailed(month: month)]
+            }
+            report.monthPartialMigrationMarkerPresent = true
+            return [.migrationResiduePresent(month: month)]
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            if isStorageNotFoundError(error) {
+                report.monthPartialMigrationMarkerPresent = false
+                return []
+            }
+            report.monthPartialMigrationMarkerPresent = nil
+            return [.migrationResidueCheckFailed(month: month)]
+        }
+    }
+
     private func barrierFutureBlockers(
         barrierSet: RetentionBarrierSet,
         nowMs: Int64
@@ -453,11 +542,11 @@ struct RepoSnapshotDeletePreflightService: Sendable {
     }
 
     private func barrierCheckpointEvidenceBlockers(
-        barrierSet: RetentionBarrierSet
+        manifests: [RetentionManifest]
     ) async throws -> [RepoSnapshotDeletePreflightBlocker] {
         let reader = SnapshotReader(client: client, basePath: basePath)
         var blockers: [RepoSnapshotDeletePreflightBlocker] = []
-        for manifest in barrierSet.unsuperseded.sorted(by: { lhs, rhs in
+        for manifest in manifests.sorted(by: { lhs, rhs in
             RetentionManifestStore.filename(for: lhs.ref) < RetentionManifestStore.filename(for: rhs.ref)
         }) {
             let filename = manifest.checkpointSnapshotName
