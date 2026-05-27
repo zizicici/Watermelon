@@ -330,7 +330,10 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
                 ? relativePath(root: root, url: url)
                 : nil
         }.sorted()
-        XCTAssertEqual(callSites, ["Shared/Services/Repo/RetentionMaintenanceOrchestrator.swift"])
+        XCTAssertEqual(callSites, [
+            "Shared/Services/Repo/RepoMaintenanceCoordinator.swift",
+            "Shared/Services/Repo/RetentionMaintenanceOrchestrator.swift"
+        ])
 
         for path in [
             "Shared/Services/Repo/BackupV2RuntimeBuilder.swift",

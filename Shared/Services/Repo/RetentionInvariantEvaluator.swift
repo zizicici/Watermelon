@@ -6,6 +6,62 @@ enum RetentionInvariantEvaluator {
         case failed(reason: RepoRetentionPostDeleteVerificationFailure)
     }
 
+    enum SnapshotPostDeleteOutcome: Sendable, Equatable {
+        case passed
+        case failed(reason: RepoSnapshotPostDeleteVerificationFailure)
+    }
+
+    /// Snapshot GC must not regress the materialized state, the accepted baseline
+    /// coverage, or any observed counters; it also must not delete protected snapshots.
+    /// Unlike commit-prefix delete, snapshot GC does not change `deletePrefixByWriter`,
+    /// so that arm of the equivalence contract is omitted.
+    static func evaluateSnapshotPostDeleteContract(
+        evidence: RepoSnapshotPostDeleteVerificationEvidence,
+        afterState: RepoSnapshotState,
+        month: LibraryMonthKey,
+        contract: RepoSnapshotPostDeleteEquivalenceContract
+    ) -> SnapshotPostDeleteOutcome {
+        guard evidence.acceptedSnapshot.covered.superset(of: contract.acceptedSnapshotCovered) else {
+            return .failed(reason: .acceptedSnapshotCoverageRegression(filename: evidence.acceptedSnapshot.filename))
+        }
+        guard evidence.acceptedSnapshot.covered.superset(of: contract.retainedBarrierUnionCovered) else {
+            return .failed(reason: .retainedBarrierCoverageRegression(filename: evidence.acceptedSnapshot.filename))
+        }
+        guard stateIsRetentionSuperset(before: contract.preDeleteState, after: afterState, month: month) else {
+            return .failed(reason: .stateNotRetentionSuperset)
+        }
+        guard evidence.materializedCovered.superset(of: contract.preDeleteCovered) else {
+            return .failed(reason: .coveredRangeRegression)
+        }
+        for writerID in contract.requiredObservedSeqByWriter.keys.sorted() {
+            let expected = contract.requiredObservedSeqByWriter[writerID] ?? 0
+            let observed = evidence.observedSeqByWriter[writerID] ?? 0
+            guard observed >= expected else {
+                return .failed(reason: .observedSeqRegression(
+                    writerID: writerID,
+                    expectedAtLeast: expected,
+                    observed: observed
+                ))
+            }
+        }
+        guard evidence.observedClock >= contract.preDeleteObservedClock else {
+            return .failed(reason: .observedClockRegression(
+                expectedAtLeast: contract.preDeleteObservedClock,
+                observed: evidence.observedClock
+            ))
+        }
+        if evidence.acceptedSnapshot.filename != contract.acceptedSnapshotFilename,
+           evidence.acceptedSnapshot.lamport <= contract.acceptedSnapshotLamport {
+            // Replacement baseline must be strictly newer to be a safe supersede.
+            return .failed(reason: .acceptedSnapshotSupersedeUnsafe(
+                expectedFilename: contract.acceptedSnapshotFilename,
+                observedFilename: evidence.acceptedSnapshot.filename,
+                observedLamport: evidence.acceptedSnapshot.lamport
+            ))
+        }
+        return .passed
+    }
+
     static func evaluatePostDeleteContract(
         evidence: RepoRetentionPostDeleteVerificationEvidence,
         afterState: RepoSnapshotState,

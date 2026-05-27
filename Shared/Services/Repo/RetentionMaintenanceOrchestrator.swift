@@ -14,6 +14,8 @@ struct RetentionMaintenanceOrchestrator: Sendable {
         self.nowMs = nowMs
     }
 
+    /// Phase B only — preserves the narrow commit-cleanup surface for tests and any
+    /// caller that does not want to trigger checkpoint or snapshot GC.
     func runMonthCommitPrefixDelete(month: LibraryMonthKey) async throws -> RepoRetentionCommitDeleteResult {
         let result = try await RepoRetentionCommitDeleteExecutor(
             client: services.metadataClient,
@@ -34,6 +36,23 @@ struct RetentionMaintenanceOrchestrator: Sendable {
         return result
     }
 
+    /// Multi-month sweep at startup. Iterates barrier-bearing months and runs the
+    /// full coordinator (Phase A + B + C) per month, returning a typed result that
+    /// surfaces snapshot-GC dispositions alongside commit cleanup.
+    func runStartupSweep() async throws -> RepoMaintenanceStartupResult {
+        let coordinator = RepoMaintenanceCoordinator(services: services, nowMs: nowMs)
+        let months = try await candidateMonths(nowMs: nowMs())
+        var monthResults: [LibraryMonthKey: RepoMaintenanceMonthResult] = [:]
+        for month in months {
+            try Task.checkCancellation()
+            let result = try await coordinator.runForMonth(month)
+            monthResults[month] = result
+        }
+        return RepoMaintenanceStartupResult(monthResults: monthResults)
+    }
+
+    /// Legacy commit-only startup sweep retained for tests / callers that only want
+    /// the Phase B dictionary. New callers should prefer `runStartupSweep`.
     func runStartupCommitPrefixSweep() async throws -> [LibraryMonthKey: RepoRetentionCommitDeleteResult] {
         let now = nowMs()
         let months = try await candidateMonths(nowMs: now)

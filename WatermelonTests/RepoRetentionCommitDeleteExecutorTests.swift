@@ -440,7 +440,10 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
                 ? relativePath(root: root, url: url)
                 : nil
         }.sorted()
-        XCTAssertEqual(callSites, ["Shared/Services/Repo/RetentionMaintenanceOrchestrator.swift"])
+        XCTAssertEqual(callSites, [
+            "Shared/Services/Repo/RepoMaintenanceCoordinator.swift",
+            "Shared/Services/Repo/RetentionMaintenanceOrchestrator.swift"
+        ])
     }
 
     private func makeReadyClient(seqs: ClosedRange<UInt64>, covered: CoveredRanges) async throws -> InMemoryRemoteStorageClient {
