@@ -9,8 +9,8 @@ struct V2MonthCommitFlusher {
 
     struct Result {
         let lastSeq: UInt64
-        let committedAssets: Set<Data>
-        let committedTombstones: Set<Data>
+        let committedAssets: Set<AssetFingerprint>
+        let committedTombstones: Set<AssetFingerprint>
     }
 
     struct Basis: Sendable, Equatable {
@@ -39,8 +39,8 @@ struct V2MonthCommitFlusher {
         let maxRetries = 4
         var lastSeq: UInt64 = 0
         var attempt = 0
-        var committedAddAssetClocks: [Data: UInt64] = [:]
-        var committedTombstoneClocks: [Data: UInt64] = [:]
+        var committedAddAssetClocks: [AssetFingerprint: UInt64] = [:]
+        var committedTombstoneClocks: [AssetFingerprint: UInt64] = [:]
         // Build rows with replay's projection so snapshot baselines equal materialized commits.
         var committedResources: [String: RemoteManifestResource] = [:]
         // Defer row stamps until seq allocation completes.

@@ -15,7 +15,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let writer = CommitLogWriter(client: client, basePath: basePath)
 
         let fp = Self.fingerprint(0xAA)
-        let hash = Self.fingerprint(0xBB)
+        let hash = Self.contentHash(0xBB)
         let commit = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
             assetFingerprint: fp,
             creationDateMs: 1_700_000_000_000,
@@ -370,8 +370,8 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         try await client.connect()
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
         let assetFP = Self.fingerprint(0x04)
-        let goodHash = Self.fingerprint(0x05)
-        let badHash = Self.fingerprint(0x06)
+        let goodHash = Self.contentHash(0x05)
+        let badHash = Self.contentHash(0x06)
         let deletedFP = Self.fingerprint(0x07)
         var covered = CoveredRanges()
         covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
@@ -424,7 +424,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 )
             ],
             deletedKeys: [
-                SnapshotDeletedKeyRow(keyType: .asset, keyValue: deletedFP.hexString, stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)),
+                SnapshotDeletedKeyRow(keyType: .asset, keyValue: deletedFP.rawValue.hexString, stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)),
                 SnapshotDeletedKeyRow(keyType: .resource, keyValue: "resource-key")
             ],
             month: month,
@@ -514,7 +514,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
         let olderFP = Self.fingerprint(0x20)
         let newerFP = Self.fingerprint(0x21)
-        let goodHash = Self.fingerprint(0x22)
+        let goodHash = Self.contentHash(0x22)
 
         var coveredA = CoveredRanges()
         coveredA.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
@@ -576,7 +576,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             )],
             resources: [SnapshotResourceRow(
                 physicalRemotePath: "2026/02/wrong-month.jpg",
-                contentHash: Self.fingerprint(0x23),
+                contentHash: Self.contentHash(0x23),
                 fileSize: 1,
                 resourceType: ResourceTypeCode.photo,
                 creationDateMs: nil,
@@ -949,7 +949,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 resources: [CommitResourceEntry(
                     physicalRemotePath: "2026/02/wrong-month.jpg",
                     logicalName: "wrong-month.jpg",
-                    contentHash: Self.fingerprint(0x72),
+                    contentHash: Self.contentHash(0x72),
                     fileSize: 1,
                     resourceType: ResourceTypeCode.photo,
                     role: ResourceTypeCode.photo,
@@ -2001,7 +2001,11 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
     }
 
-    private static func fingerprint(_ byte: UInt8) -> Data {
+    private static func fingerprint(_ byte: UInt8) -> AssetFingerprint {
+        TestFixtures.assetFingerprint(byte)
+    }
+
+    private static func contentHash(_ byte: UInt8) -> Data {
         TestFixtures.fingerprint(byte)
     }
 }

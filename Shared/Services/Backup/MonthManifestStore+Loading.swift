@@ -353,7 +353,7 @@ extension MonthManifestStore {
                     ) VALUES (?, ?, ?, ?, ?)
                     """,
                     arguments: [
-                        asset.assetFingerprint,
+                        asset.assetFingerprint.rawValue,
                         asset.creationDateMs,
                         asset.backedUpAtMs,
                         asset.resourceCount,
@@ -364,7 +364,7 @@ extension MonthManifestStore {
 
             for link in seed.assetResourceLinks.sorted(by: { lhs, rhs in
                 if lhs.assetFingerprint != rhs.assetFingerprint {
-                    return lhs.assetFingerprint.lexicographicallyPrecedes(rhs.assetFingerprint)
+                    return lhs.assetFingerprint.rawValue.lexicographicallyPrecedes(rhs.assetFingerprint.rawValue)
                 }
                 if lhs.role != rhs.role { return lhs.role < rhs.role }
                 return lhs.slot < rhs.slot
@@ -379,7 +379,7 @@ extension MonthManifestStore {
                     ) VALUES (?, ?, ?, ?)
                     """,
                     arguments: [
-                        link.assetFingerprint,
+                        link.assetFingerprint.rawValue,
                         link.resourceHash,
                         link.role,
                         link.slot
@@ -432,11 +432,14 @@ extension MonthManifestStore {
             )
         }
 
-        var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
+        var assetsByFingerprint: [AssetFingerprint: RemoteManifestAsset] = [:]
         assetsByFingerprint.reserveCapacity(assetRows.count)
 
         for row in assetRows {
-            let fingerprint: Data = row["assetFingerprint"]
+            let blob: Data = row["assetFingerprint"]
+            guard let fingerprint = AssetFingerprint(decoding: blob) else {
+                throw Self.invalidAssetFingerprintBlobError(table: "assets", actualByteCount: blob.count)
+            }
             let asset = RemoteManifestAsset(
                 year: year,
                 month: month,
@@ -460,15 +463,19 @@ extension MonthManifestStore {
             )
         }
 
-        var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
+        var linksByFingerprint: [AssetFingerprint: [RemoteAssetResourceLink]] = [:]
         linksByFingerprint.reserveCapacity(assetsByFingerprint.count)
 
         for row in linkRows {
             let resourceHash: Data = row["resourceHash"]
+            let blob: Data = row["assetFingerprint"]
+            guard let fingerprint = AssetFingerprint(decoding: blob) else {
+                throw Self.invalidAssetFingerprintBlobError(table: "asset_resources", actualByteCount: blob.count)
+            }
             let link = RemoteAssetResourceLink(
                 year: year,
                 month: month,
-                assetFingerprint: row["assetFingerprint"],
+                assetFingerprint: fingerprint,
                 resourceHash: resourceHash,
                 role: Int(row["role"] as Int64),
                 slot: Int(row["slot"] as Int64),
@@ -484,6 +491,19 @@ extension MonthManifestStore {
         existingFileNameSet = Set(resourcesByName.keys).union(remoteFilesByName.keys)
         rebuildLinkIndexes()
         invalidateCollisionKeyCache()
+    }
+
+    // Fail-closed manifest blob corruption — short/non-32-byte assetFingerprint must not vanish silently;
+    // surface as a manifest-corruption error so callers route it through the existing legacy-quarantine
+    // and re-load paths (V1MigrationResidueQuarantine, MonthManifestStore.loadOrInitialize catch).
+    static func invalidAssetFingerprintBlobError(table: String, actualByteCount: Int) -> NSError {
+        NSError(
+            domain: "MonthManifestStore",
+            code: -42,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Invalid assetFingerprint blob in \(table): expected 32 bytes, got \(actualByteCount)"
+            ]
+        )
     }
 
     // Defensive: case-insensitive volumes / buggy listings can surface the same name twice.

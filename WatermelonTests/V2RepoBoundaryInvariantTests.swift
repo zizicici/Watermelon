@@ -358,10 +358,10 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         let snapshotClient = try await makeConnectedClient()
         let genesisClient = try await makeConnectedClient()
 
-        let baseFP = TestFixtures.fingerprint(0x21)
+        let baseFP = TestFixtures.assetFingerprint(0x21)
         let baseHash = TestFixtures.fingerprint(0x23)
-        let deletedFP = TestFixtures.fingerprint(0x24)
-        let laterFP = TestFixtures.fingerprint(0x25)
+        let deletedFP = TestFixtures.assetFingerprint(0x24)
+        let laterFP = TestFixtures.assetFingerprint(0x25)
         let laterHash = TestFixtures.fingerprint(0x26)
         let baseResource = commitResource(
             path: "2026/05/base.jpg",
@@ -427,7 +427,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
             deletedKeys: [
                 SnapshotDeletedKeyRow(
                     keyType: .asset,
-                    keyValue: deletedFP.hexString,
+                    keyValue: deletedFP.rawValue.hexString,
                     stamp: OpStamp(writerID: writerA, seq: 1, clock: 2)
                 )
             ],
@@ -795,7 +795,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
     ) async throws {
         let op = addAssetOp(
             clock: clock,
-            fingerprint: TestFixtures.fingerprint(fingerprintByte),
+            fingerprint: TestFixtures.assetFingerprint(fingerprintByte),
             resources: []
         )
         try await writeCommit(client: client, writerID: writerID, seq: seq, clockMin: clock, clockMax: clock, ops: [op])
@@ -825,7 +825,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         )
     }
 
-    private func addAssetOp(clock: UInt64, fingerprint: Data, resources: [CommitResourceEntry]) -> CommitOp {
+    private func addAssetOp(clock: UInt64, fingerprint: AssetFingerprint, resources: [CommitResourceEntry]) -> CommitOp {
         CommitOp(opSeq: 0, clock: clock, body: .addAsset(CommitAddAssetBody(
             assetFingerprint: fingerprint,
             creationDateMs: nil,
@@ -834,7 +834,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         )))
     }
 
-    private func tombstoneOp(clock: UInt64, fingerprint: Data) -> CommitOp {
+    private func tombstoneOp(clock: UInt64, fingerprint: AssetFingerprint) -> CommitOp {
         CommitOp(opSeq: 1, clock: clock, body: .tombstoneAsset(CommitTombstoneBody(
             assetFingerprint: fingerprint,
             reason: .userDeleted

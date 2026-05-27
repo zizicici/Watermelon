@@ -14,7 +14,7 @@ struct BackupSelectedResource {
 #endif
 
 enum BackupAssetResourcePlanner {
-    static func assetFingerprint(resourceRoleSlotHashes: [(role: Int, slot: Int, contentHash: Data)]) -> Data {
+    static func assetFingerprint(resourceRoleSlotHashes: [(role: Int, slot: Int, contentHash: Data)]) -> AssetFingerprint {
         let tokens = resourceRoleSlotHashes
             .map { token in
                 let hashHex = token.contentHash.hexString
@@ -23,8 +23,7 @@ enum BackupAssetResourcePlanner {
             .sorted()
             .joined(separator: "\n")
 
-        let digest = SHA256.hash(data: Data(tokens.utf8))
-        return Data(digest)
+        return AssetFingerprint(SHA256.hash(data: Data(tokens.utf8)))
     }
 
     /// Bump when `orderedResourcesWithRoleSlot` selection rules change so the skip predicate refuses cached rows under the older rules.

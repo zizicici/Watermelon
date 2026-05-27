@@ -11,7 +11,7 @@ final class EngineTests: XCTestCase {
         _ engine: HomeLocalIndexEngine,
         _ snapshotsPerCollection: [[LibraryAssetSnapshot]],
         fingerprints: [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] = [:],
-        remoteFingerprintsForMonth: ((LibraryMonthKey) -> Set<Data>)? = nil
+        remoteFingerprintsForMonth: ((LibraryMonthKey) -> Set<AssetFingerprint>)? = nil
     ) -> Set<LibraryMonthKey> {
         engine.reload(
             payload: TestFixtures.initialPayload(snapshotsPerCollection),
@@ -281,7 +281,7 @@ final class EngineTests: XCTestCase {
     func testReload_dedupsBackedUpFingerprintsByValue() {
         // Two locals share a fingerprint → backedUpCount = 1 (one remote asset).
         let engine = makeEngine()
-        let fp = Data([0xDE, 0xAD, 0xBE, 0xEF])
+        let fp = TestFixtures.assetFingerprint(0xDE)
         _ = engine.reload(
             payload: TestFixtures.initialPayload([[
                 TestFixtures.snapshot(id: "a", year: 2024, month: 3),
@@ -300,8 +300,8 @@ final class EngineTests: XCTestCase {
 
     func testRefreshBackedUpState_updatesBackedUpCount() {
         let engine = makeEngine()
-        let fp = Data([0x01])
-        var remoteFps: [LibraryMonthKey: Set<Data>] = [:]
+        let fp = TestFixtures.assetFingerprint(0x01)
+        var remoteFps: [LibraryMonthKey: Set<AssetFingerprint>] = [:]
         let key = LibraryMonthKey(year: 2024, month: 3)
 
         _ = engine.reload(

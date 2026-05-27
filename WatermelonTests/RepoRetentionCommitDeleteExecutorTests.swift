@@ -382,7 +382,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
                 client: inner,
                 writerID: self.writerA,
                 seq: 2,
-                ops: [self.addAssetOp(fingerprint: TestFixtures.fingerprint(0xA1), clock: 2)]
+                ops: [self.addAssetOp(fingerprint: TestFixtures.assetFingerprint(0xA1), clock: 2)]
             )
         }
 
@@ -617,7 +617,7 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
         })
     }
 
-    private func addAssetOp(fingerprint: Data, clock: UInt64) -> CommitOp {
+    private func addAssetOp(fingerprint: AssetFingerprint, clock: UInt64) -> CommitOp {
         CommitOp(opSeq: 0, clock: clock, body: .addAsset(CommitAddAssetBody(
             assetFingerprint: fingerprint,
             creationDateMs: nil,

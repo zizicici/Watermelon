@@ -209,9 +209,9 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
     private let month = LibraryMonthKey(year: 2026, month: 5)
     private let acceptedSnapshotFilename = "snapshot-fixture.jsonl"
     private let preDeleteObservedClock: UInt64 = 100
-    private var assetFP: Data { TestFixtures.fingerprint(0xA1) }
+    private var assetFP: AssetFingerprint { TestFixtures.assetFingerprint(0xA1) }
 
-    private var preDeleteMonthAssets: [Data: SnapshotAssetRow] {
+    private var preDeleteMonthAssets: [AssetFingerprint: SnapshotAssetRow] {
         [assetFP: SnapshotAssetRow(
             assetFingerprint: assetFP,
             creationDateMs: nil,
@@ -228,7 +228,7 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
             resources: [:],
             assetResources: [:],
             deletedAssetStamps: [
-                TestFixtures.fingerprint(0xA2): OpStamp(writerID: writerA, seq: 4, clock: 90)
+                TestFixtures.assetFingerprint(0xA2): OpStamp(writerID: writerA, seq: 4, clock: 90)
             ]
         )
     }

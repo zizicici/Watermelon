@@ -454,7 +454,7 @@ private struct MaterializerCommitReference: Sendable {
 private struct AcceptedSnapshotBaseline: Sendable {
     let state: RepoMonthState
     let covered: CoveredRanges
-    let baselineStamps: [Data: OpStamp]
+    let baselineStamps: [AssetFingerprint: OpStamp]
     let info: RepoMaterializer.AcceptedSnapshotBaselineInfo
     let lamport: UInt64
 }
@@ -565,7 +565,7 @@ private struct SnapshotTrustPipeline {
     private static func makeBaseline(file: SnapshotFile, reference: MaterializerSnapshotReference) -> AcceptedSnapshotBaseline? {
         let month = reference.month
         var state = RepoMonthState.empty
-        var baselineStamps: [Data: OpStamp] = [:]
+        var baselineStamps: [AssetFingerprint: OpStamp] = [:]
         for asset in file.assets {
             state.assets[asset.assetFingerprint] = asset
             baselineStamps[asset.assetFingerprint] = asset.stamp
@@ -586,9 +586,9 @@ private struct SnapshotTrustPipeline {
                 materializerLog.warning("reject snapshot with unsupported deletedKey.keyType=\(String(describing: d.keyType), privacy: .public) for \(month.text, privacy: .public)")
                 return nil
             }
-            let fp: Data
+            let fp: AssetFingerprint
             do {
-                fp = try RepoWireValidator.validateHash(d.keyValue, field: "keyValue")
+                fp = try RepoWireValidator.validateAssetFingerprint(d.keyValue, field: "keyValue")
             } catch {
                 materializerLog.warning("reject snapshot with malformed deletedKey hash for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
                 return nil
@@ -731,7 +731,7 @@ private struct MaterializerReplayProjector {
         for month in emptyBaselineMonths where monthStates[month] == nil {
             monthStates[month] = .empty
         }
-        var baselineStampsByMonth: [LibraryMonthKey: [Data: OpStamp]] = [:]
+        var baselineStampsByMonth: [LibraryMonthKey: [AssetFingerprint: OpStamp]] = [:]
         for (month, baseline) in baselinesByMonth where !baseline.baselineStamps.isEmpty {
             baselineStampsByMonth[month] = baseline.baselineStamps
         }
@@ -751,7 +751,7 @@ private struct MaterializerReplayProjector {
             return lhs.op.opSeq < rhs.op.opSeq
         }
 
-        var lastAddByMonthFP: [LibraryMonthKey: [Data: OpStamp]] = baselineStampsByMonth
+        var lastAddByMonthFP: [LibraryMonthKey: [AssetFingerprint: OpStamp]] = baselineStampsByMonth
         for sorted in sortedOps {
             var state = monthStates[sorted.month] ?? .empty
             switch sorted.op.body {
@@ -981,7 +981,7 @@ private struct CrossRepoIndexTrustPipeline {
             if let filterMonth, month != filterMonth { continue }
             let section = sectionsByMonth[month]
             var monthState = RepoMonthState.empty
-            var baselineStamps: [Data: OpStamp] = [:]
+            var baselineStamps: [AssetFingerprint: OpStamp] = [:]
             if let section {
                 for asset in section.assets {
                     monthState.assets[asset.assetFingerprint] = asset
@@ -996,9 +996,9 @@ private struct CrossRepoIndexTrustPipeline {
                 }
                 for d in section.deletedKeys {
                     guard d.keyType == .asset else { continue }
-                    let fp: Data
+                    let fp: AssetFingerprint
                     do {
-                        fp = try RepoWireValidator.validateHash(d.keyValue, field: "keyValue")
+                        fp = try RepoWireValidator.validateAssetFingerprint(d.keyValue, field: "keyValue")
                     } catch {
                         continue
                     }

@@ -46,7 +46,7 @@ enum RepoSnapshotBuilder {
         let deletedKeys = state.deletedAssetStamps.map { fp, stamp in
             SnapshotDeletedKeyRow(
                 keyType: .asset,
-                keyValue: fp.hexString,
+                keyValue: fp.rawValue.hexString,
                 stamp: stamp
             )
         }

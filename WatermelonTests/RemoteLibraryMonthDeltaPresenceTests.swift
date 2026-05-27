@@ -20,7 +20,7 @@ final class RemoteLibraryMonthDeltaPresenceTests: XCTestCase {
         let service = RemoteIndexSyncService()
         let resourceHash = TestFixtures.fingerprint(0x71)
         let missingHash = TestFixtures.fingerprint(0x72)
-        let asset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: TestFixtures.fingerprint(0x70))
+        let asset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: TestFixtures.assetFingerprint(0x70))
         let resource = TestFixtures.remoteResource(year: year, month: month, contentHash: resourceHash)
         let link = TestFixtures.remoteLink(
             year: year, month: month,
@@ -45,7 +45,7 @@ final class RemoteLibraryMonthDeltaPresenceTests: XCTestCase {
         let service = RemoteIndexSyncService()
         let resourceHash = TestFixtures.fingerprint(0x81)
         let missingHash = TestFixtures.fingerprint(0x82)
-        let asset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: TestFixtures.fingerprint(0x80))
+        let asset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: TestFixtures.assetFingerprint(0x80))
         let resource = TestFixtures.remoteResource(year: year, month: month, contentHash: resourceHash)
         let link = TestFixtures.remoteLink(
             year: year, month: month,
@@ -69,7 +69,7 @@ final class RemoteLibraryMonthDeltaPresenceTests: XCTestCase {
     func testRepoCommittedView_monthRawData_absentOverlay_yieldsEmptyPresence() {
         let service = RemoteIndexSyncService()
         let resourceHash = TestFixtures.fingerprint(0x91)
-        let asset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: TestFixtures.fingerprint(0x90))
+        let asset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: TestFixtures.assetFingerprint(0x90))
         let resource = TestFixtures.remoteResource(year: year, month: month, contentHash: resourceHash)
         let link = TestFixtures.remoteLink(
             year: year, month: month,
@@ -92,7 +92,7 @@ final class RemoteLibraryMonthDeltaPresenceTests: XCTestCase {
         let service = RemoteIndexSyncService()
         let resourceHash = TestFixtures.fingerprint(0xC1)
         let missingHash = TestFixtures.fingerprint(0xC2)
-        let asset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: TestFixtures.fingerprint(0xC0))
+        let asset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: TestFixtures.assetFingerprint(0xC0))
         let resource = TestFixtures.remoteResource(year: year, month: month, contentHash: resourceHash)
         let link = TestFixtures.remoteLink(
             year: year, month: month,
@@ -118,7 +118,7 @@ final class RemoteLibraryMonthDeltaPresenceTests: XCTestCase {
         let service = RemoteIndexSyncService()
         let resourceHash = TestFixtures.fingerprint(0xD1)
         let missingHash = TestFixtures.fingerprint(0xD2)
-        let asset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: TestFixtures.fingerprint(0xD0))
+        let asset = TestFixtures.remoteAsset(year: year, month: month, fingerprint: TestFixtures.assetFingerprint(0xD0))
         let resource = TestFixtures.remoteResource(year: year, month: month, contentHash: resourceHash)
         let link = TestFixtures.remoteLink(
             year: year, month: month,

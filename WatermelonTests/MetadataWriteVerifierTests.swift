@@ -156,7 +156,7 @@ final class MetadataWriteVerifierTests: XCTestCase {
             ops.append(CommitOp(
                 opSeq: i, clock: clock,
                 body: .tombstoneAsset(CommitTombstoneBody(
-                    assetFingerprint: TestFixtures.fingerprint(UInt8(0xA0 &+ UInt8(i % 16))),
+                    assetFingerprint: TestFixtures.assetFingerprint(UInt8(0xA0 &+ UInt8(i % 16))),
                     reason: .userDeleted
                 ))
             ))

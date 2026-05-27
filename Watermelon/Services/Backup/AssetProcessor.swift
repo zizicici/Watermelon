@@ -14,7 +14,7 @@ struct HashIndexUpsertIntent: Sendable {
         case fingerprintOnly(resourceCount: Int)
     }
     let assetLocalIdentifier: PhotoKitLocalIdentifier
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let totalFileSizeBytes: Int64
     let modificationDateMs: Int64?
     let body: Body
@@ -29,7 +29,7 @@ enum HashIndexDrainOutcome {
 /// same content fingerprint each need their own `local_assets` row keyed by `assetLocalIdentifier`,
 /// so collapsing by fingerprint alone would lose cache coverage.
 actor PendingHashIndexIntentQueue {
-    private var byMonth: [LibraryMonthKey: [Data: [PhotoKitLocalIdentifier: HashIndexUpsertIntent]]] = [:]
+    private var byMonth: [LibraryMonthKey: [AssetFingerprint: [PhotoKitLocalIdentifier: HashIndexUpsertIntent]]] = [:]
 
     func enqueue(month: LibraryMonthKey, intent: HashIndexUpsertIntent) {
         var byFingerprint = byMonth[month] ?? [:]
@@ -39,7 +39,7 @@ actor PendingHashIndexIntentQueue {
         byMonth[month] = byFingerprint
     }
 
-    func drain(month: LibraryMonthKey, durableAssetFingerprints: Set<Data>) -> [HashIndexUpsertIntent] {
+    func drain(month: LibraryMonthKey, durableAssetFingerprints: Set<AssetFingerprint>) -> [HashIndexUpsertIntent] {
         guard var byFingerprint = byMonth[month] else { return [] }
         var drained: [HashIndexUpsertIntent] = []
         for fp in durableAssetFingerprints {
@@ -55,7 +55,7 @@ actor PendingHashIndexIntentQueue {
         return drained
     }
 
-    func rollBack(month: LibraryMonthKey, fingerprints: Set<Data>) {
+    func rollBack(month: LibraryMonthKey, fingerprints: Set<AssetFingerprint>) {
         guard var byFingerprint = byMonth[month] else { return }
         for fp in fingerprints {
             byFingerprint.removeValue(forKey: fp)
@@ -627,7 +627,7 @@ final class AssetProcessor: Sendable {
         manifestAsset: RemoteManifestAsset,
         links: [RemoteAssetResourceLink],
         timing: inout AssetProcessTiming,
-        tombstonedSubsetFingerprints: Set<Data> = [],
+        tombstonedSubsetFingerprints: Set<AssetFingerprint> = [],
         intent: HashIndexUpsertIntent
     ) async throws {
         if monthStore.v2Services == nil {
@@ -667,7 +667,7 @@ final class AssetProcessor: Sendable {
     @discardableResult
     func drainHashIndexIntents(
         month: LibraryMonthKey,
-        durableAssetFingerprints: Set<Data>
+        durableAssetFingerprints: Set<AssetFingerprint>
     ) async -> HashIndexDrainOutcome {
         let intents = await pendingHashIndexIntents.drain(
             month: month,
@@ -699,7 +699,7 @@ final class AssetProcessor: Sendable {
     /// Discard queued intents whose fingerprint will not be re-attempted (hard abort).
     func rollBackHashIndexIntents(
         month: LibraryMonthKey,
-        fingerprints: Set<Data>
+        fingerprints: Set<AssetFingerprint>
     ) async {
         await pendingHashIndexIntents.rollBack(month: month, fingerprints: fingerprints)
     }
@@ -744,7 +744,7 @@ final class AssetProcessor: Sendable {
         monthStore: any BackupMonthStore,
         manifestAsset: RemoteManifestAsset,
         delta: BackupMonthFlushDelta,
-        tombstonedSubsetFingerprints: Set<Data>
+        tombstonedSubsetFingerprints: Set<AssetFingerprint>
     ) {
         // V1-only path. V2's per-asset upsertAsset records subset tombstones in pending state, so
         // publishing here mid-batch would push uncommitted state to RemoteIndexSyncService; the V2

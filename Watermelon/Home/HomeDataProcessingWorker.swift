@@ -12,7 +12,7 @@ struct HomeDataLoadResult {
 
 private struct RemoteOnlyQueryResult: Sendable {
     let remoteItems: [RemoteAlbumItem]
-    let localFingerprintSet: Set<Data>
+    let localFingerprintSet: Set<AssetFingerprint>
 }
 
 final class HomeDataProcessingWorker: @unchecked Sendable {
@@ -119,7 +119,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         LocalHashIndexTrust.canTrust(record.trustFields, for: asset)
     }
 
-    private func remoteFingerprintsForMonth(_ month: LibraryMonthKey) -> Set<Data> {
+    private func remoteFingerprintsForMonth(_ month: LibraryMonthKey) -> Set<AssetFingerprint> {
         remoteIndex.fingerprints(for: month)
     }
 

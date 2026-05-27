@@ -32,11 +32,11 @@ actor SnapshotWriter {
     ) async throws -> SnapshotFile {
         // header.covered is the caller's contract — it must match the materialized state.
         // LIST-based enrichment here would cover corrupt / unreplayed seqs.
-        let sortedAssets = assets.sorted { $0.assetFingerprint.lexicographicallyPrecedes($1.assetFingerprint) }
+        let sortedAssets = assets.sorted { $0.assetFingerprint.rawValue.lexicographicallyPrecedes($1.assetFingerprint.rawValue) }
         let sortedResources = resources.sorted { $0.physicalRemotePath < $1.physicalRemotePath }
         let sortedAssetResources = assetResources.sorted { lhs, rhs in
             if lhs.assetFingerprint != rhs.assetFingerprint {
-                return lhs.assetFingerprint.lexicographicallyPrecedes(rhs.assetFingerprint)
+                return lhs.assetFingerprint.rawValue.lexicographicallyPrecedes(rhs.assetFingerprint.rawValue)
             }
             if lhs.role != rhs.role { return lhs.role < rhs.role }
             return lhs.slot < rhs.slot

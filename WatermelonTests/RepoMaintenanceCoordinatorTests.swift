@@ -213,7 +213,7 @@ final class RepoMaintenanceCoordinatorTests: XCTestCase {
         )
     }
 
-    private func assetFingerprint(hash: Data) -> Data {
+    private func assetFingerprint(hash: Data) -> AssetFingerprint {
         BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
         )

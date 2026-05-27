@@ -737,8 +737,8 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
 
     func testMultiWriterNonEmptyStatePlanAndContract() async throws {
         let client = try await makeClient()
-        let fpA = TestFixtures.fingerprint(0xA1)
-        let fpB = TestFixtures.fingerprint(0xB1)
+        let fpA = TestFixtures.assetFingerprint(0xA1)
+        let fpB = TestFixtures.assetFingerprint(0xB1)
         let hashA = TestFixtures.fingerprint(0xA2)
         let resourceA = CommitResourceEntry(
             physicalRemotePath: "2026/05/a.jpg",
@@ -1068,7 +1068,7 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
     }
 
     private func addAssetOp(
-        fingerprint: Data,
+        fingerprint: AssetFingerprint,
         clock: UInt64,
         resources: [CommitResourceEntry]
     ) -> CommitOp {

@@ -55,6 +55,14 @@ enum RepoWireValidator {
         return data
     }
 
+    static func validateAssetFingerprint(_ raw: String, field: String) throws -> AssetFingerprint {
+        let data = try validateHash(raw, field: field)
+        guard let fp = AssetFingerprint(decoding: data) else {
+            throw WireValidationError.wrongHashLength(field: field, actual: data.count)
+        }
+        return fp
+    }
+
     /// Reject malformed date millis instead of silently treating hostile values as nil.
     /// as nil, letting epoch-0 sort artifacts through; this rejects malformed values
     /// while still accepting NSNull / missing-key as nil.

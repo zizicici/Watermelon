@@ -32,7 +32,7 @@ final class ContentHashIndexRepositoryDuplicateCandidateTests: XCTestCase {
         )
 
         XCTAssertEqual(candidates.count, 1)
-        XCTAssertEqual(candidates[0].assetFingerprint, fpA)
+        XCTAssertEqual(candidates[0].assetFingerprint, AssetFingerprint(decoding: fpA))
         XCTAssertEqual(candidates[0].rows.map(\.assetLocalIdentifier), ["asset-1", "asset-2"])
     }
 
@@ -91,7 +91,8 @@ final class ContentHashIndexRepositoryDuplicateCandidateTests: XCTestCase {
         XCTAssertTrue(candidates.isEmpty)
     }
 
-    func testDuplicateCandidateQueryEmptyFingerprintCurrentBehavior() throws {
+    func testDuplicateCandidateQueryEmptyFingerprintIsSkipped() throws {
+        // Empty (or non-32-byte) blobs fail AssetFingerprint(decoding:) and are skipped.
         try insertLocalAsset("asset-1", fingerprint: Data())
         try insertLocalAsset("asset-2", fingerprint: Data())
 
@@ -99,9 +100,7 @@ final class ContentHashIndexRepositoryDuplicateCandidateTests: XCTestCase {
             minSelectionVersion: BackupAssetResourcePlanner.currentSelectionVersion
         )
 
-        XCTAssertEqual(candidates.count, 1)
-        XCTAssertEqual(candidates[0].assetFingerprint, Data())
-        XCTAssertEqual(candidates[0].rows.map(\.assetLocalIdentifier), ["asset-1", "asset-2"])
+        XCTAssertTrue(candidates.isEmpty)
     }
 
     func testPotentiallyUsableIndexedAssetCountFiltersVersionAndSignature() throws {

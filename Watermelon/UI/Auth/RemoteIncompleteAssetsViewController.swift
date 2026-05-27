@@ -20,7 +20,7 @@ final class RemoteIncompleteAssetsViewController: UITableViewController {
                 let lDate = lhs.creationDate ?? .distantPast
                 let rDate = rhs.creationDate ?? .distantPast
                 if lDate != rDate { return lDate < rDate }
-                return lhs.id.lexicographicallyPrecedes(rhs.id)
+                return lhs.id.rawValue.lexicographicallyPrecedes(rhs.id.rawValue)
             }
             return Section(month: month, entries: monthEntries)
         }
@@ -63,7 +63,7 @@ final class RemoteIncompleteAssetsViewController: UITableViewController {
             entry.totalResourceCount
         )
         let dateText = entry.creationDate.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "-"
-        let fpHex = String(entry.id.hexString.prefix(16))
+        let fpHex = String(entry.id.rawValue.hexString.prefix(16))
         content.secondaryText = "\(missingText) · \(dateText) · \(fpHex)"
         cell.contentConfiguration = content
         cell.accessoryType = .disclosureIndicator
@@ -86,7 +86,7 @@ final class RemoteIncompleteAssetsViewController: UITableViewController {
         var lines: [String] = []
         lines.append(String.localizedStringWithFormat(
             String(localized: "storage.detail.incompleteAssets.fingerprintLine"),
-            entry.id.hexString
+            entry.id.rawValue.hexString
         ))
         if let name = entry.representativeFileName {
             lines.append(String.localizedStringWithFormat(

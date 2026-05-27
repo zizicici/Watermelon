@@ -135,7 +135,7 @@ actor V1MigrationService {
                     existingV2Output = output
                 }
                 let existingState = existingV2Output?.state.months[monthKey]
-                var existingFingerprints: Set<Data> = []
+                var existingFingerprints: Set<AssetFingerprint> = []
                 if let existingAssets = existingState?.assets {
                     existingFingerprints.formUnion(existingAssets.keys)
                 }

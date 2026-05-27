@@ -162,7 +162,7 @@ actor ParallelBackupProgressAggregator {
     /// commit covering them landed) or `rollBackProvisionalBatch` (hard-abort flush failure)
     /// processes them. Counters advance at `record(result:)` time and revert on rollback so the
     /// visible progress matches durable outcomes after reconciliation.
-    private var provisionalByMonth: [LibraryMonthKey: [Data: [PhotoKitLocalIdentifier: ProvisionalRecordStatus]]] = [:]
+    private var provisionalByMonth: [LibraryMonthKey: [AssetFingerprint: [PhotoKitLocalIdentifier: ProvisionalRecordStatus]]] = [:]
 
     init(total: Int) {
         state = BackupRunState(total: total)
@@ -236,7 +236,7 @@ actor ParallelBackupProgressAggregator {
 
     func recordProvisional(
         month: LibraryMonthKey,
-        fingerprint: Data,
+        fingerprint: AssetFingerprint,
         assetLocalIdentifier: PhotoKitLocalIdentifier,
         status: ProvisionalRecordStatus
     ) {
@@ -245,7 +245,7 @@ actor ParallelBackupProgressAggregator {
 
     func markBatchDurable(
         month: LibraryMonthKey,
-        committedAssetFingerprints: Set<Data>
+        committedAssetFingerprints: Set<AssetFingerprint>
     ) {
         guard var byFingerprint = provisionalByMonth[month] else { return }
         for fp in committedAssetFingerprints {
@@ -263,7 +263,7 @@ actor ParallelBackupProgressAggregator {
     /// `(fingerprint, assetLocalIdentifier)` cell so duplicate-fingerprint local assets each
     /// revert their provisional row exactly once.
     @discardableResult
-    func rollBackProvisionalBatch(month: LibraryMonthKey) -> Set<Data> {
+    func rollBackProvisionalBatch(month: LibraryMonthKey) -> Set<AssetFingerprint> {
         guard let byFingerprint = provisionalByMonth.removeValue(forKey: month) else {
             return []
         }

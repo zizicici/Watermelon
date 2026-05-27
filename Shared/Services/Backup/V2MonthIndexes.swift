@@ -10,7 +10,7 @@ final class V2MonthIndexes {
     }
 
     private struct StrictSubsetQueryResult {
-        let fingerprints: [Data]
+        let fingerprints: [AssetFingerprint]
         let hasMatch: Bool
         let stats: StrictSubsetQueryStats
     }
@@ -19,11 +19,11 @@ final class V2MonthIndexes {
     let month: Int
 
     private var resourcesByPath: [String: RemoteManifestResource]
-    private var assetsByFingerprint: [Data: RemoteManifestAsset]
-    private var linksByFingerprint: [Data: [RemoteAssetResourceLink]]
+    private var assetsByFingerprint: [AssetFingerprint: RemoteManifestAsset]
+    private var linksByFingerprint: [AssetFingerprint: [RemoteAssetResourceLink]]
     /// Derived from linksByFingerprint; future link-state mutators must use the index helpers.
-    private var linkKeySetByFingerprint: [Data: Set<AssetResourceLinkKey>] = [:]
-    private var fingerprintsByResourceHash: [Data: Set<Data>] = [:]
+    private var linkKeySetByFingerprint: [AssetFingerprint: Set<AssetResourceLinkKey>] = [:]
+    private var fingerprintsByResourceHash: [Data: Set<AssetFingerprint>] = [:]
     /// `findResourceByHash` returns lex-min over present paths only; missing-path lookup would bind metadata to undownloadable bytes.
     private var pathsByHash: [Data: Set<String>]
     /// Reverse name indexes keep upload preparation from scanning every resource in a month.
@@ -37,13 +37,13 @@ final class V2MonthIndexes {
     private var existingFileNameSet: Set<String>
 
     /// Mirror of `RepoMonthState.deletedAssetStamps`; survives flushes so snapshot emits deletedKey rows.
-    private(set) var deletedAssetStamps: [Data: OpStamp]
+    private(set) var deletedAssetStamps: [AssetFingerprint: OpStamp]
 
     /// Snapshot emission reads committed rows so live same-path overwrites cannot enter the covered baseline.
     private var committedResourceByPath: [String: SnapshotResourceRow]
 
-    private(set) var pendingV2AssetFingerprints: Set<Data> = []
-    private(set) var pendingV2TombstoneFingerprints: Set<Data> = []
+    private(set) var pendingV2AssetFingerprints: Set<AssetFingerprint> = []
+    private(set) var pendingV2TombstoneFingerprints: Set<AssetFingerprint> = []
 
     private let nameCase: BackendNameCaseSensitivity
 
@@ -122,7 +122,7 @@ final class V2MonthIndexes {
         self.resourcesByCollisionKey = resourcesByCollisionKey
         self.presenceMap = presenceMap
 
-        var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
+        var assetsByFingerprint: [AssetFingerprint: RemoteManifestAsset] = [:]
         for row in materializedState.assets.values {
             assetsByFingerprint[row.assetFingerprint] = RemoteManifestAsset(
                 year: year,
@@ -137,7 +137,7 @@ final class V2MonthIndexes {
         }
         self.assetsByFingerprint = assetsByFingerprint
 
-        var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
+        var linksByFingerprint: [AssetFingerprint: [RemoteAssetResourceLink]] = [:]
         for row in materializedState.assetResources.values {
             linksByFingerprint[row.assetFingerprint, default: []].append(RemoteAssetResourceLink(
                 year: year,
@@ -157,7 +157,7 @@ final class V2MonthIndexes {
         rebuildLinkIndexes()
     }
 
-    func containsAssetFingerprint(_ fingerprint: Data) -> Bool {
+    func containsAssetFingerprint(_ fingerprint: AssetFingerprint) -> Bool {
         assetsByFingerprint[fingerprint] != nil
     }
 
@@ -165,7 +165,7 @@ final class V2MonthIndexes {
     /// can tombstone older partial assets that the incoming bundle supersedes.
     func findStrictSubsetAssetFingerprints(
         forResourceKeys keys: Set<AssetResourceLinkKey>
-    ) -> [Data] {
+    ) -> [AssetFingerprint] {
         queryStrictSubsets(forResourceKeys: keys, stopAfterFirstMatch: false).fingerprints
     }
 
@@ -200,14 +200,14 @@ final class V2MonthIndexes {
             )
         }
 
-        var candidates: Set<Data> = []
+        var candidates: Set<AssetFingerprint> = []
         for key in keys {
             if let bucket = fingerprintsByResourceHash[key.hash] {
                 candidates.formUnion(bucket)
             }
         }
 
-        var result: [Data] = []
+        var result: [AssetFingerprint] = []
         var predicateChecks = 0
         var stoppedAfterFirstMatch = false
         for fingerprint in candidates {
@@ -243,14 +243,14 @@ final class V2MonthIndexes {
         }
     }
 
-    private func indexAddAsset(fingerprint: Data, links: [RemoteAssetResourceLink]) {
+    private func indexAddAsset(fingerprint: AssetFingerprint, links: [RemoteAssetResourceLink]) {
         linkKeySetByFingerprint[fingerprint] = AssetResourceLinkSetPredicate.keys(fromLinks: links)
         for link in links {
             fingerprintsByResourceHash[link.resourceHash, default: []].insert(fingerprint)
         }
     }
 
-    private func indexRemoveAsset(_ fingerprint: Data) {
+    private func indexRemoveAsset(_ fingerprint: AssetFingerprint) {
         if let oldLinks = linksByFingerprint[fingerprint] {
             for link in oldLinks {
                 fingerprintsByResourceHash[link.resourceHash]?.remove(fingerprint)
@@ -262,7 +262,7 @@ final class V2MonthIndexes {
         linkKeySetByFingerprint.removeValue(forKey: fingerprint)
     }
 
-    func isAssetIncomplete(_ fingerprint: Data) -> Bool {
+    func isAssetIncomplete(_ fingerprint: AssetFingerprint) -> Bool {
         guard let asset = assetsByFingerprint[fingerprint] else { return false }
         let links = linksByFingerprint[fingerprint] ?? []
         // Filter gates actionability only; materialized state stays faithful to the commit log.
@@ -386,7 +386,7 @@ final class V2MonthIndexes {
     func upsertAsset(
         _ asset: RemoteManifestAsset,
         links: [RemoteAssetResourceLink],
-        replacingSubsetFingerprints: Set<Data>
+        replacingSubsetFingerprints: Set<AssetFingerprint>
     ) throws {
         // Reject links without present resources or flush would emit an asset body missing its resources.
         for link in links {
@@ -448,9 +448,9 @@ final class V2MonthIndexes {
     /// via `recordCommit(...)` after the commit log write succeeds. `limit` caps the
     /// total ops (assets + tombstones) returned, draining assets first then tombstones.
     /// A non-nil `limit` enables the U01 hard-cap chunked-flush contract.
-    func snapshotPending(limit: Int? = nil) -> (assets: [Data], tombstones: [Data]) {
-        let assets = pendingV2AssetFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) })
-        let tombstones = pendingV2TombstoneFingerprints.sorted(by: { $0.lexicographicallyPrecedes($1) })
+    func snapshotPending(limit: Int? = nil) -> (assets: [AssetFingerprint], tombstones: [AssetFingerprint]) {
+        let assets = pendingV2AssetFingerprints.sorted(by: { $0.rawValue.lexicographicallyPrecedes($1.rawValue) })
+        let tombstones = pendingV2TombstoneFingerprints.sorted(by: { $0.rawValue.lexicographicallyPrecedes($1.rawValue) })
         guard let limit, limit >= 0 else {
             return (assets, tombstones)
         }
@@ -461,18 +461,18 @@ final class V2MonthIndexes {
         return (assets, Array(tombstones.prefix(remaining)))
     }
 
-    func asset(forFingerprint fp: Data) -> RemoteManifestAsset? {
+    func asset(forFingerprint fp: AssetFingerprint) -> RemoteManifestAsset? {
         assetsByFingerprint[fp]
     }
 
-    func links(forFingerprint fp: Data) -> [RemoteAssetResourceLink]? {
+    func links(forFingerprint fp: AssetFingerprint) -> [RemoteAssetResourceLink]? {
         linksByFingerprint[fp]
     }
 
     /// Stamps committed rows so snapshot baselines match replay and stale path overwrites lose LWW.
     func recordCommit(
-        assetClocks: [Data: UInt64],
-        tombstoneClocks: [Data: UInt64],
+        assetClocks: [AssetFingerprint: UInt64],
+        tombstoneClocks: [AssetFingerprint: UInt64],
         committedResources: [String: RemoteManifestResource],
         committedResourceClocks: [String: UInt64],
         writerID: String,
@@ -524,7 +524,7 @@ final class V2MonthIndexes {
         var state = RepoMonthState.empty
         for (fp, asset) in assetsByFingerprint {
             guard let stamp = asset.stamp else {
-                preconditionFailure("currentMaterializedState requires committed asset stamp for \(asset.assetFingerprint.hexString)")
+                preconditionFailure("currentMaterializedState requires committed asset stamp for \(asset.assetFingerprint)")
             }
             state.assets[fp] = SnapshotAssetRow(
                 assetFingerprint: asset.assetFingerprint,

@@ -208,21 +208,21 @@ actor RepoCrossRepoIndexWriter {
         sections.reserveCapacity(sortedMonths.count)
         for month in sortedMonths {
             let monthState = materialized.state.months[month] ?? .empty
-            let assets = monthState.assets.values.sorted { $0.assetFingerprint.lexicographicallyPrecedes($1.assetFingerprint) }
+            let assets = monthState.assets.values.sorted { $0.assetFingerprint.rawValue.lexicographicallyPrecedes($1.assetFingerprint.rawValue) }
             let resources = monthState.resources.values.sorted { $0.physicalRemotePath < $1.physicalRemotePath }
             let assetResources = monthState.assetResources.values.sorted { lhs, rhs in
                 if lhs.assetFingerprint != rhs.assetFingerprint {
-                    return lhs.assetFingerprint.lexicographicallyPrecedes(rhs.assetFingerprint)
+                    return lhs.assetFingerprint.rawValue.lexicographicallyPrecedes(rhs.assetFingerprint.rawValue)
                 }
                 if lhs.role != rhs.role { return lhs.role < rhs.role }
                 return lhs.slot < rhs.slot
             }
             let deletedKeys = monthState.deletedAssetStamps
-                .sorted { $0.key.lexicographicallyPrecedes($1.key) }
+                .sorted { $0.key.rawValue.lexicographicallyPrecedes($1.key.rawValue) }
                 .map { (fp, stamp) in
                     SnapshotDeletedKeyRow(
                         keyType: .asset,
-                        keyValue: fp.hexString,
+                        keyValue: fp.rawValue.hexString,
                         stamp: stamp
                     )
                 }

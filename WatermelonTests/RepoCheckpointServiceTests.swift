@@ -76,7 +76,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let afterCommits = await commitFiles(inner)
         XCTAssertEqual(afterCommits, beforeCommits)
         let output = try await RepoMaterializer(client: inner, basePath: basePath).materializeMonth(month, expectedRepoID: repoID)
-        XCTAssertNotNil(output.state.months[month]?.assets[TestFixtures.fingerprint(0xD1)])
+        XCTAssertNotNil(output.state.months[month]?.assets[TestFixtures.assetFingerprint(0xD1)])
     }
 
     func testPostWriteHigherSnapshotCausesNotAcceptedAfterWrite() async throws {
@@ -163,7 +163,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let after = try await RepoMaterializer(client: client, basePath: basePath).materializeMonth(month, expectedRepoID: repoID)
         XCTAssertTrue(RepoRetentionEquivalence.matches(before, after, month: month, mode: .retentionSuperset))
         XCTAssertNotNil(after.state.months[month]?.resources["2026/05/asset-61.jpg"])
-        XCTAssertTrue(after.state.months[month]?.deletedAssetStamps.keys.contains(TestFixtures.fingerprint(0x62)) == true)
+        XCTAssertTrue(after.state.months[month]?.deletedAssetStamps.keys.contains(TestFixtures.assetFingerprint(0x62)) == true)
     }
 
     func testCancellationPropagatesUnwrappedFromWriterAndReaderSurfaces() async throws {
@@ -283,7 +283,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         assetByte: UInt8,
         includeResource: Bool = false
     ) async throws {
-        let assetFP = TestFixtures.fingerprint(assetByte)
+        let assetFP = TestFixtures.assetFingerprint(assetByte)
         let resources: [CommitResourceEntry]
         if includeResource {
             let hash = TestFixtures.fingerprint(assetByte &+ 1)
@@ -329,7 +329,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         assetByte: UInt8
     ) async throws {
         let op = CommitOp(opSeq: 0, clock: clock, body: .tombstoneAsset(CommitTombstoneBody(
-            assetFingerprint: TestFixtures.fingerprint(assetByte),
+            assetFingerprint: TestFixtures.assetFingerprint(assetByte),
             reason: .verifyFailed
         )))
         _ = try await CommitLogWriter(client: client, basePath: basePath).write(
@@ -390,7 +390,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let headerLine = try! SnapshotRowMapper.encodeHeaderLine(header)
         lines.append(headerLine)
         integrity.absorbLine(headerLine)
-        for row in parts.assets.sorted(by: { $0.assetFingerprint.lexicographicallyPrecedes($1.assetFingerprint) }) {
+        for row in parts.assets.sorted(by: { $0.assetFingerprint.rawValue.lexicographicallyPrecedes($1.assetFingerprint.rawValue) }) {
             let line = try! SnapshotRowMapper.encodeAssetLine(row)
             lines.append(line)
             integrity.absorbLine(line)
@@ -402,7 +402,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         }
         for row in parts.assetResources.sorted(by: { lhs, rhs in
             if lhs.assetFingerprint != rhs.assetFingerprint {
-                return lhs.assetFingerprint.lexicographicallyPrecedes(rhs.assetFingerprint)
+                return lhs.assetFingerprint.rawValue.lexicographicallyPrecedes(rhs.assetFingerprint.rawValue)
             }
             if lhs.role != rhs.role { return lhs.role < rhs.role }
             return lhs.slot < rhs.slot
@@ -423,7 +423,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
     private func monthState(assetBytes: [UInt8]) -> RepoMonthState {
         var state = RepoMonthState.empty
         for byte in assetBytes {
-            let fp = TestFixtures.fingerprint(byte)
+            let fp = TestFixtures.assetFingerprint(byte)
             state.assets[fp] = SnapshotAssetRow(
                 assetFingerprint: fp,
                 creationDateMs: nil,

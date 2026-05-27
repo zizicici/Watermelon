@@ -66,7 +66,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
         let hash = TestFixtures.fingerprint(0xAA)
-        let assetFP = TestFixtures.fingerprint(0xBB)
+        let assetFP = TestFixtures.assetFingerprint(0xBB)
         let asset = RemoteManifestAsset(
             year: year, month: month,
             assetFingerprint: assetFP,
@@ -284,7 +284,7 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
         // Seed a committed resource for hash h via a separate seedStore + flush so the materializer
         // returns a non-empty month state with a resource row whose contentHash == h.
         let h = TestFixtures.fingerprint(0xCD)
-        let assetFP = TestFixtures.fingerprint(0xCE)
+        let assetFP = TestFixtures.assetFingerprint(0xCE)
         let physicalPath = "\(year)/\(String(format: "%02d", month))/cd-photo.jpg"
         let resource = RemoteManifestResource(
             year: year, month: month,

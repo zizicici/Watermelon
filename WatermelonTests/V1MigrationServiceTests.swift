@@ -78,7 +78,7 @@ final class V1MigrationServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
 
-        let assetFP = TestFixtures.fingerprint(0xAB)
+        let assetFP = TestFixtures.fingerprint(0xAB); let assetFPTyped = AssetFingerprint(decoding: assetFP)!
         let contentHash = TestFixtures.fingerprint(0xCD)
         let logicalName = "IMG_0001.HEIC"
 
@@ -105,10 +105,10 @@ final class V1MigrationServiceTests: XCTestCase {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[LibraryMonthKey(year: 2025, month: 6)])
-        let asset = try XCTUnwrap(monthState.assets[assetFP], "V1 asset must be visible after V2 materialize")
+        let asset = try XCTUnwrap(monthState.assets[assetFPTyped], "V1 asset must be visible after V2 materialize")
         let resourcePath = "2025/06/\(logicalName)"
         XCTAssertEqual(monthState.resources[resourcePath]?.contentHash, contentHash)
-        let arKey = AssetResourceKey(assetFingerprint: assetFP, role: ResourceTypeCode.photo, slot: 0)
+        let arKey = AssetResourceKey(assetFingerprint: assetFPTyped, role: ResourceTypeCode.photo, slot: 0)
         XCTAssertEqual(monthState.assetResources[arKey]?.resourceHash, contentHash)
         // Migration writes V2 snapshot rows; stamp is required so future stale-add
         // replays against this baseline gate via opStampPrecedes.
@@ -131,7 +131,7 @@ final class V1MigrationServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
 
-        let assetFP = TestFixtures.fingerprint(0xAB)
+        let assetFP = TestFixtures.fingerprint(0xAB); let assetFPTyped = AssetFingerprint(decoding: assetFP)!
         let contentHash = TestFixtures.fingerprint(0xCD)
         let manifestBytes = try Self.buildV1ManifestSqlite(
             assetFingerprint: assetFP,
@@ -277,7 +277,7 @@ final class V1MigrationServiceTests: XCTestCase {
         client.setMoveIfAbsentGuarantee(.exclusive)
         try await client.connect()
 
-        let assetFP = TestFixtures.fingerprint(0xA1)
+        let assetFP = TestFixtures.fingerprint(0xA1); let assetFPTyped = AssetFingerprint(decoding: assetFP)!
         let contentHash = TestFixtures.fingerprint(0xB1)
         let manifestBytes = try Self.buildV1ManifestSqlite(
             assetFingerprint: assetFP, resourceHash: contentHash, logicalName: "IMG_run1.HEIC"
@@ -420,7 +420,7 @@ final class V1MigrationServiceTests: XCTestCase {
         // `injectAtomicCreateURLErrorCancelled` regardless of the configured guarantee.
         client.setAtomicCreateGuarantee(.exclusive)
 
-        let assetFP = TestFixtures.fingerprint(0xCE)
+        let assetFP = TestFixtures.fingerprint(0xCE); let assetFPTyped = AssetFingerprint(decoding: assetFP)!
         let contentHash = TestFixtures.fingerprint(0xCF)
         let manifestBytes = try Self.buildV1ManifestSqlite(
             assetFingerprint: assetFP,
@@ -501,13 +501,13 @@ final class V1MigrationServiceTests: XCTestCase {
         try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
         for seq in UInt64(1)...UInt64(4) {
-            let assetFP = TestFixtures.fingerprint(UInt8(0x10 + seq))
+            let assetFP = TestFixtures.fingerprint(UInt8(0x10 + seq)); let assetFPTyped = AssetFingerprint(decoding: assetFP)!
             let contentHash = TestFixtures.fingerprint(UInt8(0x20 + seq))
             let monthRel = String(format: "%04d/%02d", preExistingMonth.year, preExistingMonth.month)
             let leaf = String(format: "pre-%llu.jpg", seq)
             let path = "\(monthRel)/\(leaf)"
             let body = CommitAddAssetBody(
-                assetFingerprint: assetFP,
+                assetFingerprint: assetFPTyped,
                 creationDateMs: nil,
                 backedUpAtMs: 1,
                 resources: [
@@ -540,7 +540,7 @@ final class V1MigrationServiceTests: XCTestCase {
 
         // V1 manifest in a different month with a different asset FP, so the
         // existing-V2 fingerprint filter doesn't drop it.
-        let assetFP = TestFixtures.fingerprint(0xAB)
+        let assetFP = TestFixtures.fingerprint(0xAB); let assetFPTyped = AssetFingerprint(decoding: assetFP)!
         let contentHash = TestFixtures.fingerprint(0xCD)
         let manifestBytes = try Self.buildV1ManifestSqlite(
             assetFingerprint: assetFP,
@@ -570,7 +570,7 @@ final class V1MigrationServiceTests: XCTestCase {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let migMonthState = try XCTUnwrap(output.state.months[migrationMonth])
-        let migAsset = try XCTUnwrap(migMonthState.assets[assetFP], "migration must publish the V1 asset into V2")
+        let migAsset = try XCTUnwrap(migMonthState.assets[assetFPTyped], "migration must publish the V1 asset into V2")
         let stamp = try XCTUnwrap(migAsset.stamp)
         XCTAssertGreaterThan(stamp.seq, 4,
                              "allocator must observe remote high-water seq=4 before allocating; got \(stamp.seq)")
@@ -586,7 +586,7 @@ final class V1MigrationServiceTests: XCTestCase {
         let writerID = "11111111-1111-1111-1111-aaaaaaaaaaaa"
         let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         let migrationMonth = LibraryMonthKey(year: 2025, month: 6)
-        let assetFP = TestFixtures.fingerprint(0xAB)
+        let assetFP = TestFixtures.fingerprint(0xAB); let assetFPTyped = AssetFingerprint(decoding: assetFP)!
         let contentHash = TestFixtures.fingerprint(0xCD)
         let manifestBytes = try Self.buildV1ManifestSqlite(
             assetFingerprint: assetFP,
@@ -621,7 +621,7 @@ final class V1MigrationServiceTests: XCTestCase {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let state = try XCTUnwrap(output.state.months[migrationMonth])
-        let stamp = try XCTUnwrap(state.assets[assetFP]?.stamp)
+        let stamp = try XCTUnwrap(state.assets[assetFPTyped]?.stamp)
         XCTAssertEqual(stamp.seq, 2)
         XCTAssertEqual(stamp.clock, 2)
     }
@@ -642,12 +642,13 @@ final class V1MigrationServiceTests: XCTestCase {
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
 
         let tombstoneFP = TestFixtures.fingerprint(0xAB)
+        let tombstoneFPTyped = AssetFingerprint(decoding: tombstoneFP)!
         let contentHash = TestFixtures.fingerprint(0xCD)
         let monthRel = String(format: "%04d/%02d", month.year, month.month)
         let leaf = "IMG_tomb.HEIC"
         let path = "\(monthRel)/\(leaf)"
         let addBody = CommitAddAssetBody(
-            assetFingerprint: tombstoneFP,
+            assetFingerprint: tombstoneFPTyped,
             creationDateMs: nil,
             backedUpAtMs: 1,
             resources: [
@@ -682,7 +683,7 @@ final class V1MigrationServiceTests: XCTestCase {
             header: tombHeader,
             ops: [CommitOp(opSeq: 0, clock: 20, body: .tombstoneAsset(
                 CommitTombstoneBody(
-                    assetFingerprint: tombstoneFP,
+                    assetFingerprint: tombstoneFPTyped,
                     reason: .userDeleted,
                     observedBasis: TombstoneObservationBasis(
                         perWriterMaxSeq: [writerID: 1],
@@ -718,9 +719,9 @@ final class V1MigrationServiceTests: XCTestCase {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[month])
-        XCTAssertNil(monthState.assets[tombstoneFP],
+        XCTAssertNil(monthState.assets[tombstoneFPTyped],
                      "tombstoned fingerprint must not be resurrected by migration")
-        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(tombstoneFP),
+        XCTAssertTrue(monthState.deletedAssetStamps.keys.contains(tombstoneFPTyped),
                       "tombstone must survive migration")
     }
 

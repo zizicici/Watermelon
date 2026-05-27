@@ -96,7 +96,7 @@ final class RepoRetentionEquivalenceTests: XCTestCase {
         let before = makeOutput()
         var after = before
         var monthState = after.state.months[month]!
-        let extraFP = TestFixtures.fingerprint(0xB2)
+        let extraFP = TestFixtures.assetFingerprint(0xB2)
         monthState.assets[extraFP] = SnapshotAssetRow(
             assetFingerprint: extraFP,
             creationDateMs: nil,
@@ -202,8 +202,8 @@ final class RepoRetentionEquivalenceTests: XCTestCase {
     private let writerB = "22222222-2222-2222-2222-bbbbbbbbbbbb"
     private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     private let month = LibraryMonthKey(year: 2026, month: 5)
-    private let fp = TestFixtures.fingerprint(0xA1)
-    private let deletedFP = TestFixtures.fingerprint(0xA2)
+    private let fp = TestFixtures.assetFingerprint(0xA1)
+    private let deletedFP = TestFixtures.assetFingerprint(0xA2)
     private let resourceHash = TestFixtures.fingerprint(0xB1)
     private let resourcePath = "2026/05/a.jpg"
 }

@@ -185,7 +185,7 @@ actor RepoVerifyMonthService {
         month: LibraryMonthKey,
         cleanupItems: [VerifyMonthReportItem],
         services: BackupV2RuntimeServices
-    ) async throws -> Set<Data> {
+    ) async throws -> Set<AssetFingerprint> {
         let eligible = cleanupItems.filter { $0.allowsCleanup }
         guard !eligible.isEmpty else { return [] }
 
@@ -198,7 +198,7 @@ actor RepoVerifyMonthService {
             // tickRange must produce clocks above any peer op we just observed; advance lamport before allocating.
             try await services.lamport.observe(fresh.state.observedClock)
             let lamportWatermark = await services.lamport.value()
-            var freshLinksByFP: [Data: [SnapshotAssetResourceRow]] = [:]
+            var freshLinksByFP: [AssetFingerprint: [SnapshotAssetResourceRow]] = [:]
             for ar in monthState.assetResources.values {
                 freshLinksByFP[ar.assetFingerprint, default: []].append(ar)
             }

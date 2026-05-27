@@ -10,9 +10,9 @@ final class BackupMonthFlushDeltaTests: XCTestCase {
     }
 
     func testDirectConstructionPopulatesFields() {
-        let assetA = Data(repeating: 0xAA, count: 4)
-        let assetB = Data(repeating: 0xBB, count: 4)
-        let tombstoneA = Data(repeating: 0xCC, count: 4)
+        let assetA = TestFixtures.assetFingerprint(0xAA)
+        let assetB = TestFixtures.assetFingerprint(0xBB)
+        let tombstoneA = TestFixtures.assetFingerprint(0xCC)
 
         let delta = BackupMonthFlushDelta(
             didFlush: true,

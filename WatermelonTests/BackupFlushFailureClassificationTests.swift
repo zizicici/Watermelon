@@ -34,7 +34,7 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
     func testClassifiesCancellationErrorWrappedInSnapshotWriteFailed() {
         let profile = TestFixtures.makeServerProfile(storageType: .webdav)
         let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [TestFixtures.fingerprint(0x01)],
+            committedAssets: [TestFixtures.assetFingerprint(0x01)],
             committedTombstones: [],
             underlying: CancellationError()
         )
@@ -62,7 +62,7 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
         let profile = TestFixtures.makeServerProfile(storageType: .webdav)
         let inner = NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost)
         let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [TestFixtures.fingerprint(0x02)],
+            committedAssets: [TestFixtures.assetFingerprint(0x02)],
             committedTombstones: [],
             underlying: inner
         )
@@ -160,12 +160,12 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
 
     // MARK: - Section C: per-site partial-dispatch mappers (typed payload assertions)
 
-    private static let probeAssets: Set<Data> = [
-        TestFixtures.fingerprint(0xAA),
-        TestFixtures.fingerprint(0xAB)
+    private static let probeAssets: Set<AssetFingerprint> = [
+        TestFixtures.assetFingerprint(0xAA),
+        TestFixtures.assetFingerprint(0xAB)
     ]
-    private static let probeTombstones: Set<Data> = [
-        TestFixtures.fingerprint(0xBB)
+    private static let probeTombstones: Set<AssetFingerprint> = [
+        TestFixtures.assetFingerprint(0xBB)
     ]
 
     private func makePartialOutcome(underlying: Error) -> V2MonthFlushOutcome {

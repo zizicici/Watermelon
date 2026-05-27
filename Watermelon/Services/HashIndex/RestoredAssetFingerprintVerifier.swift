@@ -31,7 +31,7 @@ final class RestoredAssetFingerprintVerifier: @unchecked Sendable {
 
     func verifyDurableBinding(
         assetLocalIdentifier: PhotoKitLocalIdentifier,
-        expectedFingerprint: Data
+        expectedFingerprint: AssetFingerprint
     ) async throws -> Bool {
         for attempt in 0...delays.count {
             try Task.checkCancellation()

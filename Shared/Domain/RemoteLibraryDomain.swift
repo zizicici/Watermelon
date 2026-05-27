@@ -6,7 +6,7 @@ import Photos
 struct RemoteManifestAsset: Hashable, Identifiable {
     let year: Int
     let month: Int
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let creationDateMs: Int64?
     let backedUpAtMs: Int64
     let resourceCount: Int
@@ -17,7 +17,7 @@ struct RemoteManifestAsset: Hashable, Identifiable {
     init(
         year: Int,
         month: Int,
-        assetFingerprint: Data,
+        assetFingerprint: AssetFingerprint,
         creationDateMs: Int64?,
         backedUpAtMs: Int64,
         resourceCount: Int,
@@ -50,14 +50,14 @@ struct RemoteManifestAsset: Hashable, Identifiable {
     }
 
     var assetFingerprintHex: String {
-        assetFingerprint.hexString
+        assetFingerprint.rawValue.hexString
     }
 }
 
 struct RemoteAssetResourceLink: Hashable {
     let year: Int
     let month: Int
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let resourceHash: Data
     let role: Int
     let slot: Int
@@ -68,7 +68,7 @@ struct RemoteAssetResourceLink: Hashable {
     }
 
     var assetID: String {
-        monthKey + "/" + assetFingerprint.hexString
+        monthKey + "/" + assetFingerprint.rawValue.hexString
     }
 }
 

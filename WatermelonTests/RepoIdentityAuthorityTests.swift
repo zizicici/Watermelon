@@ -134,14 +134,14 @@ final class RepoIdentityAuthorityTests: XCTestCase {
         let writerB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
         let opA = CommitOp(opSeq: 0, clock: 1, body: .tombstoneAsset(
             CommitTombstoneBody(
-                assetFingerprint: TestFixtures.fingerprint(0x01),
+                assetFingerprint: TestFixtures.assetFingerprint(0x01),
                 reason: .verifyFailed,
                 observedBasis: TombstoneObservationBasis(perWriterMaxSeq: [:], lamportWatermark: 1)
             )
         ))
         let opB = CommitOp(opSeq: 0, clock: 1, body: .tombstoneAsset(
             CommitTombstoneBody(
-                assetFingerprint: TestFixtures.fingerprint(0x02),
+                assetFingerprint: TestFixtures.assetFingerprint(0x02),
                 reason: .verifyFailed,
                 observedBasis: TombstoneObservationBasis(perWriterMaxSeq: [:], lamportWatermark: 1)
             )

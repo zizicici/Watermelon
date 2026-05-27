@@ -46,7 +46,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let writer = CommitLogWriter(client: client, basePath: basePath)
-        let fp = TestFixtures.fingerprint(0x20)
+        let fp = TestFixtures.assetFingerprint(0x20)
         let hash = TestFixtures.fingerprint(0xBB)
         let path = "2026/01/missing.jpg"
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
@@ -134,7 +134,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         try await client.connect()
         let writer = CommitLogWriter(client: client, basePath: basePath)
         // Keep content valid so the test isolates stored fingerprint drift.
-        let fp = TestFixtures.fingerprint(0x60)
+        let fp = TestFixtures.assetFingerprint(0x60)
         let hash = Self.expectedSizedHash
         let path = "2026/01/photo.jpg"
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
@@ -154,7 +154,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()
         let writer = CommitLogWriter(client: client, basePath: basePath)
-        let fp = TestFixtures.fingerprint(0x50)
+        let fp = TestFixtures.assetFingerprint(0x50)
         let hash = TestFixtures.fingerprint(0xEE)
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/p.jpg")
         await client.injectFile(path: "\(basePath)/2026/01/p.jpg", contents: "x")
@@ -196,7 +196,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let v2 = try await makeV2Services(scaffold: scaffold)
 
         let writer = CommitLogWriter(client: scaffold.client, basePath: basePath)
-        let fp = TestFixtures.fingerprint(0x21)
+        let fp = TestFixtures.assetFingerprint(0x21)
         let hash = TestFixtures.fingerprint(0x91)
         try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/gone.jpg")
         try await scaffold.client.createDirectory(path: "\(basePath)/2026/01")
@@ -347,7 +347,7 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         writer: CommitLogWriter,
         seq: UInt64,
         clock: UInt64,
-        fp: Data,
+        fp: AssetFingerprint,
         hash: Data,
         path: String,
         writerID: String? = nil

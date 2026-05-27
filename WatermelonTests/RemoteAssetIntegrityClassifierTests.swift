@@ -4,7 +4,7 @@ import XCTest
 /// Verify/download/Home/health all consume this. The case-coverage matrix here
 /// is the contract — adding a new IntegrityState case must come with a test row.
 final class RemoteAssetIntegrityClassifierTests: XCTestCase {
-    private func link(role: Int, slot: Int = 0, hash: Data, fp: Data) -> RemoteAssetResourceLink {
+    private func link(role: Int, slot: Int = 0, hash: Data, fp: AssetFingerprint) -> RemoteAssetResourceLink {
         RemoteAssetResourceLink(
             year: 2026, month: 1,
             assetFingerprint: fp, resourceHash: hash,
@@ -12,7 +12,7 @@ final class RemoteAssetIntegrityClassifierTests: XCTestCase {
         )
     }
 
-    private func computedFP(role: Int = ResourceTypeCode.photo, slot: Int = 0, hash: Data) -> Data {
+    private func computedFP(role: Int = ResourceTypeCode.photo, slot: Int = 0, hash: Data) -> AssetFingerprint {
         BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: [(role: role, slot: slot, contentHash: hash)]
         )
@@ -32,7 +32,7 @@ final class RemoteAssetIntegrityClassifierTests: XCTestCase {
     }
 
     func testPhantom_emptyLinks() {
-        let fp = TestFixtures.fingerprint(0x10)
+        let fp = TestFixtures.assetFingerprint(0x10)
         let emptyLinks: [AssetIntegrityLink] = []
         let state = RemoteAssetIntegrityClassifier.classify(
             assetFingerprint: fp,
@@ -71,7 +71,7 @@ final class RemoteAssetIntegrityClassifierTests: XCTestCase {
 
     func testFingerprintMismatch_storedDoesNotMatchRecomputed() {
         let h = TestFixtures.fingerprint(0xDD)
-        let storedFp = TestFixtures.fingerprint(0x11) // arbitrary, NOT the recomputed one
+        let storedFp = TestFixtures.assetFingerprint(0x11) // arbitrary, NOT the recomputed one
         let state = RemoteAssetIntegrityClassifier.classify(
             assetFingerprint: storedFp,
             links: [link(role: ResourceTypeCode.photo, hash: h, fp: storedFp)],
@@ -121,7 +121,7 @@ final class RemoteAssetIntegrityClassifierTests: XCTestCase {
     /// diagnosis is "all gone, cleanup safe" rather than "tampering, blocked".
     func testFullyMissing_takesPriorityOverFingerprintMismatch() {
         let h = TestFixtures.fingerprint(0xFF)
-        let storedFp = TestFixtures.fingerprint(0x99) // doesn't recompute to h's fp
+        let storedFp = TestFixtures.assetFingerprint(0x99) // doesn't recompute to h's fp
         let state = RemoteAssetIntegrityClassifier.classify(
             assetFingerprint: storedFp,
             links: [link(role: ResourceTypeCode.photo, hash: h, fp: storedFp)],
@@ -136,7 +136,7 @@ final class RemoteAssetIntegrityClassifierTests: XCTestCase {
     /// reconstruct wrong content. Must surface the mismatch instead of "go ahead".
     func testFingerprintMismatch_winsWhenResourcesArePresent() {
         let h = TestFixtures.fingerprint(0xFE)
-        let storedFp = TestFixtures.fingerprint(0x88) // doesn't recompute to h's fp
+        let storedFp = TestFixtures.assetFingerprint(0x88) // doesn't recompute to h's fp
         let state = RemoteAssetIntegrityClassifier.classify(
             assetFingerprint: storedFp,
             links: [link(role: ResourceTypeCode.photo, hash: h, fp: storedFp)],

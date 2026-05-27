@@ -2,8 +2,8 @@ import XCTest
 @testable import Watermelon
 
 final class V2MonthFlushOutcomeTests: XCTestCase {
-    private let assets: Set<Data> = [TestFixtures.fingerprint(0x11)]
-    private let tombstones: Set<Data> = [TestFixtures.fingerprint(0x22)]
+    private let assets: Set<AssetFingerprint> = [TestFixtures.assetFingerprint(0x11)]
+    private let tombstones: Set<AssetFingerprint> = [TestFixtures.assetFingerprint(0x22)]
 
     private func makeDelta() -> BackupMonthFlushDelta {
         BackupMonthFlushDelta(

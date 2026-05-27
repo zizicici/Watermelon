@@ -9,7 +9,7 @@ struct DuplicateEntry: Sendable {
 }
 
 struct DuplicateGroup: Sendable {
-    let fingerprint: Data
+    let fingerprint: AssetFingerprint
     let entries: [DuplicateEntry]
 }
 
@@ -83,17 +83,17 @@ private extension IndexedAssetTrustSnapshot {
 final class DuplicatesViewController: UIViewController {
     fileprivate enum SectionID: Hashable {
         case indexGate
-        case group(fingerprint: Data)
+        case group(fingerprint: AssetFingerprint)
     }
 
     fileprivate enum ItemID: Hashable {
         case gateEntry
-        case header(fingerprint: Data)
+        case header(fingerprint: AssetFingerprint)
         case entry(assetLocalIdentifier: PhotoKitLocalIdentifier)
     }
 
     fileprivate struct EntryLocator {
-        let fingerprint: Data
+        let fingerprint: AssetFingerprint
         let indexInGroup: Int
     }
 
@@ -117,10 +117,10 @@ final class DuplicatesViewController: UIViewController {
     private let loadingIndicator = UIActivityIndicatorView(style: .large)
     private let emptyStateView: UIView
 
-    private var groupOrder: [Data] = []
-    private var entriesByGroup: [Data: [DuplicateEntry]] = [:]
-    private var keepIndexByGroup: [Data: Int] = [:]
-    private var skippedGroups: Set<Data> = []
+    private var groupOrder: [AssetFingerprint] = []
+    private var entriesByGroup: [AssetFingerprint: [DuplicateEntry]] = [:]
+    private var keepIndexByGroup: [AssetFingerprint: Int] = [:]
+    private var skippedGroups: Set<AssetFingerprint> = []
     private var locatorByEntry: [PhotoKitLocalIdentifier: EntryLocator] = [:]
     private var scopeTotal = 0
     private var scopeIndexed = 0
@@ -297,7 +297,7 @@ final class DuplicatesViewController: UIViewController {
         )
     }
 
-    private func dequeueHeaderCell(tableView: UITableView, indexPath: IndexPath, fingerprint: Data) -> UITableViewCell {
+    private func dequeueHeaderCell(tableView: UITableView, indexPath: IndexPath, fingerprint: AssetFingerprint) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(
             withIdentifier: DuplicateGroupHeaderCell.reuseIdentifier,
             for: indexPath
@@ -358,9 +358,9 @@ final class DuplicatesViewController: UIViewController {
         indexCoverageWarning = data.indexCoverageWarning
 
         groupOrder = data.groups.map(\.fingerprint)
-        var entriesByGroup: [Data: [DuplicateEntry]] = [:]
+        var entriesByGroup: [AssetFingerprint: [DuplicateEntry]] = [:]
         var locatorByEntry: [PhotoKitLocalIdentifier: EntryLocator] = [:]
-        var keepIndexByGroup: [Data: Int] = [:]
+        var keepIndexByGroup: [AssetFingerprint: Int] = [:]
         for group in data.groups {
             let fingerprint = group.fingerprint
             let entries = group.entries
@@ -460,7 +460,7 @@ final class DuplicatesViewController: UIViewController {
         return pairs
     }
 
-    private func setGroupSkip(_ fingerprint: Data, skipped: Bool) {
+    private func setGroupSkip(_ fingerprint: AssetFingerprint, skipped: Bool) {
         if skipped {
             guard !skippedGroups.contains(fingerprint) else { return }
             skippedGroups.insert(fingerprint)
@@ -472,7 +472,7 @@ final class DuplicatesViewController: UIViewController {
         updateSummary()
     }
 
-    private func reconfigureEntries(in fingerprint: Data) {
+    private func reconfigureEntries(in fingerprint: AssetFingerprint) {
         var snapshot = dataSource.snapshot()
         let section: SectionID = .group(fingerprint: fingerprint)
         guard snapshot.sectionIdentifiers.contains(section) else { return }
@@ -642,7 +642,7 @@ final class DuplicatesViewController: UIViewController {
                 ))
             }
             groups.sort { lhs, rhs in
-                lhs.fingerprint.lexicographicallyPrecedes(rhs.fingerprint)
+                lhs.fingerprint.rawValue.lexicographicallyPrecedes(rhs.fingerprint.rawValue)
             }
 
             let scopeIndexed = min(rawIndexed, scopeTotal)

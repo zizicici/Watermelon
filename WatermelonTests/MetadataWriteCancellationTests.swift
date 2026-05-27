@@ -508,7 +508,7 @@ final class MetadataWriteCancellationTests: XCTestCase {
             opSeq: 0,
             clock: 1,
             body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: TestFixtures.fingerprint(0xAA),
+                assetFingerprint: TestFixtures.assetFingerprint(0xAA),
                 reason: .userDeleted
             ))
         )

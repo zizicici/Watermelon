@@ -7,7 +7,7 @@ struct AssetResourceRoleSlot: Hashable, Sendable {
 }
 
 struct LocalAssetHashCache: Sendable {
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let resourceCount: Int
     let totalFileSizeBytes: Int64
     let updatedAt: Date
@@ -18,7 +18,7 @@ struct LocalAssetHashCache: Sendable {
 
 struct IndexedAssetRow: Sendable {
     let assetLocalIdentifier: PhotoKitLocalIdentifier
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let totalFileSizeBytes: Int64
     let updatedAt: Date
     let selectionVersion: Int
@@ -27,19 +27,19 @@ struct IndexedAssetRow: Sendable {
 
 struct DuplicateIndexedAssetRow: Sendable {
     let assetLocalIdentifier: PhotoKitLocalIdentifier
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let updatedAt: Date
     let selectionVersion: Int
     let resourceSignature: Data?
 }
 
 struct DuplicateIndexedAssetCandidate: Sendable {
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let rows: [DuplicateIndexedAssetRow]
 }
 
 struct LocalAssetFingerprintRecord: Sendable, Equatable {
-    let fingerprint: Data
+    let fingerprint: AssetFingerprint
     let updatedAt: Date
     let selectionVersion: Int
     let resourceSignature: Data?
@@ -104,7 +104,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
 
     func upsertAssetHashSnapshot(
         assetLocalIdentifier: PhotoKitLocalIdentifier,
-        assetFingerprint: Data,
+        assetFingerprint: AssetFingerprint,
         resources: [LocalAssetResourceHashRecord],
         totalFileSizeBytes: Int64,
         modificationDateMs: Int64?,
@@ -115,7 +115,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             try Self.writeLocalAssetRow(
                 db,
                 assetLocalIdentifier: assetLocalIdentifier.rawValue,
-                assetFingerprint: assetFingerprint,
+                assetFingerprint: assetFingerprint.rawValue,
                 resourceCount: resources.count,
                 totalFileSizeBytes: totalFileSizeBytes,
                 modificationDateMs: modificationDateMs,
@@ -153,7 +153,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
 
     func upsertAssetFingerprint(
         assetLocalIdentifier: PhotoKitLocalIdentifier,
-        assetFingerprint: Data,
+        assetFingerprint: AssetFingerprint,
         resourceCount: Int,
         totalFileSizeBytes: Int64,
         modificationDateMs: Int64?
@@ -162,7 +162,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             try Self.writeLocalAssetRow(
                 db,
                 assetLocalIdentifier: assetLocalIdentifier.rawValue,
-                assetFingerprint: assetFingerprint,
+                assetFingerprint: assetFingerprint.rawValue,
                 resourceCount: resourceCount,
                 totalFileSizeBytes: totalFileSizeBytes,
                 modificationDateMs: modificationDateMs,
@@ -231,8 +231,10 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             result.reserveCapacity(rows.count)
             for row in rows {
                 let assetID = PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"])
+                let blob: Data = row["assetFingerprint"]
+                guard let fp = AssetFingerprint(decoding: blob) else { continue }
                 result[assetID] = LocalAssetFingerprintRecord(
-                    fingerprint: row["assetFingerprint"],
+                    fingerprint: fp,
                     updatedAt: row["updatedAt"],
                     selectionVersion: Int(row["selectionVersion"] as Int64? ?? 0),
                     resourceSignature: row["resourceSignature"] as Data?
@@ -261,8 +263,10 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 )
                 for row in rows {
                     let assetID = PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"])
+                    let blob: Data = row["assetFingerprint"]
+                    guard let fp = AssetFingerprint(decoding: blob) else { continue }
                     result[assetID] = LocalAssetFingerprintRecord(
-                        fingerprint: row["assetFingerprint"],
+                        fingerprint: fp,
                         updatedAt: row["updatedAt"],
                         selectionVersion: Int(row["selectionVersion"] as Int64? ?? 0),
                         resourceSignature: row["resourceSignature"] as Data?
@@ -291,9 +295,11 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 )
                 for row in rows {
                     let assetID = PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"])
+                    let blob: Data = row["assetFingerprint"]
+                    guard let fp = AssetFingerprint(decoding: blob) else { continue }
                     result[assetID] = IndexedAssetRow(
                         assetLocalIdentifier: assetID,
-                        assetFingerprint: row["assetFingerprint"],
+                        assetFingerprint: fp,
                         totalFileSizeBytes: row["totalFileSizeBytes"],
                         updatedAt: row["updatedAt"],
                         selectionVersion: Int(row["selectionVersion"] as Int64? ?? 0),
@@ -355,7 +361,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             )
 
             var candidates: [DuplicateIndexedAssetCandidate] = []
-            var currentFingerprint: Data?
+            var currentFingerprint: AssetFingerprint?
             var currentRows: [DuplicateIndexedAssetRow] = []
 
             func flush() {
@@ -368,7 +374,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             }
 
             for row in rows {
-                let fingerprint: Data = row["assetFingerprint"]
+                let blob: Data = row["assetFingerprint"]
+                guard let fingerprint = AssetFingerprint(decoding: blob) else { continue }
                 if currentFingerprint != fingerprint {
                     flush()
                     currentFingerprint = fingerprint
@@ -406,8 +413,10 @@ final class ContentHashIndexRepository: @unchecked Sendable {
 
                 for row in assetRows {
                     let assetID = PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"])
+                    let blob: Data = row["assetFingerprint"]
+                    guard let fp = AssetFingerprint(decoding: blob) else { continue }
                     result[assetID] = LocalAssetHashCache(
-                        assetFingerprint: row["assetFingerprint"],
+                        assetFingerprint: fp,
                         resourceCount: Int(row["resourceCount"] as Int64),
                         totalFileSizeBytes: row["totalFileSizeBytes"],
                         updatedAt: row["updatedAt"],

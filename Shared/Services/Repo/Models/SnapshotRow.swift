@@ -10,7 +10,7 @@ struct SnapshotHeader: Equatable, Sendable {
 }
 
 struct SnapshotAssetRow: Equatable, Sendable {
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let creationDateMs: Int64?
     let backedUpAtMs: Int64
     let resourceCount: Int
@@ -18,7 +18,7 @@ struct SnapshotAssetRow: Equatable, Sendable {
     let stamp: OpStamp
 
     init(
-        assetFingerprint: Data,
+        assetFingerprint: AssetFingerprint,
         creationDateMs: Int64?,
         backedUpAtMs: Int64,
         resourceCount: Int,
@@ -66,7 +66,7 @@ struct SnapshotResourceRow: Equatable, Sendable {
 }
 
 struct SnapshotAssetResourceRow: Equatable, Sendable {
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let role: Int
     let slot: Int
     let resourceHash: Data

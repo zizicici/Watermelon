@@ -46,7 +46,7 @@ final class DownloadWorkflowHelper {
             let descriptors = toRestore.map { item in
                 RestoreService.RestoreItemDescriptor(
                     instances: item.instances,
-                    identity: item.assetFingerprint
+                    assetFingerprint: item.assetFingerprint
                 )
             }
             let restored = try await dependencies.restoreService.restoreItems(
@@ -65,7 +65,7 @@ final class DownloadWorkflowHelper {
                         do {
                             let verified = try await verifier.verifyDurableBinding(
                                 assetLocalIdentifier: assetID,
-                                expectedFingerprint: restoredItem.identity
+                                expectedFingerprint: restoredItem.assetFingerprint
                             )
                             if !verified {
                                 throw NSError(

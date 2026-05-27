@@ -10,7 +10,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         in service: RemoteIndexSyncService,
         month: LibraryMonthKey,
         contentHash: Data
-    ) -> Data {
+    ) -> AssetFingerprint {
         seedAsset(
             in: service,
             month: month,
@@ -22,8 +22,8 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         in service: RemoteIndexSyncService,
         month: LibraryMonthKey,
         resources: [(role: Int, slot: Int, hash: Data, logicalName: String)],
-        assetFingerprint overrideFingerprint: Data? = nil
-    ) -> Data {
+        assetFingerprint overrideFingerprint: AssetFingerprint? = nil
+    ) -> AssetFingerprint {
         let computedFingerprint = BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: resources.map { (role: $0.role, slot: $0.slot, contentHash: $0.hash) }
         )
@@ -93,7 +93,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
 
     func testResumeSafeCoverage_excludesPhantomAsset() {
         let service = RemoteIndexSyncService()
-        let fp = TestFixtures.fingerprint(0x42)
+        let fp = TestFixtures.assetFingerprint(0x42)
         let phantom = RemoteManifestAsset(
             year: monthA.year, month: monthA.month, assetFingerprint: fp,
             creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
@@ -222,7 +222,7 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         let service = RemoteIndexSyncService()
         let photoHash = TestFixtures.fingerprint(0xB3)
         let videoHash = TestFixtures.fingerprint(0xB4)
-        let mismatchFP = TestFixtures.fingerprint(0xF7)
+        let mismatchFP = TestFixtures.assetFingerprint(0xF7)
         let recomputedPartialFP = BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: photoHash)]
         )

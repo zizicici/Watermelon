@@ -44,13 +44,13 @@ final class MonthManifestStore {
     var itemsByFileName: [String: RemoteManifestResource] = [:]
     var itemsByHash: [Data: String] = [:]
 
-    var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
-    var assetLinksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
+    var assetsByFingerprint: [AssetFingerprint: RemoteManifestAsset] = [:]
+    var assetLinksByFingerprint: [AssetFingerprint: [RemoteAssetResourceLink]] = [:]
 
     // Derived from assetLinksByFingerprint; without them, legacy-import finders below
     // are O(N²) per month on a full manifest.
-    private var linkKeySetByFingerprint: [Data: Set<AssetResourceLinkKey>] = [:]
-    private var assetsByResourceHash: [Data: Set<Data>] = [:]
+    private var linkKeySetByFingerprint: [AssetFingerprint: Set<AssetResourceLinkKey>] = [:]
+    private var assetsByResourceHash: [Data: Set<AssetFingerprint>] = [:]
 
     var remoteFilesByName: [String: RemoteFileMetadata] = [:]
     var existingFileNameSet: Set<String> = []
@@ -91,7 +91,7 @@ final class MonthManifestStore {
         Self.closeAndRemoveLocalManifest(at: localManifestURL, queue: dbQueue)
     }
 
-    func containsAssetFingerprint(_ fingerprint: Data) -> Bool {
+    func containsAssetFingerprint(_ fingerprint: AssetFingerprint) -> Bool {
         assetsByFingerprint[fingerprint] != nil
     }
 
@@ -99,11 +99,11 @@ final class MonthManifestStore {
     /// import to skip bundles already represented by an Asset with extra (adjustment, etc.) roles.
     func findEnclosingAssetFingerprint(
         forResourceKeys keys: Set<AssetResourceLinkKey>
-    ) -> Data? {
+    ) -> AssetFingerprint? {
         guard !keys.isEmpty else { return nil }
         // Candidates = fingerprints whose links cover ALL of the requested hashes.
         // Intersect over each hash bucket; if any hash has no asset, no enclosing exists.
-        var candidates: Set<Data>?
+        var candidates: Set<AssetFingerprint>?
         for key in keys {
             guard let bucket = assetsByResourceHash[key.hash], !bucket.isEmpty else { return nil }
             if let existing = candidates {
@@ -126,16 +126,16 @@ final class MonthManifestStore {
     /// — used by legacy import to find older partial Assets that the incoming bundle supersedes.
     func findStrictSubsetAssetFingerprints(
         forResourceKeys keys: Set<AssetResourceLinkKey>
-    ) -> [Data] {
+    ) -> [AssetFingerprint] {
         guard !keys.isEmpty else { return [] }
         // Candidates = fingerprints sharing AT LEAST ONE hash with resources. A strict subset's
         // links are a subset of resource keys, so its hashes are necessarily a subset too.
-        var candidates: Set<Data> = []
+        var candidates: Set<AssetFingerprint> = []
         for key in keys {
             if let bucket = assetsByResourceHash[key.hash] { candidates.formUnion(bucket) }
         }
         if candidates.isEmpty { return [] }
-        var result: [Data] = []
+        var result: [AssetFingerprint] = []
         for fingerprint in candidates {
             guard let have = linkKeySetByFingerprint[fingerprint] else { continue }
             if AssetResourceLinkSetPredicate.isStrictSubset(have, of: keys) {
@@ -149,7 +149,7 @@ final class MonthManifestStore {
         forResourceKeys keys: Set<AssetResourceLinkKey>
     ) -> Bool {
         guard !keys.isEmpty else { return false }
-        var candidates: Set<Data> = []
+        var candidates: Set<AssetFingerprint> = []
         for key in keys {
             if let bucket = assetsByResourceHash[key.hash] { candidates.formUnion(bucket) }
         }
@@ -177,14 +177,14 @@ final class MonthManifestStore {
         }
     }
 
-    private func indexAddAsset(fingerprint: Data, links: [RemoteAssetResourceLink]) {
+    private func indexAddAsset(fingerprint: AssetFingerprint, links: [RemoteAssetResourceLink]) {
         linkKeySetByFingerprint[fingerprint] = AssetResourceLinkSetPredicate.keys(fromLinks: links)
         for link in links {
             assetsByResourceHash[link.resourceHash, default: []].insert(fingerprint)
         }
     }
 
-    private func indexRemoveAsset(fingerprint: Data) {
+    private func indexRemoveAsset(fingerprint: AssetFingerprint) {
         if let oldLinks = assetLinksByFingerprint[fingerprint] {
             for link in oldLinks {
                 assetsByResourceHash[link.resourceHash]?.remove(fingerprint)
@@ -205,7 +205,7 @@ final class MonthManifestStore {
         return itemsByFileName[fileName]
     }
 
-    func links(forAssetFingerprint fingerprint: Data) -> [RemoteAssetResourceLink] {
+    func links(forAssetFingerprint fingerprint: AssetFingerprint) -> [RemoteAssetResourceLink] {
         assetLinksByFingerprint[fingerprint] ?? []
     }
 
@@ -295,7 +295,7 @@ final class MonthManifestStore {
     func upsertAsset(
         _ asset: RemoteManifestAsset,
         links: [RemoteAssetResourceLink],
-        replacingSubsetFingerprints: Set<Data> = []
+        replacingSubsetFingerprints: Set<AssetFingerprint> = []
     ) throws {
         for link in links where itemsByHash[link.resourceHash] == nil {
             throw NSError(
@@ -317,11 +317,11 @@ final class MonthManifestStore {
             for fingerprint in subsetsToDelete {
                 try db.execute(
                     sql: "DELETE FROM asset_resources WHERE assetFingerprint = ?",
-                    arguments: [fingerprint]
+                    arguments: [fingerprint.rawValue]
                 )
                 try db.execute(
                     sql: "DELETE FROM assets WHERE assetFingerprint = ?",
-                    arguments: [fingerprint]
+                    arguments: [fingerprint.rawValue]
                 )
             }
 
@@ -341,7 +341,7 @@ final class MonthManifestStore {
                     totalFileSizeBytes = excluded.totalFileSizeBytes
                 """,
                 arguments: [
-                    asset.assetFingerprint,
+                    asset.assetFingerprint.rawValue,
                     asset.creationDateMs,
                     asset.backedUpAtMs,
                     asset.resourceCount,
@@ -351,7 +351,7 @@ final class MonthManifestStore {
 
             try db.execute(
                 sql: "DELETE FROM asset_resources WHERE assetFingerprint = ?",
-                arguments: [asset.assetFingerprint]
+                arguments: [asset.assetFingerprint.rawValue]
             )
 
             for link in normalizedLinks {
@@ -365,7 +365,7 @@ final class MonthManifestStore {
                     ) VALUES (?, ?, ?, ?)
                     """,
                     arguments: [
-                        link.assetFingerprint,
+                        link.assetFingerprint.rawValue,
                         link.resourceHash,
                         link.role,
                         link.slot
@@ -411,7 +411,7 @@ final class MonthManifestStore {
     }
 
     /// Phantom asset (assets row with no asset_resources rows) counts as incomplete.
-    func isAssetIncomplete(_ fingerprint: Data) -> Bool {
+    func isAssetIncomplete(_ fingerprint: AssetFingerprint) -> Bool {
         guard let asset = assetsByFingerprint[fingerprint] else { return false }
         let links = assetLinksByFingerprint[fingerprint] ?? []
         return RemoteAssetIntegrityClassifier.isIncomplete(
@@ -434,7 +434,7 @@ final class MonthManifestStore {
         let metadataOnlyRoles = ResourceTypeCode.metadataOnlyRoles
 
         // Iterate assetsByFingerprint.keys to cover phantom assets (no link entries).
-        var assetsToRemove: Set<Data> = []
+        var assetsToRemove: Set<AssetFingerprint> = []
         for fingerprint in assetsByFingerprint.keys {
             let links = assetLinksByFingerprint[fingerprint] ?? []
             var hasNonMetadataKeptLink = false
@@ -485,7 +485,7 @@ final class MonthManifestStore {
         let actualMissing = allMissingHashes.intersection(itemsByHash.keys)
         let availableHashes = Set(itemsByHash.keys).subtracting(actualMissing)
 
-        var assetsToRemove: Set<Data> = []
+        var assetsToRemove: Set<AssetFingerprint> = []
         for (fingerprint, asset) in assetsByFingerprint {
             let links = assetLinksByFingerprint[fingerprint] ?? []
             if RemoteAssetIntegrityClassifier.isIncomplete(
@@ -508,8 +508,8 @@ final class MonthManifestStore {
     }
 
     private func applyDeletions(
-        assetsToRemove: Set<Data>,
-        orphanLinkFingerprints: Set<Data> = [],
+        assetsToRemove: Set<AssetFingerprint>,
+        orphanLinkFingerprints: Set<AssetFingerprint> = [],
         missingHashes actualMissing: Set<Data>
     ) throws -> CleanupMissingResourcesResult {
         let linkFingerprintsToDelete = assetsToRemove.union(orphanLinkFingerprints)
@@ -523,7 +523,7 @@ final class MonthManifestStore {
 
         try dbQueue.write { db in
             if !linkFingerprintsToDelete.isEmpty {
-                try Self.forEachDataChunk(linkFingerprintsToDelete) { chunk, placeholders in
+                try Self.forEachDataChunk(linkFingerprintsToDelete.map(\.rawValue)) { chunk, placeholders in
                     try db.execute(
                         sql: "DELETE FROM asset_resources WHERE assetFingerprint IN (\(placeholders))",
                         arguments: StatementArguments(chunk)
@@ -531,7 +531,7 @@ final class MonthManifestStore {
                 }
             }
             if !assetsToRemove.isEmpty {
-                try Self.forEachDataChunk(assetsToRemove) { chunk, placeholders in
+                try Self.forEachDataChunk(assetsToRemove.map(\.rawValue)) { chunk, placeholders in
                     try db.execute(
                         sql: "DELETE FROM assets WHERE assetFingerprint IN (\(placeholders))",
                         arguments: StatementArguments(chunk)

@@ -31,7 +31,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     private var mediaKindByAssetID: [PhotoKitLocalIdentifier: AlbumMediaKind] = [:]
     // In-memory mirror of `local_assets.assetFingerprint` so recomputeAggregates can
     // compute backed-up counts without hitting the DB.
-    private var fingerprintByAssetID: [PhotoKitLocalIdentifier: Data] = [:]
+    private var fingerprintByAssetID: [PhotoKitLocalIdentifier: AssetFingerprint] = [:]
     private var monthAggregates: [LibraryMonthKey: MonthAggregate] = [:]
     private(set) var monthFileSizes: [LibraryMonthKey: Int64] = [:]
 
@@ -60,9 +60,9 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         assetIDToMonth[assetID]
     }
 
-    func fingerprints(for assetIDs: Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: Data] {
+    func fingerprints(for assetIDs: Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: AssetFingerprint] {
         guard !assetIDs.isEmpty else { return [:] }
-        var result: [PhotoKitLocalIdentifier: Data] = [:]
+        var result: [PhotoKitLocalIdentifier: AssetFingerprint] = [:]
         result.reserveCapacity(assetIDs.count)
         for id in assetIDs {
             if let fp = fingerprintByAssetID[id] {
@@ -97,7 +97,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     func reload(
         payload: LibraryInitialPayload,
         fingerprintByAsset: [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord],
-        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<AssetFingerprint>
     ) -> Set<LibraryMonthKey> {
         let oldMonths = allMonths
         trackedCollections.removeAll(keepingCapacity: true)
@@ -169,7 +169,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     func refreshExisting(
         assetIDs: Set<PhotoKitLocalIdentifier>,
         fingerprintsForIDs: (Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord],
-        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<AssetFingerprint>
     ) -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty, hasLoadedIndex else { return [] }
 
@@ -200,7 +200,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     func eagerlyInsert(
         _ snapshots: [PhotoKitLocalIdentifier: LibraryAssetSnapshot],
         fingerprintsForIDs: (Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord],
-        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<AssetFingerprint>
     ) -> Set<LibraryMonthKey> {
         guard !snapshots.isEmpty, hasLoadedIndex else { return [] }
 
@@ -231,7 +231,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     func applyChange(
         _ payload: LibraryChangePayload,
         fingerprintsForIDs: (Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord],
-        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<AssetFingerprint>
     ) -> Set<LibraryMonthKey> {
         guard !trackedCollections.isEmpty else { return [] }
 
@@ -297,7 +297,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     /// Recompute backed-up count for months whose remote fingerprints changed.
     func refreshBackedUpState(
         affectedMonths: Set<LibraryMonthKey>,
-        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<AssetFingerprint>
     ) -> Set<LibraryMonthKey> {
         guard !affectedMonths.isEmpty else { return [] }
         let knownMonths = affectedMonths.filter { localAssetIDsByMonth[$0] != nil }
@@ -380,10 +380,10 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
 
     private func recomputeAggregates(
         for months: Set<LibraryMonthKey>,
-        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<AssetFingerprint>
     ) {
         // Per-month scratch Set reused across iterations to avoid repeated reallocations.
-        var seenBackedUpFingerprints = Set<Data>()
+        var seenBackedUpFingerprints = Set<AssetFingerprint>()
         for month in months {
             guard let ids = localAssetIDsByMonth[month], !ids.isEmpty else {
                 monthAggregates[month] = nil

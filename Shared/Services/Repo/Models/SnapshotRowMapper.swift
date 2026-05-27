@@ -23,7 +23,7 @@ enum SnapshotRowMapper {
 
     static func encodeAssetLine(_ row: SnapshotAssetRow) throws -> String {
         var inner: [String: Any] = [
-            "assetFingerprint": row.assetFingerprint.hexString,
+            "assetFingerprint": row.assetFingerprint.rawValue.hexString,
             "backedUpAtMs": row.backedUpAtMs,
             "resourceCount": row.resourceCount,
             "totalFileSizeBytes": row.totalFileSizeBytes
@@ -59,7 +59,7 @@ enum SnapshotRowMapper {
 
     static func encodeAssetResourceLine(_ row: SnapshotAssetResourceRow) throws -> String {
         let inner: [String: Any] = [
-            "assetFingerprint": row.assetFingerprint.hexString,
+            "assetFingerprint": row.assetFingerprint.rawValue.hexString,
             "role": row.role,
             "slot": row.slot,
             "resourceHash": row.resourceHash.hexString,
@@ -194,7 +194,7 @@ enum SnapshotRowMapper {
     private static func decodeAsset(_ dict: [String: Any]) throws -> SnapshotAssetRow {
         let r = try innerObject(dict)
         let fp = try mapValidation {
-            try RepoWireValidator.validateHash(
+            try RepoWireValidator.validateAssetFingerprint(
                 RepoWireValidator.requireString(r, "assetFingerprint"),
                 field: "assetFingerprint"
             )
@@ -274,7 +274,7 @@ enum SnapshotRowMapper {
     private static func decodeAssetResource(_ dict: [String: Any]) throws -> SnapshotAssetResourceRow {
         let r = try innerObject(dict)
         let fp = try mapValidation {
-            try RepoWireValidator.validateHash(
+            try RepoWireValidator.validateAssetFingerprint(
                 RepoWireValidator.requireString(r, "assetFingerprint"),
                 field: "assetFingerprint"
             )

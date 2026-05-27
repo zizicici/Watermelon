@@ -6,7 +6,7 @@ private let snapshotCacheLog = Logger(subsystem: "com.zizicici.watermelon", cate
 final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     private struct LinkKey: Hashable {
         let month: LibraryMonthKey
-        let assetFingerprint: Data
+        let assetFingerprint: AssetFingerprint
         let role: Int
         let slot: Int
     }
@@ -170,7 +170,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             let monthLinks = snapshot.linksByMonth[month] ?? [:]
             let monthResources = snapshot.resourcesByMonth[month] ?? [:]
             let allHashes = Set(monthResources.values.map(\.contentHash))
-            var linksByFP: [Data: [RemoteAssetResourceLink]] = [:]
+            var linksByFP: [AssetFingerprint: [RemoteAssetResourceLink]] = [:]
             for (_, link) in monthLinks {
                 linksByFP[link.assetFingerprint, default: []].append(link)
             }
@@ -357,7 +357,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             fileNameByHash[resource.contentHash] = resource.logicalName
         }
 
-        var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
+        var linksByFingerprint: [AssetFingerprint: [RemoteAssetResourceLink]] = [:]
         for (_, link) in monthLinks {
             linksByFingerprint[link.assetFingerprint, default: []].append(link)
         }
@@ -423,7 +423,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
                 },
                 scope: "link",
                 month: month
-            ) { "fp=\($0.assetFingerprint.hexString) r=\($0.role) s=\($0.slot)" }
+            ) { "fp=\($0.assetFingerprint) r=\($0.role) s=\($0.slot)" }
 
             let previousResources = resourcesByMonth[month] ?? [:]
             let previousAssets = assetsByMonth[month] ?? [:]
@@ -666,7 +666,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         }
         let allHashes = Set(monthResources.values.map(\.contentHash))
 
-        var linksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
+        var linksByFingerprint: [AssetFingerprint: [RemoteAssetResourceLink]] = [:]
         for (_, link) in monthLinks {
             linksByFingerprint[link.assetFingerprint, default: []].append(link)
         }
@@ -842,7 +842,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     private static func sortedLinks(_ links: [RemoteAssetResourceLink]) -> [RemoteAssetResourceLink] {
         links.sorted { lhs, rhs in
             if lhs.assetFingerprint != rhs.assetFingerprint {
-                return lhs.assetFingerprint.lexicographicallyPrecedes(rhs.assetFingerprint)
+                return lhs.assetFingerprint.rawValue.lexicographicallyPrecedes(rhs.assetFingerprint.rawValue)
             }
             if lhs.role != rhs.role { return lhs.role < rhs.role }
             if lhs.slot != rhs.slot { return lhs.slot < rhs.slot }

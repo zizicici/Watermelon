@@ -5,7 +5,7 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
     private let assetID = PhotoKitLocalIdentifier(rawValue: "ABC-123/L0/001")
 
     func testHappyPath_readyOnFirstAttempt_returnsTrue() async throws {
-        let fingerprint = Data([0x01, 0x02, 0x03])
+        let fingerprint = TestFixtures.assetFingerprint(0x01)
         let buildCalls = Counter()
         let fetchCalls = Counter()
 
@@ -32,7 +32,7 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
     }
 
     func testEventuallyReady_returnsTrueAfterRetries() async throws {
-        let fingerprint = Data([0xAA])
+        let fingerprint = TestFixtures.assetFingerprint(0xAA)
         let buildCalls = Counter()
         let fetchCalls = Counter()
 
@@ -60,8 +60,8 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
     }
 
     func testReadyButFingerprintMismatch_exhaustsRetryBudget() async throws {
-        let expected = Data([0x01])
-        let actual = Data([0x02])
+        let expected = TestFixtures.assetFingerprint(0x01)
+        let actual = TestFixtures.assetFingerprint(0x02)
         let buildCalls = Counter()
         let fetchCalls = Counter()
         let delays: [Duration] = [.zero, .zero, .zero]
@@ -89,8 +89,8 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
     }
 
     func testReadyButTransientMismatch_eventuallyMatchesAfterRetries() async throws {
-        let expected = Data([0x01])
-        let transient = Data([0x02])
+        let expected = TestFixtures.assetFingerprint(0x01)
+        let transient = TestFixtures.assetFingerprint(0x02)
         let buildCalls = Counter()
         let fetchCalls = Counter()
 
@@ -135,7 +135,7 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
 
         let verified = try await verifier.verifyDurableBinding(
             assetLocalIdentifier: assetID,
-            expectedFingerprint: Data([0xFF])
+            expectedFingerprint: TestFixtures.assetFingerprint(0xFF)
         )
 
         XCTAssertFalse(verified)
@@ -162,7 +162,7 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
 
         let verified = try await verifier.verifyDurableBinding(
             assetLocalIdentifier: assetID,
-            expectedFingerprint: Data([0x01])
+            expectedFingerprint: TestFixtures.assetFingerprint(0x01)
         )
 
         XCTAssertFalse(verified)
@@ -183,7 +183,7 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
         let task = Task<Bool, Error> {
             try await verifier.verifyDurableBinding(
                 assetLocalIdentifier: assetID,
-                expectedFingerprint: Data([0x00])
+                expectedFingerprint: TestFixtures.assetFingerprint(0x00)
             )
         }
         task.cancel()
@@ -222,7 +222,7 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
         )
     }
 
-    private static func makeRecord(fingerprint: Data) -> LocalAssetFingerprintRecord {
+    private static func makeRecord(fingerprint: AssetFingerprint) -> LocalAssetFingerprintRecord {
         LocalAssetFingerprintRecord(
             fingerprint: fingerprint,
             updatedAt: Date(timeIntervalSince1970: 0),

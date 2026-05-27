@@ -14,7 +14,7 @@ final class RestoreService {
 
     struct RestoreItemDescriptor: Sendable {
         let instances: [RemoteAssetResourceInstance]
-        let identity: Data
+        let assetFingerprint: AssetFingerprint
     }
 
     struct RestoredAsset {
@@ -24,7 +24,7 @@ final class RestoreService {
     }
 
     struct RestoredItem: Sendable {
-        let identity: Data
+        let assetFingerprint: AssetFingerprint
         let asset: RestoredAsset
     }
 
@@ -59,7 +59,7 @@ final class RestoreService {
                 // every item into a "per-item failure" instead of surfacing the real cause.
                 do {
                     if let asset = try await restoreGroup(group, profile: profile, storageClient: storageClient) {
-                        let restored = RestoredItem(identity: item.identity, asset: asset)
+                        let restored = RestoredItem(assetFingerprint: item.assetFingerprint, asset: asset)
                         results.append(restored)
                         restoredItem = restored
                     }

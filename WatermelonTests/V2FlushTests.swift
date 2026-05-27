@@ -42,7 +42,7 @@ final class V2FlushTests: XCTestCase {
         let hash = TestFixtures.fingerprint(0xAA)
         let asset = RemoteManifestAsset(
             year: year, month: month,
-            assetFingerprint: TestFixtures.fingerprint(0xBB),
+            assetFingerprint: TestFixtures.assetFingerprint(0xBB),
             creationDateMs: 1_700_000_000_000,
             backedUpAtMs: 1_700_000_001_000,
             resourceCount: 1,
@@ -348,7 +348,7 @@ final class V2FlushTests: XCTestCase {
         let v2 = try await makeV2Services(client: client)
 
         // Materialize an existing asset so reconcile can tombstone it
-        let fp = TestFixtures.fingerprint(0xCC)
+        let fp = TestFixtures.assetFingerprint(0xCC)
         let hash = TestFixtures.fingerprint(0xDD)
         let store = try await V2MonthSession.loadOrCreate(
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
@@ -378,7 +378,7 @@ final class V2FlushTests: XCTestCase {
         // Initial flush — asset committed
         _ = try await store.flushToRemote(ignoreCancellation: false)
 
-        let newFP = TestFixtures.fingerprint(0xEE)
+        let newFP = TestFixtures.assetFingerprint(0xEE)
         let newAsset = RemoteManifestAsset(
             year: year, month: month,
             assetFingerprint: newFP,
@@ -420,7 +420,7 @@ final class V2FlushTests: XCTestCase {
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
 
-        let fp = TestFixtures.fingerprint(0xCC)
+        let fp = TestFixtures.assetFingerprint(0xCC)
         let hash = TestFixtures.fingerprint(0xDD)
         let resource = RemoteManifestResource(
             year: year, month: month,
@@ -443,7 +443,7 @@ final class V2FlushTests: XCTestCase {
 
         // Tombstone via subset replacement, then flush again — the tombstone now
         // lives in a commit AND its effect is in the snapshot baseline.
-        let supersedingFP = TestFixtures.fingerprint(0xEE)
+        let supersedingFP = TestFixtures.assetFingerprint(0xEE)
         let superseding = RemoteManifestAsset(
             year: year, month: month, assetFingerprint: supersedingFP,
             creationDateMs: nil, backedUpAtMs: 2, resourceCount: 1, totalFileSizeBytes: 1
@@ -470,8 +470,8 @@ final class V2FlushTests: XCTestCase {
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
 
-        let oldFP = TestFixtures.fingerprint(0xC1)
-        let newFP = TestFixtures.fingerprint(0xC2)
+        let oldFP = TestFixtures.assetFingerprint(0xC1)
+        let newFP = TestFixtures.assetFingerprint(0xC2)
         let hash = TestFixtures.fingerprint(0xD1)
         let resource = RemoteManifestResource(
             year: year, month: month,
@@ -524,8 +524,8 @@ final class V2FlushTests: XCTestCase {
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
 
-        let oldFP = TestFixtures.fingerprint(0xC1)
-        let newFP = TestFixtures.fingerprint(0xC2)
+        let oldFP = TestFixtures.assetFingerprint(0xC1)
+        let newFP = TestFixtures.assetFingerprint(0xC2)
         let hash = TestFixtures.fingerprint(0xD1)
         let resource = RemoteManifestResource(
             year: year, month: month, physicalRemotePath: "2026/01/x.jpg",
@@ -583,7 +583,7 @@ final class V2FlushTests: XCTestCase {
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
         let hash = TestFixtures.fingerprint(0xCC)
-        let assetFP = TestFixtures.fingerprint(0xDD)
+        let assetFP = TestFixtures.assetFingerprint(0xDD)
         let physicalPath = "2026/01/photo.jpg"
         let resource = RemoteManifestResource(
             year: year, month: month, physicalRemotePath: physicalPath,
@@ -609,7 +609,7 @@ final class V2FlushTests: XCTestCase {
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
 
-        let newAssetFP = TestFixtures.fingerprint(0xEE)
+        let newAssetFP = TestFixtures.assetFingerprint(0xEE)
         let newAsset = RemoteManifestAsset(
             year: year, month: month, assetFingerprint: newAssetFP,
             creationDateMs: nil, backedUpAtMs: 2, resourceCount: 1, totalFileSizeBytes: 100
@@ -652,7 +652,7 @@ final class V2FlushTests: XCTestCase {
 
         let asset = RemoteManifestAsset(
             year: year, month: month,
-            assetFingerprint: TestFixtures.fingerprint(0xBB),
+            assetFingerprint: TestFixtures.assetFingerprint(0xBB),
             creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 100
         )
         let link = RemoteAssetResourceLink(
@@ -687,7 +687,7 @@ final class V2FlushTests: XCTestCase {
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
         let hash = TestFixtures.fingerprint(0xAA)
-        let assetFP = TestFixtures.fingerprint(0xBB)
+        let assetFP = TestFixtures.assetFingerprint(0xBB)
         let physicalPath = "2026/01/photo.jpg"
         let resource = RemoteManifestResource(
             year: year, month: month,
@@ -743,7 +743,7 @@ final class V2FlushTests: XCTestCase {
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
         let hash = TestFixtures.fingerprint(0xCC)
-        let assetFP = TestFixtures.fingerprint(0xDD)
+        let assetFP = TestFixtures.assetFingerprint(0xDD)
         let physicalPath = "2026/01/photo.jpg"
         let resource = RemoteManifestResource(
             year: year, month: month,
@@ -776,7 +776,7 @@ final class V2FlushTests: XCTestCase {
 
         // Trigger a flush by upserting an unrelated asset+resource.
         let otherHash = TestFixtures.fingerprint(0x11)
-        let otherFP = TestFixtures.fingerprint(0x22)
+        let otherFP = TestFixtures.assetFingerprint(0x22)
         let otherPath = "2026/01/other.jpg"
         let otherResource = RemoteManifestResource(
             year: year, month: month,
@@ -847,7 +847,7 @@ final class V2FlushTests: XCTestCase {
         // A legitimate asset with its resource succeeds and gets committed.
         let legitHash = TestFixtures.fingerprint(0xA2)
         let legitPath = "2026/01/legit.jpg"
-        let legitFP = TestFixtures.fingerprint(0xB2)
+        let legitFP = TestFixtures.assetFingerprint(0xB2)
         let legitResource = RemoteManifestResource(
             year: year, month: month,
             physicalRemotePath: legitPath,
@@ -886,7 +886,7 @@ final class V2FlushTests: XCTestCase {
         // Round 1: commit asset A at (path, oldHash).
         let path = "2026/01/photo.jpg"
         let oldHash = TestFixtures.fingerprint(0x10)
-        let assetAFP = TestFixtures.fingerprint(0x20)
+        let assetAFP = TestFixtures.assetFingerprint(0x20)
         let store1 = try await V2MonthSession.loadOrCreate(
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
@@ -926,7 +926,7 @@ final class V2FlushTests: XCTestCase {
         _ = try store2.upsertResource(newResource)
 
         let otherHash = TestFixtures.fingerprint(0x30)
-        let otherFP = TestFixtures.fingerprint(0x40)
+        let otherFP = TestFixtures.assetFingerprint(0x40)
         let otherPath = "2026/01/other.jpg"
         let otherResource = RemoteManifestResource(
             year: year, month: month, physicalRemotePath: otherPath,
@@ -962,8 +962,8 @@ final class V2FlushTests: XCTestCase {
     func testV2MonthIndexes_seed_isFaithfulToMaterializedResources() throws {
         let tombstonedHash = TestFixtures.fingerprint(0x77)
         let livingHash = TestFixtures.fingerprint(0x88)
-        let livingFP = TestFixtures.fingerprint(0xC1)
-        let tombstonedFP = TestFixtures.fingerprint(0xC2)
+        let livingFP = TestFixtures.assetFingerprint(0xC1)
+        let tombstonedFP = TestFixtures.assetFingerprint(0xC2)
         let tombstonedPath = "2026/01/tombstoned.jpg"
         let livingPath = "2026/01/living.jpg"
 
@@ -1029,7 +1029,7 @@ final class V2FlushTests: XCTestCase {
         try await client.connect()
         let v2 = try await makeV2Services(client: client)
 
-        let assetFP = TestFixtures.fingerprint(0xA1)
+        let assetFP = TestFixtures.assetFingerprint(0xA1)
         let hash = TestFixtures.fingerprint(0xB1)
         let physicalPath = "2026/01/photo.jpg"
 
@@ -1058,7 +1058,7 @@ final class V2FlushTests: XCTestCase {
 
         // Round 2: subset-replace asset A with asset B (different fp, same resource).
         // This emits a tombstone for assetFP whose resource row remains in fold(covered).
-        let supersedingFP = TestFixtures.fingerprint(0xA2)
+        let supersedingFP = TestFixtures.assetFingerprint(0xA2)
         let superseding = RemoteManifestAsset(
             year: year, month: month, assetFingerprint: supersedingFP,
             creationDateMs: nil, backedUpAtMs: 2, resourceCount: 1, totalFileSizeBytes: 100
@@ -1073,7 +1073,7 @@ final class V2FlushTests: XCTestCase {
         let store2 = try await V2MonthSession.loadOrCreate(
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
-        let otherFP = TestFixtures.fingerprint(0xC0)
+        let otherFP = TestFixtures.assetFingerprint(0xC0)
         let otherHash = TestFixtures.fingerprint(0xD0)
         let otherPath = "2026/01/other.jpg"
         let otherResource = RemoteManifestResource(
@@ -1121,7 +1121,7 @@ final class V2FlushTests: XCTestCase {
         )
         let asset = RemoteManifestAsset(
             year: year, month: month,
-            assetFingerprint: TestFixtures.fingerprint(0xBB),
+            assetFingerprint: TestFixtures.assetFingerprint(0xBB),
             creationDateMs: 1_700_000_100_000,
             backedUpAtMs: 1_700_000_999_000,
             resourceCount: 1, totalFileSizeBytes: 100
@@ -1165,7 +1165,7 @@ final class V2FlushTests: XCTestCase {
         )
         let asset = RemoteManifestAsset(
             year: year, month: month,
-            assetFingerprint: TestFixtures.fingerprint(0xDD),
+            assetFingerprint: TestFixtures.assetFingerprint(0xDD),
             creationDateMs: 1_700_000_100_000,
             backedUpAtMs: 1_700_000_200_000,
             resourceCount: 1, totalFileSizeBytes: 200
@@ -1254,7 +1254,7 @@ final class V2FlushTests: XCTestCase {
         )
         let asset = RemoteManifestAsset(
             year: year, month: month,
-            assetFingerprint: TestFixtures.fingerprint(0xFE),
+            assetFingerprint: TestFixtures.assetFingerprint(0xFE),
             creationDateMs: 1_700_000_000_000,
             backedUpAtMs: 1_700_000_001_000,
             resourceCount: 1, totalFileSizeBytes: 100
@@ -1317,7 +1317,7 @@ final class V2FlushTests: XCTestCase {
 
         let asset = RemoteManifestAsset(
             year: year, month: month,
-            assetFingerprint: TestFixtures.fingerprint(0xFA),
+            assetFingerprint: TestFixtures.assetFingerprint(0xFA),
             creationDateMs: 1_700_000_000_000,
             backedUpAtMs: 1_700_000_001_000,
             resourceCount: 1,
@@ -1454,6 +1454,10 @@ final class V2FlushTests: XCTestCase {
         return Data(bytes)
     }
 
+    private func strictSubsetFingerprint(_ value: Int) -> AssetFingerprint {
+        AssetFingerprint(decoding: strictSubsetData(value))!
+    }
+
     private func emptyV2Indexes() -> V2MonthIndexes {
         V2MonthIndexes(
             year: year,
@@ -1486,7 +1490,7 @@ final class V2FlushTests: XCTestCase {
     }
 
     private func strictSubsetAsset(
-        fingerprint: Data,
+        fingerprint: AssetFingerprint,
         resourceCount: Int
     ) -> RemoteManifestAsset {
         RemoteManifestAsset(
@@ -1501,7 +1505,7 @@ final class V2FlushTests: XCTestCase {
     }
 
     private func strictSubsetLink(
-        fingerprint: Data,
+        fingerprint: AssetFingerprint,
         hash: Data,
         role: Int = ResourceTypeCode.photo,
         slot: Int = 0,
@@ -1529,10 +1533,10 @@ final class V2FlushTests: XCTestCase {
     private func largeStrictSubsetState(
         unrelatedCount: Int,
         includePartial: Bool
-    ) -> (state: RepoMonthState, partialFingerprint: Data, photoHash: Data, videoHash: Data) {
+    ) -> (state: RepoMonthState, partialFingerprint: AssetFingerprint, photoHash: Data, videoHash: Data) {
         var state = RepoMonthState.empty
         for index in 0 ..< unrelatedCount {
-            let fingerprint = strictSubsetData(10_000 + index)
+            let fingerprint = strictSubsetFingerprint(10_000 + index)
             let hash = strictSubsetData(20_000 + index)
             state.assets[fingerprint] = SnapshotAssetRow(
                 assetFingerprint: fingerprint,
@@ -1555,7 +1559,7 @@ final class V2FlushTests: XCTestCase {
             )
         }
 
-        let partialFingerprint = strictSubsetData(90_001)
+        let partialFingerprint = strictSubsetFingerprint(90_001)
         let photoHash = strictSubsetData(90_002)
         let videoHash = strictSubsetData(90_003)
         if includePartial {
@@ -1768,7 +1772,7 @@ final class V2FlushTests: XCTestCase {
             underlying: CancellationError()
         )
         let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [Data("fp".utf8)],
+            committedAssets: [TestFixtures.assetFingerprint(0xFF)],
             committedTombstones: [],
             underlying: SnapshotWriter.WriteError.ioFailure(gate)
         )
@@ -1845,7 +1849,7 @@ final class V2FlushTests: XCTestCase {
         _ = try store.upsertResource(videoResource)
 
         // Asset A — partial (photo only); models an older backup before paired-video support.
-        let partialFP = TestFixtures.fingerprint(0xB1)
+        let partialFP = TestFixtures.assetFingerprint(0xB1)
         let partial = RemoteManifestAsset(
             year: year, month: month, assetFingerprint: partialFP,
             creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 100
@@ -1865,7 +1869,7 @@ final class V2FlushTests: XCTestCase {
             resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
         )
         _ = try store.upsertResource(unrelatedResource)
-        let unrelatedFP = TestFixtures.fingerprint(0xB2)
+        let unrelatedFP = TestFixtures.assetFingerprint(0xB2)
         let unrelated = RemoteManifestAsset(
             year: year, month: month, assetFingerprint: unrelatedFP,
             creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 50
@@ -1903,8 +1907,8 @@ final class V2FlushTests: XCTestCase {
         let photoHash = TestFixtures.fingerprint(0xA1)
         let videoHash = TestFixtures.fingerprint(0xA2)
         let unrelatedHash = TestFixtures.fingerprint(0xCC)
-        let partialFP = TestFixtures.fingerprint(0xB1)
-        let unrelatedFP = TestFixtures.fingerprint(0xB2)
+        let partialFP = TestFixtures.assetFingerprint(0xB1)
+        let unrelatedFP = TestFixtures.assetFingerprint(0xB2)
 
         let photoResource = RemoteManifestResource(
             year: year, month: month, physicalRemotePath: "2026/01/photo.jpg",
@@ -1978,7 +1982,7 @@ final class V2FlushTests: XCTestCase {
             resourceType: ResourceTypeCode.photo, creationDateMs: nil, backedUpAtMs: 0
         )
         _ = try store.upsertResource(resource)
-        let fp = TestFixtures.fingerprint(0xB1)
+        let fp = TestFixtures.assetFingerprint(0xB1)
         let asset = RemoteManifestAsset(
             year: year, month: month, assetFingerprint: fp,
             creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
@@ -2017,10 +2021,10 @@ final class V2FlushTests: XCTestCase {
         let roleExtraHash = TestFixtures.fingerprint(0xA4)
         let slotHash = TestFixtures.fingerprint(0xA5)
         let slotExtraHash = TestFixtures.fingerprint(0xA6)
-        let properFP = TestFixtures.fingerprint(0xB1)
-        let roleFP = TestFixtures.fingerprint(0xB2)
-        let slotFP = TestFixtures.fingerprint(0xB3)
-        let emptyFP = TestFixtures.fingerprint(0xB4)
+        let properFP = TestFixtures.assetFingerprint(0xB1)
+        let roleFP = TestFixtures.assetFingerprint(0xB2)
+        let slotFP = TestFixtures.assetFingerprint(0xB3)
+        let emptyFP = TestFixtures.assetFingerprint(0xB4)
 
         let resources = [
             (properHash, "proper.jpg", ResourceTypeCode.photo),
@@ -2079,7 +2083,7 @@ final class V2FlushTests: XCTestCase {
         try seed(v1Store)
         try seed(v2Store)
 
-        let cases: [(name: String, keys: Set<AssetResourceLinkKey>, expected: Set<Data>)] = [
+        let cases: [(name: String, keys: Set<AssetResourceLinkKey>, expected: Set<AssetFingerprint>)] = [
             (
                 name: "proper strict subset",
                 keys: [
@@ -2154,7 +2158,7 @@ final class V2FlushTests: XCTestCase {
         let indexes = emptyV2Indexes()
         let hash = TestFixtures.fingerprint(0xE1)
         let extraHash = TestFixtures.fingerprint(0xE2)
-        let fingerprint = TestFixtures.fingerprint(0xE3)
+        let fingerprint = TestFixtures.assetFingerprint(0xE3)
         _ = try addV2IndexedResource(indexes, hash: hash, name: "duplicate.jpg")
         let asset = strictSubsetAsset(fingerprint: fingerprint, resourceCount: 2)
         let duplicateLink = strictSubsetLink(fingerprint: fingerprint, hash: hash, name: "duplicate.jpg")
@@ -2179,7 +2183,7 @@ final class V2FlushTests: XCTestCase {
         let oldHash = TestFixtures.fingerprint(0xE4)
         let newHash = TestFixtures.fingerprint(0xE5)
         let extraHash = TestFixtures.fingerprint(0xE6)
-        let fingerprint = TestFixtures.fingerprint(0xE7)
+        let fingerprint = TestFixtures.assetFingerprint(0xE7)
         _ = try addV2IndexedResource(indexes, hash: oldHash, name: "old.jpg")
         _ = try addV2IndexedResource(indexes, hash: newHash, name: "new.jpg")
 
@@ -2220,10 +2224,10 @@ final class V2FlushTests: XCTestCase {
         let oldOnlyHash = TestFixtures.fingerprint(0xEA)
         let replacementHash = TestFixtures.fingerprint(0xEB)
         let queryExtraHash = TestFixtures.fingerprint(0xEC)
-        let partialFP = TestFixtures.fingerprint(0xF1)
-        let fullFP = TestFixtures.fingerprint(0xF2)
-        let oldOnlyFP = TestFixtures.fingerprint(0xF3)
-        let replacementFP = TestFixtures.fingerprint(0xF4)
+        let partialFP = TestFixtures.assetFingerprint(0xF1)
+        let fullFP = TestFixtures.assetFingerprint(0xF2)
+        let oldOnlyFP = TestFixtures.assetFingerprint(0xF3)
+        let replacementFP = TestFixtures.assetFingerprint(0xF4)
 
         for (hash, name, type) in [
             (partialHash, "partial.jpg", ResourceTypeCode.photo),
@@ -2281,7 +2285,7 @@ final class V2FlushTests: XCTestCase {
         let indexes = emptyV2Indexes()
         let photoHash = TestFixtures.fingerprint(0xED)
         let videoHash = TestFixtures.fingerprint(0xEE)
-        let fingerprint = TestFixtures.fingerprint(0xEF)
+        let fingerprint = TestFixtures.assetFingerprint(0xEF)
         _ = try addV2IndexedResource(indexes, hash: photoHash, name: "photo.jpg")
         try indexes.upsertAsset(
             strictSubsetAsset(fingerprint: fingerprint, resourceCount: 1),
@@ -2390,7 +2394,7 @@ final class V2FlushTests: XCTestCase {
 
         // Partial A (pre-fix backup: photo only). Committed in the initial flush so the
         // heal step sees A as a baseline asset, not a same-session pending one.
-        let partialFP = TestFixtures.fingerprint(0xB1)
+        let partialFP = TestFixtures.assetFingerprint(0xB1)
         let partialAsset = RemoteManifestAsset(
             year: year, month: month, assetFingerprint: partialFP,
             creationDateMs: nil, backedUpAtMs: 1, resourceCount: 1, totalFileSizeBytes: 1
@@ -2402,7 +2406,7 @@ final class V2FlushTests: XCTestCase {
         try store.upsertAsset(partialAsset, links: [partialLink])
 
         // Full B (post-fix backup: photo + paired video) — committed in the same flush.
-        let fullFP = TestFixtures.fingerprint(0xB2)
+        let fullFP = TestFixtures.assetFingerprint(0xB2)
         let fullAsset = RemoteManifestAsset(
             year: year, month: month, assetFingerprint: fullFP,
             creationDateMs: nil, backedUpAtMs: 2, resourceCount: 2, totalFileSizeBytes: 3

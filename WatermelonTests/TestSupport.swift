@@ -60,7 +60,7 @@ enum TestFixtures {
     }
 
     static func record(
-        _ fingerprint: Data,
+        _ fingerprint: AssetFingerprint,
         updatedAt: Date = Date(),
         selectionVersion: Int = BackupAssetResourcePlanner.currentSelectionVersion,
         resourceSignature: Data? = Data()
@@ -73,20 +73,20 @@ enum TestFixtures {
         )
     }
 
-    static func emptyRemoteFingerprints(for month: LibraryMonthKey) -> Set<Data> {
+    static func emptyRemoteFingerprints(for month: LibraryMonthKey) -> Set<AssetFingerprint> {
         []
     }
 
 
     /// Use for any test that exercises the classifier — fake fingerprints trip `.fingerprintMismatch`.
-    static func computedFingerprint(for resourceRoleSlotHashes: [(role: Int, slot: Int, contentHash: Data)]) -> Data {
+    static func computedFingerprint(for resourceRoleSlotHashes: [(role: Int, slot: Int, contentHash: Data)]) -> AssetFingerprint {
         BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: resourceRoleSlotHashes)
     }
 
     static func remoteAsset(
         year: Int,
         month: Int,
-        fingerprint: Data,
+        fingerprint: AssetFingerprint,
         creationDateMs: Int64? = nil,
         backedUpAtMs: Int64 = 0,
         resourceCount: Int = 1,
@@ -127,7 +127,7 @@ enum TestFixtures {
     static func remoteLink(
         year: Int,
         month: Int,
-        assetFingerprint: Data,
+        assetFingerprint: AssetFingerprint,
         resourceHash: Data,
         role: Int = ResourceTypeCode.photo,
         slot: Int = 0,
@@ -171,10 +171,15 @@ enum TestFixtures {
     }
 
 
-    /// 32-byte filler used as opaque fingerprint/hash bytes; the byte value carries no
+    /// 32-byte filler used as opaque content/resource-hash bytes; the byte value carries no
     /// semantics, it just makes the value visually distinguishable in failure logs.
     static func fingerprint(_ byte: UInt8) -> Data {
         Data(repeating: byte, count: 32)
+    }
+
+    /// Typed asset fingerprint helper for tests; force-unwrap is safe because input is 32 bytes.
+    static func assetFingerprint(_ byte: UInt8) -> AssetFingerprint {
+        AssetFingerprint(decoding: Data(repeating: byte, count: 32))!
     }
 
     static func tombstoneBasis(lamportWatermark: UInt64 = 0) -> TombstoneObservationBasis {
@@ -317,7 +322,7 @@ enum TestFixtures {
 }
 
 extension CommitTombstoneBody {
-    init(assetFingerprint: Data, reason: Reason) {
+    init(assetFingerprint: AssetFingerprint, reason: Reason) {
         self.init(
             assetFingerprint: assetFingerprint,
             reason: reason,
@@ -328,7 +333,7 @@ extension CommitTombstoneBody {
 
 extension SnapshotAssetRow {
     init(
-        assetFingerprint: Data,
+        assetFingerprint: AssetFingerprint,
         creationDateMs: Int64?,
         backedUpAtMs: Int64,
         resourceCount: Int,

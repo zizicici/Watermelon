@@ -5,7 +5,7 @@ struct IncompleteAssetEntry: Sendable, Identifiable {
         case manifestOrphan
     }
 
-    let id: Data
+    let id: AssetFingerprint
     let month: LibraryMonthKey
     let creationDate: Date?
     let representativeFileName: String?

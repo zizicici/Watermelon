@@ -25,7 +25,7 @@ final class SnapshotRowMapperTests: XCTestCase {
 
     func testAssetRowRoundTrip() throws {
         let row = SnapshotAssetRow(
-            assetFingerprint: Data(repeating: 0x01, count: 32),
+            assetFingerprint: TestFixtures.assetFingerprint(0x01),
             creationDateMs: 100,
             backedUpAtMs: 200,
             resourceCount: 3,
@@ -55,7 +55,7 @@ final class SnapshotRowMapperTests: XCTestCase {
 
     func testAssetResourceRoundTrip() throws {
         let row = SnapshotAssetResourceRow(
-            assetFingerprint: Data(repeating: 0x10, count: 32),
+            assetFingerprint: TestFixtures.assetFingerprint(0x10),
             role: 1,
             slot: 0,
             resourceHash: Data(repeating: 0x20, count: 32),

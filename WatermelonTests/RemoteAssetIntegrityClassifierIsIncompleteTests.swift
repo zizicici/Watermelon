@@ -4,7 +4,7 @@ import XCTest
 /// Pins `isIncomplete(...) == !classify(...).isHealthy` across every
 /// AssetIntegrityState case and across both surviving overloads.
 final class RemoteAssetIntegrityClassifierIsIncompleteTests: XCTestCase {
-    private func link(role: Int, slot: Int = 0, hash: Data, fp: Data) -> RemoteAssetResourceLink {
+    private func link(role: Int, slot: Int = 0, hash: Data, fp: AssetFingerprint) -> RemoteAssetResourceLink {
         RemoteAssetResourceLink(
             year: 2026, month: 1,
             assetFingerprint: fp, resourceHash: hash,
@@ -12,7 +12,7 @@ final class RemoteAssetIntegrityClassifierIsIncompleteTests: XCTestCase {
         )
     }
 
-    private func computedFP(role: Int = ResourceTypeCode.photo, slot: Int = 0, hash: Data) -> Data {
+    private func computedFP(role: Int = ResourceTypeCode.photo, slot: Int = 0, hash: Data) -> AssetFingerprint {
         BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: [(role: role, slot: slot, contentHash: hash)]
         )
@@ -22,7 +22,7 @@ final class RemoteAssetIntegrityClassifierIsIncompleteTests: XCTestCase {
 
     private struct Fixture {
         let name: String
-        let assetFingerprint: Data
+        let assetFingerprint: AssetFingerprint
         let remoteLinks: [RemoteAssetResourceLink]
         let isResourceAvailable: (Data) -> Bool
     }
@@ -41,7 +41,7 @@ final class RemoteAssetIntegrityClassifierIsIncompleteTests: XCTestCase {
     private func makePhantomFixture() -> Fixture {
         Fixture(
             name: "phantom",
-            assetFingerprint: TestFixtures.fingerprint(0x10),
+            assetFingerprint: TestFixtures.assetFingerprint(0x10),
             remoteLinks: [],
             isResourceAvailable: { _ in true }
         )
@@ -96,7 +96,7 @@ final class RemoteAssetIntegrityClassifierIsIncompleteTests: XCTestCase {
 
     private func makeFingerprintMismatchFixture() -> Fixture {
         let h = TestFixtures.fingerprint(0xE1)
-        let wrongFP = TestFixtures.fingerprint(0xEF)
+        let wrongFP = TestFixtures.assetFingerprint(0xEF)
         return Fixture(
             name: "fingerprintMismatch",
             assetFingerprint: wrongFP,

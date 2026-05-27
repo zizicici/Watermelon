@@ -153,7 +153,7 @@ final class V2BatchCommitTests: XCTestCase {
 
     func testIntentQueue_DuplicateFingerprintAcrossLocalIdentifiers_BothDrained() async throws {
         let queue = PendingHashIndexIntentQueue()
-        let fp = TestFixtures.fingerprint(0xCC)
+        let fp = TestFixtures.assetFingerprint(0xCC)
         let intentA = HashIndexUpsertIntent(
             assetLocalIdentifier: "local-A",
             assetFingerprint: fp,
@@ -184,7 +184,7 @@ final class V2BatchCommitTests: XCTestCase {
 
     func testIntentQueue_ReenqueueSameLocalIdentifier_KeepsLatest() async throws {
         let queue = PendingHashIndexIntentQueue()
-        let fp = TestFixtures.fingerprint(0xDD)
+        let fp = TestFixtures.assetFingerprint(0xDD)
         let first = HashIndexUpsertIntent(
             assetLocalIdentifier: "local-X",
             assetFingerprint: fp,
@@ -212,8 +212,8 @@ final class V2BatchCommitTests: XCTestCase {
 
     func testIntentQueue_RollBackDiscardsForFingerprints() async throws {
         let queue = PendingHashIndexIntentQueue()
-        let fp1 = TestFixtures.fingerprint(0xE1)
-        let fp2 = TestFixtures.fingerprint(0xE2)
+        let fp1 = TestFixtures.assetFingerprint(0xE1)
+        let fp2 = TestFixtures.assetFingerprint(0xE2)
         await queue.enqueue(month: monthKey, intent: HashIndexUpsertIntent(
             assetLocalIdentifier: "a", assetFingerprint: fp1,
             totalFileSizeBytes: 1, modificationDateMs: nil,
@@ -240,25 +240,25 @@ final class V2BatchCommitTests: XCTestCase {
         let aggregator = ParallelBackupProgressAggregator(total: 3)
         _ = await aggregator.record(result: AssetProcessResult(
             status: .success, reason: nil, displayName: "a",
-            assetFingerprint: TestFixtures.fingerprint(0x01),
+            assetFingerprint: TestFixtures.assetFingerprint(0x01),
             timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 1
         ))
         _ = await aggregator.record(result: AssetProcessResult(
             status: .skipped, reason: nil, displayName: "b",
-            assetFingerprint: TestFixtures.fingerprint(0x02),
+            assetFingerprint: TestFixtures.assetFingerprint(0x02),
             timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 0
         ))
         await aggregator.recordProvisional(
-            month: monthKey, fingerprint: TestFixtures.fingerprint(0x01),
+            month: monthKey, fingerprint: TestFixtures.assetFingerprint(0x01),
             assetLocalIdentifier: "local-a", status: .success
         )
         await aggregator.recordProvisional(
-            month: monthKey, fingerprint: TestFixtures.fingerprint(0x02),
+            month: monthKey, fingerprint: TestFixtures.assetFingerprint(0x02),
             assetLocalIdentifier: "local-b", status: .skipped
         )
         await aggregator.markBatchDurable(
             month: monthKey,
-            committedAssetFingerprints: [TestFixtures.fingerprint(0x01), TestFixtures.fingerprint(0x02)]
+            committedAssetFingerprints: [TestFixtures.assetFingerprint(0x01), TestFixtures.assetFingerprint(0x02)]
         )
 
         let state = await aggregator.snapshot()
@@ -274,25 +274,25 @@ final class V2BatchCommitTests: XCTestCase {
         let aggregator = ParallelBackupProgressAggregator(total: 3)
         _ = await aggregator.record(result: AssetProcessResult(
             status: .success, reason: nil, displayName: "a",
-            assetFingerprint: TestFixtures.fingerprint(0x01),
+            assetFingerprint: TestFixtures.assetFingerprint(0x01),
             timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 1
         ))
         _ = await aggregator.record(result: AssetProcessResult(
             status: .skipped, reason: nil, displayName: "b",
-            assetFingerprint: TestFixtures.fingerprint(0x02),
+            assetFingerprint: TestFixtures.assetFingerprint(0x02),
             timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 0
         ))
         await aggregator.recordProvisional(
-            month: monthKey, fingerprint: TestFixtures.fingerprint(0x01),
+            month: monthKey, fingerprint: TestFixtures.assetFingerprint(0x01),
             assetLocalIdentifier: "local-a", status: .success
         )
         await aggregator.recordProvisional(
-            month: monthKey, fingerprint: TestFixtures.fingerprint(0x02),
+            month: monthKey, fingerprint: TestFixtures.assetFingerprint(0x02),
             assetLocalIdentifier: "local-b", status: .skipped
         )
 
         let rolledBack = await aggregator.rollBackProvisionalBatch(month: monthKey)
-        XCTAssertEqual(rolledBack, [TestFixtures.fingerprint(0x01), TestFixtures.fingerprint(0x02)])
+        XCTAssertEqual(rolledBack, [TestFixtures.assetFingerprint(0x01), TestFixtures.assetFingerprint(0x02)])
 
         let state = await aggregator.snapshot()
         XCTAssertEqual(state.succeeded, 0, "succeeded count must revert for rolled-back success")
@@ -308,7 +308,7 @@ final class V2BatchCommitTests: XCTestCase {
     // already preserves both rows (B2-2); this test pins the matching shape on the aggregator.
     func testAggregator_RollBackProvisionalBatch_DuplicateFingerprintDistinctLocalIdentifiers_DecrementsBoth() async {
         let aggregator = ParallelBackupProgressAggregator(total: 4)
-        let sharedFingerprint = TestFixtures.fingerprint(0xAB)
+        let sharedFingerprint = TestFixtures.assetFingerprint(0xAB)
         _ = await aggregator.record(result: AssetProcessResult(
             status: .success, reason: nil, displayName: "dup-a",
             assetFingerprint: sharedFingerprint,
@@ -476,18 +476,18 @@ final class V2BatchCommitTests: XCTestCase {
     // that the rollback after partial multi-chunk reverts only the leftover provisional cells.
     func testAggregator_MarkBatchDurableThenRollBack_OnlyChunk2RecordReverts() async {
         let aggregator = ParallelBackupProgressAggregator(total: 5)
-        let chunk1Fingerprints: [Data] = (0..<4).map { TestFixtures.fingerprint(UInt8($0 + 0x40)) }
+        let chunk1Fingerprints: [AssetFingerprint] = (0..<4).map { TestFixtures.assetFingerprint(UInt8($0 + 0x40)) }
         // Per-asset progress + per-asset provisional record for chunk 1.
         for fp in chunk1Fingerprints {
             _ = await aggregator.record(result: AssetProcessResult(
-                status: .success, reason: nil, displayName: "asset-\(fp.hexString)",
+                status: .success, reason: nil, displayName: "asset-\(fp)",
                 assetFingerprint: fp,
                 timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 1
             ))
             await aggregator.recordProvisional(
                 month: monthKey,
                 fingerprint: fp,
-                assetLocalIdentifier: PhotoKitLocalIdentifier(rawValue: "local-\(fp.hexString)"),
+                assetLocalIdentifier: PhotoKitLocalIdentifier(rawValue: "local-\(fp)"),
                 status: .success
             )
         }
@@ -497,7 +497,7 @@ final class V2BatchCommitTests: XCTestCase {
             committedAssetFingerprints: Set(chunk1Fingerprints)
         )
         // Now chunk 2 starts: one extra provisional record.
-        let chunk2Fingerprint = TestFixtures.fingerprint(0x99)
+        let chunk2Fingerprint = TestFixtures.assetFingerprint(0x99)
         _ = await aggregator.record(result: AssetProcessResult(
             status: .skipped, reason: nil, displayName: "chunk2",
             assetFingerprint: chunk2Fingerprint,
@@ -527,7 +527,7 @@ final class V2BatchCommitTests: XCTestCase {
         // Mirror the `asset_exists_cached` construction site in AssetProcessor.processWithLocalCache.
         let cachedSkip = AssetProcessResult(
             status: .skipped, reason: "asset_exists_cached", displayName: "x",
-            assetFingerprint: TestFixtures.fingerprint(0xC1),
+            assetFingerprint: TestFixtures.assetFingerprint(0xC1),
             timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 0
         )
         XCTAssertFalse(cachedSkip.wroteProvisionalV2Row,
@@ -536,7 +536,7 @@ final class V2BatchCommitTests: XCTestCase {
         // finalizeRowWritingAsset and DOES enqueue a V2 intent.
         let cacheReuse = AssetProcessResult(
             status: .skipped, reason: "resources_reused_cached", displayName: "y",
-            assetFingerprint: TestFixtures.fingerprint(0xC2),
+            assetFingerprint: TestFixtures.assetFingerprint(0xC2),
             timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 0,
             wroteProvisionalV2Row: true
         )
@@ -561,7 +561,7 @@ final class V2BatchCommitTests: XCTestCase {
         let cap = BackupV2Constants.batchFlushInterval
 
         // Seed (cap + 1) pending V2 ops — first chunk fits cap, second chunk carries 1 leftover.
-        var allFingerprints: [Data] = []
+        var allFingerprints: [AssetFingerprint] = []
         for index in 0 ..< (cap + 1) {
             let rows = makeAssetRows(index: index)
             _ = try store.upsertResource(rows.resource)

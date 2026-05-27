@@ -382,8 +382,8 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         client: InMemoryRemoteStorageClient,
         commit: CommitFile,
         tombstoneBasis: TombstoneObservationBasis,
-        oldFP: Data,
-        replacementFP: Data
+        oldFP: AssetFingerprint,
+        replacementFP: AssetFingerprint
     ) {
         let client = try await makeClient()
         let oldHash = TestFixtures.fingerprint(0xA1)
@@ -490,7 +490,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         runID: String,
         seq: UInt64,
         clock: UInt64,
-        fp: Data,
+        fp: AssetFingerprint,
         hash: Data,
         path: String
     ) async throws {
@@ -606,7 +606,7 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         return (asset, resource, link)
     }
 
-    private func assetFingerprint(hash: Data) -> Data {
+    private func assetFingerprint(hash: Data) -> AssetFingerprint {
         BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
         )

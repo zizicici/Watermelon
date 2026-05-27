@@ -12,7 +12,7 @@ final class ObservationTombstoneTests: XCTestCase {
     private let runID = "run-test"
     private let repoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
-    private func computedFP(role: Int = ResourceTypeCode.photo, slot: Int = 0, hash: Data) -> Data {
+    private func computedFP(role: Int = ResourceTypeCode.photo, slot: Int = 0, hash: Data) -> AssetFingerprint {
         BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: [(role: role, slot: slot, contentHash: hash)]
         )
@@ -23,7 +23,7 @@ final class ObservationTombstoneTests: XCTestCase {
         writerID: String,
         seq: UInt64,
         clock: UInt64,
-        fp: Data,
+        fp: AssetFingerprint,
         hash: Data
     ) async throws {
         let writer = CommitLogWriter(client: client, basePath: basePath)
@@ -53,7 +53,7 @@ final class ObservationTombstoneTests: XCTestCase {
         writerID: String,
         seq: UInt64,
         clock: UInt64,
-        fp: Data,
+        fp: AssetFingerprint,
         basis: TombstoneObservationBasis
     ) async throws {
         let writer = CommitLogWriter(client: client, basePath: basePath)
@@ -177,7 +177,7 @@ final class ObservationTombstoneTests: XCTestCase {
             lamportWatermark: 500
         )
         let body = CommitTombstoneBody(
-            assetFingerprint: TestFixtures.fingerprint(0xFA),
+            assetFingerprint: TestFixtures.assetFingerprint(0xFA),
             reason: .verifyFailed,
             observedBasis: basis
         )

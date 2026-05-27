@@ -10,7 +10,7 @@ struct HomeRemoteDelta {
 /// serialize access. `@unchecked Sendable` is granted because
 /// `HomeDataProcessingWorker` runs all engine calls on its `processingQueue`.
 final class HomeRemoteIndexEngine: @unchecked Sendable {
-    private var remoteFingerprintsByMonth: [LibraryMonthKey: Set<Data>] = [:]
+    private var remoteFingerprintsByMonth: [LibraryMonthKey: Set<AssetFingerprint>] = [:]
     private var summaryByMonth: [LibraryMonthKey: HomeMonthSummary] = [:]
 
     private(set) var snapshotRevision: UInt64?
@@ -19,7 +19,7 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
         Set(remoteFingerprintsByMonth.keys)
     }
 
-    func fingerprints(for month: LibraryMonthKey) -> Set<Data> {
+    func fingerprints(for month: LibraryMonthKey) -> Set<AssetFingerprint> {
         remoteFingerprintsByMonth[month] ?? []
     }
 
@@ -71,7 +71,7 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
     }
 
     private struct ResolvedMonth {
-        let fingerprints: Set<Data>
+        let fingerprints: Set<AssetFingerprint>
         let summary: HomeMonthSummary?
     }
 
@@ -94,7 +94,7 @@ final class HomeRemoteIndexEngine: @unchecked Sendable {
 
         let linksByAssetID: [String: [RemoteAssetResourceLink]] = Dictionary(grouping: delta.assetResourceLinks, by: \.assetID)
 
-        var fingerprints = Set<Data>()
+        var fingerprints = Set<AssetFingerprint>()
         fingerprints.reserveCapacity(delta.assets.count)
         var assetCount = 0
         var photoCount = 0

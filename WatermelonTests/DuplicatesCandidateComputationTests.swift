@@ -4,7 +4,7 @@ import XCTest
 
 final class DuplicatesCandidateComputationTests: XCTestCase {
     func testComputeDataAllowsFastAssetCountButForbidsFullLibraryMaterialization() async {
-        let fp = TestFixtures.fingerprint(0x10)
+        let fp = TestFixtures.assetFingerprint(0x10)
         let signature = Data([0x01])
         let repository = FakeDuplicateRepository(
             rawIndexedCount: 2,
@@ -37,7 +37,7 @@ final class DuplicatesCandidateComputationTests: XCTestCase {
     }
 
     func testComputeDataDropsGroupWhenValidationLeavesSingleton() async {
-        let fp = TestFixtures.fingerprint(0x11)
+        let fp = TestFixtures.assetFingerprint(0x11)
         let signature = Data([0x02])
         let repository = FakeDuplicateRepository(
             rawIndexedCount: 3,
@@ -67,7 +67,7 @@ final class DuplicatesCandidateComputationTests: XCTestCase {
     }
 
     func testComputeDataDropsDeletedOrPermissionInvisibleRows() async {
-        let fp = TestFixtures.fingerprint(0x12)
+        let fp = TestFixtures.assetFingerprint(0x12)
         let signature = Data([0x03])
         let repository = FakeDuplicateRepository(
             rawIndexedCount: 2,
@@ -93,7 +93,7 @@ final class DuplicatesCandidateComputationTests: XCTestCase {
     }
 
     func testComputeDataPreservesTrustChecksEvenWhenRepositoryReturnsBadRows() async {
-        let fp = TestFixtures.fingerprint(0x13)
+        let fp = TestFixtures.assetFingerprint(0x13)
         let signature = Data([0x04])
         let repository = FakeDuplicateRepository(
             rawIndexedCount: 5,
@@ -133,7 +133,7 @@ final class DuplicatesCandidateComputationTests: XCTestCase {
     }
 
     func testComputeDataBuildsSortedTrustedGroup() async {
-        let fp = TestFixtures.fingerprint(0x14)
+        let fp = TestFixtures.assetFingerprint(0x14)
         let signature = Data([0x05])
         let repository = FakeDuplicateRepository(
             rawIndexedCount: 4,
@@ -170,8 +170,8 @@ final class DuplicatesCandidateComputationTests: XCTestCase {
     }
 
     func testComputeDataGroupOrderingByFingerprint() async {
-        let fpA = TestFixtures.fingerprint(0x01)
-        let fpB = TestFixtures.fingerprint(0x02)
+        let fpA = TestFixtures.assetFingerprint(0x01)
+        let fpB = TestFixtures.assetFingerprint(0x02)
         let signature = Data([0x06])
         let repository = FakeDuplicateRepository(
             rawIndexedCount: 4,
@@ -231,7 +231,7 @@ final class DuplicatesCandidateComputationTests: XCTestCase {
     }
 
     func testComputeDataShowsGateWhenCandidateTrustDropsRows() async {
-        let fp = TestFixtures.fingerprint(0x15)
+        let fp = TestFixtures.assetFingerprint(0x15)
         let signature = Data([0x07])
         let repository = FakeDuplicateRepository(
             rawIndexedCount: 2,
@@ -327,7 +327,7 @@ private final class FakeDuplicatePhotoLibraryProvider: DuplicatePhotoLibraryProv
 }
 
 private func candidate(
-    _ fingerprint: Data,
+    _ fingerprint: AssetFingerprint,
     rows: [DuplicateIndexedAssetRow]
 ) -> DuplicateIndexedAssetCandidate {
     DuplicateIndexedAssetCandidate(assetFingerprint: fingerprint, rows: rows)
@@ -335,7 +335,7 @@ private func candidate(
 
 private func row(
     _ assetID: String,
-    fingerprint: Data,
+    fingerprint: AssetFingerprint,
     updatedAt: Date = Date(timeIntervalSince1970: 150),
     selectionVersion: Int = BackupAssetResourcePlanner.currentSelectionVersion,
     resourceSignature: Data?

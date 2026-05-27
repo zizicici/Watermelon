@@ -11,10 +11,12 @@ final class AssetResourceLinkSetPredicateTests: XCTestCase {
     }
 
     private func link(_ byte: UInt8, role: Int = 1, slot: Int = 0) -> RemoteAssetResourceLink {
+        // Asset fingerprint must be 32 bytes — `hash(_:)` returns a 1-byte fixture for the
+        // resource-hash side; use TestFixtures.assetFingerprint for the typed identity field.
         RemoteAssetResourceLink(
             year: 2026,
             month: 1,
-            assetFingerprint: hash(0xF0),
+            assetFingerprint: TestFixtures.assetFingerprint(0xF0),
             resourceHash: hash(byte),
             role: role,
             slot: slot,

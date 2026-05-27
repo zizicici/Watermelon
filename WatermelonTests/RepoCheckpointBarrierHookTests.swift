@@ -516,7 +516,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         policy: RepoCompactionPolicy,
         assetByte: UInt8,
         logLines: MonthManifestStepLogger? = nil
-    ) async throws -> (session: V2MonthSession, fingerprint: Data) {
+    ) async throws -> (session: V2MonthSession, fingerprint: AssetFingerprint) {
         let services = try await makeServices(client: client, policy: policy)
         let session = try await V2MonthSession.loadOrCreate(
             client: client,
@@ -651,7 +651,7 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         )
     }
 
-    private func assetFingerprint(hash: Data) -> Data {
+    private func assetFingerprint(hash: Data) -> AssetFingerprint {
         BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
         )

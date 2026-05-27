@@ -165,13 +165,13 @@ final class LocalHashIndexTrustTests: XCTestCase {
         let signature = currentSignature
 
         let fingerprintRecord = LocalAssetFingerprintRecord(
-            fingerprint: Data([0x01]),
+            fingerprint: TestFixtures.assetFingerprint(0x01),
             updatedAt: updatedAt,
             selectionVersion: version,
             resourceSignature: signature
         )
         let hashCache = LocalAssetHashCache(
-            assetFingerprint: Data([0x01]),
+            assetFingerprint: TestFixtures.assetFingerprint(0x01),
             resourceCount: 1,
             totalFileSizeBytes: 0,
             updatedAt: updatedAt,
@@ -181,7 +181,7 @@ final class LocalHashIndexTrustTests: XCTestCase {
         )
         let indexedRow = IndexedAssetRow(
             assetLocalIdentifier: "id",
-            assetFingerprint: Data([0x01]),
+            assetFingerprint: TestFixtures.assetFingerprint(0x01),
             totalFileSizeBytes: 0,
             updatedAt: updatedAt,
             selectionVersion: version,
@@ -189,7 +189,7 @@ final class LocalHashIndexTrustTests: XCTestCase {
         )
         let duplicateRow = DuplicateIndexedAssetRow(
             assetLocalIdentifier: "id",
-            assetFingerprint: Data([0x01]),
+            assetFingerprint: TestFixtures.assetFingerprint(0x01),
             updatedAt: updatedAt,
             selectionVersion: version,
             resourceSignature: signature

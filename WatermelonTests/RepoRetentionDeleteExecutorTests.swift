@@ -83,7 +83,7 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
         let target = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
         let changedBytes = try encodedCommitData(
             header: TestFixtures.makeCommitHeader(repoID: repoID, writerID: writerA, seq: 1, runID: runID, month: month),
-            ops: [addAssetOp(fingerprint: TestFixtures.fingerprint(0xF1), clock: 10)]
+            ops: [addAssetOp(fingerprint: TestFixtures.assetFingerprint(0xF1), clock: 10)]
         )
         let racing = PostDownloadMutationClient(inner: inner, targetPath: target) { client in
             await client.injectFile(path: target, data: changedBytes)
@@ -519,7 +519,7 @@ final class RepoRetentionDeleteExecutorTests: XCTestCase {
         )
     }
 
-    private func addAssetOp(fingerprint: Data, clock: UInt64) -> CommitOp {
+    private func addAssetOp(fingerprint: AssetFingerprint, clock: UInt64) -> CommitOp {
         CommitOp(opSeq: 0, clock: clock, body: .addAsset(CommitAddAssetBody(
             assetFingerprint: fingerprint,
             creationDateMs: nil,

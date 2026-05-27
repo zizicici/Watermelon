@@ -16,7 +16,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
 
-        let fp = TestFixtures.fingerprint(0xA1)
+        let fp = TestFixtures.assetFingerprint(0xA1)
         let hash = TestFixtures.fingerprint(0xB1)
         _ = try await commitWriter.write(
             header: makeHeader(seq: 1, clockMin: 100, clockMax: 100, writerID: writerA),
@@ -76,7 +76,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
 
-        let fp = TestFixtures.fingerprint(0xA2)
+        let fp = TestFixtures.assetFingerprint(0xA2)
 
         _ = try await commitWriter.write(
             header: makeHeader(seq: 1, clockMin: 100, clockMax: 100, writerID: writerA),
@@ -154,7 +154,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
 
-        let fp = TestFixtures.fingerprint(0xA3)
+        let fp = TestFixtures.assetFingerprint(0xA3)
 
         var covered = CoveredRanges()
         covered.add(writerID: writerB, range: ClosedSeqRange(low: 1, high: 1))
@@ -216,7 +216,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
 
-        let fp = TestFixtures.fingerprint(0xA4)
+        let fp = TestFixtures.assetFingerprint(0xA4)
 
         _ = try await commitWriter.write(
             header: makeHeader(seq: 1, clockMin: 100, clockMax: 100, writerID: writerA),
@@ -291,8 +291,8 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
 
-        let fpA = TestFixtures.fingerprint(0xA5)
-        let fpB = TestFixtures.fingerprint(0xA6)
+        let fpA = TestFixtures.assetFingerprint(0xA5)
+        let fpB = TestFixtures.assetFingerprint(0xA6)
         let hashH1 = TestFixtures.fingerprint(0xC5)
         let hashH2 = TestFixtures.fingerprint(0xC6)
         let sharedPath = "2026/03/shared.jpg"
@@ -404,7 +404,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         try await client.connect()
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
 
-        let fp = TestFixtures.fingerprint(0xD1)
+        let fp = TestFixtures.assetFingerprint(0xD1)
 
         // Snapshot covers only writerB seq 1, but the row stamp claims writerA seq=5,
         // outside coverage. The snapshot must be rejected so replay isn't poisoned.
@@ -453,7 +453,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         try await client.connect()
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
 
-        let fp = TestFixtures.fingerprint(0xD2)
+        let fp = TestFixtures.assetFingerprint(0xD2)
         let snapState = RepoMonthState(
             assets: [fp: SnapshotAssetRow(
                 assetFingerprint: fp, creationDateMs: nil, backedUpAtMs: 1,

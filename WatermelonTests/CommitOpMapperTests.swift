@@ -24,7 +24,7 @@ final class CommitOpMapperTests: XCTestCase {
 
     func testAddAssetOpRoundTrip() throws {
         let body = CommitAddAssetBody(
-            assetFingerprint: Data(repeating: 0xAB, count: 32),
+            assetFingerprint: AssetFingerprint(decoding: Data(repeating: 0xAB, count: 32))!,
             creationDateMs: 1778284800000,
             backedUpAtMs: 1778285000000,
             resources: [
@@ -51,7 +51,7 @@ final class CommitOpMapperTests: XCTestCase {
 
     func testTombstoneOpRoundTrip() throws {
         let body = CommitTombstoneBody(
-            assetFingerprint: Data(repeating: 0xDE, count: 32),
+            assetFingerprint: AssetFingerprint(decoding: Data(repeating: 0xDE, count: 32))!,
             reason: .verifyFailed
         )
         let op = CommitOp(opSeq: 7, clock: 9999, body: .tombstoneAsset(body))
@@ -200,7 +200,7 @@ final class CommitOpMapperTests: XCTestCase {
     func testCryptoOptionalRoundTrip() throws {
         let crypto = ResourceCryptoMetadata(scheme: "aes-gcm-256", payload: ["nonce": "abcdef"])
         let body = CommitAddAssetBody(
-            assetFingerprint: Data(repeating: 0xFF, count: 32),
+            assetFingerprint: AssetFingerprint(decoding: Data(repeating: 0xFF, count: 32))!,
             creationDateMs: nil,
             backedUpAtMs: 1,
             resources: [
@@ -233,7 +233,7 @@ final class CommitOpMapperTests: XCTestCase {
             lamportWatermark: UInt64(Int64.max) + 42
         )
         let body = CommitTombstoneBody(
-            assetFingerprint: Data(repeating: 0xBE, count: 32),
+            assetFingerprint: AssetFingerprint(decoding: Data(repeating: 0xBE, count: 32))!,
             reason: .verifyFailed,
             observedBasis: basis
         )

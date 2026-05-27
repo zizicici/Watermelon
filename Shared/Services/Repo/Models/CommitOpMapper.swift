@@ -36,7 +36,7 @@ enum CommitOpMapper {
         case .tombstoneAsset(let payload):
             kind = CommitOpKind.tombstoneAsset.rawValue
             var dict: [String: Any] = [
-                "assetFingerprint": payload.assetFingerprint.hexString,
+                "assetFingerprint": payload.assetFingerprint.rawValue.hexString,
                 "reason": payload.reason.rawValue
             ]
             var basisDict: [String: Any] = [
@@ -147,7 +147,7 @@ enum CommitOpMapper {
             body = .addAsset(try decodeAddAssetBody(bodyDict))
         case CommitOpKind.tombstoneAsset.rawValue:
             let fp = try mapValidation {
-                try RepoWireValidator.validateHash(
+                try RepoWireValidator.validateAssetFingerprint(
                     RepoWireValidator.requireString(bodyDict, "assetFingerprint"),
                     field: "assetFingerprint"
                 )
@@ -187,7 +187,7 @@ enum CommitOpMapper {
 
     private static func encodeAddAssetBody(_ body: CommitAddAssetBody) -> [String: Any] {
         var dict: [String: Any] = [
-            "assetFingerprint": body.assetFingerprint.hexString,
+            "assetFingerprint": body.assetFingerprint.rawValue.hexString,
             "backedUpAtMs": body.backedUpAtMs,
             "resources": body.resources.map(encodeResourceEntry)
         ]
@@ -215,7 +215,7 @@ enum CommitOpMapper {
 
     private static func decodeAddAssetBody(_ dict: [String: Any]) throws -> CommitAddAssetBody {
         let fp = try mapValidation {
-            try RepoWireValidator.validateHash(
+            try RepoWireValidator.validateAssetFingerprint(
                 RepoWireValidator.requireString(dict, "assetFingerprint"),
                 field: "assetFingerprint"
             )

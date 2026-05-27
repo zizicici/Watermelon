@@ -7,7 +7,7 @@ enum AssetIntegrityState: Sendable, Equatable {
     case metadataOnlyLeft
     case fullyMissing
     case phantom
-    case fingerprintMismatch(recomputed: Data)
+    case fingerprintMismatch(recomputed: AssetFingerprint)
 
     /// The asset can be downloaded into Photos and pass full-fingerprint verification.
     var allowsRestore: Bool {
@@ -49,7 +49,7 @@ extension SnapshotAssetResourceRow {
 enum RemoteAssetIntegrityClassifier {
     /// Callers supply file-presence truth so storage layout cannot skew classification.
     static func classify(
-        assetFingerprint: Data,
+        assetFingerprint: AssetFingerprint,
         links: [AssetIntegrityLink],
         isResourceAvailable: (Data) -> Bool
     ) -> AssetIntegrityState {
@@ -94,7 +94,7 @@ enum RemoteAssetIntegrityClassifier {
     }
 
     static func classify(
-        assetFingerprint: Data,
+        assetFingerprint: AssetFingerprint,
         links: [RemoteAssetResourceLink],
         isResourceAvailable: (Data) -> Bool
     ) -> AssetIntegrityState {
@@ -104,7 +104,7 @@ enum RemoteAssetIntegrityClassifier {
     }
 
     static func classify(
-        assetFingerprint: Data,
+        assetFingerprint: AssetFingerprint,
         links: [SnapshotAssetResourceRow],
         isResourceAvailable: (Data) -> Bool
     ) -> AssetIntegrityState {
@@ -114,7 +114,7 @@ enum RemoteAssetIntegrityClassifier {
     }
 
     static func isIncomplete(
-        assetFingerprint: Data,
+        assetFingerprint: AssetFingerprint,
         links: [AssetIntegrityLink],
         isResourceAvailable: (Data) -> Bool
     ) -> Bool {
@@ -124,7 +124,7 @@ enum RemoteAssetIntegrityClassifier {
     }
 
     static func isIncomplete(
-        assetFingerprint: Data,
+        assetFingerprint: AssetFingerprint,
         links: [RemoteAssetResourceLink],
         isResourceAvailable: (Data) -> Bool
     ) -> Bool {

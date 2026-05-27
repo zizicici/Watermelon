@@ -40,7 +40,7 @@ struct RepoTestBuilder {
         month: LibraryMonthKey,
         seq: UInt64 = 1,
         clock: UInt64? = nil,
-        fingerprint: Data,
+        fingerprint: AssetFingerprint,
         contentHash: Data,
         physicalRemotePath: String? = nil,
         role: Int = ResourceTypeCode.photo,
@@ -92,7 +92,7 @@ struct RepoTestBuilder {
         month: LibraryMonthKey,
         seq: UInt64 = 1,
         clock: UInt64? = nil,
-        fingerprint: Data,
+        fingerprint: AssetFingerprint,
         reason: CommitTombstoneBody.Reason = .verifyFailed,
         observedBasis: TombstoneObservationBasis? = nil
     ) async throws -> Self {

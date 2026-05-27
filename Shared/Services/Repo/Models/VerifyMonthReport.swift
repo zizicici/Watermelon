@@ -11,7 +11,7 @@ enum VerifyMonthReportKind: String, Sendable {
 
 struct VerifyMonthReportItem: Sendable, Hashable {
     let kind: VerifyMonthReportKind
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let detail: String?
 
     var allowsCleanup: Bool { kind.allowsCleanup }
@@ -77,7 +77,7 @@ extension VerifyMonthReportKind {
 extension VerifyMonthReportItem {
     static func from(
         state: AssetIntegrityState,
-        fingerprint: Data,
+        fingerprint: AssetFingerprint,
         linkCount: Int
     ) -> VerifyMonthReportItem? {
         guard let kind = VerifyMonthReportKind(from: state) else { return nil }
@@ -86,7 +86,7 @@ extension VerifyMonthReportItem {
         case .healthy:
             return nil
         case .phantom:
-            detail = "no asset_resources rows; fingerprint=\(fingerprint.hexString)"
+            detail = "no asset_resources rows; fingerprint=\(fingerprint)"
         case .fullyMissing:
             detail = "all \(linkCount) resources missing on remote"
         case .metadataOnlyLeft:

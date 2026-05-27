@@ -1,18 +1,18 @@
 import Foundation
 
 struct RemoteResumeCoverage: Sendable, Equatable {
-    let safeToSkipAssetFingerprintsByMonth: PerMonth<Set<Data>>
-    let healingRequiredAssetFingerprintsByMonth: PerMonth<Set<Data>>
+    let safeToSkipAssetFingerprintsByMonth: PerMonth<Set<AssetFingerprint>>
+    let healingRequiredAssetFingerprintsByMonth: PerMonth<Set<AssetFingerprint>>
 
     init(
-        safeToSkipAssetFingerprintsByMonth: PerMonth<Set<Data>> = PerMonth<Set<Data>>(),
-        healingRequiredAssetFingerprintsByMonth: PerMonth<Set<Data>> = PerMonth<Set<Data>>()
+        safeToSkipAssetFingerprintsByMonth: PerMonth<Set<AssetFingerprint>> = PerMonth<Set<AssetFingerprint>>(),
+        healingRequiredAssetFingerprintsByMonth: PerMonth<Set<AssetFingerprint>> = PerMonth<Set<AssetFingerprint>>()
     ) {
         self.safeToSkipAssetFingerprintsByMonth = safeToSkipAssetFingerprintsByMonth
         self.healingRequiredAssetFingerprintsByMonth = healingRequiredAssetFingerprintsByMonth
     }
 
-    func containsSafeToSkip(_ fingerprint: Data, in month: LibraryMonthKey) -> Bool {
+    func containsSafeToSkip(_ fingerprint: AssetFingerprint, in month: LibraryMonthKey) -> Bool {
         safeToSkipAssetFingerprintsByMonth.contains(fingerprint, in: month)
     }
 }
@@ -29,11 +29,11 @@ struct RemoteViewHandle: Sendable {
     let overlayFreshness: OverlayFreshness
     let producedAt: Date
 
-    var safeToSkipAssetFingerprintsByMonth: PerMonth<Set<Data>> {
+    var safeToSkipAssetFingerprintsByMonth: PerMonth<Set<AssetFingerprint>> {
         resumeCoverage.safeToSkipAssetFingerprintsByMonth
     }
 
-    var healingRequiredAssetFingerprintsByMonth: PerMonth<Set<Data>> {
+    var healingRequiredAssetFingerprintsByMonth: PerMonth<Set<AssetFingerprint>> {
         resumeCoverage.healingRequiredAssetFingerprintsByMonth
     }
 }

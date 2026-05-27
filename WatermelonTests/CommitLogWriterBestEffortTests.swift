@@ -42,7 +42,7 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         let ourOp = CommitOp(
             opSeq: 0, clock: 1,
             body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: TestFixtures.fingerprint(0xBB),  // different fp → different SHA
+                assetFingerprint: TestFixtures.assetFingerprint(0xBB),  // different fp → different SHA
                 reason: .userDeleted
             ))
         )
@@ -100,7 +100,7 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         let ourOp = CommitOp(
             opSeq: 0, clock: 1,
             body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: TestFixtures.fingerprint(0xCC),
+                assetFingerprint: TestFixtures.assetFingerprint(0xCC),
                 reason: .userDeleted
             ))
         )
@@ -181,7 +181,7 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         let peerOp = CommitOp(
             opSeq: 0, clock: 1,
             body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: TestFixtures.fingerprint(0xDD),
+                assetFingerprint: TestFixtures.assetFingerprint(0xDD),
                 reason: .userDeleted
             ))
         )
@@ -683,7 +683,7 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         CommitOp(
             opSeq: opSeq, clock: clock,
             body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: TestFixtures.fingerprint(0xAA),
+                assetFingerprint: TestFixtures.assetFingerprint(0xAA),
                 reason: .userDeleted
             ))
         )

@@ -16,7 +16,7 @@ final class AssetIntegrityKindAdapterTests: XCTestCase {
         XCTAssertEqual(VerifyMonthReportKind(from: .fullyMissing), .allResourcesGone)
         XCTAssertEqual(VerifyMonthReportKind(from: .metadataOnlyLeft), .metadataOnlyLeft)
         XCTAssertEqual(
-            VerifyMonthReportKind(from: .fingerprintMismatch(recomputed: TestFixtures.fingerprint(0x01))),
+            VerifyMonthReportKind(from: .fingerprintMismatch(recomputed: TestFixtures.assetFingerprint(0x01))),
             .fingerprintMismatch
         )
         XCTAssertEqual(
@@ -35,7 +35,7 @@ final class AssetIntegrityKindAdapterTests: XCTestCase {
     }
 
     func testItemAllowsCleanup_delegatesToKind() {
-        let fp = TestFixtures.fingerprint(0xAA)
+        let fp = TestFixtures.assetFingerprint(0xAA)
         let cases: [VerifyMonthReportKind] = [
             .phantomAsset, .allResourcesGone, .metadataOnlyLeft,
             .partiallyMissing, .fingerprintMismatch, .verificationIncomplete,
@@ -52,7 +52,7 @@ final class AssetIntegrityKindAdapterTests: XCTestCase {
             .phantom,
             .fullyMissing,
             .metadataOnlyLeft,
-            .fingerprintMismatch(recomputed: TestFixtures.fingerprint(0x11)),
+            .fingerprintMismatch(recomputed: TestFixtures.assetFingerprint(0x11)),
             .partiallyMissing(missingHashes: [TestFixtures.fingerprint(0x22)]),
         ]
         for state in states {
@@ -64,18 +64,18 @@ final class AssetIntegrityKindAdapterTests: XCTestCase {
     func testItemFactory_healthy_returnsNil() {
         let result = VerifyMonthReportItem.from(
             state: .healthy,
-            fingerprint: TestFixtures.fingerprint(0x33),
+            fingerprint: TestFixtures.assetFingerprint(0x33),
             linkCount: 0
         )
         XCTAssertNil(result)
     }
 
     func testItemFactory_detailStrings_matchPreEditFormat() {
-        let fp = TestFixtures.fingerprint(0x44)
+        let fp = TestFixtures.assetFingerprint(0x44)
 
         let phantom = VerifyMonthReportItem.from(state: .phantom, fingerprint: fp, linkCount: 0)
         XCTAssertEqual(phantom?.kind, .phantomAsset)
-        XCTAssertEqual(phantom?.detail, "no asset_resources rows; fingerprint=\(fp.hexString)")
+        XCTAssertEqual(phantom?.detail, "no asset_resources rows; fingerprint=\(fp)")
 
         let fullyMissing = VerifyMonthReportItem.from(state: .fullyMissing, fingerprint: fp, linkCount: 3)
         XCTAssertEqual(fullyMissing?.kind, .allResourcesGone)
@@ -86,7 +86,7 @@ final class AssetIntegrityKindAdapterTests: XCTestCase {
         XCTAssertEqual(metadataOnly?.detail, "only adjustment-data roles remain")
 
         let mismatch = VerifyMonthReportItem.from(
-            state: .fingerprintMismatch(recomputed: TestFixtures.fingerprint(0x55)),
+            state: .fingerprintMismatch(recomputed: TestFixtures.assetFingerprint(0x55)),
             fingerprint: fp,
             linkCount: 2
         )

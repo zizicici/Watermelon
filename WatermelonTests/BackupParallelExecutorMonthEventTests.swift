@@ -3,12 +3,12 @@ import XCTest
 
 final class BackupParallelExecutorMonthEventTests: XCTestCase {
 
-    private static let probeAssets: Set<Data> = [
-        TestFixtures.fingerprint(0xC1),
-        TestFixtures.fingerprint(0xC2)
+    private static let probeAssets: Set<AssetFingerprint> = [
+        TestFixtures.assetFingerprint(0xC1),
+        TestFixtures.assetFingerprint(0xC2)
     ]
-    private static let probeTombstones: Set<Data> = [
-        TestFixtures.fingerprint(0xD1)
+    private static let probeTombstones: Set<AssetFingerprint> = [
+        TestFixtures.assetFingerprint(0xD1)
     ]
 
     private func makePartialOutcome(underlying: Error) -> V2MonthFlushOutcome {

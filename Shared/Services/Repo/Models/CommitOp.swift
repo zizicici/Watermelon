@@ -41,7 +41,7 @@ struct CommitResourceEntry: Equatable, Sendable {
 }
 
 struct CommitAddAssetBody: Equatable, Sendable {
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let creationDateMs: Int64?
     let backedUpAtMs: Int64
     let resources: [CommitResourceEntry]
@@ -73,11 +73,11 @@ struct CommitTombstoneBody: Equatable, Sendable {
         case verifyFailed
         case manifestOrphan
     }
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let reason: Reason
     let observedBasis: TombstoneObservationBasis
 
-    init(assetFingerprint: Data, reason: Reason, observedBasis: TombstoneObservationBasis) {
+    init(assetFingerprint: AssetFingerprint, reason: Reason, observedBasis: TombstoneObservationBasis) {
         self.assetFingerprint = assetFingerprint
         self.reason = reason
         self.observedBasis = observedBasis

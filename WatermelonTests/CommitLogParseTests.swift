@@ -18,7 +18,7 @@ final class CommitLogParseTests: XCTestCase {
 
     private func sampleOp(seq: Int, clock: UInt64) -> CommitOp {
         // Wire boundary requires 32-byte SHA-256 fingerprints; fill with `seq` for distinguishability.
-        let fp = Data(repeating: UInt8(seq), count: 32)
+        let fp = AssetFingerprint(decoding: Data(repeating: UInt8(seq), count: 32))!
         return CommitOp(opSeq: seq, clock: clock, body: .tombstoneAsset(
             CommitTombstoneBody(assetFingerprint: fp, reason: .userDeleted)
         ))

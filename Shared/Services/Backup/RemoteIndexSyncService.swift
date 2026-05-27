@@ -659,12 +659,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         }
     }
 
-    func resumeSafeToSkipAssetFingerprintsByMonth() -> PerMonth<Set<Data>> {
+    func resumeSafeToSkipAssetFingerprintsByMonth() -> PerMonth<Set<AssetFingerprint>> {
         resumeCoverageForCurrentView().safeToSkipAssetFingerprintsByMonth
     }
 
     private static func resumeCoverage(from snapshot: RemoteLibrarySnapshot) -> RemoteResumeCoverage {
-        var linksByMonthFP: [LibraryMonthKey: [Data: [RemoteAssetResourceLink]]] = [:]
+        var linksByMonthFP: [LibraryMonthKey: [AssetFingerprint: [RemoteAssetResourceLink]]] = [:]
         for link in snapshot.assetResourceLinks {
             let month = LibraryMonthKey(year: link.year, month: link.month)
             linksByMonthFP[month, default: [:]][link.assetFingerprint, default: []].append(link)
@@ -679,7 +679,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         for entry in snapshot.presence.entries where !entry.value.missingHashes.isEmpty {
             availableHashesByMonth[entry.month, default: []].subtract(entry.value.missingHashes)
         }
-        var survivorKeySetsByMonthFP: [LibraryMonthKey: [Data: Set<AssetResourceLinkKey>]] = [:]
+        var survivorKeySetsByMonthFP: [LibraryMonthKey: [AssetFingerprint: Set<AssetResourceLinkKey>]] = [:]
         for (month, linksByFingerprint) in linksByMonthFP {
             for (fingerprint, links) in linksByFingerprint {
                 let keySet = AssetResourceLinkSetPredicate.keys(fromLinks: links)
@@ -688,7 +688,7 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             }
         }
 
-        var healthyKeySetsByMonthFP: [LibraryMonthKey: [Data: Set<AssetResourceLinkKey>]] = [:]
+        var healthyKeySetsByMonthFP: [LibraryMonthKey: [AssetFingerprint: Set<AssetResourceLinkKey>]] = [:]
         for asset in snapshot.assets {
             let month = LibraryMonthKey(year: asset.year, month: asset.month)
             let links = linksByMonthFP[month]?[asset.assetFingerprint] ?? []
@@ -705,11 +705,11 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             }
         }
 
-        var safeToSkipByMonth = PerMonth<Set<Data>>()
-        var healingRequiredByMonth = PerMonth<Set<Data>>()
+        var safeToSkipByMonth = PerMonth<Set<AssetFingerprint>>()
+        var healingRequiredByMonth = PerMonth<Set<AssetFingerprint>>()
         for (month, keySetsByFingerprint) in healthyKeySetsByMonthFP {
             let survivorKeySetsByFingerprint = survivorKeySetsByMonthFP[month] ?? [:]
-            var fingerprintsByResourceKey: [AssetResourceLinkKey: Set<Data>] = [:]
+            var fingerprintsByResourceKey: [AssetResourceLinkKey: Set<AssetFingerprint>] = [:]
             fingerprintsByResourceKey.reserveCapacity(
                 survivorKeySetsByFingerprint.values.reduce(0) { $0 + $1.count }
             )
@@ -720,10 +720,10 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             }
 
             var safeToSkip = Set(keySetsByFingerprint.keys)
-            var healingRequired: Set<Data> = []
+            var healingRequired: Set<AssetFingerprint> = []
             healingRequired.reserveCapacity(keySetsByFingerprint.count)
             for (fingerprint, incomingKeys) in keySetsByFingerprint {
-                var possibleSurvivors: Set<Data> = []
+                var possibleSurvivors: Set<AssetFingerprint> = []
                 for key in incomingKeys {
                     if let bucket = fingerprintsByResourceKey[key] {
                         possibleSurvivors.formUnion(bucket)

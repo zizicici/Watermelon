@@ -472,7 +472,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
             clockMax: 1
         )
         let op = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
-            assetFingerprint: Data(repeating: 0xAB, count: 32),
+            assetFingerprint: AssetFingerprint(decoding: Data(repeating: 0xAB, count: 32))!,
             creationDateMs: nil, backedUpAtMs: 1, resources: []
         )))
         _ = try await commitWriter.write(
@@ -541,7 +541,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
                         clockMax: 1
                     )
                     let op = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
-                        assetFingerprint: Data(repeating: 0xAC, count: 32),
+                        assetFingerprint: AssetFingerprint(decoding: Data(repeating: 0xAC, count: 32))!,
                         creationDateMs: nil, backedUpAtMs: 1, resources: []
                     )))
                     _ = try await commitWriter.write(header: header, ops: [op], month: month, respectTaskCancellation: false)
@@ -595,7 +595,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
                         clockMax: 1
                     )
                     let op = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
-                        assetFingerprint: Data(repeating: 0xAD, count: 32),
+                        assetFingerprint: AssetFingerprint(decoding: Data(repeating: 0xAD, count: 32))!,
                         creationDateMs: nil, backedUpAtMs: 1, resources: []
                     )))
                     _ = try await commitWriter.write(header: header, ops: [op], month: month, respectTaskCancellation: false)
@@ -1126,7 +1126,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: repoID)
         try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: writerID)
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
-        let fp = TestFixtures.fingerprint(0x31)
+        let fp = TestFixtures.assetFingerprint(0x31)
         let hash = TestFixtures.fingerprint(0xA1)
         let body = CommitAddAssetBody(
             assetFingerprint: fp,

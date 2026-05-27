@@ -82,7 +82,7 @@ final class HomeAlbumMatchingTests: XCTestCase {
     /// the asset's identity is corrupt; restoring would seed the local index
     /// with the wrong fingerprint and lock out the real asset.
     func testFingerprintMismatchAsset_isNotRestorable() {
-        let bogusFp = TestFixtures.fingerprint(0xA4)
+        let bogusFp = TestFixtures.assetFingerprint(0xA4)
         let hash = TestFixtures.fingerprint(0xB4)
         let asset = makeAsset(fp: bogusFp)
         let resource = makeResource(hash: hash)
@@ -103,7 +103,7 @@ final class HomeAlbumMatchingTests: XCTestCase {
     /// emitted) — but if a future code path emits one, it must not be restored.
     func testPhantomAsset_emittedItemNotRestorable() {
         // Force a phantom: link references a hash that has no resource row.
-        let fp = TestFixtures.fingerprint(0xA5)
+        let fp = TestFixtures.assetFingerprint(0xA5)
         let missingHash = TestFixtures.fingerprint(0xB5)
         let asset = makeAsset(fp: fp)
         let link = makeLink(fp: fp, hash: missingHash, role: ResourceTypeCode.photo)
@@ -174,7 +174,7 @@ final class HomeAlbumMatchingTests: XCTestCase {
     }
 
 
-    private func makeAsset(fp: Data) -> RemoteManifestAsset {
+    private func makeAsset(fp: AssetFingerprint) -> RemoteManifestAsset {
         RemoteManifestAsset(
             year: year, month: month,
             assetFingerprint: fp,
@@ -196,7 +196,7 @@ final class HomeAlbumMatchingTests: XCTestCase {
         )
     }
 
-    private func makeLink(fp: Data, hash: Data, role: Int) -> RemoteAssetResourceLink {
+    private func makeLink(fp: AssetFingerprint, hash: Data, role: Int) -> RemoteAssetResourceLink {
         RemoteAssetResourceLink(
             year: year, month: month,
             assetFingerprint: fp, resourceHash: hash,

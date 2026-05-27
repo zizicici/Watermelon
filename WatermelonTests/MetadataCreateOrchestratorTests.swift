@@ -518,7 +518,7 @@ final class MetadataCreateOrchestratorTests: XCTestCase {
         let op = CommitOp(
             opSeq: 0, clock: clock,
             body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: TestFixtures.fingerprint(0xAA), reason: .userDeleted
+                assetFingerprint: TestFixtures.assetFingerprint(0xAA), reason: .userDeleted
             ))
         )
         var lines: [String] = []
@@ -556,7 +556,7 @@ final class MetadataCreateOrchestratorTests: XCTestCase {
         let op = CommitOp(
             opSeq: 0, clock: 1,
             body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: TestFixtures.fingerprint(0xAA), reason: .userDeleted
+                assetFingerprint: TestFixtures.assetFingerprint(0xAA), reason: .userDeleted
             ))
         )
 
@@ -598,7 +598,7 @@ final class MetadataCreateOrchestratorTests: XCTestCase {
         let op = CommitOp(
             opSeq: 0, clock: 1,
             body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: TestFixtures.fingerprint(0xCC), reason: .userDeleted
+                assetFingerprint: TestFixtures.assetFingerprint(0xCC), reason: .userDeleted
             ))
         )
 
@@ -643,7 +643,7 @@ final class MetadataCreateOrchestratorTests: XCTestCase {
         let op = CommitOp(
             opSeq: 0, clock: 1,
             body: .tombstoneAsset(CommitTombstoneBody(
-                assetFingerprint: TestFixtures.fingerprint(0xAA), reason: .userDeleted
+                assetFingerprint: TestFixtures.assetFingerprint(0xAA), reason: .userDeleted
             ))
         )
         do {

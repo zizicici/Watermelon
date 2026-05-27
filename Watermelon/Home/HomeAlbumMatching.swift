@@ -6,7 +6,7 @@ private let albumMatchingLog = Logger(subsystem: "com.zizicici.watermelon", cate
 
 struct RemoteAlbumItem {
     let id: String
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let creationDate: Date
     let resources: [RemoteManifestResource]
     let instances: [RemoteAssetResourceInstance]

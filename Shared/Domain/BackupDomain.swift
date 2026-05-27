@@ -24,7 +24,7 @@ enum BackupItemStatus: String, Codable {
 struct BackupItemEvent {
     // Ephemeral per-run UI string. Never persisted to remote storage.
     let assetLocalIdentifier: String
-    let assetFingerprint: Data?
+    let assetFingerprint: AssetFingerprint?
     let displayName: String
     let resourceDate: Date?
     let status: BackupItemStatus

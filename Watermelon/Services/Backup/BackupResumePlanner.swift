@@ -176,7 +176,7 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
 
     func assetIDsCoveredByRemote(
         records: [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord],
-        safeToSkip: PerMonth<Set<Data>>
+        safeToSkip: PerMonth<Set<AssetFingerprint>>
     ) async throws -> Set<PhotoKitLocalIdentifier> {
         let entries = Array(records)
         var covered: Set<PhotoKitLocalIdentifier> = []
@@ -196,7 +196,7 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
 
     private func assetIDsCoveredByRemoteChunk(
         records: [(PhotoKitLocalIdentifier, LocalAssetFingerprintRecord)],
-        safeToSkip: PerMonth<Set<Data>>
+        safeToSkip: PerMonth<Set<AssetFingerprint>>
     ) async -> Set<PhotoKitLocalIdentifier> {
         await withCheckedContinuation { continuation in
             queue.async {

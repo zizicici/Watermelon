@@ -40,7 +40,7 @@ final class BackupResumePlannerTests: XCTestCase {
         XCTAssertEqual(pending, ["b", "c"])
     }
 
-    private func freshHandle(_ safeToSkip: PerMonth<Set<Data>>) -> RemoteViewHandle {
+    private func freshHandle(_ safeToSkip: PerMonth<Set<AssetFingerprint>>) -> RemoteViewHandle {
         RemoteViewHandle(
             revision: 1,
             resumeCoverage: RemoteResumeCoverage(safeToSkipAssetFingerprintsByMonth: safeToSkip),
@@ -62,7 +62,7 @@ final class BackupResumePlannerTests: XCTestCase {
     /// derive the asset's month and conservatively keeps the asset pending. The
     /// production skip path requires real PHAssets and is covered in integration tests.
     func testRetryMode_perMonthDedup_keepsPendingWhenMonthUnknown() async throws {
-        let fp1 = TestFixtures.fingerprint(0xAA)
+        let fp1 = TestFixtures.assetFingerprint(0xAA)
         try hashIndex.upsertAssetFingerprint(
             assetLocalIdentifier: "a", assetFingerprint: fp1,
             resourceCount: 1, totalFileSizeBytes: 100, modificationDateMs: nil
@@ -72,7 +72,7 @@ final class BackupResumePlannerTests: XCTestCase {
             photoLibraryService: PhotoLibraryService(),
             hashIndexRepository: hashIndex
         )
-        var byMonth = PerMonth<Set<Data>>()
+        var byMonth = PerMonth<Set<AssetFingerprint>>()
         byMonth.insert(fp1, for: LibraryMonthKey(year: 2026, month: 5))
         let plan = try await planner.makePlan(
             pausedMode: .retry(assetIDs: ["a", "b"]),
@@ -97,7 +97,7 @@ final class BackupResumePlannerTests: XCTestCase {
         let plan = try await planner.makePlan(
             pausedMode: .retry(assetIDs: ["a", "b"]),
             completedAssetIDs: ["a"],
-            dedupMode: .v2(freshHandle(PerMonth<Set<Data>>()))
+            dedupMode: .v2(freshHandle(PerMonth<Set<AssetFingerprint>>()))
         )
         guard case .retry(let pending) = plan.resumedExecutionMode else {
             XCTFail("expected .retry, got \(String(describing: plan.resumedExecutionMode))")

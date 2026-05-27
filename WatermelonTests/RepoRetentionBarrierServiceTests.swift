@@ -361,7 +361,7 @@ final class RepoRetentionBarrierServiceTests: XCTestCase {
         assetByte: UInt8
     ) async throws {
         let op = CommitOp(opSeq: 0, clock: clock, body: .addAsset(CommitAddAssetBody(
-            assetFingerprint: TestFixtures.fingerprint(assetByte),
+            assetFingerprint: TestFixtures.assetFingerprint(assetByte),
             creationDateMs: nil,
             backedUpAtMs: Int64(clock),
             resources: []
@@ -430,7 +430,7 @@ final class RepoRetentionBarrierServiceTests: XCTestCase {
     }
 
     private func monthState() -> RepoMonthState {
-        let fp = TestFixtures.fingerprint(0xB1)
+        let fp = TestFixtures.assetFingerprint(0xB1)
         var state = RepoMonthState.empty
         state.assets[fp] = SnapshotAssetRow(
             assetFingerprint: fp,

@@ -1,16 +1,16 @@
 import Foundation
 
 struct RepoMonthState: Equatable, Sendable {
-    var assets: [Data: SnapshotAssetRow]
+    var assets: [AssetFingerprint: SnapshotAssetRow]
     var resources: [String: SnapshotResourceRow]
     var assetResources: [AssetResourceKey: SnapshotAssetResourceRow]
-    var deletedAssetStamps: [Data: OpStamp]
+    var deletedAssetStamps: [AssetFingerprint: OpStamp]
 
     init(
-        assets: [Data: SnapshotAssetRow],
+        assets: [AssetFingerprint: SnapshotAssetRow],
         resources: [String: SnapshotResourceRow],
         assetResources: [AssetResourceKey: SnapshotAssetResourceRow],
-        deletedAssetStamps: [Data: OpStamp]
+        deletedAssetStamps: [AssetFingerprint: OpStamp]
     ) {
         self.assets = assets
         self.resources = resources
@@ -29,7 +29,7 @@ struct RepoMonthState: Equatable, Sendable {
 }
 
 struct AssetResourceKey: Hashable, Sendable {
-    let assetFingerprint: Data
+    let assetFingerprint: AssetFingerprint
     let role: Int
     let slot: Int
 }

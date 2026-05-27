@@ -29,7 +29,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testCommitVanishedThenReappearsAfterRestartSucceeds() async throws {
         let client = try await makeClient()
-        let fp = TestFixtures.fingerprint(0x10)
+        let fp = TestFixtures.assetFingerprint(0x10)
         try await writeAddCommit(client: client, seq: 1, fingerprint: fp)
         let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
         let race = ReadRaceClient(inner: client)
@@ -44,7 +44,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testCommitVanishedThenNewSnapshotCoversAfterRestartSucceeds() async throws {
         let client = try await makeClient()
-        let fp = TestFixtures.fingerprint(0x11)
+        let fp = TestFixtures.assetFingerprint(0x11)
         try await writeAddCommit(client: client, seq: 1, fingerprint: fp)
         let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
         let race = ReadRaceClient(inner: client)
@@ -64,7 +64,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testCommitStillMissingAfterRestartFailsClosed() async throws {
         let client = try await makeClient()
-        try await writeAddCommit(client: client, seq: 1, fingerprint: TestFixtures.fingerprint(0x12))
+        try await writeAddCommit(client: client, seq: 1, fingerprint: TestFixtures.assetFingerprint(0x12))
         let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
         let race = ReadRaceClient(inner: client)
         race.setDownloadHook(path: commitPath) { _ in
@@ -86,7 +86,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testSecondCommitDisappearanceIsBounded() async throws {
         let client = try await makeClient()
-        try await writeAddCommit(client: client, seq: 1, fingerprint: TestFixtures.fingerprint(0x13))
+        try await writeAddCommit(client: client, seq: 1, fingerprint: TestFixtures.assetFingerprint(0x13))
         let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
         let race = ReadRaceClient(inner: client)
         race.setDownloadHook(path: commitPath, once: false) { _ in throw Self.notFoundError() }
@@ -101,7 +101,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testUnclassifiedCommitReadErrorFailsWithoutRestart() async throws {
         let client = try await makeClient()
-        try await writeAddCommit(client: client, seq: 1, fingerprint: TestFixtures.fingerprint(0x14))
+        try await writeAddCommit(client: client, seq: 1, fingerprint: TestFixtures.assetFingerprint(0x14))
         let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
         let race = ReadRaceClient(inner: client)
         race.setDownloadHook(path: commitPath) { _ in
@@ -119,7 +119,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testCancellationPropagatesFromPassOneAndPassTwo() async throws {
         let passOneClient = try await makeClient()
-        try await writeAddCommit(client: passOneClient, seq: 1, fingerprint: TestFixtures.fingerprint(0x15))
+        try await writeAddCommit(client: passOneClient, seq: 1, fingerprint: TestFixtures.assetFingerprint(0x15))
         let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
         let passOneRace = ReadRaceClient(inner: passOneClient)
         passOneRace.setDownloadHook(path: commitPath) { _ in throw CancellationError() }
@@ -132,7 +132,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
         }
 
         let passTwoClient = try await makeClient()
-        try await writeAddCommit(client: passTwoClient, seq: 1, fingerprint: TestFixtures.fingerprint(0x16))
+        try await writeAddCommit(client: passTwoClient, seq: 1, fingerprint: TestFixtures.assetFingerprint(0x16))
         let passTwoRace = ReadRaceClient(inner: passTwoClient)
         let calls = LockedCounter()
         passTwoRace.setDownloadHook(path: commitPath, once: false) { _ in
@@ -150,7 +150,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testCorruptCommitAndHeaderMismatchDoNotRestart() async throws {
         let corruptClient = try await makeClient()
-        try await writeAddCommit(client: corruptClient, seq: 1, fingerprint: TestFixtures.fingerprint(0x17))
+        try await writeAddCommit(client: corruptClient, seq: 1, fingerprint: TestFixtures.assetFingerprint(0x17))
         let corruptPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
         await corruptClient.corrupt(path: corruptPath, with: Data("not-jsonl".utf8))
         let corruptRace = ReadRaceClient(inner: corruptClient)
@@ -161,7 +161,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
         XCTAssertEqual(corruptRace.listCount(path: RepoLayout.commitsDirectoryPath(base: basePath)), 1)
 
         let mismatchClient = try await makeClient()
-        try await writeAddCommit(client: mismatchClient, seq: 2, fingerprint: TestFixtures.fingerprint(0x18))
+        try await writeAddCommit(client: mismatchClient, seq: 2, fingerprint: TestFixtures.assetFingerprint(0x18))
         let source = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 2)
         let target = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
         let files = await mismatchClient.snapshotFiles()
@@ -178,7 +178,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testSnapshotVanishedThenReappearsSucceeds() async throws {
         let client = try await makeClient()
-        let fp = TestFixtures.fingerprint(0x20)
+        let fp = TestFixtures.assetFingerprint(0x20)
         try await writeSnapshot(client: client, lamport: 100, writerID: writerA, coveredSeqs: [], fingerprints: [fp])
         let snapshotPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 100, writerID: writerA, runID: runID)
         let race = ReadRaceClient(inner: client)
@@ -193,8 +193,8 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testSnapshotVanishedDowngradeFailsClosed() async throws {
         let client = try await makeClient()
-        try await writeSnapshot(client: client, lamport: 100, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.fingerprint(0x21)])
-        try await writeSnapshot(client: client, lamport: 200, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.fingerprint(0x22)])
+        try await writeSnapshot(client: client, lamport: 100, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.assetFingerprint(0x21)])
+        try await writeSnapshot(client: client, lamport: 200, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.assetFingerprint(0x22)])
         let highPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 200, writerID: writerA, runID: runID)
         let race = ReadRaceClient(inner: client)
         race.setDownloadHook(path: highPath) { _ in
@@ -216,12 +216,12 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testSnapshotVanishedRecoveredBySameLamportHigherWriterSucceeds() async throws {
         let client = try await makeClient()
-        try await writeSnapshot(client: client, lamport: 200, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.fingerprint(0x23)])
+        try await writeSnapshot(client: client, lamport: 200, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.assetFingerprint(0x23)])
         let highPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 200, writerID: writerA, runID: runID)
         let race = ReadRaceClient(inner: client)
         race.setDownloadHook(path: highPath) { _ in
             try await client.delete(path: highPath)
-            try await self.writeSnapshot(client: client, lamport: 200, writerID: self.writerB, coveredSeqs: [], fingerprints: [TestFixtures.fingerprint(0x24)])
+            try await self.writeSnapshot(client: client, lamport: 200, writerID: self.writerB, coveredSeqs: [], fingerprints: [TestFixtures.assetFingerprint(0x24)])
             throw Self.notFoundError()
         }
 
@@ -233,7 +233,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testRepeatedSnapshotDisappearanceIsBounded() async throws {
         let client = try await makeClient()
-        try await writeSnapshot(client: client, lamport: 100, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.fingerprint(0x25)])
+        try await writeSnapshot(client: client, lamport: 100, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.assetFingerprint(0x25)])
         let snapshotPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 100, writerID: writerA, runID: runID)
         let race = ReadRaceClient(inner: client)
         race.setDownloadHook(path: snapshotPath, once: false) { _ in throw Self.notFoundError() }
@@ -248,9 +248,9 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testReadableCorruptSnapshotStillFallsBackWithoutRestart() async throws {
         let client = try await makeClient()
-        let olderFP = TestFixtures.fingerprint(0x26)
+        let olderFP = TestFixtures.assetFingerprint(0x26)
         try await writeSnapshot(client: client, lamport: 100, writerID: writerA, coveredSeqs: [], fingerprints: [olderFP])
-        try await writeSnapshot(client: client, lamport: 200, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.fingerprint(0x27)])
+        try await writeSnapshot(client: client, lamport: 200, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.assetFingerprint(0x27)])
         let highPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 200, writerID: writerA, runID: runID)
         await client.corrupt(path: highPath, with: Data("corrupt".utf8))
         let race = ReadRaceClient(inner: client)
@@ -265,7 +265,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
     func testMonthFilterDoesNotReadRacedMetadataFromOtherMonth() async throws {
         let client = try await makeClient()
         let otherMonth = LibraryMonthKey(year: 2026, month: 2)
-        try await writeSnapshot(client: client, month: otherMonth, lamport: 100, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.fingerprint(0x28)])
+        try await writeSnapshot(client: client, month: otherMonth, lamport: 100, writerID: writerA, coveredSeqs: [], fingerprints: [TestFixtures.assetFingerprint(0x28)])
         let otherPath = RepoLayout.snapshotFilePath(base: basePath, month: otherMonth, lamport: 100, writerID: writerA, runID: runID)
         let race = ReadRaceClient(inner: client)
         race.setDownloadHook(path: otherPath) { _ in throw Self.notFoundError() }
@@ -334,8 +334,8 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
 
     func testIdentityScanIgnoresListedThenVanishedMetadata() async throws {
         let client = try await makeClient()
-        try await writeAddCommit(client: client, seq: 1, fingerprint: TestFixtures.fingerprint(0x30))
-        try await writeAddCommit(client: client, seq: 2, fingerprint: TestFixtures.fingerprint(0x31))
+        try await writeAddCommit(client: client, seq: 1, fingerprint: TestFixtures.assetFingerprint(0x30))
+        try await writeAddCommit(client: client, seq: 2, fingerprint: TestFixtures.assetFingerprint(0x31))
         let vanishedPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
         await client.injectDownloadError(.notFound, for: vanishedPath)
         let identity = RepoIdentity(database: databaseManager)
@@ -364,10 +364,10 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
     func testCrossMonthObservedSeqDoesNotRecoverVanishedCommit() async throws {
         let otherMonth = LibraryMonthKey(year: 2026, month: 2)
         let client = try await makeClient()
-        let fp1 = TestFixtures.fingerprint(0x40)
+        let fp1 = TestFixtures.assetFingerprint(0x40)
         try await writeAddCommit(client: client, seq: 1, fingerprint: fp1)
 
-        let fpOther = TestFixtures.fingerprint(0x41)
+        let fpOther = TestFixtures.assetFingerprint(0x41)
         let otherWriter = CommitLogWriter(client: client, basePath: basePath)
         let otherOp = CommitOp(opSeq: 0, clock: 10, body: .addAsset(CommitAddAssetBody(
             assetFingerprint: fpOther,
@@ -438,7 +438,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
     private func writeAddCommit(
         client: InMemoryRemoteStorageClient,
         seq: UInt64,
-        fingerprint: Data
+        fingerprint: AssetFingerprint
     ) async throws {
         let writer = CommitLogWriter(client: client, basePath: basePath)
         let op = CommitOp(opSeq: 0, clock: seq, body: .addAsset(CommitAddAssetBody(
@@ -467,7 +467,7 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
         lamport: UInt64,
         writerID: String,
         coveredSeqs: [UInt64],
-        fingerprints: [Data]
+        fingerprints: [AssetFingerprint]
     ) async throws {
         let month = month ?? self.month
         var covered = CoveredRanges.empty

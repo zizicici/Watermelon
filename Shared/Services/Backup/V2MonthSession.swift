@@ -7,7 +7,7 @@ final class V2MonthSession: BackupMonthStore {
     enum FlushError: Error {
         case concurrentFlushRejected
         /// Commit landed; caller must mark these fingerprints committed before rethrowing.
-        case snapshotWriteFailed(committedAssets: Set<Data>, committedTombstones: Set<Data>, underlying: Error)
+        case snapshotWriteFailed(committedAssets: Set<AssetFingerprint>, committedTombstones: Set<AssetFingerprint>, underlying: Error)
 
         /// SnapshotWriter can wrap CancellationError.
         var cancellationCause: CancellationError? {
@@ -166,11 +166,11 @@ final class V2MonthSession: BackupMonthStore {
     }
 
 
-    func containsAssetFingerprint(_ fingerprint: Data) -> Bool {
+    func containsAssetFingerprint(_ fingerprint: AssetFingerprint) -> Bool {
         indexes.containsAssetFingerprint(fingerprint)
     }
 
-    func containsDurableAssetFingerprint(_ fingerprint: Data) -> Bool {
+    func containsDurableAssetFingerprint(_ fingerprint: AssetFingerprint) -> Bool {
         // Pending adds are in-memory only until the batch commit covering them lands;
         // cache-reuse short-circuits that trust durability must reject those.
         indexes.containsAssetFingerprint(fingerprint)
@@ -183,7 +183,7 @@ final class V2MonthSession: BackupMonthStore {
 
     func findStrictSubsetAssetFingerprints(
         forResourceKeys keys: Set<AssetResourceLinkKey>
-    ) -> [Data] {
+    ) -> [AssetFingerprint] {
         indexes.findStrictSubsetAssetFingerprints(forResourceKeys: keys)
     }
 
@@ -193,7 +193,7 @@ final class V2MonthSession: BackupMonthStore {
         indexes.hasStrictSubsetAssetFingerprint(forResourceKeys: keys)
     }
 
-    func isAssetIncomplete(_ fingerprint: Data) -> Bool {
+    func isAssetIncomplete(_ fingerprint: AssetFingerprint) -> Bool {
         indexes.isAssetIncomplete(fingerprint)
     }
 
@@ -239,7 +239,7 @@ final class V2MonthSession: BackupMonthStore {
     func upsertAsset(
         _ asset: RemoteManifestAsset,
         links: [RemoteAssetResourceLink],
-        replacingSubsetFingerprints: Set<Data>
+        replacingSubsetFingerprints: Set<AssetFingerprint>
     ) throws {
         try indexes.upsertAsset(asset, links: links, replacingSubsetFingerprints: replacingSubsetFingerprints)
         dirty = true
@@ -275,7 +275,7 @@ final class V2MonthSession: BackupMonthStore {
         }
         if !ignoreCancellation { try Task.checkCancellation() }
 
-        let drainResult: (lastSeq: UInt64?, committedAssets: Set<Data>, committedTombstones: Set<Data>)
+        let drainResult: (lastSeq: UInt64?, committedAssets: Set<AssetFingerprint>, committedTombstones: Set<AssetFingerprint>)
         do {
             drainResult = try await commitPendingAssetDrainLocked(force: true, ignoreCancellation: ignoreCancellation)
         } catch {
@@ -352,14 +352,14 @@ final class V2MonthSession: BackupMonthStore {
     private func commitPendingAssetDrainLocked(
         force: Bool,
         ignoreCancellation: Bool
-    ) async throws -> (lastSeq: UInt64?, committedAssets: Set<Data>, committedTombstones: Set<Data>) {
+    ) async throws -> (lastSeq: UInt64?, committedAssets: Set<AssetFingerprint>, committedTombstones: Set<AssetFingerprint>) {
         guard let services = v2Services else {
             return (nil, [], [])
         }
         let threshold = BackupV2Constants.batchFlushInterval
         var lastSeq: UInt64?
-        var committedAssets: Set<Data> = []
-        var committedTombstones: Set<Data> = []
+        var committedAssets: Set<AssetFingerprint> = []
+        var committedTombstones: Set<AssetFingerprint> = []
         while indexes.hasUncommittedOps {
             if !force, indexes.pendingOpsCount < threshold {
                 break

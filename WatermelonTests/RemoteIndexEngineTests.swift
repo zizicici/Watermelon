@@ -12,7 +12,7 @@ final class RemoteIndexEngineTests: XCTestCase {
         _ key: LibraryMonthKey,
         discriminator: Data,
         resourceSize: Int64 = 100
-    ) -> (delta: RemoteLibraryMonthDelta, fingerprint: Data) {
+    ) -> (delta: RemoteLibraryMonthDelta, fingerprint: AssetFingerprint) {
         let hash = Data([0xA0]) + discriminator
         let fp = TestFixtures.computedFingerprint(for: [(ResourceTypeCode.photo, 0, hash)])
         let delta = TestFixtures.remoteMonthDelta(
@@ -145,7 +145,7 @@ final class RemoteIndexEngineTests: XCTestCase {
         // resource rows. Those orphans must not contribute to the engine, otherwise
         // matchedCount would over-report against locals whose hashes we can't serve.
         let engine = makeEngine()
-        let fp = Data([0x60])
+        let fp = TestFixtures.assetFingerprint(0x60)
         let absentHash = Data([0xFF])
         let delta = TestFixtures.remoteMonthDelta(
             key202401,

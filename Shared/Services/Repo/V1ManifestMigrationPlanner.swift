@@ -21,22 +21,18 @@ nonisolated enum V1ManifestMigrationPlanner {
     ) -> V1MonthMigrationPlan {
         var resourcesByHash: [Data: RemoteManifestResource] = [:]
         resourcesByHash.reserveCapacity(resources.count)
-        for resource in resources where isValidV2Hash(resource.contentHash) {
+        for resource in resources where resource.contentHash.count == 32 {
             resourcesByHash[resource.contentHash] = resource
         }
-        let linksByAssetFP: [Data: [RemoteAssetResourceLink]] = Dictionary(grouping: links, by: { $0.assetFingerprint })
+        let linksByAssetFP: [AssetFingerprint: [RemoteAssetResourceLink]] = Dictionary(grouping: links, by: { $0.assetFingerprint })
 
         var migrable: [V1MigrableAsset] = []
         migrable.reserveCapacity(assets.count)
         var skippedFailures: [String] = []
         for asset in assets {
-            guard isValidV2Hash(asset.assetFingerprint) else {
-                skippedFailures.append("asset has invalid fingerprint length \(asset.assetFingerprint.count)")
-                continue
-            }
             let assetLinks = linksByAssetFP[asset.assetFingerprint] ?? []
             if assetLinks.isEmpty {
-                skippedFailures.append("asset \(asset.assetFingerprint.hexString) has no resource links")
+                skippedFailures.append("asset \(asset.assetFingerprint) has no resource links")
                 continue
             }
             var resourcesForOp: [CommitResourceEntry] = []
@@ -44,7 +40,7 @@ nonisolated enum V1ManifestMigrationPlanner {
             var missingResourceHash: Data?
             var invalidResourceHash: Data?
             for link in assetLinks {
-                guard isValidV2Hash(link.resourceHash) else {
+                guard link.resourceHash.count == 32 else {
                     invalidResourceHash = link.resourceHash
                     break
                 }
@@ -52,7 +48,7 @@ nonisolated enum V1ManifestMigrationPlanner {
                     missingResourceHash = link.resourceHash
                     break
                 }
-                guard isValidV2Hash(res.contentHash) else {
+                guard res.contentHash.count == 32 else {
                     invalidResourceHash = res.contentHash
                     break
                 }
@@ -68,19 +64,15 @@ nonisolated enum V1ManifestMigrationPlanner {
                 ))
             }
             if let invalidResourceHash {
-                skippedFailures.append("asset \(asset.assetFingerprint.hexString) references invalid resource hash length \(invalidResourceHash.count)")
+                skippedFailures.append("asset \(asset.assetFingerprint) references invalid resource hash length \(invalidResourceHash.count)")
                 continue
             }
             if let missingResourceHash {
-                skippedFailures.append("asset \(asset.assetFingerprint.hexString) references missing resource \(missingResourceHash.hexString)")
+                skippedFailures.append("asset \(asset.assetFingerprint) references missing resource \(missingResourceHash.hexString)")
                 continue
             }
             migrable.append(V1MigrableAsset(asset: asset, resources: resourcesForOp))
         }
         return V1MonthMigrationPlan(migrable: migrable, skippedFailures: skippedFailures)
-    }
-
-    private static func isValidV2Hash(_ hash: Data) -> Bool {
-        hash.count == 32
     }
 }

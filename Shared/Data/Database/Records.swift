@@ -61,6 +61,7 @@ struct LocalAssetRecord: Codable, FetchableRecord, MutablePersistableRecord {
     static let databaseTableName = "local_assets"
 
     var assetLocalIdentifier: String
+    // GRDB-row blob; typed at the ContentHashIndexRepository boundary via AssetFingerprint(decoding:).
     var assetFingerprint: Data?
     var resourceCount: Int
     var totalFileSizeBytes: Int64

@@ -740,10 +740,10 @@ private final class ThrowingCommitMonthStore: BackupMonthStore {
         self.eventRecorder = eventRecorder
     }
 
-    func containsAssetFingerprint(_ fingerprint: Data) -> Bool { false }
-    func containsDurableAssetFingerprint(_ fingerprint: Data) -> Bool { false }
+    func containsAssetFingerprint(_ fingerprint: AssetFingerprint) -> Bool { false }
+    func containsDurableAssetFingerprint(_ fingerprint: AssetFingerprint) -> Bool { false }
     var hasUncommittedV2Ops: Bool { false }
-    func isAssetIncomplete(_ fingerprint: Data) -> Bool { false }
+    func isAssetIncomplete(_ fingerprint: AssetFingerprint) -> Bool { false }
     func findResourceByHash(_ contentHash: Data) -> RemoteManifestResource? { nil }
     func findByFileName(_ logicalName: String) -> RemoteManifestResource? { nil }
     func existingFileNames() -> Set<String> { [] }
@@ -752,7 +752,7 @@ private final class ThrowingCommitMonthStore: BackupMonthStore {
     func upsertAsset(
         _ asset: RemoteManifestAsset,
         links: [RemoteAssetResourceLink],
-        replacingSubsetFingerprints: Set<Data>
+        replacingSubsetFingerprints: Set<AssetFingerprint>
     ) throws {}
     func upsertResource(_ resource: RemoteManifestResource) throws -> RemoteManifestResource { resource }
     func markRemoteFile(name: String, size: Int64) {}

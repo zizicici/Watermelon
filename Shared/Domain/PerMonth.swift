@@ -61,17 +61,17 @@ struct PerMonth<Value: Sendable & Equatable>: Sendable, Equatable {
     var asDictionary: [LibraryMonthKey: Value] { byMonth }
 }
 
-extension PerMonth where Value == Set<Data> {
-    mutating func insert(_ fingerprint: Data, for month: LibraryMonthKey) {
+extension PerMonth where Value == Set<AssetFingerprint> {
+    mutating func insert(_ fingerprint: AssetFingerprint, for month: LibraryMonthKey) {
         byMonth[month, default: []].insert(fingerprint)
     }
 
-    mutating func formUnion(_ fingerprints: Set<Data>, for month: LibraryMonthKey) {
+    mutating func formUnion(_ fingerprints: Set<AssetFingerprint>, for month: LibraryMonthKey) {
         guard !fingerprints.isEmpty else { return }
         byMonth[month, default: []].formUnion(fingerprints)
     }
 
-    mutating func subtract(_ fingerprints: Set<Data>, from month: LibraryMonthKey) {
+    mutating func subtract(_ fingerprints: Set<AssetFingerprint>, from month: LibraryMonthKey) {
         guard byMonth[month] != nil else { return }
         byMonth[month]?.subtract(fingerprints)
         if byMonth[month]?.isEmpty == true {
@@ -79,7 +79,19 @@ extension PerMonth where Value == Set<Data> {
         }
     }
 
-    func contains(_ fingerprint: Data, in month: LibraryMonthKey) -> Bool {
+    func contains(_ fingerprint: AssetFingerprint, in month: LibraryMonthKey) -> Bool {
         byMonth[month]?.contains(fingerprint) ?? false
+    }
+}
+
+extension PerMonth where Value == Set<Data> {
+    // Resource content-hash domain (RepoCommittedView.physicallyMissingByMonth); distinct from
+    // the asset-fingerprint overload above.
+    mutating func subtract(_ hashes: Set<Data>, from month: LibraryMonthKey) {
+        guard byMonth[month] != nil else { return }
+        byMonth[month]?.subtract(hashes)
+        if byMonth[month]?.isEmpty == true {
+            byMonth.removeValue(forKey: month)
+        }
     }
 }

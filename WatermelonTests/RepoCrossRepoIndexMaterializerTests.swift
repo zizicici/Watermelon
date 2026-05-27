@@ -13,7 +13,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0x11)
+        let fp = TestFixtures.assetFingerprint(0x11)
         let hash = TestFixtures.fingerprint(0x12)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: hash)
         let output = try await builder.materialize()
@@ -27,7 +27,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0x21)
+        let fp = TestFixtures.assetFingerprint(0x21)
         let hash = TestFixtures.fingerprint(0x22)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: hash)
 
@@ -51,7 +51,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0x31)
+        let fp = TestFixtures.assetFingerprint(0x31)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0x32))
         let output = try await builder.materialize()
         try await builder.publishCrossRepoIndex(from: output, lamport: 50)
@@ -71,7 +71,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0x41)
+        let fp = TestFixtures.assetFingerprint(0x41)
         let hash = TestFixtures.fingerprint(0x42)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: hash)
         let output = try await builder.materialize()
@@ -93,7 +93,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0x51)
+        let fp = TestFixtures.assetFingerprint(0x51)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0x52))
         let output = try await builder.materialize()
 
@@ -115,7 +115,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0x61)
+        let fp = TestFixtures.assetFingerprint(0x61)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0x62))
         let output = try await builder.materialize()
         try await builder.publishCrossRepoIndex(from: output, lamport: 200)
@@ -143,7 +143,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0x71)
+        let fp = TestFixtures.assetFingerprint(0x71)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0x72))
         let output = try await builder.materialize()
         try await builder.publishCrossRepoIndex(from: output, lamport: 100, runID: "run-low")
@@ -159,7 +159,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0x81)
+        let fp = TestFixtures.assetFingerprint(0x81)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0x82))
         let output = try await builder.materialize()
         try await builder.publishCrossRepoIndex(from: output, lamport: 100, runID: "run-low")
@@ -183,7 +183,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0x91)
+        let fp = TestFixtures.assetFingerprint(0x91)
         try await builder.addAsset(month: month1, seq: 1, clock: 500, fingerprint: fp, contentHash: TestFixtures.fingerprint(0x92))
         let output = try await builder.materialize()
         XCTAssertEqual(output.state.observedClock, 500)
@@ -235,7 +235,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0xA1)
+        let fp = TestFixtures.assetFingerprint(0xA1)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0xA2))
         let output = try await builder.materialize()
         try await builder.publishCrossRepoIndex(from: output, lamport: 50)
@@ -250,7 +250,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0xB1)
+        let fp = TestFixtures.assetFingerprint(0xB1)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0xB2))
 
         // Publish cross-repo at lamport 50 (older).
@@ -273,7 +273,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0xC1)
+        let fp = TestFixtures.assetFingerprint(0xC1)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0xC2))
 
         let materialized = try await builder.materialize()
@@ -313,7 +313,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0xD1)
+        let fp = TestFixtures.assetFingerprint(0xD1)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0xD2))
         let materialized = try await builder.materialize()
         try await Self.publishPerMonthSnapshot(builder: builder, month: month1, lamport: 50, materialized: materialized)
@@ -353,7 +353,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0xF1)
+        let fp = TestFixtures.assetFingerprint(0xF1)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0xF2))
 
         // Create the index directory so the listFilenames path actually issues a `list` call
@@ -377,7 +377,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0xF3)
+        let fp = TestFixtures.assetFingerprint(0xF3)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0xF4))
         let materialized = try await builder.materialize()
         try await builder.publishCrossRepoIndex(from: materialized, lamport: 100)
@@ -403,7 +403,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0xE1)
+        let fp = TestFixtures.assetFingerprint(0xE1)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0xE2))
         let materialized = try await builder.materialize()
         try await builder.publishCrossRepoIndex(from: materialized, lamport: 100)
@@ -433,7 +433,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0xE3)
+        let fp = TestFixtures.assetFingerprint(0xE3)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0xE4))
         let materialized = try await builder.materialize()
         try await builder.publishCrossRepoIndex(from: materialized, lamport: 100)
@@ -459,7 +459,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0xE5)
+        let fp = TestFixtures.assetFingerprint(0xE5)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0xE6))
         let materialized = try await builder.materialize()
         try await builder.publishCrossRepoIndex(from: materialized, lamport: 100)
@@ -497,7 +497,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0xE7)
+        let fp = TestFixtures.assetFingerprint(0xE7)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0xE8))
 
         let materialized = try await builder.materialize()
@@ -533,7 +533,7 @@ final class RepoCrossRepoIndexMaterializerTests: XCTestCase {
             writerID: "11111111-2222-3333-4444-555555555555",
             runID: "abcdef12-3456-7890-abcd-ef1234567890"
         )
-        let fp = TestFixtures.fingerprint(0xE9)
+        let fp = TestFixtures.assetFingerprint(0xE9)
         try await builder.addAsset(month: month1, seq: 1, fingerprint: fp, contentHash: TestFixtures.fingerprint(0xEA))
 
         let materialized = try await builder.materialize()
