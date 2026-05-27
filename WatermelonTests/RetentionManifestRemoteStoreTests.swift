@@ -224,7 +224,9 @@ final class RetentionManifestRemoteStoreTests: XCTestCase {
         let allowed = Set([
             "Shared/Services/Backup/V2RetentionBarrierRefresh.swift",
             "Shared/Services/Repo/RepoCheckpointBarrierHook.swift",
+            "Shared/Services/Repo/RepoMaintenanceCoordinator.swift",
             "Shared/Services/Repo/RepoRetentionDeletePreflightService.swift",
+            "Shared/Services/Repo/RepoSnapshotDeletePreflightService.swift",
             "Shared/Services/Repo/RetentionMaintenanceOrchestrator.swift",
             "Shared/Services/Repo/RetentionManifestRemoteStore.swift",
             "Shared/Services/Repo/RepoRetentionBarrierService.swift",

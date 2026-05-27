@@ -67,7 +67,11 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
 
         let tombstoneOp = CommitOp(opSeq: 0, clock: 2, body: .tombstoneAsset(CommitTombstoneBody(
             assetFingerprint: fp,
-            reason: .userDeleted
+            reason: .userDeleted,
+            observedBasis: TombstoneObservationBasis(
+                perWriterMaxSeq: [writerA: 1],
+                lamportWatermark: 1
+            )
         )))
         _ = try await writer.write(
             header: makeHeader(seq: 2, clockMin: 2, clockMax: 2),
