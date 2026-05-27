@@ -1139,7 +1139,6 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
     private let policy = RepoCompactionPolicy(
         checkpointCommitThreshold: 1,
         checkpointByteThreshold: 1,
-        minimumCheckpointIntervalSeconds: 0,
         retentionStalenessThresholdSeconds: 60,
         snapshotFallbackKeepCount: 2
     )

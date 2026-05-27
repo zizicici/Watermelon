@@ -3,7 +3,6 @@ import Foundation
 struct RepoCompactionPolicy: Equatable, Sendable {
     var checkpointCommitThreshold: Int
     var checkpointByteThreshold: Int64
-    var minimumCheckpointIntervalSeconds: Int
     var retentionStalenessThresholdSeconds: Int
     var snapshotFallbackKeepCount: Int
 
@@ -11,7 +10,6 @@ struct RepoCompactionPolicy: Equatable, Sendable {
         RepoCompactionPolicy(
             checkpointCommitThreshold: BackupV2Constants.checkpointCommitThreshold,
             checkpointByteThreshold: BackupV2Constants.checkpointByteThreshold,
-            minimumCheckpointIntervalSeconds: BackupV2Constants.minimumCheckpointIntervalSeconds,
             retentionStalenessThresholdSeconds: BackupV2Constants.retentionStalenessThresholdSeconds,
             snapshotFallbackKeepCount: BackupV2Constants.snapshotFallbackKeepCount
         )

@@ -14,17 +14,25 @@ import Foundation
 ///   for, so deleting more files on top of it would compound the uncertainty.
 /// - Phase C runs its own independent preflight; it never trusts Phase B's plan.
 struct RepoMaintenanceCoordinator: Sendable {
+    typealias CommitCleanupOverride = @Sendable (LibraryMonthKey) async throws -> RepoRetentionCommitDeleteResult
+
     let services: BackupV2RuntimeServices
     let nowMs: @Sendable () -> Int64
+    // Test-only seam for driving the coordinator into Phase-B branches that are hard to reach
+    // deterministically from the real executor (verificationFailed / verificationInconclusive).
+    // Production must leave this nil so the real Phase B runs.
+    let commitCleanupOverride: CommitCleanupOverride?
 
     init(
         services: BackupV2RuntimeServices,
         nowMs: @escaping @Sendable () -> Int64 = {
             Int64(Date().timeIntervalSince1970 * 1000)
-        }
+        },
+        commitCleanupOverride: CommitCleanupOverride? = nil
     ) {
         self.services = services
         self.nowMs = nowMs
+        self.commitCleanupOverride = commitCleanupOverride
     }
 
     func runForMonth(_ month: LibraryMonthKey) async throws -> RepoMaintenanceMonthResult {
@@ -32,11 +40,15 @@ struct RepoMaintenanceCoordinator: Sendable {
         let checkpoint = try await RepoCheckpointPhase(services: services, month: month).run()
         try Task.checkCancellation()
         let commitCleanup: RepoRetentionCommitDeleteResult
-        commitCleanup = try await RepoCommitPrefixCleanupPhase(
-            services: services,
-            month: month,
-            nowMs: nowMs
-        ).run()
+        if let override = commitCleanupOverride {
+            commitCleanup = try await override(month)
+        } else {
+            commitCleanup = try await RepoCommitPrefixCleanupPhase(
+                services: services,
+                month: month,
+                nowMs: nowMs
+            ).run()
+        }
         let snapshotGC: RepoMaintenanceSnapshotGCDisposition
         switch commitCleanup {
         case .preflightBlocked, .completed:

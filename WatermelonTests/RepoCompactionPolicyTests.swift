@@ -6,7 +6,6 @@ final class RepoCompactionPolicyTests: XCTestCase {
         let policy = RepoCompactionPolicy.default
         XCTAssertEqual(policy.checkpointCommitThreshold, 5_000)
         XCTAssertEqual(policy.checkpointByteThreshold, 16 * 1024 * 1024)
-        XCTAssertEqual(policy.minimumCheckpointIntervalSeconds, 6 * 60 * 60)
         XCTAssertEqual(policy.retentionStalenessThresholdSeconds, 24 * 60 * 60)
         XCTAssertEqual(policy.snapshotFallbackKeepCount, 2)
     }

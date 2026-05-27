@@ -424,7 +424,6 @@ final class RepoSnapshotDeletePreflightTests: XCTestCase {
         let executorPolicy = RepoCompactionPolicy(
             checkpointCommitThreshold: 1,
             checkpointByteThreshold: Int64.max,
-            minimumCheckpointIntervalSeconds: 0,
             retentionStalenessThresholdSeconds: 0,
             snapshotFallbackKeepCount: 1
         )
@@ -481,7 +480,6 @@ final class RepoSnapshotDeletePreflightTests: XCTestCase {
         RepoCompactionPolicy(
             checkpointCommitThreshold: 1,
             checkpointByteThreshold: Int64.max,
-            minimumCheckpointIntervalSeconds: 0,
             retentionStalenessThresholdSeconds: 0,
             snapshotFallbackKeepCount: 2
         )

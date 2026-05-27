@@ -706,7 +706,6 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         RepoCompactionPolicy(
             checkpointCommitThreshold: checkpointCommitThreshold,
             checkpointByteThreshold: Int64.max,
-            minimumCheckpointIntervalSeconds: 0,
             retentionStalenessThresholdSeconds: retentionStalenessThresholdSeconds,
             snapshotFallbackKeepCount: 2
         )

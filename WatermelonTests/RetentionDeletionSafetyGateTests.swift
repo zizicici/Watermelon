@@ -256,7 +256,6 @@ final class RetentionDeletionSafetyGateTests: XCTestCase {
         RepoCompactionPolicy(
             checkpointCommitThreshold: 1,
             checkpointByteThreshold: 1,
-            minimumCheckpointIntervalSeconds: 1,
             retentionStalenessThresholdSeconds: retentionSeconds,
             snapshotFallbackKeepCount: 2
         )

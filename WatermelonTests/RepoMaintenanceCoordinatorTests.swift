@@ -84,6 +84,75 @@ final class RepoMaintenanceCoordinatorTests: XCTestCase {
         }
     }
 
+    // MARK: - Phase B .verificationFailed → Phase C skipped (override seam)
+
+    func testPhaseB_VerificationFailed_PhaseC_SkippedWithTypedReason() async throws {
+        let client = try await makeClient()
+        let services = try await makeServices(client: client, policy: makePolicy())
+
+        let synthesized: RepoRetentionCommitDeleteResult = .verificationFailed(
+            summary: emptySummary(),
+            stopReason: nil,
+            report: emptyReport(nowMs: 1),
+            verification: .failed(reason: .coveredRangeRegression, evidence: nil)
+        )
+
+        let result = try await RepoMaintenanceCoordinator(
+            services: services,
+            nowMs: { 1 },
+            commitCleanupOverride: { _ in synthesized }
+        ).runForMonth(month)
+
+        guard case .verificationFailed = result.commitCleanup else {
+            return XCTFail("expected Phase B .verificationFailed, got \(String(describing: result.commitCleanup))")
+        }
+        guard case .skipped(.skippedAfterCommitCleanupVerificationFailed) = result.snapshotGC else {
+            return XCTFail("expected Phase C skippedAfterCommitCleanupVerificationFailed, got \(result.snapshotGC)")
+        }
+    }
+
+    // MARK: - Phase B .verificationInconclusive → Phase C skipped (override seam)
+
+    func testPhaseB_VerificationInconclusive_PhaseC_SkippedWithTypedReason() async throws {
+        let client = try await makeClient()
+        let services = try await makeServices(client: client, policy: makePolicy())
+
+        let synthesized: RepoRetentionCommitDeleteResult = .verificationInconclusive(
+            summary: emptySummary(),
+            stopReason: nil,
+            report: emptyReport(nowMs: 1),
+            verification: .inconclusive(reason: .materializerReadFailed)
+        )
+
+        let result = try await RepoMaintenanceCoordinator(
+            services: services,
+            nowMs: { 1 },
+            commitCleanupOverride: { _ in synthesized }
+        ).runForMonth(month)
+
+        guard case .verificationInconclusive = result.commitCleanup else {
+            return XCTFail("expected Phase B .verificationInconclusive, got \(String(describing: result.commitCleanup))")
+        }
+        guard case .skipped(.skippedAfterCommitCleanupVerificationInconclusive) = result.snapshotGC else {
+            return XCTFail("expected Phase C skippedAfterCommitCleanupVerificationInconclusive, got \(result.snapshotGC)")
+        }
+    }
+
+    // MARK: - Override-seam fixture helpers
+
+    private func emptySummary() -> RepoRetentionCommitDeleteSummary {
+        RepoRetentionCommitDeleteSummary(month: month, repoID: repoID, candidateCount: 0)
+    }
+
+    private func emptyReport(nowMs: Int64) -> RepoRetentionDeletePreflightReport {
+        RepoRetentionDeletePreflightReport(
+            month: month,
+            repoID: repoID,
+            mode: .dryRun,
+            evaluatedAtMs: nowMs
+        )
+    }
+
     // MARK: - Fixtures (mirror RetentionMaintenanceOrchestratorTests)
 
     private let basePath = "/repo"
@@ -99,7 +168,6 @@ final class RepoMaintenanceCoordinatorTests: XCTestCase {
         RepoCompactionPolicy(
             checkpointCommitThreshold: checkpointCommitThreshold,
             checkpointByteThreshold: Int64.max,
-            minimumCheckpointIntervalSeconds: 0,
             retentionStalenessThresholdSeconds: retentionStalenessThresholdSeconds,
             snapshotFallbackKeepCount: 2
         )
