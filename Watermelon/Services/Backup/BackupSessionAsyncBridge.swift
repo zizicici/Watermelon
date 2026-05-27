@@ -76,12 +76,12 @@ final class BackupSessionAsyncBridge {
         backupSessionController.stopBackup()
     }
 
-    func markAssetIDsPendingForResume(_ assetIDs: Set<String>) {
+    func markAssetIDsPendingForResume(_ assetIDs: Set<PhotoKitLocalIdentifier>) {
         backupSessionController.markAssetIDsPendingForResume(assetIDs)
     }
 
     func runScopedBackup(
-        assetIDs: Set<String>,
+        assetIDs: Set<PhotoKitLocalIdentifier>,
         onProgress: @escaping () -> Void
     ) async -> Bool {
         let selection = BackupScopeSelection(

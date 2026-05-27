@@ -17,7 +17,7 @@ enum TestFixtures {
         modificationDate: Date? = nil
     ) -> LibraryAssetSnapshot {
         LibraryAssetSnapshot(
-            localIdentifier: id,
+            localIdentifier: PhotoKitLocalIdentifier(rawValue: id),
             creationDate: date(year, month, day),
             modificationDate: modificationDate,
             mediaKind: kind
@@ -37,7 +37,7 @@ enum TestFixtures {
     ) -> LibraryChangePayload.CollectionChange {
         .incremental(
             collectionIndex: collectionIndex,
-            removed: removed,
+            removed: removed.map { PhotoKitLocalIdentifier(rawValue: $0) },
             inserted: inserted,
             changed: changed,
             moved: moved
@@ -55,7 +55,7 @@ enum TestFixtures {
         LibraryChangePayload(collectionChanges: collectionChanges)
     }
 
-    static func emptyFingerprint(for ids: Set<String>) -> [String: LocalAssetFingerprintRecord] {
+    static func emptyFingerprint(for ids: Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] {
         [:]
     }
 

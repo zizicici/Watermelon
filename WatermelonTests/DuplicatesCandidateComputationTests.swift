@@ -272,7 +272,7 @@ final class DuplicatesCandidateComputationTests: XCTestCase {
 private final class FakeDuplicateRepository: DuplicateCandidateRepository, @unchecked Sendable {
     let rawIndexedCount: Int
     let candidates: [DuplicateIndexedAssetCandidate]
-    var validRows: [String: IndexedAssetRow] = [:]
+    var validRows: [PhotoKitLocalIdentifier: IndexedAssetRow] = [:]
 
     init(rawIndexedCount: Int, candidates: [DuplicateIndexedAssetCandidate]) {
         self.rawIndexedCount = rawIndexedCount
@@ -287,16 +287,16 @@ private final class FakeDuplicateRepository: DuplicateCandidateRepository, @unch
         candidates
     }
 
-    func fetchValidIndexedRows(assetIDs: Set<String>) throws -> [String: IndexedAssetRow] {
+    func fetchValidIndexedRows(assetIDs: Set<PhotoKitLocalIdentifier>) throws -> [PhotoKitLocalIdentifier: IndexedAssetRow] {
         validRows.filter { assetIDs.contains($0.key) }
     }
 }
 
 private final class FakeDuplicatePhotoLibraryProvider: DuplicatePhotoLibraryProvider, @unchecked Sendable {
     let totalCount: Int
-    let snapshotsByID: [String: IndexedAssetTrustSnapshot]
+    let snapshotsByID: [PhotoKitLocalIdentifier: IndexedAssetTrustSnapshot]
     var assetCountQueries: [PhotoLibraryQuery] = []
-    var fetchTrustSnapshotCalls: [Set<String>] = []
+    var fetchTrustSnapshotCalls: [Set<PhotoKitLocalIdentifier>] = []
     var collectAssetIDsQueries: [PhotoLibraryQuery] = []
     var fetchResultsQueries: [PhotoLibraryQuery] = []
 
@@ -310,12 +310,12 @@ private final class FakeDuplicatePhotoLibraryProvider: DuplicatePhotoLibraryProv
         return totalCount
     }
 
-    func fetchTrustSnapshots(localIdentifiers: Set<String>) -> [IndexedAssetTrustSnapshot] {
+    func fetchTrustSnapshots(localIdentifiers: Set<PhotoKitLocalIdentifier>) -> [IndexedAssetTrustSnapshot] {
         fetchTrustSnapshotCalls.append(localIdentifiers)
         return localIdentifiers.compactMap { snapshotsByID[$0] }
     }
 
-    func collectAssetIDs(query: PhotoLibraryQuery) -> Set<String> {
+    func collectAssetIDs(query: PhotoLibraryQuery) -> Set<PhotoKitLocalIdentifier> {
         collectAssetIDsQueries.append(query)
         return []
     }
@@ -341,7 +341,7 @@ private func row(
     resourceSignature: Data?
 ) -> DuplicateIndexedAssetRow {
     DuplicateIndexedAssetRow(
-        assetLocalIdentifier: assetID,
+        assetLocalIdentifier: PhotoKitLocalIdentifier(rawValue: assetID),
         assetFingerprint: fingerprint,
         updatedAt: updatedAt,
         selectionVersion: selectionVersion,
@@ -357,7 +357,7 @@ private func snapshot(
     signature: Data
 ) -> IndexedAssetTrustSnapshot {
     IndexedAssetTrustSnapshot(
-        localIdentifier: assetID,
+        localIdentifier: PhotoKitLocalIdentifier(rawValue: assetID),
         creationDate: creationDate,
         modificationDate: modificationDate,
         mediaType: mediaType,

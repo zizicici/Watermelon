@@ -60,10 +60,10 @@ final class HomeExecutionCoordinator {
     // MARK: - Data Access (provided by Store)
 
     struct DataAccess {
-        let localAssetIDs: (LibraryMonthKey) -> Set<String>
+        let localAssetIDs: (LibraryMonthKey) -> Set<PhotoKitLocalIdentifier>
         let remoteOnlyItems: (LibraryMonthKey) async -> [RemoteAlbumItem]
         let syncRemoteData: () async -> Set<LibraryMonthKey>
-        let refreshLocalIndex: (Set<String>) async -> Set<LibraryMonthKey>
+        let refreshLocalIndex: (Set<PhotoKitLocalIdentifier>) async -> Set<LibraryMonthKey>
     }
 
     // MARK: - Dependencies
@@ -610,7 +610,7 @@ final class HomeExecutionCoordinator {
     /// Upload months read frozen IDs (the work plan is fixed at session.enter; PHChange
     /// additions mid-run shouldn't expand it). Pure-download months read live IDs so
     /// assets uploaded earlier in the same run are recognized and not re-downloaded.
-    private func assetIDsForLocalHashIndexPreflight() -> Set<String> {
+    private func assetIDsForLocalHashIndexPreflight() -> Set<PhotoKitLocalIdentifier> {
         var assetIDs = session.uploadScopeAssetIDs
         let uploadMonths = Set(session.backupMonths).union(session.complementMonths)
         for month in session.monthPlans.keys where !uploadMonths.contains(month) {
@@ -704,7 +704,7 @@ final class HomeExecutionCoordinator {
 
     private func downloadRemoteMonth(
         _ month: LibraryMonthKey,
-        assetIDs: Set<String>,
+        assetIDs: Set<PhotoKitLocalIdentifier>,
         context: DownloadWorkflowHelper.Context
     ) async -> DownloadMonthResult {
         appendInfoLog(String(format: String(localized: "home.execution.log.syncRemoteIndex"), month.displayText))
@@ -789,8 +789,8 @@ final class HomeExecutionCoordinator {
         }
     }
 
-    private func assetIDsAwaitingInlineComplementResume() -> Set<String> {
-        var assetIDs = Set<String>()
+    private func assetIDsAwaitingInlineComplementResume() -> Set<PhotoKitLocalIdentifier> {
+        var assetIDs = Set<PhotoKitLocalIdentifier>()
         for (month, plan) in session.monthPlans {
             guard plan.needsUpload && plan.needsDownload else { continue }
             if plan.workFacts.uploadFinished && !plan.workFacts.downloadFinished {

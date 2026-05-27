@@ -487,7 +487,7 @@ final class V2BatchCommitTests: XCTestCase {
             await aggregator.recordProvisional(
                 month: monthKey,
                 fingerprint: fp,
-                assetLocalIdentifier: "local-\(fp.hexString)",
+                assetLocalIdentifier: PhotoKitLocalIdentifier(rawValue: "local-\(fp.hexString)"),
                 status: .success
             )
         }
@@ -580,7 +580,7 @@ final class V2BatchCommitTests: XCTestCase {
         let aggregator = ParallelBackupProgressAggregator(total: cap + 1)
         for (index, fp) in allFingerprints.enumerated() {
             await processor.pendingHashIndexIntents.enqueue(month: monthKey, intent: HashIndexUpsertIntent(
-                assetLocalIdentifier: "local-\(index)", assetFingerprint: fp,
+                assetLocalIdentifier: PhotoKitLocalIdentifier(rawValue: "local-\(index)"), assetFingerprint: fp,
                 totalFileSizeBytes: 1, modificationDateMs: nil,
                 body: .fingerprintOnly(resourceCount: 1)
             ))
@@ -591,7 +591,7 @@ final class V2BatchCommitTests: XCTestCase {
             ))
             await aggregator.recordProvisional(
                 month: monthKey, fingerprint: fp,
-                assetLocalIdentifier: "local-\(index)", status: .success
+                assetLocalIdentifier: PhotoKitLocalIdentifier(rawValue: "local-\(index)"), status: .success
             )
         }
         let initialIntents = await processor.pendingHashIndexIntents.pendingFingerprintCountForTest(month: monthKey)

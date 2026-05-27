@@ -40,6 +40,7 @@ final class LocalAlbumPickerViewController: UIViewController {
     private let onDone: ([LocalAlbumDescriptor]) -> Void
 
     private var albums: [LocalAlbumDescriptor] = []
+    // PHCollection.localIdentifier (album id) — not the asset-id boundary.
     private var selectedAlbumIDs: Set<String>
     private var albumLoadTask: Task<Void, Never>?
 
@@ -266,7 +267,7 @@ private final class LocalAlbumCell: UICollectionViewCell {
     private var loadedThumbnailKey: ThumbnailKey?
 
     private struct ThumbnailKey: Equatable {
-        let assetIdentifier: String
+        let assetIdentifier: PhotoKitLocalIdentifier
         let pixelSide: Int
     }
 

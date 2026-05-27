@@ -10,7 +10,7 @@ final class EngineTests: XCTestCase {
     private func reload(
         _ engine: HomeLocalIndexEngine,
         _ snapshotsPerCollection: [[LibraryAssetSnapshot]],
-        fingerprints: [String: LocalAssetFingerprintRecord] = [:],
+        fingerprints: [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] = [:],
         remoteFingerprintsForMonth: ((LibraryMonthKey) -> Set<Data>)? = nil
     ) -> Set<LibraryMonthKey> {
         engine.reload(

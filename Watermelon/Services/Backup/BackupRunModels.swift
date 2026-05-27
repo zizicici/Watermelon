@@ -2,8 +2,8 @@ import Foundation
 
 enum BackupRunMode: Sendable {
     case full
-    case scoped(assetIDs: Set<String>)
-    case retry(assetIDs: Set<String>)
+    case scoped(assetIDs: Set<PhotoKitLocalIdentifier>)
+    case retry(assetIDs: Set<PhotoKitLocalIdentifier>)
 
     var isRetry: Bool {
         if case .retry = self {
@@ -12,7 +12,7 @@ enum BackupRunMode: Sendable {
         return false
     }
 
-    var targetAssetIdentifiers: Set<String>? {
+    var targetAssetIdentifiers: Set<PhotoKitLocalIdentifier>? {
         switch self {
         case .full:
             return nil
@@ -97,7 +97,7 @@ struct BackupRunConfigurationOverride: Sendable {
 struct BackupRunRequest: Sendable {
     let profile: ServerProfileRecord
     let password: String
-    let onlyAssetLocalIdentifiers: Set<String>?
+    let onlyAssetLocalIdentifiers: Set<PhotoKitLocalIdentifier>?
     let workerCountOverride: Int?
     let iCloudPhotoBackupMode: ICloudPhotoBackupMode
     let onMonthUploaded: BackupMonthFinalizer?
@@ -105,7 +105,7 @@ struct BackupRunRequest: Sendable {
     init(
         profile: ServerProfileRecord,
         password: String,
-        onlyAssetLocalIdentifiers: Set<String>?,
+        onlyAssetLocalIdentifiers: Set<PhotoKitLocalIdentifier>?,
         workerCountOverride: Int? = nil,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode = .disable,
         onMonthUploaded: BackupMonthFinalizer? = nil

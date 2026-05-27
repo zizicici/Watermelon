@@ -6,12 +6,14 @@ import XCTest
 final class ScopeNormalizerTests: XCTestCase {
     private final class Source {
         var status: PHAuthorizationStatus = .authorized
+        // PHCollection.localIdentifier (album id) — not the asset-id boundary.
         var existing: Set<String> = []
     }
 
     private func makeNormalizer(source: Source) -> HomeScopeNormalizer {
         HomeScopeNormalizer(hooks: HomeScopeNormalizer.Hooks(
             authorizationStatus: { source.status },
+            // PHCollection.localIdentifier (album id) — not the asset-id boundary.
             existingUserAlbumIdentifiers: { ids in source.existing.intersection(ids) }
         ))
     }

@@ -7,7 +7,7 @@ enum AlbumMediaKind: Sendable {
 }
 
 struct LibraryAssetSnapshot: Hashable, Sendable {
-    let localIdentifier: String
+    let localIdentifier: PhotoKitLocalIdentifier
     let creationDate: Date?
     let modificationDate: Date?
     let mediaKind: AlbumMediaKind
@@ -21,7 +21,7 @@ struct LibraryChangePayload: Sendable {
     enum CollectionChange: Sendable {
         case incremental(
             collectionIndex: Int,
-            removed: [String],
+            removed: [PhotoKitLocalIdentifier],
             inserted: [LibraryAssetSnapshot],
             changed: [LibraryAssetSnapshot],
             moved: [LibraryAssetSnapshot]

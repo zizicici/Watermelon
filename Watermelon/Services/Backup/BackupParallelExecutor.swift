@@ -314,7 +314,7 @@ struct BackupParallelExecutor: Sendable {
                     let batchAssetIDs = Array(monthAssetIDs[batchStart ..< batchEnd])
                     guard !batchAssetIDs.isEmpty else { continue }
 
-                    var batchLocalHashCacheByAssetID: [String: LocalAssetHashCache]
+                    var batchLocalHashCacheByAssetID: [PhotoKitLocalIdentifier: LocalAssetHashCache]
                     do {
                         batchLocalHashCacheByAssetID = try hashIndexRepository.fetchAssetHashCaches(
                             assetIDs: Set(batchAssetIDs)
@@ -336,14 +336,14 @@ struct BackupParallelExecutor: Sendable {
                     }
 
                     let batchAssetsResult = PHAsset.fetchAssets(
-                        withLocalIdentifiers: batchAssetIDs,
+                        withLocalIdentifiers: batchAssetIDs.rawValues,
                         options: nil
                     )
-                    var batchAssetsByLocalIdentifier: [String: PHAsset] = [:]
+                    var batchAssetsByLocalIdentifier: [PhotoKitLocalIdentifier: PHAsset] = [:]
                     batchAssetsByLocalIdentifier.reserveCapacity(batchAssetsResult.count)
                     for index in 0 ..< batchAssetsResult.count {
                         let asset = batchAssetsResult.object(at: index)
-                        batchAssetsByLocalIdentifier[asset.localIdentifier] = asset
+                        batchAssetsByLocalIdentifier[PhotoKitLocalIdentifier(asset)] = asset
                     }
                     missingAssetCount += max(batchAssetIDs.count - batchAssetsByLocalIdentifier.count, 0)
 
@@ -424,14 +424,14 @@ struct BackupParallelExecutor: Sendable {
                                     await aggregator.recordProvisional(
                                         month: monthKey,
                                         fingerprint: fingerprint,
-                                        assetLocalIdentifier: asset.localIdentifier,
+                                        assetLocalIdentifier: PhotoKitLocalIdentifier(asset),
                                         status: .success
                                     )
                                 case .skipped:
                                     await aggregator.recordProvisional(
                                         month: monthKey,
                                         fingerprint: fingerprint,
-                                        assetLocalIdentifier: asset.localIdentifier,
+                                        assetLocalIdentifier: PhotoKitLocalIdentifier(asset),
                                         status: .skipped
                                     )
                                 case .failed:
@@ -957,7 +957,7 @@ struct BackupParallelExecutor: Sendable {
     }
 
     private func monthAlreadyFullyBackedUp(
-        monthAssetIDs: [String],
+        monthAssetIDs: [PhotoKitLocalIdentifier],
         monthStore: any BackupMonthStore
     ) -> Bool {
         guard !monthAssetIDs.isEmpty else { return true }
@@ -969,14 +969,14 @@ struct BackupParallelExecutor: Sendable {
         guard cachedHashes.count == monthAssetIDs.count else { return false }
 
         let fetchResult = PHAsset.fetchAssets(
-            withLocalIdentifiers: monthAssetIDs,
+            withLocalIdentifiers: monthAssetIDs.rawValues,
             options: nil
         )
         guard fetchResult.count == monthAssetIDs.count else { return false }
 
         for index in 0 ..< fetchResult.count {
             let asset = fetchResult.object(at: index)
-            guard let cache = cachedHashes[asset.localIdentifier] else { return false }
+            guard let cache = cachedHashes[PhotoKitLocalIdentifier(asset)] else { return false }
             if let modDate = asset.modificationDate, modDate > cache.updatedAt {
                 return false
             }

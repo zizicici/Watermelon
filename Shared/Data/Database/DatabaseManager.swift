@@ -47,6 +47,7 @@ final class DatabaseManager: @unchecked Sendable {
                 table.column("updatedAt", .datetime).notNull()
             }
 
+            // PhotoKit cache key. Rows are orphans on PhotoKit library reset and are cleaned by next index rebuild — not a repo identity.
             try db.create(table: LocalAssetRecord.databaseTableName) { table in
                 table.column("assetLocalIdentifier", .text).notNull()
                 table.column("assetFingerprint", .blob)

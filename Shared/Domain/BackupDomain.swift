@@ -1,7 +1,4 @@
 import Foundation
-#if os(iOS)
-import Photos
-#endif
 
 enum ExecutionLogLevel: String, CaseIterable, Sendable {
     case debug
@@ -25,6 +22,7 @@ enum BackupItemStatus: String, Codable {
 }
 
 struct BackupItemEvent {
+    // Ephemeral per-run UI string. Never persisted to remote storage.
     let assetLocalIdentifier: String
     let assetFingerprint: Data?
     let displayName: String
@@ -36,6 +34,7 @@ struct BackupItemEvent {
 
 struct BackupTransferState {
     let workerID: Int
+    // Ephemeral per-run UI string. Never persisted to remote storage.
     let assetLocalIdentifier: String
     let assetDisplayName: String
     let resourceDate: Date?
@@ -47,24 +46,6 @@ struct BackupTransferState {
     let resourceFraction: Float
     let stageDescription: String
 }
-
-#if os(iOS)
-struct LocalPhotoResource {
-    let asset: PHAsset
-    let resource: PHAssetResource
-    let assetLocalIdentifier: String
-    let resourceLocalIdentifier: String
-    let preferredRemoteFileName: String
-    let resourceRole: Int
-    let resourceSlot: Int
-    let resourceType: String
-    let resourceTypeCode: Int
-    let uti: String?
-    let originalFilename: String
-    let fileSize: Int64
-    let resourceModificationDate: Date?
-}
-#endif
 
 struct BackupProgress {
     let succeeded: Int

@@ -96,7 +96,7 @@ final class LocalIndexBuildCoordinator {
         guard let initialState = state else { return }
         let mode = initialState.mode
         var didClear = false
-        var processedIDs = Set<String>()
+        var processedIDs = Set<PhotoKitLocalIdentifier>()
 
         do {
             try await Self.ensureAuthorization(photoLibraryService: photoLibraryService)
@@ -115,7 +115,7 @@ final class LocalIndexBuildCoordinator {
 
             guard !allIDs.isEmpty else { return }
 
-            let processIDs: Set<String>
+            let processIDs: Set<PhotoKitLocalIdentifier>
             switch mode {
             case .rebuild:
                 processIDs = allIDs
@@ -191,7 +191,7 @@ final class LocalIndexBuildCoordinator {
 
     private nonisolated static func collectAllAssetIDs(
         photoLibraryService: PhotoLibraryService
-    ) async -> Set<String> {
+    ) async -> Set<PhotoKitLocalIdentifier> {
         await withCancellableDetachedValue(priority: .userInitiated) {
             photoLibraryService.collectAssetIDs(query: .allAssets)
         }
@@ -200,19 +200,20 @@ final class LocalIndexBuildCoordinator {
     private nonisolated static func computeIncrementalProcessIDs(
         repository: ContentHashIndexRepository,
         photoLibraryService: PhotoLibraryService,
-        assetIDs: Set<String>
-    ) async -> Set<String> {
+        assetIDs: Set<PhotoKitLocalIdentifier>
+    ) async -> Set<PhotoKitLocalIdentifier> {
         await withCancellableDetachedValue(priority: .userInitiated) {
             let cached = (try? repository.fetchAssetHashCaches(assetIDs: assetIDs)) ?? [:]
             let unfingerprinted = assetIDs.subtracting(cached.keys)
 
-            var invalidated = Set<String>()
+            var invalidated = Set<PhotoKitLocalIdentifier>()
             if !cached.isEmpty {
                 let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(cached.keys))
                 for asset in phAssets {
-                    guard let cache = cached[asset.localIdentifier] else { continue }
+                    let assetID = PhotoKitLocalIdentifier(asset)
+                    guard let cache = cached[assetID] else { continue }
                     if Self.shouldProcessIncrementalAsset(asset, cache: cache) {
-                        invalidated.insert(asset.localIdentifier)
+                        invalidated.insert(assetID)
                     }
                 }
             }

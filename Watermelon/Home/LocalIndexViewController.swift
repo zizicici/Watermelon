@@ -343,7 +343,7 @@ final class LocalIndexViewController: UIViewController {
             var indexedCount = 0
             var newest: Date?
             for asset in phAssets {
-                guard let row = validRaw[asset.localIdentifier] else { continue }
+                guard let row = validRaw[PhotoKitLocalIdentifier(asset)] else { continue }
                 guard Self.canTrustIndexedRow(row, for: asset) else { continue }
                 totalSize += row.totalFileSizeBytes
                 indexedCount += 1

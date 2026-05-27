@@ -9,7 +9,7 @@ fileprivate struct LocalAlbumAssetItem: Hashable, Sendable {
         case video
     }
 
-    let localIdentifier: String
+    let localIdentifier: PhotoKitLocalIdentifier
     let mediaKind: MediaKind
     let duration: TimeInterval
     let isLivePhoto: Bool
@@ -116,6 +116,7 @@ final class LocalAlbumDetailViewController: UIViewController {
     private func reloadAssets() {
         assetLoadTask?.cancel()
         let photoLibraryService = photoLibraryService
+        // PHCollection.localIdentifier (album id) — not the asset-id boundary.
         let albumIdentifier = album.localIdentifier
         assetLoadTask = Task { [weak self] in
             let assets = await withCancellableDetachedValue(priority: .userInitiated) {
@@ -144,7 +145,7 @@ final class LocalAlbumDetailViewController: UIViewController {
 
     nonisolated private static func makeAssetItem(from asset: PHAsset) -> LocalAlbumAssetItem {
         LocalAlbumAssetItem(
-            localIdentifier: asset.localIdentifier,
+            localIdentifier: PhotoKitLocalIdentifier(asset),
             mediaKind: asset.mediaType == .video ? .video : .image,
             duration: asset.duration,
             isLivePhoto: asset.mediaSubtypes.contains(.photoLive)

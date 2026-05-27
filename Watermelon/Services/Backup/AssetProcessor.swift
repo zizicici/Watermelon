@@ -13,7 +13,7 @@ struct HashIndexUpsertIntent: Sendable {
         )
         case fingerprintOnly(resourceCount: Int)
     }
-    let assetLocalIdentifier: String
+    let assetLocalIdentifier: PhotoKitLocalIdentifier
     let assetFingerprint: Data
     let totalFileSizeBytes: Int64
     let modificationDateMs: Int64?
@@ -29,7 +29,7 @@ enum HashIndexDrainOutcome {
 /// same content fingerprint each need their own `local_assets` row keyed by `assetLocalIdentifier`,
 /// so collapsing by fingerprint alone would lose cache coverage.
 actor PendingHashIndexIntentQueue {
-    private var byMonth: [LibraryMonthKey: [Data: [String: HashIndexUpsertIntent]]] = [:]
+    private var byMonth: [LibraryMonthKey: [Data: [PhotoKitLocalIdentifier: HashIndexUpsertIntent]]] = [:]
 
     func enqueue(month: LibraryMonthKey, intent: HashIndexUpsertIntent) {
         var byFingerprint = byMonth[month] ?? [:]
@@ -309,7 +309,7 @@ final class AssetProcessor: Sendable {
                 eventStream.emit(.transferState(
                     Self.makeTransferState(
                         workerID: context.workerID,
-                        assetLocalIdentifier: prepared.local.assetLocalIdentifier,
+                        assetLocalIdentifier: prepared.local.assetLocalIdentifier.rawValue,
                         assetDisplayName: displayName,
                         resourceDate: prepared.shotDate,
                         assetPosition: context.assetPosition,
@@ -408,7 +408,7 @@ final class AssetProcessor: Sendable {
             orderedResources: context.selectedResources
         )
         let snapshotIntent = HashIndexUpsertIntent(
-            assetLocalIdentifier: context.asset.localIdentifier,
+            assetLocalIdentifier: PhotoKitLocalIdentifier(context.asset),
             assetFingerprint: assetFingerprint,
             totalFileSizeBytes: totalFileSizeBytes,
             modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch,
@@ -516,7 +516,7 @@ final class AssetProcessor: Sendable {
             let totalFileSizeBytes = Self.totalSizeBytes(of: context.selectedResources)
             let dbStart = CFAbsoluteTimeGetCurrent()
             try hashIndexRepository.upsertAssetFingerprint(
-                assetLocalIdentifier: context.asset.localIdentifier,
+                assetLocalIdentifier: PhotoKitLocalIdentifier(context.asset),
                 assetFingerprint: cachedFingerprint,
                 resourceCount: context.selectedResources.count,
                 totalFileSizeBytes: totalFileSizeBytes,
@@ -595,7 +595,7 @@ final class AssetProcessor: Sendable {
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
 
         let fingerprintOnlyIntent = HashIndexUpsertIntent(
-            assetLocalIdentifier: context.asset.localIdentifier,
+            assetLocalIdentifier: PhotoKitLocalIdentifier(context.asset),
             assetFingerprint: cachedFingerprint,
             totalFileSizeBytes: totalFileSizeBytes,
             modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch,

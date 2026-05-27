@@ -38,11 +38,16 @@ extension AssetProcessor {
         selected: BackupSelectedResource,
         preferredAssetNameStem: String
     ) -> LocalPhotoResource {
-        LocalPhotoResource(
+        let assetID = PhotoKitLocalIdentifier(asset)
+        return LocalPhotoResource(
             asset: asset,
             resource: selected.resource,
-            assetLocalIdentifier: asset.localIdentifier,
-            resourceLocalIdentifier: "\(asset.localIdentifier)::\(selected.role)::\(selected.slot)",
+            assetLocalIdentifier: assetID,
+            inProcessResourceKey: InProcessResourceKey(
+                assetID: assetID,
+                role: selected.role,
+                slot: selected.slot
+            ),
             preferredRemoteFileName: Self.preferredRemoteFileName(
                 preferredAssetNameStem: preferredAssetNameStem,
                 selected: selected

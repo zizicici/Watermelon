@@ -51,7 +51,7 @@ struct BackupSessionState {
     var failed: Int = 0
     var skipped: Int = 0
     var total: Int = 0
-    var completedAssetIDsForResume: Set<String> = []
+    var completedAssetIDsForResume: Set<PhotoKitLocalIdentifier> = []
     var startedMonths = Set<LibraryMonthKey>()
     var uploadCompletedMonths = Set<LibraryMonthKey>()
     var incompleteSummaryByMonth: [LibraryMonthKey: BackupMonthIncompleteSummary] = [:]
@@ -448,9 +448,9 @@ struct BackupSessionState {
 
         if event.status == .failed {
             failedCountByMonth[monthKey, default: 0] += 1
-            completedAssetIDsForResume.remove(event.assetLocalIdentifier)
+            completedAssetIDsForResume.remove(PhotoKitLocalIdentifier(rawValue: event.assetLocalIdentifier))
         } else {
-            completedAssetIDsForResume.insert(event.assetLocalIdentifier)
+            completedAssetIDsForResume.insert(PhotoKitLocalIdentifier(rawValue: event.assetLocalIdentifier))
         }
     }
 }

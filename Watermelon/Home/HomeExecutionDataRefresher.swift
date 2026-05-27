@@ -3,7 +3,7 @@ import Foundation
 @MainActor
 final class HomeExecutionDataRefresher {
     typealias RemoteSync = () async -> Set<LibraryMonthKey>
-    typealias LocalRefresh = (Set<String>) async -> Set<LibraryMonthKey>
+    typealias LocalRefresh = (Set<PhotoKitLocalIdentifier>) async -> Set<LibraryMonthKey>
 
     var onStateChanged: (() -> Void)?
 
@@ -74,7 +74,7 @@ final class HomeExecutionDataRefresher {
         }
     }
 
-    func refreshLocalIndexAndNotify(_ assetIDs: Set<String>) async {
+    func refreshLocalIndexAndNotify(_ assetIDs: Set<PhotoKitLocalIdentifier>) async {
         let changedMonths = await refreshLocalIndex(assetIDs)
         guard !changedMonths.isEmpty else { return }
         pendingChangedMonths.formUnion(changedMonths)

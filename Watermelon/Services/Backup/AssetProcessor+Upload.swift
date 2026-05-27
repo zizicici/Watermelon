@@ -370,7 +370,7 @@ extension AssetProcessor {
                         eventStream.emit(.transferState(
                             Self.makeTransferState(
                                 workerID: workerID,
-                                assetLocalIdentifier: local.assetLocalIdentifier,
+                                assetLocalIdentifier: local.assetLocalIdentifier.rawValue,
                                 assetDisplayName: displayName,
                                 resourceDate: prepared.shotDate,
                                 assetPosition: assetPosition,

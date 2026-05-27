@@ -10,6 +10,7 @@ final class HomeScopeNormalizer {
 
     struct Hooks {
         var authorizationStatus: () -> PHAuthorizationStatus
+        // PHCollection.localIdentifier (album id) — not the asset-id boundary.
         var existingUserAlbumIdentifiers: (Set<String>) -> Set<String>
     }
 

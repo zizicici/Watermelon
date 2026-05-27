@@ -2,7 +2,7 @@ import XCTest
 @testable import Watermelon
 
 final class RestoredAssetFingerprintVerifierTests: XCTestCase {
-    private let assetID = "ABC-123/L0/001"
+    private let assetID = PhotoKitLocalIdentifier(rawValue: "ABC-123/L0/001")
 
     func testHappyPath_readyOnFirstAttempt_returnsTrue() async throws {
         let fingerprint = Data([0x01, 0x02, 0x03])
@@ -39,7 +39,7 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
         let verifier = RestoredAssetFingerprintVerifier(
             buildIndex: { [assetID] _ in
                 let n = buildCalls.bump()
-                let ready: Set<String> = (n >= 3) ? [assetID] : []
+                let ready: Set<PhotoKitLocalIdentifier> = (n >= 3) ? [assetID] : []
                 return Self.makeBuildResult(ready: ready)
             },
             fetchRecords: { [assetID] _ in
@@ -212,7 +212,7 @@ final class RestoredAssetFingerprintVerifierTests: XCTestCase {
         )
     }
 
-    private static func makeBuildResult(ready: Set<String>) -> LocalHashIndexBuildResult {
+    private static func makeBuildResult(ready: Set<PhotoKitLocalIdentifier>) -> LocalHashIndexBuildResult {
         LocalHashIndexBuildResult(
             requestedAssetIDs: ready,
             readyAssetIDs: ready,

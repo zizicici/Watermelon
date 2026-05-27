@@ -31,9 +31,9 @@ final class HomeFileSizeScanCoordinator {
 
     private var pendingFileSizeMonths = Set<LibraryMonthKey>()
     private var fileSizeUpdateTask: Task<Void, Never>?
-    private var assetSizeSnapshot: [String: AssetSizeSnapshot] = [:]
+    private var assetSizeSnapshot: [PhotoKitLocalIdentifier: AssetSizeSnapshot] = [:]
     private var assetSizeSnapshotLoaded = false
-    private var assetSizeSnapshotLoadTask: Task<[String: AssetSizeSnapshot], Never>?
+    private var assetSizeSnapshotLoadTask: Task<[PhotoKitLocalIdentifier: AssetSizeSnapshot], Never>?
     private var assetSizeSnapshotGeneration = 0
     private var fileSizeScanTask: Task<Void, Never>?
     private var fileSizeRescanTask: Task<Void, Never>?
@@ -231,7 +231,7 @@ final class HomeFileSizeScanCoordinator {
         guard !assetSizeSnapshotLoaded else { return }
         let generation = assetSizeSnapshotGeneration
 
-        let task: Task<[String: AssetSizeSnapshot], Never>
+        let task: Task<[PhotoKitLocalIdentifier: AssetSizeSnapshot], Never>
         if let existing = assetSizeSnapshotLoadTask {
             task = existing
         } else {

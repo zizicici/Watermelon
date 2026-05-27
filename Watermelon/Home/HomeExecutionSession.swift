@@ -24,7 +24,7 @@ struct HomeExecutionSession {
     private(set) var monthPlans: [LibraryMonthKey: MonthPlan] = [:]
     private(set) var assetCountByMonth: [LibraryMonthKey: Int] = [:]
     private(set) var processedCountByMonth: [LibraryMonthKey: Int] = [:]
-    private(set) var uploadAssetIDsByMonth: [LibraryMonthKey: Set<String>] = [:]
+    private(set) var uploadAssetIDsByMonth: [LibraryMonthKey: Set<PhotoKitLocalIdentifier>] = [:]
     private(set) var backupMonths: [LibraryMonthKey] = []
     private(set) var downloadMonths: [LibraryMonthKey] = []
     private(set) var complementMonths: [LibraryMonthKey] = []
@@ -87,15 +87,15 @@ struct HomeExecutionSession {
 
     var shouldRunUploadPhase: Bool { !uploadPhaseCompleted }
 
-    var uploadScopeAssetIDs: Set<String> {
-        uploadAssetIDsByMonth.values.reduce(into: Set<String>()) { $0.formUnion($1) }
+    var uploadScopeAssetIDs: Set<PhotoKitLocalIdentifier> {
+        uploadAssetIDsByMonth.values.reduce(into: Set<PhotoKitLocalIdentifier>()) { $0.formUnion($1) }
     }
 
     mutating func enter(
         backup: [LibraryMonthKey],
         download: [LibraryMonthKey],
         complement: [LibraryMonthKey],
-        localAssetIDs: (LibraryMonthKey) -> Set<String>
+        localAssetIDs: (LibraryMonthKey) -> Set<PhotoKitLocalIdentifier>
     ) {
         backupMonths = backup
         downloadMonths = download
@@ -342,10 +342,10 @@ struct HomeExecutionSession {
     }
 
     private mutating func buildUploadScope(
-        localAssetIDs: (LibraryMonthKey) -> Set<String>
+        localAssetIDs: (LibraryMonthKey) -> Set<PhotoKitLocalIdentifier>
     ) -> BackupScopeSelection {
         let complementMonthSet = Set(complementMonths)
-        var allAssetIDs = Set<String>()
+        var allAssetIDs = Set<PhotoKitLocalIdentifier>()
         uploadAssetIDsByMonth.removeAll(keepingCapacity: true)
 
         for month in backupMonths + complementMonths {

@@ -8,27 +8,27 @@ typealias LocalHashIndexProgressHandler = @Sendable (String, ExecutionLogLevel) 
 typealias LocalHashIndexProgressTickHandler = @Sendable (_ processed: Int, _ total: Int) async -> Void
 
 struct LocalHashIndexBuildResult: Sendable {
-    let requestedAssetIDs: Set<String>
-    let readyAssetIDs: Set<String>
-    let unavailableAssetIDs: Set<String>
-    let failedAssetIDs: Set<String>
-    let missingAssetIDs: Set<String>
+    let requestedAssetIDs: Set<PhotoKitLocalIdentifier>
+    let readyAssetIDs: Set<PhotoKitLocalIdentifier>
+    let unavailableAssetIDs: Set<PhotoKitLocalIdentifier>
+    let failedAssetIDs: Set<PhotoKitLocalIdentifier>
+    let missingAssetIDs: Set<PhotoKitLocalIdentifier>
 
-    var incompleteAssetIDs: Set<String> {
+    var incompleteAssetIDs: Set<PhotoKitLocalIdentifier> {
         unavailableAssetIDs.union(failedAssetIDs)
     }
 }
 
 private enum LocalHashIndexAssetOutcome: Sendable {
-    case ready(String)
-    case unavailable(String)
-    case failed(String)
+    case ready(PhotoKitLocalIdentifier)
+    case unavailable(PhotoKitLocalIdentifier)
+    case failed(PhotoKitLocalIdentifier)
 }
 
 private struct LocalHashIndexWorkerResult: Sendable {
-    var readyAssetIDs = Set<String>()
-    var unavailableAssetIDs = Set<String>()
-    var failedAssetIDs = Set<String>()
+    var readyAssetIDs = Set<PhotoKitLocalIdentifier>()
+    var unavailableAssetIDs = Set<PhotoKitLocalIdentifier>()
+    var failedAssetIDs = Set<PhotoKitLocalIdentifier>()
 
     mutating func record(_ outcome: LocalHashIndexAssetOutcome) {
         switch outcome {
@@ -48,14 +48,14 @@ private struct LocalHashIndexProcessedAssetResult: Sendable {
 }
 
 private actor LocalHashIndexWorklist {
-    private let assetIDs: [String]
+    private let assetIDs: [PhotoKitLocalIdentifier]
     private var nextIndex = 0
 
-    init(assetIDs: [String]) {
+    init(assetIDs: [PhotoKitLocalIdentifier]) {
         self.assetIDs = assetIDs
     }
 
-    func nextBatch(maxSize: Int) -> ArraySlice<String> {
+    func nextBatch(maxSize: Int) -> ArraySlice<PhotoKitLocalIdentifier> {
         let start = nextIndex
         let end = min(start + maxSize, assetIDs.count)
         nextIndex = end
@@ -141,14 +141,14 @@ private actor LocalHashIndexBuildProgressReporter {
 }
 
 private struct LocalHashIndexBuildPreparedInput: Sendable {
-    let cachedHashesByAssetID: [String: LocalAssetHashCache]
-    let assetIDs: [String]
-    let missingAssetIDs: Set<String>
+    let cachedHashesByAssetID: [PhotoKitLocalIdentifier: LocalAssetHashCache]
+    let assetIDs: [PhotoKitLocalIdentifier]
+    let missingAssetIDs: Set<PhotoKitLocalIdentifier>
 }
 
 private struct LocalHashIndexAssetFetchInput: Sendable {
-    let assetIDs: [String]
-    let missingAssetIDs: Set<String>
+    let assetIDs: [PhotoKitLocalIdentifier]
+    let missingAssetIDs: Set<PhotoKitLocalIdentifier>
 }
 
 final class LocalHashIndexBuildService: @unchecked Sendable {
@@ -166,7 +166,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
     }
 
     func buildIndex(
-        for assetIDs: Set<String>,
+        for assetIDs: Set<PhotoKitLocalIdentifier>,
         workerCount: Int = 2,
         allowNetworkAccess: Bool = false,
         progressHandler: LocalHashIndexProgressHandler? = nil,
@@ -242,10 +242,10 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
 
                             let phAssets = self.photoLibraryService
                                 .fetchAssets(localIdentifiers: Set(batch))
-                            var assetByID: [String: PHAsset] = [:]
+                            var assetByID: [PhotoKitLocalIdentifier: PHAsset] = [:]
                             assetByID.reserveCapacity(phAssets.count)
                             for asset in phAssets {
-                                assetByID[asset.localIdentifier] = asset
+                                assetByID[PhotoKitLocalIdentifier(asset)] = asset
                             }
 
                             for assetID in batch {
@@ -334,7 +334,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
     }
 
     private func prepareInput(
-        for assetIDs: Set<String>
+        for assetIDs: Set<PhotoKitLocalIdentifier>
     ) async throws -> LocalHashIndexBuildPreparedInput {
         async let cachedHashesByAssetID = loadCachedHashes(for: assetIDs)
         async let assetFetchInput = prepareAssetFetchInput(for: assetIDs)
@@ -349,13 +349,13 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
     }
 
     private func prepareAssetFetchInput(
-        for assetIDs: Set<String>
+        for assetIDs: Set<PhotoKitLocalIdentifier>
     ) async throws -> LocalHashIndexAssetFetchInput {
         let photoLibraryService = self.photoLibraryService
         let task = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
             let fetchedAssets = photoLibraryService.fetchAssets(localIdentifiers: assetIDs)
-            let sortedIDs: [String] = fetchedAssets
+            let sortedIDs: [PhotoKitLocalIdentifier] = fetchedAssets
                 .sorted { lhs, rhs in
                     let lhsDate = lhs.creationDate ?? .distantPast
                     let rhsDate = rhs.creationDate ?? .distantPast
@@ -364,7 +364,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                     }
                     return lhs.localIdentifier < rhs.localIdentifier
                 }
-                .map(\.localIdentifier)
+                .map { PhotoKitLocalIdentifier($0) }
             return LocalHashIndexAssetFetchInput(
                 assetIDs: sortedIDs,
                 missingAssetIDs: assetIDs.subtracting(sortedIDs)
@@ -379,8 +379,8 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
     }
 
     private func loadCachedHashes(
-        for assetIDs: Set<String>
-    ) async throws -> [String: LocalAssetHashCache] {
+        for assetIDs: Set<PhotoKitLocalIdentifier>
+    ) async throws -> [PhotoKitLocalIdentifier: LocalAssetHashCache] {
         let repository = self.repository
         let task = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
@@ -404,7 +404,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         )
         guard !selectedResources.isEmpty else {
             return LocalHashIndexProcessedAssetResult(
-                outcome: .failed(asset.localIdentifier),
+                outcome: .failed(PhotoKitLocalIdentifier(asset)),
                 reusedCache: false
             )
         }
@@ -426,7 +426,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                         )
                         if !isLocal {
                             return LocalHashIndexProcessedAssetResult(
-                                outcome: .unavailable(asset.localIdentifier),
+                                outcome: .unavailable(PhotoKitLocalIdentifier(asset)),
                                 reusedCache: true
                             )
                         }
@@ -435,13 +435,13 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                     throw CancellationError()
                 } catch {
                     return LocalHashIndexProcessedAssetResult(
-                        outcome: .failed(asset.localIdentifier),
+                        outcome: .failed(PhotoKitLocalIdentifier(asset)),
                         reusedCache: true
                     )
                 }
             }
             return LocalHashIndexProcessedAssetResult(
-                outcome: .ready(asset.localIdentifier),
+                outcome: .ready(PhotoKitLocalIdentifier(asset)),
                 reusedCache: true
             )
         }
@@ -480,7 +480,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
 
             let signature = BackupAssetResourcePlanner.resourceSignature(orderedResources: selectedResources)
             try repository.upsertAssetHashSnapshot(
-                assetLocalIdentifier: asset.localIdentifier,
+                assetLocalIdentifier: PhotoKitLocalIdentifier(asset),
                 assetFingerprint: fingerprint,
                 resources: roleSlotHashes.map { item in
                     LocalAssetResourceHashRecord(
@@ -496,7 +496,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 resourceSignature: signature
             )
             return LocalHashIndexProcessedAssetResult(
-                outcome: .ready(asset.localIdentifier),
+                outcome: .ready(PhotoKitLocalIdentifier(asset)),
                 reusedCache: false
             )
         } catch is CancellationError {
@@ -504,12 +504,12 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
         } catch {
             if !allowNetworkAccess && PhotoLibraryService.isNetworkAccessRequiredError(error) {
                 return LocalHashIndexProcessedAssetResult(
-                    outcome: .unavailable(asset.localIdentifier),
+                    outcome: .unavailable(PhotoKitLocalIdentifier(asset)),
                     reusedCache: false
                 )
             }
             return LocalHashIndexProcessedAssetResult(
-                outcome: .failed(asset.localIdentifier),
+                outcome: .failed(PhotoKitLocalIdentifier(asset)),
                 reusedCache: false
             )
         }

@@ -86,7 +86,7 @@ enum State {
         set { session.backupScopeSelection = newValue }
     }
 
-    private var completedAssetIDsForResume: Set<String> {
+    private var completedAssetIDsForResume: Set<PhotoKitLocalIdentifier> {
         get { session.completedAssetIDsForResume }
         set { session.completedAssetIDsForResume = newValue }
     }
@@ -430,7 +430,7 @@ enum State {
         notifyObserversNow()
     }
 
-    func markAssetIDsPendingForResume(_ assetIDs: Set<String>) {
+    func markAssetIDsPendingForResume(_ assetIDs: Set<PhotoKitLocalIdentifier>) {
         guard !assetIDs.isEmpty else { return }
         completedAssetIDsForResume.subtract(assetIDs)
     }

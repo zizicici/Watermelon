@@ -17,21 +17,21 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     }
 
     private struct TrackedCollection {
-        var assetIDs: Set<String>
+        var assetIDs: Set<PhotoKitLocalIdentifier>
     }
 
     // For All Photos `trackedCollections.count == 1` and every membership count is 1.
     // For album scope an asset may belong to several selected albums; the count gates
     // eviction so a removal from one album doesn't drop the asset from the index.
     private var trackedCollections: [TrackedCollection] = []
-    private var assetMembershipCount: [String: Int] = [:]
+    private var assetMembershipCount: [PhotoKitLocalIdentifier: Int] = [:]
 
-    private var localAssetIDsByMonth: [LibraryMonthKey: Set<String>] = [:]
-    private var assetIDToMonth: [String: LibraryMonthKey] = [:]
-    private var mediaKindByAssetID: [String: AlbumMediaKind] = [:]
+    private var localAssetIDsByMonth: [LibraryMonthKey: Set<PhotoKitLocalIdentifier>] = [:]
+    private var assetIDToMonth: [PhotoKitLocalIdentifier: LibraryMonthKey] = [:]
+    private var mediaKindByAssetID: [PhotoKitLocalIdentifier: AlbumMediaKind] = [:]
     // In-memory mirror of `local_assets.assetFingerprint` so recomputeAggregates can
     // compute backed-up counts without hitting the DB.
-    private var fingerprintByAssetID: [String: Data] = [:]
+    private var fingerprintByAssetID: [PhotoKitLocalIdentifier: Data] = [:]
     private var monthAggregates: [LibraryMonthKey: MonthAggregate] = [:]
     private(set) var monthFileSizes: [LibraryMonthKey: Int64] = [:]
 
@@ -43,8 +43,8 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         Set(localAssetIDsByMonth.keys)
     }
 
-    func knownAssetIDs(in assetIDs: Set<String>) -> Set<String> {
-        var result: Set<String> = []
+    func knownAssetIDs(in assetIDs: Set<PhotoKitLocalIdentifier>) -> Set<PhotoKitLocalIdentifier> {
+        var result: Set<PhotoKitLocalIdentifier> = []
         result.reserveCapacity(assetIDs.count)
         for id in assetIDs where assetIDToMonth[id] != nil {
             result.insert(id)
@@ -52,17 +52,17 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         return result
     }
 
-    func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
+    func localAssetIDs(for month: LibraryMonthKey) -> Set<PhotoKitLocalIdentifier> {
         localAssetIDsByMonth[month] ?? []
     }
 
-    func monthForAsset(_ assetID: String) -> LibraryMonthKey? {
+    func monthForAsset(_ assetID: PhotoKitLocalIdentifier) -> LibraryMonthKey? {
         assetIDToMonth[assetID]
     }
 
-    func fingerprints(for assetIDs: Set<String>) -> [String: Data] {
+    func fingerprints(for assetIDs: Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: Data] {
         guard !assetIDs.isEmpty else { return [:] }
-        var result: [String: Data] = [:]
+        var result: [PhotoKitLocalIdentifier: Data] = [:]
         result.reserveCapacity(assetIDs.count)
         for id in assetIDs {
             if let fp = fingerprintByAssetID[id] {
@@ -96,7 +96,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
 
     func reload(
         payload: LibraryInitialPayload,
-        fingerprintByAsset: [String: LocalAssetFingerprintRecord],
+        fingerprintByAsset: [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
         let oldMonths = allMonths
@@ -119,7 +119,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         trackedCollections.reserveCapacity(payload.collections.count)
 
         for snapshots in payload.collections {
-            var collectionAssetIDs = Set<String>()
+            var collectionAssetIDs = Set<PhotoKitLocalIdentifier>()
             collectionAssetIDs.reserveCapacity(snapshots.count)
             for snapshot in snapshots {
                 let assetID = snapshot.localIdentifier
@@ -167,14 +167,14 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     /// Recompute fingerprint / aggregate for IDs already represented in the index.
     /// Unknown IDs are silently skipped. Returns the months whose aggregates changed.
     func refreshExisting(
-        assetIDs: Set<String>,
-        fingerprintsForIDs: (Set<String>) -> [String: LocalAssetFingerprintRecord],
+        assetIDs: Set<PhotoKitLocalIdentifier>,
+        fingerprintsForIDs: (Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty, hasLoadedIndex else { return [] }
 
         var changedMonths = Set<LibraryMonthKey>()
-        var refreshIDs = Set<String>()
+        var refreshIDs = Set<PhotoKitLocalIdentifier>()
         refreshIDs.reserveCapacity(assetIDs.count)
         for id in assetIDs {
             guard let month = monthForAsset(id) else { continue }
@@ -198,8 +198,8 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     /// PHChange is in flight or deferred. Already-tracked IDs in `snapshots` are
     /// skipped so a double call is idempotent.
     func eagerlyInsert(
-        _ snapshots: [String: LibraryAssetSnapshot],
-        fingerprintsForIDs: (Set<String>) -> [String: LocalAssetFingerprintRecord],
+        _ snapshots: [PhotoKitLocalIdentifier: LibraryAssetSnapshot],
+        fingerprintsForIDs: (Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
         guard !snapshots.isEmpty, hasLoadedIndex else { return [] }
@@ -230,21 +230,21 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     /// last collection drops it.
     func applyChange(
         _ payload: LibraryChangePayload,
-        fingerprintsForIDs: (Set<String>) -> [String: LocalAssetFingerprintRecord],
+        fingerprintsForIDs: (Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord],
         remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
     ) -> Set<LibraryMonthKey> {
         guard !trackedCollections.isEmpty else { return [] }
 
         var changedMonths = Set<LibraryMonthKey>()
-        var fingerprintRefreshIDs = Set<String>()
+        var fingerprintRefreshIDs = Set<PhotoKitLocalIdentifier>()
 
         for change in payload.collectionChanges {
             let index = change.collectionIndex
             guard trackedCollections.indices.contains(index) else { continue }
 
             let previousAssetIDs = trackedCollections[index].assetIDs
-            var nextAssetIDs: Set<String>
-            var upsertSnapshots: [String: LibraryAssetSnapshot] = [:]
+            var nextAssetIDs: Set<PhotoKitLocalIdentifier>
+            var upsertSnapshots: [PhotoKitLocalIdentifier: LibraryAssetSnapshot] = [:]
 
             switch change {
             case .incremental(_, let removed, let inserted, let changed, let moved):
@@ -257,7 +257,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
                     upsertSnapshots[snapshot.localIdentifier] = snapshot
                 }
             case .nonIncremental(_, let nextSnapshots):
-                nextAssetIDs = Set<String>()
+                nextAssetIDs = Set<PhotoKitLocalIdentifier>()
                 nextAssetIDs.reserveCapacity(nextSnapshots.count)
                 upsertSnapshots.reserveCapacity(nextSnapshots.count)
                 for snapshot in nextSnapshots {
@@ -309,11 +309,11 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     }
 
     private func applyMembershipDelta(
-        removedIDs: Set<String>,
-        addedIDs: Set<String>,
+        removedIDs: Set<PhotoKitLocalIdentifier>,
+        addedIDs: Set<PhotoKitLocalIdentifier>,
         changedMonths: inout Set<LibraryMonthKey>
-    ) -> Set<String> {
-        var newlyRepresentedIDs = Set<String>()
+    ) -> Set<PhotoKitLocalIdentifier> {
+        var newlyRepresentedIDs = Set<PhotoKitLocalIdentifier>()
 
         for id in removedIDs {
             guard let count = assetMembershipCount[id] else { continue }
@@ -340,10 +340,10 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     }
 
     private func upsertAssets(
-        _ snapshots: [String: LibraryAssetSnapshot],
+        _ snapshots: [PhotoKitLocalIdentifier: LibraryAssetSnapshot],
         changedMonths: inout Set<LibraryMonthKey>
-    ) -> Set<String> {
-        var representedIDs = Set<String>()
+    ) -> Set<PhotoKitLocalIdentifier> {
+        var representedIDs = Set<PhotoKitLocalIdentifier>()
         representedIDs.reserveCapacity(snapshots.count)
 
         for (id, snapshot) in snapshots {
@@ -363,8 +363,8 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     }
 
     private func refreshFingerprintCache(
-        for ids: Set<String>,
-        using fingerprintsForIDs: (Set<String>) -> [String: LocalAssetFingerprintRecord]
+        for ids: Set<PhotoKitLocalIdentifier>,
+        using fingerprintsForIDs: (Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord]
     ) {
         guard !ids.isEmpty else { return }
         let fresh = fingerprintsForIDs(ids)
@@ -420,13 +420,13 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         }
     }
 
-    private func insertAssetID(_ id: String, month: LibraryMonthKey, mediaKind: AlbumMediaKind) {
+    private func insertAssetID(_ id: PhotoKitLocalIdentifier, month: LibraryMonthKey, mediaKind: AlbumMediaKind) {
         localAssetIDsByMonth[month, default: []].insert(id)
         assetIDToMonth[id] = month
         mediaKindByAssetID[id] = mediaKind
     }
 
-    private func removeFromIDSets(_ id: String, month: LibraryMonthKey) {
+    private func removeFromIDSets(_ id: PhotoKitLocalIdentifier, month: LibraryMonthKey) {
         if var ids = localAssetIDsByMonth[month] {
             ids.remove(id)
             localAssetIDsByMonth[month] = ids.isEmpty ? nil : ids

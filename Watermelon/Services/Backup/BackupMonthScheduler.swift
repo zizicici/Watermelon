@@ -7,33 +7,33 @@ enum BackupMonthScheduler {
 
     static func buildMonthAssetIDsByMonth(
         from assetsResult: PHFetchResult<PHAsset>
-    ) -> [MonthKey: [String]] {
-        var assetsByMonth: [MonthKey: [String]] = [:]
+    ) -> [MonthKey: [PhotoKitLocalIdentifier]] {
+        var assetsByMonth: [MonthKey: [PhotoKitLocalIdentifier]] = [:]
         assetsByMonth.reserveCapacity(32)
 
         for index in 0 ..< assetsResult.count {
             let asset = assetsResult.object(at: index)
             let monthKey = AssetProcessor.monthKey(for: asset.creationDate)
-            assetsByMonth[monthKey, default: []].append(asset.localIdentifier)
+            assetsByMonth[monthKey, default: []].append(PhotoKitLocalIdentifier(asset))
         }
         return assetsByMonth
     }
 
     static func buildMonthAssetIDsByMonth(
         from assets: [PHAsset]
-    ) -> [MonthKey: [String]] {
-        var assetsByMonth: [MonthKey: [String]] = [:]
+    ) -> [MonthKey: [PhotoKitLocalIdentifier]] {
+        var assetsByMonth: [MonthKey: [PhotoKitLocalIdentifier]] = [:]
         assetsByMonth.reserveCapacity(32)
 
         for asset in assets {
             let monthKey = AssetProcessor.monthKey(for: asset.creationDate)
-            assetsByMonth[monthKey, default: []].append(asset.localIdentifier)
+            assetsByMonth[monthKey, default: []].append(PhotoKitLocalIdentifier(asset))
         }
         return assetsByMonth
     }
 
     static func buildMonthPlans(
-        assetLocalIdentifiersByMonth: [MonthKey: [String]],
+        assetLocalIdentifiersByMonth: [MonthKey: [PhotoKitLocalIdentifier]],
         estimatedBytesByMonth: [MonthKey: Int64]
     ) -> [MonthWorkItem] {
 
@@ -108,7 +108,7 @@ enum BackupMonthScheduler {
 
 struct MonthWorkItem: Sendable {
     let month: MonthKey
-    let assetLocalIdentifiers: [String]
+    let assetLocalIdentifiers: [PhotoKitLocalIdentifier]
     let estimatedBytes: Int64
 }
 
@@ -162,7 +162,7 @@ actor ParallelBackupProgressAggregator {
     /// commit covering them landed) or `rollBackProvisionalBatch` (hard-abort flush failure)
     /// processes them. Counters advance at `record(result:)` time and revert on rollback so the
     /// visible progress matches durable outcomes after reconciliation.
-    private var provisionalByMonth: [LibraryMonthKey: [Data: [String: ProvisionalRecordStatus]]] = [:]
+    private var provisionalByMonth: [LibraryMonthKey: [Data: [PhotoKitLocalIdentifier: ProvisionalRecordStatus]]] = [:]
 
     init(total: Int) {
         state = BackupRunState(total: total)
@@ -237,7 +237,7 @@ actor ParallelBackupProgressAggregator {
     func recordProvisional(
         month: LibraryMonthKey,
         fingerprint: Data,
-        assetLocalIdentifier: String,
+        assetLocalIdentifier: PhotoKitLocalIdentifier,
         status: ProvisionalRecordStatus
     ) {
         provisionalByMonth[month, default: [:]][fingerprint, default: [:]][assetLocalIdentifier] = status

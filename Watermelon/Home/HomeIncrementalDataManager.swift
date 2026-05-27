@@ -50,7 +50,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     @discardableResult
-    func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) async -> Set<LibraryMonthKey> {
+    func refreshLocalIndex(forAssetIDs assetIDs: Set<PhotoKitLocalIdentifier>) async -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty else { return [] }
         return await processingWorker.refreshLocalIndex(
             forAssetIDs: assetIDs,
@@ -77,7 +77,7 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         processingWorker.allMonthRows()
     }
 
-    func localAssetIDs(for month: LibraryMonthKey) -> Set<String> {
+    func localAssetIDs(for month: LibraryMonthKey) -> Set<PhotoKitLocalIdentifier> {
         processingWorker.localAssetIDs(for: month, expectedScope: hooks.currentScope())
     }
 

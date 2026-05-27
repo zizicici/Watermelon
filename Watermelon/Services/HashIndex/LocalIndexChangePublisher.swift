@@ -4,7 +4,7 @@ import Foundation
 /// via its own per-month / per-asset callbacks, and a publish would double-fire.
 final class LocalIndexChangePublisher: @unchecked Sendable {
     enum Change: Sendable {
-        case touched(assetIDs: Set<String>)
+        case touched(assetIDs: Set<PhotoKitLocalIdentifier>)
         case bulkInvalidation
     }
 

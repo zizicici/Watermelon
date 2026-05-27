@@ -1,8 +1,8 @@
 import Foundation
 
 final class RestoredAssetFingerprintVerifier: @unchecked Sendable {
-    typealias BuildFingerprintIndex = @Sendable (_ assetLocalIdentifiers: Set<String>) async throws -> LocalHashIndexBuildResult
-    typealias FetchFingerprintRecords = @Sendable (_ assetLocalIdentifiers: Set<String>) throws -> [String: LocalAssetFingerprintRecord]
+    typealias BuildFingerprintIndex = @Sendable (_ assetLocalIdentifiers: Set<PhotoKitLocalIdentifier>) async throws -> LocalHashIndexBuildResult
+    typealias FetchFingerprintRecords = @Sendable (_ assetLocalIdentifiers: Set<PhotoKitLocalIdentifier>) throws -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord]
 
     // PhotoKit settle window after a Photos save: rebuild + read may race the asset becoming queryable.
     static let defaultDelays: [Duration] = [
@@ -30,7 +30,7 @@ final class RestoredAssetFingerprintVerifier: @unchecked Sendable {
     }
 
     func verifyDurableBinding(
-        assetLocalIdentifier: String,
+        assetLocalIdentifier: PhotoKitLocalIdentifier,
         expectedFingerprint: Data
     ) async throws -> Bool {
         for attempt in 0...delays.count {

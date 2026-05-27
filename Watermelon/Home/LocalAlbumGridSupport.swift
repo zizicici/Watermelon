@@ -79,13 +79,13 @@ final class PHAssetThumbnailRequest: @unchecked Sendable {
 enum PHAssetThumbnailLoader {
     private static let imageManager = PHCachingImageManager()
 
-    static func cacheKey(assetLocalIdentifier: String, pixelSide: Int) -> String {
-        "phasset-thumbnail-\(assetLocalIdentifier)-\(pixelSide)"
+    static func cacheKey(assetLocalIdentifier: PhotoKitLocalIdentifier, pixelSide: Int) -> String {
+        "phasset-thumbnail-\(assetLocalIdentifier.rawValue)-\(pixelSide)"
     }
 
     @discardableResult
     static func setImage(
-        assetLocalIdentifier: String,
+        assetLocalIdentifier: PhotoKitLocalIdentifier,
         pixelSide: Int,
         on imageView: UIImageView,
         fadeDuration: TimeInterval
@@ -110,7 +110,7 @@ enum PHAssetThumbnailLoader {
     }
 
     private static func loadFromPhotoLibrary(
-        assetLocalIdentifier: String,
+        assetLocalIdentifier: PhotoKitLocalIdentifier,
         pixelSide: Int,
         cacheKey: String,
         request: PHAssetThumbnailRequest,
@@ -118,7 +118,7 @@ enum PHAssetThumbnailLoader {
         fadeDuration: TimeInterval
     ) {
         guard !request.cancelled else { return }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [assetLocalIdentifier], options: nil)
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: [assetLocalIdentifier.rawValue], options: nil)
         guard result.count > 0 else { return }
 
         let asset = result.object(at: 0)

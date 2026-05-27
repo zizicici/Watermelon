@@ -149,7 +149,7 @@ final class BackgroundBackupRunner {
 
     private func backupProfile(
         _ profile: ServerProfileRecord,
-        monthAssetIDs: [LibraryMonthKey: [String]],
+        monthAssetIDs: [LibraryMonthKey: [PhotoKitLocalIdentifier]],
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter
     ) async -> ProfileRunResult {
@@ -383,7 +383,7 @@ final class BackgroundBackupRunner {
     private func runBackupLoop(
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
-        monthAssetIDs: [LibraryMonthKey: [String]],
+        monthAssetIDs: [LibraryMonthKey: [PhotoKitLocalIdentifier]],
         sortedMonths: [LibraryMonthKey],
         writer: ExecutionLogSessionWriter,
         v2Services: BackupV2RuntimeServices
@@ -461,7 +461,7 @@ final class BackgroundBackupRunner {
                 let batchEnd = min(batchStart + fetchBatchSize, assetIDs.count)
                 let batchIDs = Array(assetIDs[batchStart ..< batchEnd])
 
-                let batchLocalHashCache: [String: LocalAssetHashCache]
+                let batchLocalHashCache: [PhotoKitLocalIdentifier: LocalAssetHashCache]
                 do {
                     batchLocalHashCache = try hashIndexRepository.fetchAssetHashCaches(
                         assetIDs: Set(batchIDs)
@@ -474,7 +474,7 @@ final class BackgroundBackupRunner {
                     batchLocalHashCache = [:]
                 }
                 let batchResult = PHAsset.fetchAssets(
-                    withLocalIdentifiers: batchIDs, options: nil
+                    withLocalIdentifiers: batchIDs.rawValues, options: nil
                 )
 
                 for i in 0 ..< batchResult.count {
@@ -489,7 +489,7 @@ final class BackgroundBackupRunner {
                         workerID: 1,
                         asset: asset,
                         selectedResources: resources,
-                        cachedLocalHash: batchLocalHashCache[asset.localIdentifier],
+                        cachedLocalHash: batchLocalHashCache[PhotoKitLocalIdentifier(asset)],
                         iCloudPhotoBackupMode: iCloudMode,
                         monthStore: monthStore,
                         profile: profile,

@@ -308,6 +308,7 @@ final class HomeScreenStore {
 
     func setLocalLibraryScope(_ scope: HomeLocalLibraryScope, descriptors: [LocalAlbumDescriptor] = []) {
         for descriptor in descriptors {
+            // PHCollection.localIdentifier (album id) — not the asset-id boundary.
             albumDisplayCache[descriptor.localIdentifier] = descriptor
         }
         let isExecuting = executionState != nil

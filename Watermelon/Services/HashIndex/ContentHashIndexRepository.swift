@@ -17,7 +17,7 @@ struct LocalAssetHashCache: Sendable {
 }
 
 struct IndexedAssetRow: Sendable {
-    let assetLocalIdentifier: String
+    let assetLocalIdentifier: PhotoKitLocalIdentifier
     let assetFingerprint: Data
     let totalFileSizeBytes: Int64
     let updatedAt: Date
@@ -26,7 +26,7 @@ struct IndexedAssetRow: Sendable {
 }
 
 struct DuplicateIndexedAssetRow: Sendable {
-    let assetLocalIdentifier: String
+    let assetLocalIdentifier: PhotoKitLocalIdentifier
     let assetFingerprint: Data
     let updatedAt: Date
     let selectionVersion: Int
@@ -51,7 +51,7 @@ struct AssetSizeSnapshot: Sendable {
 }
 
 struct AssetSizeUpdate: Sendable {
-    let assetLocalIdentifier: String
+    let assetLocalIdentifier: PhotoKitLocalIdentifier
     let totalFileSizeBytes: Int64
     let modificationDateMs: Int64
 }
@@ -81,10 +81,11 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         self.databaseManager = databaseManager
     }
 
-    private static func forEachIDChunk<C: Collection>(
-        _ ids: C,
+    // Raw String chunker — the SQLite codec binds String, conversion happens at the public API boundary.
+    private static func forEachRawIDChunk(
+        _ ids: [String],
         body: (_ chunk: [String], _ placeholders: String) throws -> Void
-    ) rethrows where C.Element == String {
+    ) rethrows {
         var buffer: [String] = []
         buffer.reserveCapacity(idChunkSize)
         for id in ids {
@@ -102,7 +103,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
     }
 
     func upsertAssetHashSnapshot(
-        assetLocalIdentifier: String,
+        assetLocalIdentifier: PhotoKitLocalIdentifier,
         assetFingerprint: Data,
         resources: [LocalAssetResourceHashRecord],
         totalFileSizeBytes: Int64,
@@ -113,7 +114,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         try databaseManager.write { db in
             try Self.writeLocalAssetRow(
                 db,
-                assetLocalIdentifier: assetLocalIdentifier,
+                assetLocalIdentifier: assetLocalIdentifier.rawValue,
                 assetFingerprint: assetFingerprint,
                 resourceCount: resources.count,
                 totalFileSizeBytes: totalFileSizeBytes,
@@ -124,7 +125,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
 
             try db.execute(
                 sql: "DELETE FROM local_asset_resources WHERE assetLocalIdentifier = ?",
-                arguments: [assetLocalIdentifier]
+                arguments: [assetLocalIdentifier.rawValue]
             )
 
             for resource in resources {
@@ -139,7 +140,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                     ) VALUES (?, ?, ?, ?, ?)
                     """,
                     arguments: [
-                        assetLocalIdentifier,
+                        assetLocalIdentifier.rawValue,
                         resource.role,
                         resource.slot,
                         resource.contentHash,
@@ -151,7 +152,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
     }
 
     func upsertAssetFingerprint(
-        assetLocalIdentifier: String,
+        assetLocalIdentifier: PhotoKitLocalIdentifier,
         assetFingerprint: Data,
         resourceCount: Int,
         totalFileSizeBytes: Int64,
@@ -160,7 +161,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         try databaseManager.write { db in
             try Self.writeLocalAssetRow(
                 db,
-                assetLocalIdentifier: assetLocalIdentifier,
+                assetLocalIdentifier: assetLocalIdentifier.rawValue,
                 assetFingerprint: assetFingerprint,
                 resourceCount: resourceCount,
                 totalFileSizeBytes: totalFileSizeBytes,
@@ -216,7 +217,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         )
     }
 
-    func fetchAssetFingerprintRecords() throws -> [String: LocalAssetFingerprintRecord] {
+    func fetchAssetFingerprintRecords() throws -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] {
         try databaseManager.read { db in
             let rows = try Row.fetchAll(
                 db,
@@ -226,10 +227,10 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 WHERE assetFingerprint IS NOT NULL
                 """
             )
-            var result: [String: LocalAssetFingerprintRecord] = [:]
+            var result: [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] = [:]
             result.reserveCapacity(rows.count)
             for row in rows {
-                let assetID: String = row["assetLocalIdentifier"]
+                let assetID = PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"])
                 result[assetID] = LocalAssetFingerprintRecord(
                     fingerprint: row["assetFingerprint"],
                     updatedAt: row["updatedAt"],
@@ -241,13 +242,13 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
-    func fetchAssetFingerprintRecords(assetIDs: Set<String>) throws -> [String: LocalAssetFingerprintRecord] {
+    func fetchAssetFingerprintRecords(assetIDs: Set<PhotoKitLocalIdentifier>) throws -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] {
         guard !assetIDs.isEmpty else { return [:] }
 
         return try databaseManager.read { db in
-            var result: [String: LocalAssetFingerprintRecord] = [:]
+            var result: [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] = [:]
             result.reserveCapacity(assetIDs.count)
-            try Self.forEachIDChunk(assetIDs) { chunk, placeholders in
+            try Self.forEachRawIDChunk(Array(assetIDs.rawValues)) { chunk, placeholders in
                 let rows = try Row.fetchAll(
                     db,
                     sql: """
@@ -259,7 +260,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                     arguments: StatementArguments(chunk)
                 )
                 for row in rows {
-                    let assetID: String = row["assetLocalIdentifier"]
+                    let assetID = PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"])
                     result[assetID] = LocalAssetFingerprintRecord(
                         fingerprint: row["assetFingerprint"],
                         updatedAt: row["updatedAt"],
@@ -272,12 +273,12 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
-    func fetchValidIndexedRows(assetIDs: Set<String>) throws -> [String: IndexedAssetRow] {
+    func fetchValidIndexedRows(assetIDs: Set<PhotoKitLocalIdentifier>) throws -> [PhotoKitLocalIdentifier: IndexedAssetRow] {
         guard !assetIDs.isEmpty else { return [:] }
 
         return try databaseManager.read { db in
-            var result: [String: IndexedAssetRow] = [:]
-            try Self.forEachIDChunk(assetIDs) { chunk, placeholders in
+            var result: [PhotoKitLocalIdentifier: IndexedAssetRow] = [:]
+            try Self.forEachRawIDChunk(Array(assetIDs.rawValues)) { chunk, placeholders in
                 let rows = try Row.fetchAll(
                     db,
                     sql: """
@@ -289,7 +290,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                     arguments: StatementArguments(chunk)
                 )
                 for row in rows {
-                    let assetID: String = row["assetLocalIdentifier"]
+                    let assetID = PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"])
                     result[assetID] = IndexedAssetRow(
                         assetLocalIdentifier: assetID,
                         assetFingerprint: row["assetFingerprint"],
@@ -373,7 +374,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                     currentFingerprint = fingerprint
                 }
                 currentRows.append(DuplicateIndexedAssetRow(
-                    assetLocalIdentifier: row["assetLocalIdentifier"],
+                    assetLocalIdentifier: PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"]),
                     assetFingerprint: fingerprint,
                     updatedAt: row["updatedAt"],
                     selectionVersion: Int(row["selectionVersion"] as Int64? ?? 0),
@@ -386,12 +387,12 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
-    func fetchAssetHashCaches(assetIDs: Set<String>) throws -> [String: LocalAssetHashCache] {
+    func fetchAssetHashCaches(assetIDs: Set<PhotoKitLocalIdentifier>) throws -> [PhotoKitLocalIdentifier: LocalAssetHashCache] {
         guard !assetIDs.isEmpty else { return [:] }
 
         return try databaseManager.read { db in
-            var result: [String: LocalAssetHashCache] = [:]
-            try Self.forEachIDChunk(assetIDs) { chunk, placeholders in
+            var result: [PhotoKitLocalIdentifier: LocalAssetHashCache] = [:]
+            try Self.forEachRawIDChunk(Array(assetIDs.rawValues)) { chunk, placeholders in
                 let assetRows = try Row.fetchAll(
                     db,
                     sql: """
@@ -404,7 +405,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 )
 
                 for row in assetRows {
-                    let assetID: String = row["assetLocalIdentifier"]
+                    let assetID = PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"])
                     result[assetID] = LocalAssetHashCache(
                         assetFingerprint: row["assetFingerprint"],
                         resourceCount: Int(row["resourceCount"] as Int64),
@@ -427,7 +428,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 )
 
                 for row in resourceRows {
-                    let assetID: String = row["assetLocalIdentifier"]
+                    let assetID = PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"])
                     guard var cache = result[assetID] else { continue }
                     let role = Int(row["role"] as Int64)
                     let slot = Int(row["slot"] as Int64)
@@ -440,9 +441,9 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
-    func fetchAssetSizes() throws -> [String: AssetSizeSnapshot] {
+    func fetchAssetSizes() throws -> [PhotoKitLocalIdentifier: AssetSizeSnapshot] {
         try databaseManager.read { db in
-            var result: [String: AssetSizeSnapshot] = [:]
+            var result: [PhotoKitLocalIdentifier: AssetSizeSnapshot] = [:]
             let rows = try Row.fetchAll(
                 db,
                 sql: """
@@ -453,7 +454,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
             )
             result.reserveCapacity(rows.count)
             for row in rows {
-                let id: String = row["assetLocalIdentifier"]
+                let id = PhotoKitLocalIdentifier(rawValue: row["assetLocalIdentifier"])
                 let size: Int64 = row["totalFileSizeBytes"]
                 let mtime: Int64 = row["modificationDateMs"]
                 result[id] = AssetSizeSnapshot(
@@ -485,7 +486,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                 """)
             for entry in entries {
                 try statement.setArguments([
-                    entry.assetLocalIdentifier,
+                    entry.assetLocalIdentifier.rawValue,
                     entry.totalFileSizeBytes,
                     entry.modificationDateMs,
                     now
@@ -495,12 +496,12 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
-    func fetchTotalFileSizeBytes(assetIDs: Set<String>) throws -> Int64 {
+    func fetchTotalFileSizeBytes(assetIDs: Set<PhotoKitLocalIdentifier>) throws -> Int64 {
         guard !assetIDs.isEmpty else { return 0 }
 
         return try databaseManager.read { db in
             var totalBytes: Int64 = 0
-            try Self.forEachIDChunk(assetIDs) { chunk, placeholders in
+            try Self.forEachRawIDChunk(Array(assetIDs.rawValues)) { chunk, placeholders in
                 let chunkBytes = try Int64.fetchOne(
                     db,
                     sql: """
@@ -555,19 +556,19 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
-    func fetchIndexedAssetIDs() throws -> [String] {
+    func fetchIndexedAssetIDs() throws -> [PhotoKitLocalIdentifier] {
         try databaseManager.read { db in
             try String.fetchAll(
                 db,
                 sql: "SELECT assetLocalIdentifier FROM local_assets WHERE assetFingerprint IS NOT NULL"
-            )
+            ).map { PhotoKitLocalIdentifier(rawValue: $0) }
         }
     }
 
-    func deleteIndexEntries(assetIDs: [String]) throws {
+    func deleteIndexEntries(assetIDs: [PhotoKitLocalIdentifier]) throws {
         guard !assetIDs.isEmpty else { return }
         try databaseManager.write { db in
-            try Self.forEachIDChunk(assetIDs) { chunk, placeholders in
+            try Self.forEachRawIDChunk(assetIDs.rawValues) { chunk, placeholders in
                 try db.execute(
                     sql: "DELETE FROM local_asset_resources WHERE assetLocalIdentifier IN (\(placeholders))",
                     arguments: StatementArguments(chunk)

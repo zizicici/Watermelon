@@ -10,6 +10,7 @@ struct ExportedResourceFile: Sendable {
 
 enum PhotoLibraryQuery: Equatable, Sendable {
     case allAssets
+    // PHCollection.localIdentifier (album id) — not the asset-id boundary.
     case albums(Set<String>)
 }
 
@@ -169,11 +170,11 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
-    func collectAssetIDs(query: PhotoLibraryQuery) -> Set<String> {
-        var ids = Set<String>()
+    func collectAssetIDs(query: PhotoLibraryQuery) -> Set<PhotoKitLocalIdentifier> {
+        var ids = Set<PhotoKitLocalIdentifier>()
         for result in fetchResults(query: query) {
             for index in 0 ..< result.count {
-                ids.insert(result.object(at: index).localIdentifier)
+                ids.insert(PhotoKitLocalIdentifier(result.object(at: index)))
             }
         }
         return ids
@@ -197,8 +198,11 @@ final class PhotoLibraryService: @unchecked Sendable {
 
             let collection = collections.object(at: index)
             let assets = PHAsset.fetchAssets(in: collection, options: assetOptions)
-            let thumbnailAssetIdentifier = assets.count > 0 ? assets.object(at: 0).localIdentifier : nil
+            let thumbnailAssetIdentifier: PhotoKitLocalIdentifier? = assets.count > 0
+                ? PhotoKitLocalIdentifier(assets.object(at: 0))
+                : nil
             albums.append(LocalAlbumDescriptor(
+                // PHCollection.localIdentifier (album id) — not the asset-id boundary.
                 localIdentifier: collection.localIdentifier,
                 title: collection.localizedTitle ?? String(localized: "home.localAlbums.untitled"),
                 assetCount: assets.count,
@@ -215,6 +219,7 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    // PHCollection.localIdentifier (album id) — not the asset-id boundary.
     private func resolveUserAlbumCollections(_ albumIdentifiers: Set<String>) -> [PHAssetCollection] {
         guard !albumIdentifiers.isEmpty else { return [] }
         let fetched = PHAssetCollection.fetchAssetCollections(
@@ -233,10 +238,12 @@ final class PhotoLibraryService: @unchecked Sendable {
         return result
     }
 
+    // PHCollection.localIdentifier (album id) — not the asset-id boundary.
     func existingUserAlbumIdentifiers(in albumIdentifiers: Set<String>) -> Set<String> {
         Set(resolveUserAlbumCollections(albumIdentifiers).map(\.localIdentifier))
     }
 
+    // `inAlbumIdentifiers` is PHCollection.localIdentifier (album id) — not the asset-id boundary.
     func fetchAssets(
         inAlbumIdentifiers albumIdentifiers: Set<String>,
         ascendingByCreationDate: Bool = false,
@@ -261,6 +268,7 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    // `inAlbumIdentifiers` is PHCollection.localIdentifier (album id) — not the asset-id boundary.
     @discardableResult
     func enumerateAssets(
         inAlbumIdentifiers albumIdentifiers: Set<String>,
@@ -270,7 +278,7 @@ final class PhotoLibraryService: @unchecked Sendable {
         guard !shouldCancel() else { return false }
         let collections = resolveUserAlbumCollections(albumIdentifiers)
 
-        var visitedAssetIDs = Set<String>()
+        var visitedAssetIDs = Set<PhotoKitLocalIdentifier>()
         for collection in collections {
             guard !shouldCancel() else { return false }
             let assets = PHAsset.fetchAssets(in: collection, options: nil)
@@ -278,7 +286,7 @@ final class PhotoLibraryService: @unchecked Sendable {
                 guard !shouldCancel() else { return false }
 
                 let asset = assets.object(at: assetIndex)
-                guard visitedAssetIDs.insert(asset.localIdentifier).inserted else {
+                guard visitedAssetIDs.insert(PhotoKitLocalIdentifier(asset)).inserted else {
                     continue
                 }
                 visit(asset)
@@ -288,9 +296,9 @@ final class PhotoLibraryService: @unchecked Sendable {
         return true
     }
 
-    func fetchAssets(localIdentifiers: Set<String>) -> [PHAsset] {
+    func fetchAssets(localIdentifiers: Set<PhotoKitLocalIdentifier>) -> [PHAsset] {
         guard !localIdentifiers.isEmpty else { return [] }
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: Array(localIdentifiers), options: nil)
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers.rawValues, options: nil)
         var assets: [PHAsset] = []
         assets.reserveCapacity(result.count)
         for index in 0 ..< result.count {

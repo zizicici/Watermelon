@@ -115,7 +115,7 @@ struct BackupRunPreparationService: Sendable {
                 let initialTotal = retryMode ? retryAssets.count : (assetsResult?.count ?? 0)
                 eventStream.emit(.started(totalAssets: initialTotal))
 
-                let monthAssetIDsByMonth: [MonthKey: [String]]
+                let monthAssetIDsByMonth: [MonthKey: [PhotoKitLocalIdentifier]]
                 if retryMode {
                     monthAssetIDsByMonth = BackupMonthScheduler.buildMonthAssetIDsByMonth(from: retryAssets)
                 } else if let assetsResult {
@@ -422,9 +422,9 @@ struct BackupRunPreparationService: Sendable {
         try storageClientFactory.makeClient(profile: profile, password: password)
     }
 
-    private func loadRetryAssets(from onlyAssetLocalIdentifiers: Set<String>?) -> [PHAsset] {
+    private func loadRetryAssets(from onlyAssetLocalIdentifiers: Set<PhotoKitLocalIdentifier>?) -> [PHAsset] {
         guard let retryTargets = onlyAssetLocalIdentifiers else { return [] }
-        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: Array(retryTargets), options: nil)
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: retryTargets.rawValues, options: nil)
         var retryAssets: [PHAsset] = []
         retryAssets.reserveCapacity(fetched.count)
         for index in 0 ..< fetched.count {
@@ -437,7 +437,7 @@ struct BackupRunPreparationService: Sendable {
     }
 
     private func fetchEstimatedBytesByMonth(
-        monthAssetIDsByMonth: [MonthKey: [String]],
+        monthAssetIDsByMonth: [MonthKey: [PhotoKitLocalIdentifier]],
         eventStream: BackupEventStream
     ) -> [MonthKey: Int64] {
         var estimatedBytesByMonth: [MonthKey: Int64] = [:]

@@ -39,7 +39,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     private let publishedLock = NSLock()
     private struct PublishedSnapshot {
         var monthRows: [LibraryMonthKey: HomeMonthRow] = [:]
-        var localAssetIDs: [LibraryMonthKey: Set<String>] = [:]
+        var localAssetIDs: [LibraryMonthKey: Set<PhotoKitLocalIdentifier>] = [:]
         var matchedCounts: [LibraryMonthKey: Int] = [:]
         var localMonths: [LibraryMonthKey] = []
         var loadedScope: HomeLocalLibraryScope?
@@ -71,18 +71,19 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     //
     // PHFetch fresh mtimes per call: a PHChange that hasn't reached the engine yet
     // would otherwise let a stale DB fingerprint slip through.
-    private func fetchFingerprintsForIDs(_ ids: Set<String>) -> [String: LocalAssetFingerprintRecord] {
+    private func fetchFingerprintsForIDs(_ ids: Set<PhotoKitLocalIdentifier>) -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] {
         guard !ids.isEmpty else { return [:] }
         do {
             let raw = try contentHashIndexRepository.fetchAssetFingerprintRecords(assetIDs: ids)
             guard !raw.isEmpty else { return [:] }
             let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(raw.keys))
-            var result: [String: LocalAssetFingerprintRecord] = [:]
+            var result: [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] = [:]
             result.reserveCapacity(raw.count)
             for asset in phAssets {
-                guard let record = raw[asset.localIdentifier] else { continue }
+                let assetID = PhotoKitLocalIdentifier(asset)
+                guard let record = raw[assetID] else { continue }
                 guard Self.canTrustFingerprint(record, for: asset) else { continue }
-                result[asset.localIdentifier] = record
+                result[assetID] = record
             }
             return result
         } catch {
@@ -91,19 +92,20 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
-    private func fetchAllFingerprints(in results: [PHFetchResult<PHAsset>]) -> [String: LocalAssetFingerprintRecord] {
+    private func fetchAllFingerprints(in results: [PHFetchResult<PHAsset>]) -> [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] {
         do {
             let raw = try contentHashIndexRepository.fetchAssetFingerprintRecords()
             guard !raw.isEmpty else { return [:] }
-            var result: [String: LocalAssetFingerprintRecord] = [:]
+            var result: [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord] = [:]
             result.reserveCapacity(raw.count)
             for fetchResult in results {
                 for index in 0 ..< fetchResult.count {
                     let asset = fetchResult.object(at: index)
-                    guard result[asset.localIdentifier] == nil,
-                          let record = raw[asset.localIdentifier],
+                    let assetID = PhotoKitLocalIdentifier(asset)
+                    guard result[assetID] == nil,
+                          let record = raw[assetID],
                           Self.canTrustFingerprint(record, for: asset) else { continue }
-                    result[asset.localIdentifier] = record
+                    result[assetID] = record
                 }
             }
             return result
@@ -183,7 +185,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     }
 
     func refreshLocalIndex(
-        forAssetIDs assetIDs: Set<String>,
+        forAssetIDs assetIDs: Set<PhotoKitLocalIdentifier>,
         expectedScope: HomeLocalLibraryScope
     ) async -> Set<LibraryMonthKey> {
         guard !assetIDs.isEmpty else { return [] }
@@ -220,8 +222,8 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                         let fetched = self.photoLibraryService.fetchAssets(localIdentifiers: missingIDs)
                         if !fetched.isEmpty {
                             let snapshots = Dictionary(uniqueKeysWithValues: fetched.map { asset in
-                                (asset.localIdentifier, LibraryAssetSnapshot(
-                                    localIdentifier: asset.localIdentifier,
+                                (PhotoKitLocalIdentifier(asset), LibraryAssetSnapshot(
+                                    localIdentifier: PhotoKitLocalIdentifier(asset),
                                     creationDate: asset.creationDate,
                                     modificationDate: asset.modificationDate,
                                     mediaKind: libraryAssetMediaKind(for: asset)
@@ -310,7 +312,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 let entry: LibraryChangePayload.CollectionChange
                 if details.hasIncrementalChanges {
                     let removedIDs = details.removedIndexes.map { idxs in
-                        idxs.map { fetchResult.object(at: $0).localIdentifier }
+                        idxs.map { PhotoKitLocalIdentifier(fetchResult.object(at: $0)) }
                     } ?? []
                     let inserted = details.insertedIndexes.map { idxs in
                         idxs.map { snapshot(nextFetchResult.object(at: $0)) }
@@ -381,7 +383,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         )
     }
 
-    func localAssetIDs(for month: LibraryMonthKey, expectedScope: HomeLocalLibraryScope) -> Set<String> {
+    func localAssetIDs(for month: LibraryMonthKey, expectedScope: HomeLocalLibraryScope) -> Set<PhotoKitLocalIdentifier> {
         publishedLock.withLock {
             guard published.loadedScope == expectedScope else { return [] }
             return published.localAssetIDs[month] ?? []
@@ -393,7 +395,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         dispatchPrecondition(condition: .onQueue(processingQueue))
         let allMonths = localIndex.allMonths.union(remoteIndex.allMonths)
         var rows: [LibraryMonthKey: HomeMonthRow] = [:]
-        var ids: [LibraryMonthKey: Set<String>] = [:]
+        var ids: [LibraryMonthKey: Set<PhotoKitLocalIdentifier>] = [:]
         var matched: [LibraryMonthKey: Int] = [:]
         rows.reserveCapacity(allMonths.count)
         ids.reserveCapacity(allMonths.count)
@@ -473,7 +475,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
     struct FileSizeScanSample {
         let scope: HomeLocalLibraryScope?
-        let ids: Set<String>
+        let ids: Set<PhotoKitLocalIdentifier>
     }
 
     /// Snapshot the engine state under processingQueue. The returned `scope` is what
@@ -513,7 +515,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
     func updateFileSize(
         for month: LibraryMonthKey,
-        sizeCache: [String: AssetSizeSnapshot]
+        sizeCache: [PhotoKitLocalIdentifier: AssetSizeSnapshot]
     ) async -> [AssetSizeUpdate] {
         let sample = await sampleFileSizeScan(for: month)
         guard !sample.ids.isEmpty else { return [] }
@@ -523,10 +525,10 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         // at 100K libraries that's easily tens of MB of ObjC overhead. Drain per month.
         let (total, updates): (Int64, [AssetSizeUpdate]) = autoreleasepool {
             let phAssets = photoLibraryService.fetchAssets(localIdentifiers: sample.ids)
-            var assetByID: [String: PHAsset] = [:]
+            var assetByID: [PhotoKitLocalIdentifier: PHAsset] = [:]
             assetByID.reserveCapacity(phAssets.count)
             for asset in phAssets {
-                assetByID[asset.localIdentifier] = asset
+                assetByID[PhotoKitLocalIdentifier(asset)] = asset
             }
 
             var total: Int64 = 0

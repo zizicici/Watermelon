@@ -944,6 +944,7 @@ final class HomeViewController: UIViewController {
             photoLibraryService: dependencies.photoLibraryService,
             selectedAlbumIDs: store.localLibraryScope.selectedAlbumIdentifiers
         ) { [weak self] albums in
+            // PHCollection.localIdentifier (album id) — not the asset-id boundary.
             self?.store.setLocalLibraryScope(
                 .albums(Set(albums.map(\.localIdentifier))),
                 descriptors: albums

@@ -23,7 +23,7 @@ final class BackupResumePlanner {
 
     func makePlan(
         pausedMode: BackupRunMode,
-        completedAssetIDs: Set<String>,
+        completedAssetIDs: Set<PhotoKitLocalIdentifier>,
         dedupMode: BackupResumeDedupMode
     ) async throws -> BackupResumePlan {
         switch pausedMode {
@@ -59,10 +59,10 @@ final class BackupResumePlanner {
     }
 
     private func filterPending(
-        assetIDs: Set<String>,
-        completedAssetIDs: Set<String>,
+        assetIDs: Set<PhotoKitLocalIdentifier>,
+        completedAssetIDs: Set<PhotoKitLocalIdentifier>,
         dedupMode: BackupResumeDedupMode
-    ) async throws -> Set<String> {
+    ) async throws -> Set<PhotoKitLocalIdentifier> {
         switch dedupMode {
         case .v1CompletedIDs:
             return assetIDs.subtracting(completedAssetIDs)
@@ -83,9 +83,9 @@ final class BackupResumePlanner {
     }
 
     private func computePendingAssetIDsForFullRun(
-        excluding completedAssetIDs: Set<String>,
+        excluding completedAssetIDs: Set<PhotoKitLocalIdentifier>,
         dedupMode: BackupResumeDedupMode
-    ) async throws -> Set<String> {
+    ) async throws -> Set<PhotoKitLocalIdentifier> {
         let status = photoLibraryService.authorizationStatus()
         let authorized: Bool
         if status == .authorized || status == .limited {
@@ -108,7 +108,7 @@ final class BackupResumePlanner {
             case .v1CompletedIDs: useHashDedup = false
             case .v2: useHashDedup = true
             }
-            var pendingIDs: [String] = []
+            var pendingIDs: [PhotoKitLocalIdentifier] = []
             pendingIDs.reserveCapacity(max(allAssetIDs.count - (useHashDedup ? 0 : completedAssetIDs.count), 0))
             for assetID in allAssetIDs {
                 try Task.checkCancellation()
@@ -160,14 +160,14 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
         self.photoLibraryService = photoLibraryService
     }
 
-    func assetIDsForFullRun() async -> [String] {
+    func assetIDsForFullRun() async -> [PhotoKitLocalIdentifier] {
         await withCheckedContinuation { continuation in
             queue.async { [photoLibraryService] in
                 let assets = photoLibraryService.fetchAssetsResult(ascendingByCreationDate: true)
-                var ids: [String] = []
+                var ids: [PhotoKitLocalIdentifier] = []
                 ids.reserveCapacity(assets.count)
                 for index in 0 ..< assets.count {
-                    ids.append(assets.object(at: index).localIdentifier)
+                    ids.append(PhotoKitLocalIdentifier(assets.object(at: index)))
                 }
                 continuation.resume(returning: ids)
             }
@@ -175,11 +175,11 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
     }
 
     func assetIDsCoveredByRemote(
-        records: [String: LocalAssetFingerprintRecord],
+        records: [PhotoKitLocalIdentifier: LocalAssetFingerprintRecord],
         safeToSkip: PerMonth<Set<Data>>
-    ) async throws -> Set<String> {
+    ) async throws -> Set<PhotoKitLocalIdentifier> {
         let entries = Array(records)
-        var covered: Set<String> = []
+        var covered: Set<PhotoKitLocalIdentifier> = []
         covered.reserveCapacity(records.count)
         var offset = 0
         while offset < entries.count {
@@ -195,13 +195,13 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
     }
 
     private func assetIDsCoveredByRemoteChunk(
-        records: [(String, LocalAssetFingerprintRecord)],
+        records: [(PhotoKitLocalIdentifier, LocalAssetFingerprintRecord)],
         safeToSkip: PerMonth<Set<Data>>
-    ) async -> Set<String> {
+    ) async -> Set<PhotoKitLocalIdentifier> {
         await withCheckedContinuation { continuation in
             queue.async {
                 let phAssets = Self.phAssets(forAssetIDs: records.map { $0.0 })
-                var covered: Set<String> = []
+                var covered: Set<PhotoKitLocalIdentifier> = []
                 covered.reserveCapacity(records.count)
                 for (id, record) in records {
                     guard let phAsset = phAssets[id] else { continue }
@@ -217,14 +217,14 @@ private final class BackupResumeCoverageWorker: @unchecked Sendable {
         }
     }
 
-    private static func phAssets(forAssetIDs ids: [String]) -> [String: PHAsset] {
+    private static func phAssets(forAssetIDs ids: [PhotoKitLocalIdentifier]) -> [PhotoKitLocalIdentifier: PHAsset] {
         guard !ids.isEmpty else { return [:] }
-        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
-        var result: [String: PHAsset] = [:]
+        let fetched = PHAsset.fetchAssets(withLocalIdentifiers: ids.rawValues, options: nil)
+        var result: [PhotoKitLocalIdentifier: PHAsset] = [:]
         result.reserveCapacity(fetched.count)
         for index in 0 ..< fetched.count {
             let asset = fetched.object(at: index)
-            result[asset.localIdentifier] = asset
+            result[PhotoKitLocalIdentifier(asset)] = asset
         }
         return result
     }

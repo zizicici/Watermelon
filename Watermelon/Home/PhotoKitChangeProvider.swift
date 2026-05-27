@@ -13,7 +13,7 @@ func libraryAssetMediaKind(for asset: PHAsset) -> AlbumMediaKind {
 
 func snapshot(_ asset: PHAsset) -> LibraryAssetSnapshot {
     LibraryAssetSnapshot(
-        localIdentifier: asset.localIdentifier,
+        localIdentifier: PhotoKitLocalIdentifier(asset),
         creationDate: asset.creationDate,
         modificationDate: asset.modificationDate,
         mediaKind: libraryAssetMediaKind(for: asset)

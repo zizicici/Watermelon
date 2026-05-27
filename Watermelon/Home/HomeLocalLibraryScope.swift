@@ -2,6 +2,7 @@ import Foundation
 
 enum HomeLocalLibraryScope: Hashable, Sendable {
     case allPhotos
+    // PHCollection.localIdentifier (album id) — not the asset-id boundary.
     case albums(Set<String>)
 
     var isSpecificAlbums: Bool {
@@ -9,6 +10,7 @@ enum HomeLocalLibraryScope: Hashable, Sendable {
         return false
     }
 
+    // PHCollection.localIdentifier (album id) — not the asset-id boundary.
     var selectedAlbumIdentifiers: Set<String> {
         switch self {
         case .allPhotos:

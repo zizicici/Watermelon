@@ -18,6 +18,7 @@ final class RestoreService {
     }
 
     struct RestoredAsset {
+        // Newly-created PhotoKit asset's id, valid only on this device after the import.
         let localIdentifier: String
         let importedInstances: [RemoteAssetResourceInstance]
     }

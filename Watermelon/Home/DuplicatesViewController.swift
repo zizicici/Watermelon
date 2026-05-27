@@ -3,7 +3,7 @@ import SnapKit
 import UIKit
 
 struct DuplicateEntry: Sendable {
-    let assetLocalIdentifier: String
+    let assetLocalIdentifier: PhotoKitLocalIdentifier
     let creationDate: Date?
     let mediaType: PHAssetMediaType
 }
@@ -21,7 +21,7 @@ struct DuplicatesData: Sendable {
 }
 
 struct IndexedAssetTrustSnapshot: Sendable {
-    let localIdentifier: String
+    let localIdentifier: PhotoKitLocalIdentifier
     let creationDate: Date?
     let modificationDate: Date?
     let mediaType: PHAssetMediaType
@@ -31,20 +31,20 @@ struct IndexedAssetTrustSnapshot: Sendable {
 protocol DuplicateCandidateRepository: Sendable {
     func fetchPotentiallyUsableIndexedAssetCount(minSelectionVersion: Int) throws -> Int
     func fetchDuplicateIndexedAssetCandidates(minSelectionVersion: Int) throws -> [DuplicateIndexedAssetCandidate]
-    func fetchValidIndexedRows(assetIDs: Set<String>) throws -> [String: IndexedAssetRow]
+    func fetchValidIndexedRows(assetIDs: Set<PhotoKitLocalIdentifier>) throws -> [PhotoKitLocalIdentifier: IndexedAssetRow]
 }
 
 protocol DuplicatePhotoLibraryProvider: Sendable {
     func assetCount(query: PhotoLibraryQuery) -> Int
-    func fetchTrustSnapshots(localIdentifiers: Set<String>) -> [IndexedAssetTrustSnapshot]
-    func collectAssetIDs(query: PhotoLibraryQuery) -> Set<String>
+    func fetchTrustSnapshots(localIdentifiers: Set<PhotoKitLocalIdentifier>) -> [IndexedAssetTrustSnapshot]
+    func collectAssetIDs(query: PhotoLibraryQuery) -> Set<PhotoKitLocalIdentifier>
     func fetchResults(query: PhotoLibraryQuery) -> [PHFetchResult<PHAsset>]
 }
 
 extension ContentHashIndexRepository: DuplicateCandidateRepository {}
 
 extension PhotoLibraryService: DuplicatePhotoLibraryProvider {
-    func fetchTrustSnapshots(localIdentifiers: Set<String>) -> [IndexedAssetTrustSnapshot] {
+    func fetchTrustSnapshots(localIdentifiers: Set<PhotoKitLocalIdentifier>) -> [IndexedAssetTrustSnapshot] {
         fetchAssets(localIdentifiers: localIdentifiers).map(DuplicateAssetTrust.makeSnapshot(from:))
     }
 }
@@ -53,7 +53,7 @@ private enum DuplicateAssetTrust {
     static func makeSnapshot(from asset: PHAsset) -> IndexedAssetTrustSnapshot {
         let shape = LocalHashIndexTrust.AssetShape(asset: asset)
         return IndexedAssetTrustSnapshot(
-            localIdentifier: asset.localIdentifier,
+            localIdentifier: PhotoKitLocalIdentifier(asset),
             creationDate: asset.creationDate,
             modificationDate: shape.modificationDate,
             mediaType: asset.mediaType,
@@ -89,7 +89,7 @@ final class DuplicatesViewController: UIViewController {
     fileprivate enum ItemID: Hashable {
         case gateEntry
         case header(fingerprint: Data)
-        case entry(assetLocalIdentifier: String)
+        case entry(assetLocalIdentifier: PhotoKitLocalIdentifier)
     }
 
     fileprivate struct EntryLocator {
@@ -121,7 +121,7 @@ final class DuplicatesViewController: UIViewController {
     private var entriesByGroup: [Data: [DuplicateEntry]] = [:]
     private var keepIndexByGroup: [Data: Int] = [:]
     private var skippedGroups: Set<Data> = []
-    private var locatorByEntry: [String: EntryLocator] = [:]
+    private var locatorByEntry: [PhotoKitLocalIdentifier: EntryLocator] = [:]
     private var scopeTotal = 0
     private var scopeIndexed = 0
     private var indexCoverageWarning = false
@@ -309,7 +309,7 @@ final class DuplicatesViewController: UIViewController {
         return cell
     }
 
-    private func dequeueEntryCell(tableView: UITableView, indexPath: IndexPath, assetID: String) -> UITableViewCell {
+    private func dequeueEntryCell(tableView: UITableView, indexPath: IndexPath, assetID: PhotoKitLocalIdentifier) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(
             withIdentifier: DuplicateEntryCell.reuseIdentifier,
             for: indexPath
@@ -359,7 +359,7 @@ final class DuplicatesViewController: UIViewController {
 
         groupOrder = data.groups.map(\.fingerprint)
         var entriesByGroup: [Data: [DuplicateEntry]] = [:]
-        var locatorByEntry: [String: EntryLocator] = [:]
+        var locatorByEntry: [PhotoKitLocalIdentifier: EntryLocator] = [:]
         var keepIndexByGroup: [Data: Int] = [:]
         for group in data.groups {
             let fingerprint = group.fingerprint
@@ -440,8 +440,8 @@ final class DuplicatesViewController: UIViewController {
     }
 
     private struct KeepDeletePair: Sendable {
-        let keep: String
-        let delete: String
+        let keep: PhotoKitLocalIdentifier
+        let delete: PhotoKitLocalIdentifier
     }
 
     private func collectKeepDeletePairs() -> [KeepDeletePair] {
@@ -484,7 +484,7 @@ final class DuplicatesViewController: UIViewController {
         dataSource.apply(snapshot, animatingDifferences: false)
     }
 
-    private func setKeepEntry(assetID: String) {
+    private func setKeepEntry(assetID: PhotoKitLocalIdentifier) {
         guard let locator = locatorByEntry[assetID] else { return }
         if skippedGroups.contains(locator.fingerprint) { return }
         if keepIndexByGroup[locator.fingerprint] == locator.indexInGroup { return }
@@ -634,7 +634,7 @@ final class DuplicatesViewController: UIViewController {
                     let lhsDate = lhs.creationDate ?? .distantFuture
                     let rhsDate = rhs.creationDate ?? .distantFuture
                     if lhsDate != rhsDate { return lhsDate < rhsDate }
-                    return lhs.assetLocalIdentifier < rhs.assetLocalIdentifier
+                    return lhs.assetLocalIdentifier.rawValue < rhs.assetLocalIdentifier.rawValue
                 }
                 groups.append(DuplicateGroup(
                     fingerprint: candidate.assetFingerprint,
@@ -666,9 +666,9 @@ final class DuplicatesViewController: UIViewController {
                 return false
             }
             let phAssets = photoLibraryService.fetchAssets(localIdentifiers: allIDs)
-            var phAssetByID: [String: PHAsset] = [:]
+            var phAssetByID: [PhotoKitLocalIdentifier: PHAsset] = [:]
             for asset in phAssets {
-                phAssetByID[asset.localIdentifier] = asset
+                phAssetByID[PhotoKitLocalIdentifier(asset)] = asset
             }
             for pair in pairs {
                 guard let keepRow = valid[pair.keep],
@@ -688,7 +688,7 @@ final class DuplicatesViewController: UIViewController {
 
     private nonisolated static func deleteAssets(
         photoLibraryService: PhotoLibraryService,
-        assetLocalIdentifiers: [String]
+        assetLocalIdentifiers: [PhotoKitLocalIdentifier]
     ) async -> Bool {
         let assets = photoLibraryService.fetchAssets(localIdentifiers: Set(assetLocalIdentifiers))
         guard !assets.isEmpty else { return true }
@@ -703,7 +703,7 @@ final class DuplicatesViewController: UIViewController {
 
     private nonisolated static func removeIndexEntries(
         repository: ContentHashIndexRepository,
-        assetIDs: [String]
+        assetIDs: [PhotoKitLocalIdentifier]
     ) async {
         await withCancellableDetachedValue(priority: .userInitiated) {
             try? repository.deleteIndexEntries(assetIDs: assetIDs)
@@ -809,7 +809,7 @@ private final class DuplicateEntryCell: UITableViewCell {
     private let dateLabel = UILabel()
     private let statusLabel = UILabel()
     private var thumbnailRequest: PHAssetThumbnailRequest?
-    private var loadedAssetID: String?
+    private var loadedAssetID: PhotoKitLocalIdentifier?
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -882,7 +882,7 @@ private final class DuplicateEntryCell: UITableViewCell {
     }
 
     func configure(
-        assetLocalIdentifier: String,
+        assetLocalIdentifier: PhotoKitLocalIdentifier,
         creationDate: Date?,
         isVideo: Bool,
         isKeep: Bool,
