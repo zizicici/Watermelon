@@ -263,10 +263,12 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
         do {
             try await client.delete(path: path)
         } catch {
-            // A peer racing the same cleanup can remove the file between metadata
-            // and delete; SMB/WebDAV/SFTP surface that as an error (S3 is idempotent).
-            // Treat not-found as success so cleanup doesn't abort with a spurious error.
             if !isStorageNotFoundError(error) { throw error }
+        }
+        guard try await metadataIfPresent(path: path) == nil else {
+            throw NSError(domain: "V1MigrationService", code: -33, userInfo: [
+                NSLocalizedDescriptionKey: "residue file still present after delete: \(path)"
+            ])
         }
     }
 

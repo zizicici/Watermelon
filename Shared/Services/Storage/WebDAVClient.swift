@@ -594,11 +594,16 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         entries.reserveCapacity(parsedEntries.count)
 
         for parsed in parsedEntries {
+            guard let remotePath = remotePath(fromHref: parsed.href, relativeTo: baseURL) else { continue }
+            if remotePath == normalizedTargetKey {
+                if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
+                    throw Self.statusError(parsed.firstFailureStatusCode ?? 404, method: "PROPFIND", url: request.url)
+                }
+                continue
+            }
             if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
                 continue
             }
-            guard let remotePath = remotePath(fromHref: parsed.href, relativeTo: baseURL) else { continue }
-            if remotePath == normalizedTargetKey { continue }
             let name = Self.entryName(forRemotePath: remotePath, displayName: parsed.displayName, href: parsed.href)
             entries.append(
                 RemoteStorageEntry(

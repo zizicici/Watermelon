@@ -276,6 +276,30 @@ final class V1MigrationResidueQuarantineTests: XCTestCase {
         XCTAssertTrue(residueSurvived, "cancellation must not cause residue deletion")
     }
 
+    // Bug-IX P04 R15 CodexReviewerA F1: sweep must not consider cleanup complete when
+    // a backend reports delete success but the residue file remains visible.
+    func testSweep_noPartialMigrationMarker_noOpDelete_throwsIncomplete() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+
+        let residuePath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        await inner.injectFile(path: residuePath, data: Data("residue".utf8))
+
+        let client = NoOpDeleteClient(inner: inner, noOpDeletePaths: [residuePath])
+
+        let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        do {
+            try await quarantine.sweepResidueManifests()
+            XCTFail("sweep must throw when residue survives a no-op delete")
+        } catch let error as NSError {
+            XCTAssertEqual(error.domain, "V1MigrationService")
+            XCTAssertEqual(error.code, -33)
+        }
+
+        let residueSurvived = await inner.hasFile(residuePath)
+        XCTAssertTrue(residueSurvived, "residue must still be present after no-op delete")
+    }
+
     // Bug-IX P04 R07 ClaudeReviewerA F1 / CodexReviewerB F1: equal-residue fast path must
     // verify source deletion when the remote reports success but the file remains visible.
     func testQuarantine_existingResidueEqual_noOpDelete_throwsIncomplete() async throws {
