@@ -782,6 +782,73 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
         }
     }
 
+    // Bug-IX P01 R08 Codex A F1: a commit whose body contains an op at or above
+    // `LamportClock.maxAdoptableValue` is rejected by the materializer's commit-trust pipeline.
+    // Retention preflight must mirror that predicate so the file is not classified as a delete
+    // candidate even when the accepted snapshot/barrier's covered range nominally includes its seq.
+    // Bug-IX P01 R09 Codex A F1: a directory squatting at a canonical target-month commit
+    // filename inside the delete prefix is damaged remote metadata in the exact namespace
+    // retention is about to prune. Preflight must fail-closed via `.candidateCorruptOrUntrusted`
+    // before any sibling commit in the same prefix is removed. Parallel to F20's snapshot
+    // directory-shape fix in `RepoSnapshotDeletePreflightService`.
+    func testDirectoryAtTargetMonthCommitFilenameInPrefixFailsClosed() async throws {
+        let client = try await makeClient()
+        try await writeCommits(client: client, seqs: 1...2)
+        let covered = coveredRanges([(1, 3)])
+        let snapshot = try await writeSnapshot(client: client, covered: covered)
+        try await writeBarrier(client: client, covered: covered, checkpointSHA256Hex: snapshot.sha256Hex)
+
+        let damagedName = RepoLayout.commitFileName(month: month, writerID: writerA, seq: 3)
+        let damagedPath = RemotePathBuilder.absolutePath(
+            basePath: RepoLayout.commitsDirectoryPath(base: basePath),
+            remoteRelativePath: damagedName
+        )
+        try await client.createDirectory(path: damagedPath)
+
+        let result = try await service(client: client).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+
+        XCTAssertTrue(
+            blockers(in: result).contains(.candidateCorruptOrUntrusted(filename: damagedName)),
+            "retention preflight must fail-closed when a directory squats at a canonical in-prefix commit filename"
+        )
+        // The sibling commit files must NOT have been promoted to planned candidates.
+        if case .planned = result {
+            XCTFail("expected .blocked, got \(result)")
+        }
+    }
+
+    func testCommitWithUnworkableOpClockIsKeptAsCorruptOrUntrusted() async throws {
+        let client = try await makeClient()
+        let fingerprint = TestFixtures.assetFingerprint(0xC1)
+        try await writeCommit(
+            client: client,
+            writerID: writerA,
+            seq: 1,
+            ops: [addAssetOp(fingerprint: fingerprint, clock: LamportClock.maxAdoptableValue, resources: [])]
+        )
+        let covered = coveredRanges([(1, 1)])
+        let snapshot = try await writeSnapshot(client: client, covered: covered)
+        try await writeBarrier(client: client, covered: covered, checkpointSHA256Hex: snapshot.sha256Hex)
+
+        let result = try await service(client: client).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+
+        let filename = RepoLayout.commitFileName(month: month, writerID: writerA, seq: 1)
+        XCTAssertTrue(
+            blockers(in: result).contains(.candidateCorruptOrUntrusted(filename: filename)),
+            "retention preflight must keep a materializer-rejected commit (op.clock >= maxAdoptableValue) instead of deleting it"
+        )
+    }
+
     func testMultiWriterNonEmptyStatePlanAndContract() async throws {
         let client = try await makeClient()
         let fpA = TestFixtures.assetFingerprint(0xA1)

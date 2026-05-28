@@ -177,7 +177,20 @@ final class DatabaseManager: @unchecked Sendable {
         try write { db in
             let now = Date()
             profile.updatedAt = now
-            if profile.id == nil {
+            if let id = profile.id {
+                // `server_profiles.writerID` is owned by `RepoIdentity.lazyEnsureWriterID` —
+                // generated once, reused forever for that installation. Any other caller (editor
+                // commit, StorageClientFactory.onBookmarkRefreshed, anything passing a stale
+                // ServerProfileRecord snapshot) can carry a stale or nil value through GRDB's
+                // full-row save and silently rotate the writerID, accumulating orphan identity /
+                // liveness / commit / snapshot files keyed on the rotated-away writerID. Re-fetch
+                // the live column inside the same write transaction and overwrite whatever the
+                // caller passed, so saveServerProfile is the single durable choke point that
+                // preserves the writerID invariant regardless of caller hygiene.
+                if let existing = try ServerProfileRecord.fetchOne(db, key: id) {
+                    profile.writerID = existing.writerID
+                }
+            } else {
                 profile.createdAt = now
                 let maxSortOrder = try Int.fetchOne(
                     db,

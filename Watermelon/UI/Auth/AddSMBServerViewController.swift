@@ -171,16 +171,43 @@ final class AddSMBServerViewController: UIViewController {
             credentialRef: credentialRef,
             backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? false,
             createdAt: baseProfile?.createdAt ?? Date(),
-            updatedAt: Date()
+            updatedAt: Date(),
+            writerID: baseProfile?.writerID
         )
 
+        // Recheck the mutation gate now that we know the actual mutation target: an Add flow
+        // that adopts an existing duplicate row (`existing != nil`, `editingProfile == nil`)
+        // would otherwise bypass the entry-gate check that was conditioned on `editingProfile`.
+        let existingProfileID = baseProfile?.id
+        if existingProfileID != nil {
+            try ProfileEditorMutationGate.throwIfBlocked(dependencies: dependencies)
+        }
         try dependencies.databaseManager.saveServerProfile(&profile)
-        try dependencies.keychainService.save(password: context.auth.password, account: credentialRef)
+        do {
+            try dependencies.keychainService.save(password: context.auth.password, account: credentialRef)
+        } catch {
+            // The DB row already points at the edited endpoint/credential ref. Drop the local V2
+            // binding AND the active session so the partial save can't strand a stale repo_state
+            // or keep `BackupSessionController.resolveActiveConnection()` reading the cached
+            // pre-edit profile/password. Mirrors `StorageProfileDetailViewController.handleConnectionEdited()`.
+            if let existingProfileID {
+                clearActiveSessionIfMatches(profileID: existingProfileID)
+                try? dependencies.databaseManager.clearRemoteVerifiedAt(profileID: existingProfileID)
+                try? dependencies.databaseManager.clearRepoState(profileID: existingProfileID)
+            }
+            throw error
+        }
         if let oldRef = baseProfile?.credentialRef,
            oldRef != credentialRef {
             try? dependencies.keychainService.delete(account: oldRef)
         }
         return (profile, context.auth.password)
+    }
+
+    private func clearActiveSessionIfMatches(profileID: Int64) {
+        guard dependencies.appSession.activeProfile?.id == profileID else { return }
+        try? dependencies.databaseManager.setActiveServerProfileID(nil)
+        dependencies.appSession.clear()
     }
 
     private func presentAlert(title: String, message: String) {

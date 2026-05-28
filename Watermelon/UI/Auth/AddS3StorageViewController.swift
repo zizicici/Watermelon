@@ -177,6 +177,20 @@ final class AddS3StorageViewController: UIViewController {
             }
 
             await MainActor.run {
+                // Re-check the mutation gate at the final commit boundary: a background V2 run
+                // can claim the shared execution lease while `verifyConnection` is awaiting the
+                // network, so the initial gate check is not enough. Gate on the actual mutation
+                // target (`draft.baseProfile?.id`) so an Add flow that adopts an existing duplicate
+                // row is gated identically to an explicit Edit.
+                if draft.baseProfile?.id != nil,
+                   ProfileEditorMutationGate.isBlocked(dependencies: self.dependencies) {
+                    self.setSaving(false)
+                    self.presentAlert(
+                        title: String(localized: "common.error"),
+                        message: String(localized: "home.alert.maintenanceInProgress")
+                    )
+                    return
+                }
                 do {
                     let profile = try self.commitProfile(draft: draft)
                     self.onSaved(profile, draft.secretAccessKey)
@@ -311,16 +325,43 @@ final class AddS3StorageViewController: UIViewController {
             credentialRef: draft.credentialRef,
             backgroundBackupEnabled: draft.baseProfile?.backgroundBackupEnabled ?? false,
             createdAt: draft.baseProfile?.createdAt ?? Date(),
-            updatedAt: Date()
+            updatedAt: Date(),
+            writerID: draft.baseProfile?.writerID
         )
 
+        // Recheck the mutation gate now that we know the actual mutation target: an Add flow
+        // that adopts an existing duplicate row would otherwise bypass the entry/post-validation
+        // gate checks if the entry-gate condition was scoped to `editingProfile != nil`.
+        let existingProfileID = draft.baseProfile?.id
+        if existingProfileID != nil {
+            try ProfileEditorMutationGate.throwIfBlocked(dependencies: dependencies)
+        }
         try dependencies.databaseManager.saveServerProfile(&profile)
-        try dependencies.keychainService.save(password: draft.secretAccessKey, account: draft.credentialRef)
-        if let oldRef = editingProfile?.credentialRef,
+        do {
+            try dependencies.keychainService.save(password: draft.secretAccessKey, account: draft.credentialRef)
+        } catch {
+            // The DB row already points at the edited endpoint/credential ref. Drop the local V2
+            // binding AND the active session so the partial save can't strand a stale repo_state
+            // or keep `BackupSessionController.resolveActiveConnection()` reading the cached
+            // pre-edit profile/password. Mirrors `StorageProfileDetailViewController.handleConnectionEdited()`.
+            if let existingProfileID {
+                clearActiveSessionIfMatches(profileID: existingProfileID)
+                try? dependencies.databaseManager.clearRemoteVerifiedAt(profileID: existingProfileID)
+                try? dependencies.databaseManager.clearRepoState(profileID: existingProfileID)
+            }
+            throw error
+        }
+        if let oldRef = draft.baseProfile?.credentialRef,
            oldRef != draft.credentialRef {
             try? dependencies.keychainService.delete(account: oldRef)
         }
         return profile
+    }
+
+    private func clearActiveSessionIfMatches(profileID: Int64) {
+        guard dependencies.appSession.activeProfile?.id == profileID else { return }
+        try? dependencies.databaseManager.setActiveServerProfileID(nil)
+        dependencies.appSession.clear()
     }
 
     private func findExistingProfile(host: String, port: Int, bucket: String, basePath: String, accessKeyID: String) throws -> ServerProfileRecord? {

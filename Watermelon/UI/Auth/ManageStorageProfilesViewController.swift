@@ -100,9 +100,11 @@ final class ManageStorageProfilesViewController: UIViewController {
 
         // `isExecuting` is the shared process-wide gate; a background run owns it for any
         // background-enabled profile, not just the active Home one, so we cannot narrow the
-        // block to the active profile.
+        // block to the active profile. `isVerifying` is checked process-wide as well so a
+        // verify task that survived scene disconnect/reconnect still blocks deletion.
         let isBusy = dependencies.remoteMaintenanceController.isVerifying(profileID: id)
             || dependencies.appRuntimeFlags.isExecuting
+            || dependencies.appRuntimeFlags.isVerifying
         if isBusy {
             presentAlert(
                 title: String(localized: "common.error"),

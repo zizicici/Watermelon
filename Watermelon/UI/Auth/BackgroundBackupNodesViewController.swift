@@ -80,7 +80,9 @@ final class BackgroundBackupNodesViewController: UIViewController {
     }
 
     private var isProfileMutationBlocked: Bool {
-        dependencies.appRuntimeFlags.isExecuting || dependencies.remoteMaintenanceController.isVerifying
+        dependencies.appRuntimeFlags.isExecuting
+            || dependencies.appRuntimeFlags.isVerifying
+            || dependencies.remoteMaintenanceController.isVerifying
     }
 
     private func presentAlert(title: String, message: String) {

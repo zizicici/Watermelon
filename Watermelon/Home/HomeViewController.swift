@@ -122,6 +122,13 @@ final class HomeViewController: UIViewController {
         }
     }
 
+    /// Called from `SceneDelegate.sceneDidDisconnect` via `AppCoordinator.handleSceneDisconnect`.
+    /// Cancels any in-flight foreground execution / manual verify so the process-wide
+    /// `AppRuntimeFlags` lease is released before the scene's container is reclaimed.
+    func handleSceneDisconnect() {
+        store.handleSceneDisconnect()
+    }
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {

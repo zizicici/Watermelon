@@ -164,8 +164,13 @@ final class StorageProfileDetailViewController: UIViewController {
     // MARK: - Rows
 
     /// Locked while verify/execution holds this profile to avoid orphaning the in-flight task.
+    /// `isVerifying` is checked on BOTH the process-wide AppRuntimeFlags and the local controller
+    /// so a verify task that survived a scene disconnect/reconnect still blocks the new scene's
+    /// mutations (the new local controller is idle but the shared verify lease is still held).
     private var isProfileMutationBlocked: Bool {
-        dependencies.appRuntimeFlags.isExecuting || dependencies.remoteMaintenanceController.isVerifying
+        dependencies.appRuntimeFlags.isExecuting
+            || dependencies.appRuntimeFlags.isVerifying
+            || dependencies.remoteMaintenanceController.isVerifying
     }
 
     private func makeEditConnectionRow() -> RowSpec {

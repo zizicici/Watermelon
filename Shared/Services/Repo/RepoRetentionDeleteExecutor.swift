@@ -289,6 +289,11 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         if let mismatch = headerMismatch(candidate: candidate, header: commit.header, expectedRepoID: expectedRepoID) {
             return .failed(.headerMismatch(mismatch))
         }
+        // Defense-in-depth against a body that became materializer-untrusted between preflight
+        // and revalidation; keeps retention deletion aligned with the materializer's op-trust ceiling.
+        if commit.ops.contains(where: { $0.clock >= LamportClock.maxAdoptableValue }) {
+            return .failed(.corruptOrUntrusted)
+        }
         if commit.sha256Hex.lowercased() != candidate.sha256Hex.lowercased() {
             return .failed(.contentHashMismatch(
                 expected: candidate.sha256Hex.lowercased(),

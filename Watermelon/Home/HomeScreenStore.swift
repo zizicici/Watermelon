@@ -51,9 +51,12 @@ final class HomeScreenStore {
     }
 
     /// Read live so a verify started after a confirm dialog opened still blocks
-    /// the action that dialog gates.
+    /// the action that dialog gates. Reads BOTH the local controller (in-scene verify)
+    /// AND the process-wide `appRuntimeFlags.isVerifying` so a verify task that survived
+    /// scene disconnect/reconnect still blocks the new scene's Home actions.
     var isMaintenanceBlocked: Bool {
-        dependencies.remoteMaintenanceController.isVerifying
+        dependencies.appRuntimeFlags.isVerifying
+            || dependencies.remoteMaintenanceController.isVerifying
     }
 
     var isRemoteSelectionAllowed: Bool {
@@ -79,6 +82,14 @@ final class HomeScreenStore {
     private var lastMonthPhases: [LibraryMonthKey: MonthPlan.Phase] = [:]
     private var bootstrapTask: Task<Void, Never>?
     private var maintenanceObserver: NSObjectProtocol?
+    /// Listens to the process-wide `AppRuntimeFlags.shared` execution/verify lease changes
+    /// so a verify task that survived scene disconnect/reconnect surfaces as Home maintenance.
+    private var executionLifecycleObserver: NSObjectProtocol?
+    /// Previous value of `isConnectMaintenanceOrExecutionBlocked()` — used to detect the
+    /// blocked → unblocked transition so we can retry auto-connect after a BG runner ends
+    /// (the verify-only `isRemoteMaintenanceActive` tracker does not change on `isExecuting`).
+    private var wasConnectBlocked: Bool = false
+    private var backgroundRefreshTask: Task<Void, Never>?
     private var indexChangeObserverID: UUID?
     private var enteredBackgroundAt: Date?
 
@@ -158,25 +169,60 @@ final class HomeScreenStore {
     }
 
     private func observeMaintenance() {
+        // Sync the initial state — a previous scene's verify task may already hold the shared
+        // verify lease while the new container's local controller is idle. Without this, the
+        // first notification we'd see is whatever fires next, not the state at construction.
+        isRemoteMaintenanceActive = computedRemoteMaintenanceActive()
+        wasConnectBlocked = isConnectMaintenanceOrExecutionBlocked()
+        let handler: @Sendable (Notification) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+
+                // Maintenance-active (verify-only) drives selection / structural state.
+                let active = self.computedRemoteMaintenanceActive()
+                if self.isRemoteMaintenanceActive != active {
+                    let wasActive = self.isRemoteMaintenanceActive
+                    self.isRemoteMaintenanceActive = active
+                    // Sync first: verify's `replaceMonth` won't reach the grid until HomeIncrementalDataManager pulls the new revision.
+                    if wasActive && !active {
+                        self.scheduleRefresh([.syncRemote, .notifyStructural])
+                    } else {
+                        self.onChange?(.structural)
+                    }
+                }
+
+                // Connect-blocked tracks the wider predicate (also includes process-wide
+                // `isExecuting`) so a BG runner that ends while load()'s deferred auto-connect
+                // is waiting still triggers the retry. The verify-only `wasActive` block above
+                // does NOT cover this case because `isExecuting` does not flip
+                // `isRemoteMaintenanceActive`.
+                let connectBlocked = self.isConnectMaintenanceOrExecutionBlocked()
+                if self.wasConnectBlocked && !connectBlocked {
+                    self.connectionController.attemptAutoConnect()
+                }
+                self.wasConnectBlocked = connectBlocked
+            }
+        }
         maintenanceObserver = NotificationCenter.default.addObserver(
             forName: .RemoteMaintenanceDidChange,
             object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                let active = self.dependencies.remoteMaintenanceController.isVerifying
-                guard self.isRemoteMaintenanceActive != active else { return }
-                let wasActive = self.isRemoteMaintenanceActive
-                self.isRemoteMaintenanceActive = active
-                // Sync first: verify's `replaceMonth` won't reach the grid until HomeIncrementalDataManager pulls the new revision.
-                if wasActive && !active {
-                    self.scheduleRefresh([.syncRemote, .notifyStructural])
-                } else {
-                    self.onChange?(.structural)
-                }
-            }
-        }
+            queue: .main,
+            using: handler
+        )
+        executionLifecycleObserver = NotificationCenter.default.addObserver(
+            forName: .ExecutionLifecycleDidChange,
+            object: nil,
+            queue: .main,
+            using: handler
+        )
+    }
+
+    /// Maintenance is active when either the in-scene controller is verifying OR the process-wide
+    /// AppRuntimeFlags lease is held — the latter catches a verify task that survived scene
+    /// disconnect/reconnect.
+    private func computedRemoteMaintenanceActive() -> Bool {
+        dependencies.appRuntimeFlags.isVerifying
+            || dependencies.remoteMaintenanceController.isVerifying
     }
 
     private func makeRefreshScheduler() -> HomeRefreshScheduler {
@@ -228,6 +274,9 @@ final class HomeScreenStore {
         if let maintenanceObserver {
             NotificationCenter.default.removeObserver(maintenanceObserver)
         }
+        if let executionLifecycleObserver {
+            NotificationCenter.default.removeObserver(executionLifecycleObserver)
+        }
         if let id = indexChangeObserverID {
             dependencies.localIndexChangePublisher.removeObserver(id)
         }
@@ -263,7 +312,23 @@ final class HomeScreenStore {
         // Remote snapshot data accumulates in snapshotCache on the connection thread;
         // processing happens in handleConnectionChange once connected.
         connectionController.onNeedsPasswordPrompt = { [weak self] profile, completion in
-            self?.onNeedsPasswordPrompt?(profile, completion)
+            // Wrap the prompt completion with a process-wide execution / verify re-check.
+            // The password prompt is a UI await: a background V2 runner, a verify task in
+            // another scene, or a foreground execution that started while the prompt was open
+            // would otherwise be raced by `connect()` → `reloadRemoteIndex` against the same
+            // remote. The initial `rejectIfMaintaining()` only fires at the connect-button
+            // tap; the prompt-completion boundary needs its own live re-check.
+            self?.onNeedsPasswordPrompt?(profile) { [weak self] password in
+                guard let self else { return }
+                if self.isConnectMaintenanceOrExecutionBlocked() {
+                    self.onAlert?(
+                        String(localized: "common.error"),
+                        String(localized: "home.alert.maintenanceInProgress")
+                    )
+                    return
+                }
+                completion(password)
+            }
         }
         connectionController.onConnectFailed = { [weak self] profile, error in
             self?.onConnectFailed?(profile, error)
@@ -291,7 +356,15 @@ final class HomeScreenStore {
             await self.dataManager.ensureLocalIndexLoaded()
             guard !Task.isCancelled else { return }
             _ = self.refreshLocalPhotoAccessState()
-            self.connectionController.attemptAutoConnect()
+            // Skip auto-connect while a process-wide execution lease (BG runner, another
+            // scene's foreground run) or any verify lease is still held. `attemptAutoConnect`
+            // calls `connect()` → `reloadRemoteIndex`, which would otherwise race the active
+            // V2 owner against the same remote. observeMaintenance retries attemptAutoConnect
+            // on the connect-blocked → idle transition once the active owner unwinds, so we
+            // don't strand the user with no auto-connect.
+            if !self.isConnectMaintenanceOrExecutionBlocked() {
+                self.connectionController.attemptAutoConnect()
+            }
             // Don't call syncRemoteDataIfNeeded here — if auto-connect is in progress,
             // connectionState is .connecting and hasActiveConnection would be false,
             // which would clear remote data and advance revision, corrupting the bootstrap.
@@ -368,12 +441,18 @@ final class HomeScreenStore {
     // MARK: - Connection Actions
 
     func connectProfile(_ profile: ServerProfileRecord) {
-        guard !rejectIfMaintaining() else { return }
+        // Use the wider connect-blocked predicate: saved-password and passwordless paths skip
+        // the F31 prompt-completion wrapper and call `connect()` → `reloadRemoteIndex` directly,
+        // so the entry gate must also block on `appRuntimeFlags.isExecuting` to keep a BG
+        // runner's V2 work from racing a foreground reload of the same remote.
+        guard !rejectIfConnectBlocked() else { return }
+        backgroundRefreshTask?.cancel()
         connectionController.promptAndConnect(profile: profile)
     }
 
     func disconnect() {
         guard !rejectIfMaintaining() else { return }
+        backgroundRefreshTask?.cancel()
         connectionController.disconnect()
     }
 
@@ -384,6 +463,26 @@ final class HomeScreenStore {
             String(localized: "home.alert.maintenanceInProgress")
         )
         return true
+    }
+
+    private func rejectIfConnectBlocked() -> Bool {
+        guard isConnectMaintenanceOrExecutionBlocked() else { return false }
+        onAlert?(
+            String(localized: "common.error"),
+            String(localized: "home.alert.maintenanceInProgress")
+        )
+        return true
+    }
+
+    /// Connect / password-prompt completion must not race a process-wide execution lease either,
+    /// not just a verify lease — a BG runner that started while the prompt was open holds
+    /// `appRuntimeFlags.isExecuting` and a concurrent `reloadRemoteIndex` would race its V2 work.
+    /// Wider predicate than `isMaintenanceBlocked` (which is verify-only) because the connect
+    /// surface opens a V2 runtime, not just a metadata read.
+    private func isConnectMaintenanceOrExecutionBlocked() -> Bool {
+        dependencies.appRuntimeFlags.isExecuting
+            || dependencies.appRuntimeFlags.isVerifying
+            || dependencies.remoteMaintenanceController.isVerifying
     }
 
     private func rejectIfLocalIndexBuilding() -> Bool {
@@ -427,6 +526,18 @@ final class HomeScreenStore {
         enteredBackgroundAt = Date()
     }
 
+    /// Scene-disconnect teardown. The executionTask's `guard let self` strongly retains the
+    /// `HomeExecutionCoordinator`, so dropping the store reference is not enough to fire its
+    /// deinit — we have to drive cancellation explicitly. `exit()` cancels the in-flight task,
+    /// then defers the shared lease release until the underlying BackupRunDriver unwinds.
+    /// Verify uses the same `guard let self` pattern on its verifyTask, so cancel it here as
+    /// well; the controller's existing cancel-then-handleCancellation path clears the shared
+    /// verify lease once the task observes the cancellation.
+    func handleSceneDisconnect() {
+        executionCoordinator.exit()
+        dependencies.remoteMaintenanceController.cancel()
+    }
+
     /// Background backup runs in a separate DependencyContainer, so the foreground's
     /// snapshotCache + fingerprintByAssetID don't reflect its writes without a refresh.
     private func refreshAfterBackgroundBackupIfRan() {
@@ -442,11 +553,14 @@ final class HomeScreenStore {
             return
         }
 
-        Task { [weak self, dependencies] in
+        backgroundRefreshTask?.cancel()
+        backgroundRefreshTask = Task { [weak self, dependencies] in
+            guard dependencies.appSession.activeProfile?.id == profile.id else { return }
             _ = try? await dependencies.backupCoordinator.reloadRemoteIndex(
                 profile: profile,
                 password: password
             )
+            guard dependencies.appSession.activeProfile?.id == profile.id else { return }
             await MainActor.run {
                 self?.scheduleRefresh([.reloadLocal, .syncRemote, .notifyStructural])
             }

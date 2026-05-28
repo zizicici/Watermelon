@@ -163,6 +163,12 @@ final class AddExternalStorageViewController: UIViewController {
             }
 
             let baseProfile = editingProfile ?? existing
+            // Recheck the mutation gate now that we know the actual mutation target: an Add flow
+            // that adopts an existing duplicate row would otherwise bypass the entry-gate check
+            // that was conditioned on `editingProfile != nil`.
+            if baseProfile?.id != nil {
+                try ProfileEditorMutationGate.throwIfBlocked(dependencies: dependencies)
+            }
             let finalName = nameText.trimmingCharacters(in: .whitespacesAndNewlines)
             let profileName = finalName.isEmpty ? URL(fileURLWithPath: selectedDisplayPath).lastPathComponent : finalName
             let credentialRef = baseProfile?.credentialRef ?? "external:\(UUID().uuidString)"
@@ -183,7 +189,8 @@ final class AddExternalStorageViewController: UIViewController {
                 credentialRef: credentialRef,
                 backgroundBackupEnabled: baseProfile?.backgroundBackupEnabled ?? false,
                 createdAt: baseProfile?.createdAt ?? Date(),
-                updatedAt: Date()
+                updatedAt: Date(),
+                writerID: baseProfile?.writerID
             )
 
             try dependencies.databaseManager.saveServerProfile(&profile)

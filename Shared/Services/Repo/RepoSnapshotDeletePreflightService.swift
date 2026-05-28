@@ -697,7 +697,21 @@ private struct SnapshotDeleteCandidateScanner: Sendable {
         var acceptedBaselineListed = false
 
         for entry in entries.sorted(by: { $0.name < $1.name }) {
-            guard !entry.isDirectory, entry.name.hasSuffix(".jsonl") else {
+            if entry.isDirectory {
+                // A directory squatting at a target-month snapshot filename is damaged remote
+                // state, not "snapshot absent" — fail closed so snapshot GC can't run while
+                // target-month snapshot metadata is uncertain. Parallel to the file-shaped
+                // unparseable handling below.
+                if entry.name.hasSuffix(".jsonl"),
+                   let monthHint = monthPrefix(from: entry.name), monthHint == month {
+                    protectedSummary.unparseableSnapshotsForMonth += 1
+                    blockers.append(.unparseableSnapshotPresent(filename: entry.name))
+                } else {
+                    protectedSummary.ignoredNonSnapshotEntryCount += 1
+                }
+                continue
+            }
+            guard entry.name.hasSuffix(".jsonl") else {
                 protectedSummary.ignoredNonSnapshotEntryCount += 1
                 continue
             }

@@ -26,10 +26,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
-        // Called as the scene is being released by the system.
-        // This occurs shortly after the scene enters the background, or when its session is discarded.
-        // Release any resources associated with this scene that can be re-created the next time the scene connects.
-        // The scene may re-connect later, as its session was not necessarily discarded (see `application:didDiscardSceneSessions` instead).
+        // Trigger explicit teardown of any in-flight foreground execution / manual verify so the
+        // process-wide AppRuntimeFlags lease is released before the scene's container is reclaimed.
+        // Without this, the executionTask's `guard let self` retain keeps the HomeExecutionCoordinator
+        // alive past scene teardown — `HomeExecutionCoordinator.deinit` would never fire and the
+        // lease would leak for the rest of the process lifetime, locking out the next reconnect's
+        // foreground tap, manual verify, and any scheduled BGProcessingTask.
+        appCoordinator?.handleSceneDisconnect()
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {

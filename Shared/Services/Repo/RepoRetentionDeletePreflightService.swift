@@ -658,7 +658,26 @@ private struct RepoRetentionDeleteCandidateScanner: Sendable {
         var blockers: [RepoRetentionDeletePreflightBlocker] = []
 
         for entry in entries.sorted(by: { $0.name < $1.name }) {
-            guard !entry.isDirectory, entry.name.hasSuffix(".jsonl") else {
+            if entry.isDirectory {
+                // A directory squatting at a canonical target-month commit filename is damaged
+                // remote metadata in the exact namespace retention is about to prune. Fail closed
+                // so we don't delete healthy sibling commit files while uncertain state remains
+                // in the covered range. Parallel to the directory-shape snapshot handling in
+                // RepoSnapshotDeletePreflightService.scan.
+                if entry.name.hasSuffix(".jsonl"),
+                   let parsed = RepoLayout.parseCommitFilename(entry.name),
+                   parsed.month == month,
+                   parsed.seq > 0,
+                   let prefix = deletePrefixByWriter[parsed.writerID],
+                   parsed.seq <= prefix {
+                    protectedSummary.corruptOrUntrustedCandidateCount += 1
+                    blockers.append(.candidateCorruptOrUntrusted(filename: entry.name))
+                } else {
+                    protectedSummary.ignoredNonCommitEntryCount += 1
+                }
+                continue
+            }
+            guard entry.name.hasSuffix(".jsonl") else {
                 protectedSummary.ignoredNonCommitEntryCount += 1
                 continue
             }
@@ -728,6 +747,19 @@ private struct RepoRetentionDeleteCandidateScanner: Sendable {
                 protectedSummary.headerMismatchCandidateCount += 1
                 protectedSummary.protectedBytes += entry.size
                 blockers.append(.candidateHeaderMismatch(filename: entry.name, reason: mismatch))
+                continue
+            }
+
+            // The materializer rejects any commit whose body contains an op at or above
+            // `LamportClock.maxAdoptableValue`. Retention authorizes deletion from an accepted
+            // snapshot whose covered range may have been written when the commit was still trusted,
+            // but the body is no longer trusted now; the retained barrier policy records
+            // `keepCorruptOrUntrustedCommits = true`, so mirror the materializer's predicate here
+            // before classifying the file as a candidate.
+            if commit.ops.contains(where: { $0.clock >= LamportClock.maxAdoptableValue }) {
+                protectedSummary.corruptOrUntrustedCandidateCount += 1
+                protectedSummary.protectedBytes += entry.size
+                blockers.append(.candidateCorruptOrUntrusted(filename: entry.name))
                 continue
             }
 

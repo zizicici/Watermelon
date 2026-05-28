@@ -79,6 +79,10 @@ final class HomeExecutionCoordinator {
     private var transientControlState: ExecutionControlState?
     private var backupSessionController: BackupSessionController?
     private var backupBridge: BackupSessionAsyncBridge?
+    /// True from `enter()`'s successful `tryBeginExecution()` until `exit()`'s deferred
+    /// release fires (or scene teardown forces a deinit-side release). Single source of
+    /// truth for "do we still owe the shared lease a release".
+    private var holdsExecutionLease = false
     private var downloadHelper: DownloadWorkflowHelper?
     private var executionSettingsSnapshot: ExecutionSettingsSnapshot?
     private var forcedUploadWorkerCountOverride: Int?
@@ -135,6 +139,7 @@ final class HomeExecutionCoordinator {
             )
             return
         }
+        holdsExecutionLease = true
         executionTask = nil
         transientControlState = nil
         executionSettingsSnapshot = ExecutionSettingsSnapshot.fromCurrentSettings()
@@ -182,6 +187,8 @@ final class HomeExecutionCoordinator {
         // V2 runtime services / metadata client / data client cleanup until its `defer` blocks
         // fire. Releasing `isExecuting` before that finishes would let a new foreground run or
         // scheduled BG task open a second V2 runtime against the same repo mid-shutdown.
+        guard holdsExecutionLease else { return }
+        holdsExecutionLease = false
         let flags = dependencies.appRuntimeFlags
         if let bridgeToAwait {
             Task { @MainActor in
@@ -189,6 +196,27 @@ final class HomeExecutionCoordinator {
                 flags.setExecuting(false)
             }
         } else {
+            flags.setExecuting(false)
+        }
+    }
+
+    deinit {
+        // Scene teardown (system-driven `sceneDidDisconnect`, or HomeScreenStore being
+        // dropped without an explicit stop/exit) can release the coordinator while a run
+        // still owns the process-wide execution lease. Mirror exit()'s deferred-release
+        // pattern: cancel the in-flight bridge so the underlying BackupRunDriver unwinds,
+        // then release the shared lease after cleanup. Without this, the next foreground
+        // tap or scheduled BG task is locked out until the process restarts.
+        guard holdsExecutionLease else { return }
+        let bridgeToAwait = backupBridge
+        let task = executionTask
+        let flags = dependencies.appRuntimeFlags
+        Task { @MainActor in
+            task?.cancel()
+            bridgeToAwait?.cancel()
+            if let bridgeToAwait {
+                await bridgeToAwait.awaitCleanup()
+            }
             flags.setExecuting(false)
         }
     }

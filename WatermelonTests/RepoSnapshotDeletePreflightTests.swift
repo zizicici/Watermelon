@@ -450,6 +450,53 @@ final class RepoSnapshotDeletePreflightTests: XCTestCase {
         XCTAssertTrue(olderExists, "older untrusted snapshot must NOT be deleted")
     }
 
+    // Bug-IX P01 R08 Codex A F2: a directory squatting at a target-month snapshot filename is
+    // damaged remote state, not proof that the snapshot is absent. Snapshot GC must fail-closed
+    // via `.unparseableSnapshotPresent(filename:)` before deleting any other older snapshot for
+    // the same month — parallel to the file-shaped unparseable handling.
+    func testDirectoryAtTargetMonthSnapshotFilenameFailsClosed() async throws {
+        let client = try await makeReadyClient()
+        let covered = makeCovered(seqs: [(1, 1)])
+        // Accepted baseline + barrier so deletion could otherwise proceed.
+        let accepted = try await writeSnapshot(client: client, covered: covered, lamport: snapshotLamport)
+        try await writeBarrier(
+            client: client,
+            covered: covered,
+            checkpointSHA256Hex: accepted.sha256Hex,
+            createdAtMs: 0,
+            snapshotName: nil,
+            snapshotKeepCount: 0
+        )
+        // An older deletable snapshot the GC plan would otherwise schedule for delete.
+        _ = try await writeSnapshot(client: client, covered: covered, lamport: 3)
+        // A directory entry whose name parses as a target-month snapshot — damaged remote state.
+        let damagedName = RepoLayout.snapshotFileName(
+            month: month,
+            lamport: 4,
+            writerID: writerID,
+            runID: "44444444-4444-4444-4444-444444444444"
+        )
+        let damagedPath = RemotePathBuilder.absolutePath(
+            basePath: RepoLayout.snapshotsDirectoryPath(base: basePath),
+            remoteRelativePath: damagedName
+        )
+        try await client.createDirectory(path: damagedPath)
+
+        let result = try await preflight(client: client).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            nowMs: nowMs
+        )
+
+        guard case .blocked(let blockers, _) = result else {
+            return XCTFail("expected blocked, got \(result)")
+        }
+        XCTAssertTrue(
+            blockers.contains(.unparseableSnapshotPresent(filename: damagedName)),
+            "snapshot GC must fail-closed on a directory entry at a target-month snapshot filename"
+        )
+    }
+
     // MARK: - Happy path (executor + verifier integration)
 
     /// End-to-end: with two snapshots (older lamport=3, newer lamport=5 = accepted baseline)

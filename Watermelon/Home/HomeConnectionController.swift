@@ -48,13 +48,14 @@ final class HomeConnectionController {
 
     func attemptAutoConnect() {
         guard !didAttemptAutoConnect else { return }
-        didAttemptAutoConnect = true
 
         let activeID = try? dependencies.databaseManager.activeServerProfileID()
         guard let activeID,
               let profile = savedProfiles.first(where: { $0.id == activeID }) else {
             return
         }
+
+        didAttemptAutoConnect = true
 
         if profile.storageProfile.requiresPassword {
             guard let password = try? dependencies.keychainService.readPassword(account: profile.credentialRef) else {

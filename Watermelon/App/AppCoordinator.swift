@@ -10,14 +10,23 @@ final class AppCoordinator {
         self.dependencies = dependencies
     }
 
+    private weak var homeViewController: HomeViewController?
+
     func start() {
         let home = HomeViewController(dependencies: dependencies)
+        homeViewController = home
         window.rootViewController = home
         window.makeKeyAndVisible()
 
         if !OnboardingViewController.CompletionGate.hasCompleted {
             presentOnboarding(over: home)
         }
+    }
+
+    func handleSceneDisconnect() {
+        // Forward to Home so the in-flight execution / verify can be cancelled and the shared
+        // AppRuntimeFlags lease released before the scene's container is reclaimed.
+        homeViewController?.handleSceneDisconnect()
     }
 
     private func presentOnboarding(over presenter: UIViewController) {
