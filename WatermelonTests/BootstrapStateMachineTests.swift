@@ -209,7 +209,7 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
-    func testVersionAbsentRawMarker_noV2Data_returnsFresh() async throws {
+    func testVersionAbsentMarkerTransportError_noV2Data_throwsDamagedV2() async throws {
         let (client, profile) = await makeFixture()
         try await client.createDirectory(path: "\(basePath)/.watermelon")
         let writerID = "34343434-3434-3434-3434-343434343434"
@@ -217,8 +217,12 @@ final class BootstrapStateMachineTests: XCTestCase {
         await client.injectFile(path: markerPath, contents: "not-json")
         await client.injectPersistentDownloadError(.transport, for: markerPath)
 
-        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
-        XCTAssertEqual(outcome, .fresh)
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("transport error during marker download should fail closed")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
     }
 
     func testWatermelonPresent_versionJsonGarbage_throwsDamagedV2() async throws {
@@ -688,6 +692,25 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
+    /// Transport errors while reading valid-marker files must not become authoritative fresh.
+    func testValidMarkerTransportError_versionAbsent_noV2Data_throwsDamagedV2() async throws {
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        let writerID = "e5e5e5e5-e5e5-e5e5-e5e5-e5e5e5e5e5e5"
+        let markerPath = RepoLayout.migrationMarkerPath(base: basePath, writerID: writerID)
+        // Write a parseable marker so the listing passes filename validation.
+        try await injectMigrationMarker(client: client, writerID: writerID, phase: 2)
+        // Make the download always fail with a transport error.
+        await client.injectPersistentDownloadError(.transport, for: markerPath)
+
+        do {
+            _ = try await format.inspectRemoteFormat(client: client, profile: profile)
+            XCTFail("transport error during valid-marker download should fail closed")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected: uncertain marker state must not become fresh
+        }
+    }
+
     private func makeFixture() async -> (InMemoryRemoteStorageClient, ServerProfileRecord) {
         let client = InMemoryRemoteStorageClient()
         try? await client.connect()
@@ -751,5 +774,54 @@ final class BootstrapStateMachineTests: XCTestCase {
         } catch {
             XCTFail("expected CancellationError, got \(error)")
         }
+    }
+
+    // MARK: - Profileless inspection
+
+    func testProfileless_versionFormatVersionBelowTwo_returnsUnsupported() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try? await client.connect()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 1, minAppVersion: "1.0.0")
+
+        let outcome = try await format.inspectRemoteFormatProfileless(client: client, basePath: basePath)
+        XCTAssertEqual(outcome, .unsupported(minAppVersion: "1.0.0"),
+                       "format_version < 2 is impossible for V1 and corrupt for V2; must not return .v1")
+    }
+
+    func testProfileless_versionFormatVersionZero_returnsUnsupported() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try? await client.connect()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 0, minAppVersion: "0.0.1")
+
+        let outcome = try await format.inspectRemoteFormatProfileless(client: client, basePath: basePath)
+        XCTAssertEqual(outcome, .unsupported(minAppVersion: "0.0.1"),
+                       "format_version 0 is corrupt; must not return .v1")
+    }
+
+    func testProfileless_versionAbsent_returnsV1() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try? await client.connect()
+
+        let outcome = try await format.inspectRemoteFormatProfileless(client: client, basePath: basePath)
+        XCTAssertEqual(outcome, .v1,
+                       "absent version.json should still return .v1 for profileless path")
+    }
+
+    func testProfileless_versionMatchesCurrent_returnsV2() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try? await client.connect()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+
+        let outcome = try await format.inspectRemoteFormatProfileless(client: client, basePath: basePath)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion))
+    }
+
+    func testProfileless_versionHigher_returnsUnsupported() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try? await client.connect()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
+
+        let outcome = try await format.inspectRemoteFormatProfileless(client: client, basePath: basePath)
+        XCTAssertEqual(outcome, .unsupported(minAppVersion: "9.9.9"))
     }
 }

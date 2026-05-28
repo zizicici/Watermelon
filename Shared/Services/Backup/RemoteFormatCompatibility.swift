@@ -102,7 +102,7 @@ struct RemoteFormatCompatibilityService: Sendable {
             if formatVersion >= 2 {
                 return .v2(formatVersion: formatVersion)
             }
-            return .v1
+            return .unsupported(minAppVersion: manifest.minAppVersion)
         }
     }
 

@@ -148,7 +148,7 @@ struct RepoBootstrapInspectionFSM: Sendable {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                // Transport errors in !hasV2Data path: can't validate, proceed
+                throw BackupCompatibilityError.damagedV2Repo
             }
         }
         if v1Manifests { return .v1 }
