@@ -67,11 +67,60 @@ final class RemoteStorageErrorClassifierTests: XCTestCase {
                 domain: S3ErrorClassifier.errorDomain,
                 code: 404,
                 userInfo: [S3ErrorClassifier.userInfoServerCodeKey: "NoSuchBucket"]
-            ))
+            )),
+            NSError(
+                domain: "SMB",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "STATUS_BAD_NETWORK_NAME"]
+            ),
+            NSError(
+                domain: "SMB",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "STATUS_REDIRECTOR_NOT_STARTED"]
+            )
         ]
         for error in cases {
             XCTAssertFalse(RemoteStorageErrorClassifier.isNotFound(error), "\(error)")
             XCTAssertEqual(RemoteStorageErrorClassifier.isNotFound(error), isStorageNotFoundError(error), "\(error)")
+        }
+    }
+
+    func testWebDAVWatchdogTimeouts_classifyTransient() {
+        let codes = [-1301, -1302, -1303]
+        for code in codes {
+            let raw = NSError(domain: WebDAVClient.errorDomain, code: code)
+            let wrapped = RemoteStorageClientError.underlying(raw)
+            for error in [raw as Error, wrapped as Error] {
+                XCTAssertTrue(
+                    WebDAVErrorClassifier.isConnectionUnavailable(error),
+                    "WebDAVErrorClassifier.isConnectionUnavailable expected true for code \(code): \(error)"
+                )
+                XCTAssertTrue(
+                    RemoteWriteClassifier.isTransientVerifyFailure(error),
+                    "isTransientVerifyFailure expected true for code \(code): \(error)"
+                )
+            }
+        }
+    }
+
+    func testSMBShareErrors_classifyTransient() {
+        let cases: [Error] = [
+            NSError(
+                domain: "SMB",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "STATUS_BAD_NETWORK_NAME"]
+            ),
+            NSError(
+                domain: "SMB",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "STATUS_REDIRECTOR_NOT_STARTED"]
+            )
+        ]
+        for error in cases {
+            XCTAssertTrue(
+                RemoteWriteClassifier.isTransientVerifyFailure(error),
+                "expected transient: \(error)"
+            )
         }
     }
 }

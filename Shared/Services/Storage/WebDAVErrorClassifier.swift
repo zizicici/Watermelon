@@ -23,7 +23,8 @@ enum WebDAVErrorClassifier {
         }
         if ns.domain == WebDAVClient.errorDomain {
             switch ns.code {
-            case 502, 503, 504:
+            case 502, 503, 504,
+                 -1301, -1302, -1303:
                 return true
             default:
                 break

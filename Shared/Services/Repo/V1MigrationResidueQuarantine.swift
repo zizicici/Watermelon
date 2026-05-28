@@ -35,6 +35,9 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
         do {
             switch try await client.moveIfAbsent(from: sourcePath, to: residuePath) {
             case .created:
+                guard try await metadataIfPresent(path: sourcePath) == nil else {
+                    throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: residuePath)
+                }
                 return
             case .bestEffortRetry:
                 try await finishBestEffortResidueMove(sourcePath: sourcePath, destinationPath: residuePath)
@@ -152,6 +155,9 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
         do {
             switch try await client.moveIfAbsent(from: sourcePath, to: uniqueResiduePath) {
             case .created:
+                guard try await metadataIfPresent(path: sourcePath) == nil else {
+                    throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
+                }
                 return
             case .bestEffortRetry:
                 try await finishBestEffortResidueMove(sourcePath: sourcePath, destinationPath: uniqueResiduePath)
@@ -198,7 +204,12 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
         do {
             try await client.delete(path: sourcePath)
         } catch {
-            if isStorageNotFoundError(error) { return }
+            if isStorageNotFoundError(error) {
+                guard try await metadataIfPresent(path: sourcePath) == nil else {
+                    throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: destinationPath)
+                }
+                return
+            }
             throw error
         }
         guard try await metadataIfPresent(path: sourcePath) == nil else {
@@ -215,7 +226,12 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
         do {
             try await client.delete(path: sourcePath)
         } catch {
-            if isStorageNotFoundError(error) { return }
+            if isStorageNotFoundError(error) {
+                guard try await metadataIfPresent(path: sourcePath) == nil else {
+                    throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: destinationPath)
+                }
+                return
+            }
             throw error
         }
         guard try await metadataIfPresent(path: sourcePath) == nil else {

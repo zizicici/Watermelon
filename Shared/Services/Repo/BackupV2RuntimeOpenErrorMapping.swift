@@ -71,6 +71,9 @@ enum BackupV2RuntimeOpenErrorMapping {
             if RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
                 return underlying
             }
+            if RemoteWriteClassifier.isTransientVerifyFailure(underlying) {
+                return underlying
+            }
             return BackupV2RuntimeBuildError.damagedV2Repo
         case .futureFormatVersion(let minAppVersion):
             return BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: minAppVersion)
@@ -88,6 +91,9 @@ enum BackupV2RuntimeOpenErrorMapping {
             }
             if let underlying,
                RemoteStorageClientError.isLikelyExternalStorageUnavailable(underlying) {
+                return underlying
+            }
+            if let underlying, RemoteWriteClassifier.isTransientVerifyFailure(underlying) {
                 return underlying
             }
             return BackupV2RuntimeBuildError.damagedV2Repo
