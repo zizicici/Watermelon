@@ -48,6 +48,7 @@ final class HomeScreenStore {
             && executionState == nil
             && !isReloadingScope
             && !isRemoteMaintenanceActive
+            && !dependencies.appRuntimeFlags.isExecuting
     }
 
     /// Read live so a verify started after a confirm dialog opened still blocks
@@ -62,6 +63,8 @@ final class HomeScreenStore {
     var isRemoteSelectionAllowed: Bool {
         !localLibraryScope.isSpecificAlbums
     }
+
+    var isProcessExecuting: Bool { dependencies.appRuntimeFlags.isExecuting }
 
     var savedProfiles: [ServerProfileRecord] { connectionController.savedProfiles }
 
@@ -89,6 +92,7 @@ final class HomeScreenStore {
     /// blocked → unblocked transition so we can retry auto-connect after a BG runner ends
     /// (the verify-only `isRemoteMaintenanceActive` tracker does not change on `isExecuting`).
     private var wasConnectBlocked: Bool = false
+    private var wasProcessExecuting: Bool = false
     private var backgroundRefreshTask: Task<Void, Never>?
     private var indexChangeObserverID: UUID?
     private var enteredBackgroundAt: Date?
@@ -174,6 +178,7 @@ final class HomeScreenStore {
         // first notification we'd see is whatever fires next, not the state at construction.
         isRemoteMaintenanceActive = computedRemoteMaintenanceActive()
         wasConnectBlocked = isConnectMaintenanceOrExecutionBlocked()
+        wasProcessExecuting = dependencies.appRuntimeFlags.isExecuting
         let handler: @Sendable (Notification) -> Void = { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -201,6 +206,17 @@ final class HomeScreenStore {
                     self.connectionController.attemptAutoConnect()
                 }
                 self.wasConnectBlocked = connectBlocked
+
+                let isProcessExecuting = self.dependencies.appRuntimeFlags.isExecuting
+                if self.wasProcessExecuting != isProcessExecuting {
+                    self.wasProcessExecuting = isProcessExecuting
+                    if self.connectionState.isConnected {
+                        if !isProcessExecuting {
+                            self.refreshAfterBackgroundBackupIfRan()
+                        }
+                        self.onChange?(.selection)
+                    }
+                }
             }
         }
         maintenanceObserver = NotificationCenter.default.addObserver(
@@ -542,7 +558,6 @@ final class HomeScreenStore {
     /// snapshotCache + fingerprintByAssetID don't reflect its writes without a refresh.
     private func refreshAfterBackgroundBackupIfRan() {
         guard let enteredBg = enteredBackgroundAt else { return }
-        enteredBackgroundAt = nil
 
         guard let profile = dependencies.appSession.activeProfile,
               profile.backgroundBackupEnabled,
@@ -552,6 +567,8 @@ final class HomeScreenStore {
               let password = profile.resolvedSessionPassword(from: dependencies.appSession) else {
             return
         }
+
+        enteredBackgroundAt = nil
 
         backgroundRefreshTask?.cancel()
         backgroundRefreshTask = Task { [weak self, dependencies] in

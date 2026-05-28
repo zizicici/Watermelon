@@ -166,6 +166,8 @@ final class HomeConnectionController {
                         )
                     }
 
+                    guard !Task.isCancelled else { return }
+
                     self.connectingProfile = nil
                     self.connectTask = nil
                     self.clearSyncProgress()

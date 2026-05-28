@@ -536,6 +536,7 @@ final class HomeViewController: UIViewController {
             case .connectionProgress:  self.updateRemoteOverlay()
             case .structural:          self.renderStructuralChange()
             }
+            if case .connectionProgress = kind { return }
             self.updateSelectionInteraction()
         }
 
@@ -1103,14 +1104,16 @@ final class HomeViewController: UIViewController {
 
     private func updateSelectionInteraction() {
         let isMaintaining = store.isRemoteMaintenanceActive
-        let canAttemptSelection = store.executionState == nil && !store.isReloadingScope && !isMaintaining
+        let processExecuting = store.isProcessExecuting
+        let canAttemptSelection = store.executionState == nil && !store.isReloadingScope && !isMaintaining && !processExecuting
         collectionView.allowsSelection = canAttemptSelection
         leftToggle.isEnabled = canAttemptSelection && store.localPhotoAccessState.isAuthorized
         rightToggle.isEnabled = canAttemptSelection && store.connectionState.isConnected
-        leftHeaderMenuOverlay.isEnabled = store.executionState == nil && !isMaintaining
-        leftHeaderButton.isEnabled = store.executionState == nil && !isMaintaining
-        rightHeaderMenuOverlay.isEnabled = store.executionState == nil && !isMaintaining
-        rightHeaderButton.isEnabled = store.executionState == nil && !isMaintaining
+        let headerEnabled = store.executionState == nil && !isMaintaining && !processExecuting
+        leftHeaderMenuOverlay.isEnabled = headerEnabled
+        leftHeaderButton.isEnabled = headerEnabled
+        rightHeaderMenuOverlay.isEnabled = headerEnabled
+        rightHeaderButton.isEnabled = headerEnabled
     }
 
     private func updateLocalOverlay() {
