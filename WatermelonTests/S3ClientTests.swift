@@ -177,6 +177,24 @@ final class S3ClientTests: XCTestCase {
         )
     }
 
+    // MARK: - Truncated listing without continuation token
+
+    func testListXMLParserTruncatedWithoutContinuationToken() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult>
+          <IsTruncated>true</IsTruncated>
+          <Contents>
+            <Key>photos/a.jpg</Key>
+            <Size>100</Size>
+          </Contents>
+        </ListBucketResult>
+        """
+        let result = try S3ListXMLParser().parse(data: Data(xml.utf8))
+        XCTAssertTrue(result.isTruncated)
+        XCTAssertNil(result.nextContinuationToken)
+    }
+
     // MARK: - Endpoint parsing
 
     func testParseEndpointFromBareHostDefaultsToHTTPS() {

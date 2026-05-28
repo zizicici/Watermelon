@@ -56,9 +56,19 @@ final class RemoteStorageErrorClassifierTests: XCTestCase {
                 code: 500,
                 userInfo: [S3ErrorClassifier.userInfoServerCodeKey: "InternalError"]
             ),
-            RepoJSONLReadError.missingHeader
+            RepoJSONLReadError.missingHeader,
+            // Bug-IX P04 R04 CodexReviewerB F1: bucket-level errors must not be path-level not-found
+            NSError(
+                domain: S3ErrorClassifier.errorDomain,
+                code: 404,
+                userInfo: [S3ErrorClassifier.userInfoServerCodeKey: "NoSuchBucket"]
+            ),
+            RemoteStorageClientError.underlying(NSError(
+                domain: S3ErrorClassifier.errorDomain,
+                code: 404,
+                userInfo: [S3ErrorClassifier.userInfoServerCodeKey: "NoSuchBucket"]
+            ))
         ]
-
         for error in cases {
             XCTAssertFalse(RemoteStorageErrorClassifier.isNotFound(error), "\(error)")
             XCTAssertEqual(RemoteStorageErrorClassifier.isNotFound(error), isStorageNotFoundError(error), "\(error)")

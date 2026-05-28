@@ -647,11 +647,14 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             : (response.url ?? targetURL)
         let normalizedTargetKey = try Self.canonicalRemotePath(normalizedTarget)
         for parsed in parsedEntries {
-            if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
-                continue
-            }
             guard let remotePath = remotePath(fromHref: parsed.href, relativeTo: baseURL),
                   remotePath == normalizedTargetKey else {
+                continue
+            }
+            if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
+                if let failureStatus = parsed.firstFailureStatusCode {
+                    throw Self.statusError(failureStatus, method: "PROPFIND", url: request.url)
+                }
                 continue
             }
             let name = Self.entryName(forRemotePath: remotePath, displayName: parsed.displayName, href: parsed.href)
@@ -1553,12 +1556,21 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
     private func deleteWithoutPendingCleanup(path: String) async throws {
         let targetURL = try remoteURL(forRemotePath: path)
         let request = makeRequest(url: targetURL, method: "DELETE")
-        let status = try await sendStatus(request)
+        let (data, response) = try await sendData(request)
+        let status = response.statusCode
         if status == 404 {
             return
         }
         guard status == 207 || (200 ... 299).contains(status) else {
             throw Self.statusError(status, method: "DELETE", url: request.url)
+        }
+        if status == 207 {
+            switch evaluateMultiStatus(data, relativeTo: response.url ?? targetURL, targetPath: path) {
+            case .success, .unknown:
+                return
+            case .failure(let failureStatus):
+                throw Self.statusError(failureStatus, method: "DELETE", url: request.url)
+            }
         }
     }
 

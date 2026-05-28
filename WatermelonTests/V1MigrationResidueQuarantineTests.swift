@@ -201,4 +201,210 @@ final class V1MigrationResidueQuarantineTests: XCTestCase {
         let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
         try await quarantine.sweepResidueManifests()
     }
+
+    // Bug-IX P04 R04 CodexReviewerA F1: stale listing omits partial-migration marker while
+    // residue files are visible → must not delete residue. Metadata probe confirms marker.
+    func testSweep_staleListingOmitsMarker_preservesResidue() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+
+        let residuePath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let markerPath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        await inner.injectFile(path: residuePath, data: Data("residue".utf8))
+        await inner.injectFile(path: markerPath, data: Data("{}".utf8))
+
+        let client = StaleListingClient(inner: inner, hiddenNames: [V1MigrationResidueFileNames.partialMigrationMarkerFileName])
+
+        let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        try await quarantine.sweepResidueManifests()
+
+        let residueSurvived = await inner.hasFile(residuePath)
+        let markerSurvived = await inner.hasFile(markerPath)
+        XCTAssertTrue(residueSurvived, "stale listing must not cause residue deletion when marker is still present")
+        XCTAssertTrue(markerSurvived)
+    }
+
+    // Bug-IX P04 R05 CodexReviewerA F1: stale listing omits marker, metadata probe throws
+    // non-not-found error → sweep must not delete residue when marker status is uncertain.
+    func testSweep_staleListingOmitsMarker_metadataFault_preservesResidue() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+
+        let residuePath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let markerPath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        await inner.injectFile(path: residuePath, data: Data("residue".utf8))
+        await inner.injectFile(path: markerPath, data: Data("{}".utf8))
+
+        let client = StaleListingClient(
+            inner: inner,
+            hiddenNames: [V1MigrationResidueFileNames.partialMigrationMarkerFileName],
+            metadataFaultPaths: [markerPath]
+        )
+
+        let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        try await quarantine.sweepResidueManifests()
+
+        let residueSurvived = await inner.hasFile(residuePath)
+        XCTAssertTrue(residueSurvived, "inconclusive metadata probe must not cause residue deletion")
+    }
+
+    // Bug-IX P04 R06 CodexChecker F2: metadata probe must propagate CancellationError
+    // instead of swallowing it and continuing.
+    func testSweep_staleListingOmitsMarker_metadataCancellation_propagates() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+
+        let residuePath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let markerPath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.partialMigrationMarkerFileName)"
+        await inner.injectFile(path: residuePath, data: Data("residue".utf8))
+        await inner.injectFile(path: markerPath, data: Data("{}".utf8))
+
+        let client = StaleListingClient(
+            inner: inner,
+            hiddenNames: [V1MigrationResidueFileNames.partialMigrationMarkerFileName],
+            metadataCancellationPaths: [markerPath]
+        )
+
+        let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        do {
+            try await quarantine.sweepResidueManifests()
+            XCTFail("expected CancellationError to propagate")
+        } catch is CancellationError {
+            // expected
+        }
+        let residueSurvived = await inner.hasFile(residuePath)
+        XCTAssertTrue(residueSurvived, "cancellation must not cause residue deletion")
+    }
+
+    // Bug-IX P04 R07 ClaudeReviewerA F1 / CodexReviewerB F1: equal-residue fast path must
+    // verify source deletion when the remote reports success but the file remains visible.
+    func testQuarantine_existingResidueEqual_noOpDelete_throwsIncomplete() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+
+        let residuePath = "\(basePath)/2024/03/\(V1MigrationResidueFileNames.residueManifestFileName)"
+        let sourcePath = "\(basePath)/2024/03/.watermelon_manifest.sqlite"
+        let shared = Data("identical".utf8)
+        await inner.injectFile(path: residuePath, data: shared)
+        await inner.injectFile(path: sourcePath, data: shared)
+
+        let client = NoOpDeleteClient(inner: inner, noOpDeletePaths: [sourcePath])
+
+        let quarantine = V1MigrationResidueQuarantine(client: client, basePath: basePath)
+        do {
+            try await quarantine.quarantine(year: 2024, month: 3, sourcePath: sourcePath)
+            XCTFail("quarantine must throw when source survives a no-op delete")
+        } catch let error as NSError {
+            XCTAssertEqual(error.domain, "V1MigrationService")
+            XCTAssertEqual(error.code, -33)
+        }
+
+        let sourceSurvived = await inner.hasFile(sourcePath)
+        XCTAssertTrue(sourceSurvived, "source must still be present after no-op delete")
+        let residueIntact = await inner.snapshotFiles()[residuePath]
+        XCTAssertEqual(residueIntact, shared, "residue must be untouched")
+    }
+}
+
+/// Client that hides specific file names from `list` results but preserves them for `metadata`.
+/// Optionally injects non-not-found errors for specific metadata paths.
+private final class StaleListingClient: @unchecked Sendable, RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    private let hiddenNames: Set<String>
+    private let metadataFaultPaths: Set<String>
+    private let metadataCancellationPaths: Set<String>
+
+    init(inner: InMemoryRemoteStorageClient, hiddenNames: [String], metadataFaultPaths: [String] = [], metadataCancellationPaths: [String] = []) {
+        self.inner = inner
+        self.hiddenNames = Set(hiddenNames)
+        self.metadataFaultPaths = Set(metadataFaultPaths)
+        self.metadataCancellationPaths = Set(metadataCancellationPaths)
+    }
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 0 }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .exclusive }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func verifyWriteAccess() async throws {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        try await inner.list(path: path).filter { !hiddenNames.contains($0.name) }
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        if metadataCancellationPaths.contains(path) {
+            throw CancellationError()
+        }
+        if metadataFaultPaths.contains(path) {
+            throw RemoteStorageClientError.unavailable
+        }
+        return try await inner.metadata(path: path)
+    }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool { true }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+}
+
+/// Client that wraps InMemoryRemoteStorageClient but makes delete a no-op for
+/// specific paths — simulates a remote backend that reports success without removing the file.
+private final class NoOpDeleteClient: @unchecked Sendable, RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    private let noOpDeletePaths: Set<String>
+
+    init(inner: InMemoryRemoteStorageClient, noOpDeletePaths: [String]) {
+        self.inner = inner
+        self.noOpDeletePaths = Set(noOpDeletePaths)
+    }
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 0 }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .exclusive }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func verifyWriteAccess() async throws {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool { true }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws {
+        if noOpDeletePaths.contains(path) { return }
+        try await inner.delete(path: path)
+    }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
 }

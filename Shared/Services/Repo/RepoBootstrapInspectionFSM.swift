@@ -147,8 +147,6 @@ struct RepoBootstrapInspectionFSM: Sendable {
                 throw BackupCompatibilityError.damagedV2Repo
             } catch is CancellationError {
                 throw CancellationError()
-            } catch {
-                throw BackupCompatibilityError.damagedV2Repo
             }
         }
         if v1Manifests { return .v1 }

@@ -209,7 +209,9 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
-    func testVersionAbsentMarkerTransportError_noV2Data_throwsDamagedV2() async throws {
+    /// Transport errors while downloading marker files must propagate as storage
+    /// errors, not be collapsed into damagedV2Repo.
+    func testVersionAbsentMarkerTransportError_noV2Data_propagatesStorageError() async throws {
         let (client, profile) = await makeFixture()
         try await client.createDirectory(path: "\(basePath)/.watermelon")
         let writerID = "34343434-3434-3434-3434-343434343434"
@@ -219,9 +221,11 @@ final class BootstrapStateMachineTests: XCTestCase {
 
         do {
             _ = try await format.inspectRemoteFormat(client: client, profile: profile)
-            XCTFail("transport error during marker download should fail closed")
-        } catch BackupCompatibilityError.damagedV2Repo {
-            // expected
+            XCTFail("transport error during marker download should propagate")
+        } catch is BackupCompatibilityError {
+            XCTFail("transient transport error must not be classified as damagedV2Repo")
+        } catch {
+            // expected: raw storage error propagates
         }
     }
 
@@ -692,8 +696,9 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
-    /// Transport errors while reading valid-marker files must not become authoritative fresh.
-    func testValidMarkerTransportError_versionAbsent_noV2Data_throwsDamagedV2() async throws {
+    /// Transport errors while reading valid-marker files must propagate as storage
+    /// errors, not be collapsed into damagedV2Repo.
+    func testValidMarkerTransportError_versionAbsent_noV2Data_propagatesStorageError() async throws {
         let (client, profile) = await makeFixture()
         try await client.createDirectory(path: "\(basePath)/.watermelon")
         let writerID = "e5e5e5e5-e5e5-e5e5-e5e5-e5e5e5e5e5e5"
@@ -705,9 +710,11 @@ final class BootstrapStateMachineTests: XCTestCase {
 
         do {
             _ = try await format.inspectRemoteFormat(client: client, profile: profile)
-            XCTFail("transport error during valid-marker download should fail closed")
-        } catch BackupCompatibilityError.damagedV2Repo {
-            // expected: uncertain marker state must not become fresh
+            XCTFail("transport error during valid-marker download should propagate")
+        } catch is BackupCompatibilityError {
+            XCTFail("transient transport error must not be classified as damagedV2Repo")
+        } catch {
+            // expected: raw storage error propagates
         }
     }
 

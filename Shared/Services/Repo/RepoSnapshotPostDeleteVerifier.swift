@@ -35,6 +35,7 @@ enum RepoSnapshotPostDeleteVerificationInconclusive: Equatable, Sendable {
     case materializerReadRace
     case materializerReadFailed
     case protectedSnapshotReadFailed(filename: String)
+    case deleteTargetStillPresent(path: String)
     case cancelled
 }
 

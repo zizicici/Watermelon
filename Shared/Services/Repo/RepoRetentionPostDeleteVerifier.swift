@@ -30,6 +30,7 @@ enum RepoRetentionPostDeleteVerificationInconclusive: Equatable, Sendable {
     case repoIdentityReadFailed
     case materializerReadRace
     case materializerReadFailed
+    case deleteTargetStillPresent(path: String)
     case cancelled
 }
 

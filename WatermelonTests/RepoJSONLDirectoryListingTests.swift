@@ -58,7 +58,7 @@ final class RepoJSONLDirectoryListingTests: XCTestCase {
 
     func testListFilenames_translatesMetadataCancellationToCancellationError() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.injectListError(.transport, for: dir)
+        await client.injectListError(.notFound, for: dir)
         await client.injectRawMetadataError(
             RemoteStorageClientError.underlying(NSError(
                 domain: NSURLErrorDomain,
@@ -118,6 +118,37 @@ final class RepoJSONLDirectoryListingTests: XCTestCase {
         let result = try await reader.listSnapshotFilenames()
 
         XCTAssertEqual(result.sorted(), ["0000.jsonl", "0001.jsonl"])
+    }
+
+    // Bug-IX P04 R02 ClaudeReviewerC F1: non-not-found list errors must not be
+    // silently converted to [] via metadata fallback (e.g. S3 truncated listing
+    // throws, S3 HEAD on prefix returns nil → was returning []).
+    func testListFilenames_throwsNonNotFoundErrorEvenWhenMetadataReturnsNil() async throws {
+        let client = InMemoryRemoteStorageClient()
+        // Inject a non-not-found list error (transport) with no files (metadata returns nil).
+        await client.injectListError(.transport, for: dir)
+        // metadata for absent dir returns nil — before fix this caused return [].
+
+        do {
+            _ = try await RepoJSONLDirectoryListing.listFilenames(client: client, directory: dir)
+            XCTFail("non-not-found list error must propagate, not return []")
+        } catch is CancellationError {
+            XCTFail("must not surface as CancellationError")
+        } catch {
+            let nsError = Self.unwrapToNSError(error)
+            XCTAssertEqual(nsError.domain, NSURLErrorDomain)
+            XCTAssertEqual(nsError.code, NSURLErrorNotConnectedToInternet)
+        }
+    }
+
+    // Not-found list errors with nil metadata should still return [] (directory confirmed absent).
+    func testListFilenames_notFoundWithNilMetadata_returnsEmpty() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.injectListError(.notFound, for: dir)
+
+        let result = try await RepoJSONLDirectoryListing.listFilenames(client: client, directory: dir)
+
+        XCTAssertEqual(result, [])
     }
 
     private static func unwrapToNSError(_ error: Error) -> NSError {

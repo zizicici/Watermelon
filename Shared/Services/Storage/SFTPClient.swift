@@ -198,6 +198,11 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             if Self.isAlreadyExists(error) {
                 return .alreadyExists
             }
+            // v3 servers may return generic SSH_FX_FAILURE on O_EXCL collision;
+            // probe destination metadata to distinguish collision from real failure.
+            if let _ = try? await self.metadata(path: remotePath) {
+                return .alreadyExists
+            }
             throw error
         }
 

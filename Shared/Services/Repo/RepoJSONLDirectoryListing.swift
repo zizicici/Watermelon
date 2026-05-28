@@ -1,8 +1,9 @@
 import Foundation
 
 enum RepoJSONLDirectoryListing {
-    /// Backend not-found codes vary; metadata probe distinguishes absent (return [])
-    /// from transient (rethrow). Cancellation from either call surfaces as CancellationError.
+    /// Metadata probe distinguishes confirmed-absent directories (return [])
+    /// from transport/format errors (rethrow). Only applied for not-found list
+    /// errors — other list failures always propagate.
     static func listFilenames(
         client: any RemoteStorageClientProtocol,
         directory: String
@@ -12,11 +13,13 @@ enum RepoJSONLDirectoryListing {
             entries = try await client.list(path: directory)
         } catch {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            do {
-                let metadata = try await client.metadata(path: directory)
-                if metadata == nil { return [] }
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            if isStorageNotFoundError(error) {
+                do {
+                    let metadata = try await client.metadata(path: directory)
+                    if metadata == nil { return [] }
+                } catch {
+                    if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                }
             }
             throw error
         }

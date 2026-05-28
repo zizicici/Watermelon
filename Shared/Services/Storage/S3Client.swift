@@ -407,6 +407,16 @@ final actor S3Client: RemoteStorageClientProtocol {
             let (data, _) = try await performMetadata(request)
             let parsed = try S3ListXMLParser().parse(data: data)
 
+            if parsed.isTruncated && parsed.nextContinuationToken == nil {
+                throw RemoteStorageClientError.underlying(
+                    NSError(
+                        domain: Self.errorDomain,
+                        code: -1002,
+                        userInfo: [NSLocalizedDescriptionKey: "S3 list response truncated without continuation token"]
+                    )
+                )
+            }
+
             for content in parsed.contents {
                 if content.key == prefix { continue }
                 entries.append(makeContentEntry(key: content.key, size: content.size, lastModified: content.lastModified, prefix: prefix))
@@ -1165,11 +1175,11 @@ final actor S3Client: RemoteStorageClientProtocol {
         }
         let ns = error as NSError
         if ns.domain == errorDomain {
-            if ns.code == 404 { return true }
-            if let serverCode = ns.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String,
-               serverCode == "NoSuchKey" || serverCode == "NotFound" {
-                return true
+            if let serverCode = ns.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String {
+                if serverCode == "NoSuchKey" || serverCode == "NotFound" { return true }
+                if serverCode == "NoSuchBucket" { return false }
             }
+            if ns.code == 404 { return true }
         }
         return false
     }

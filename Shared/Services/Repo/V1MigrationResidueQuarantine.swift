@@ -18,6 +18,9 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
             guard try await metadataIfPresent(path: sourcePath) != nil else { return }
             if try await remoteFilesEqual(sourcePath, residuePath) {
                 try await deleteIfPresent(path: sourcePath)
+                guard try await metadataIfPresent(path: sourcePath) == nil else {
+                    throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: residuePath)
+                }
                 return
             }
             try await moveSourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
@@ -39,6 +42,9 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
             case .alreadyExists:
                 if try await remoteFilesEqual(sourcePath, residuePath) {
                     try await deleteIfPresent(path: sourcePath)
+                    guard try await metadataIfPresent(path: sourcePath) == nil else {
+                        throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: residuePath)
+                    }
                 } else {
                     try await moveSourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
                 }
@@ -50,6 +56,9 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
                 guard try await metadataIfPresent(path: sourcePath) != nil else { return }
                 if try await remoteFilesEqual(sourcePath, residuePath) {
                     try await deleteIfPresent(path: sourcePath)
+                    guard try await metadataIfPresent(path: sourcePath) == nil else {
+                        throw residueMoveIncompleteError(sourcePath: sourcePath, destinationPath: residuePath)
+                    }
                 } else {
                     try await moveSourceToUniqueResidue(monthRel: monthRel, sourcePath: sourcePath)
                 }
@@ -94,6 +103,23 @@ nonisolated struct V1MigrationResidueQuarantine: Sendable {
                 // need the residue evidence preserved.
                 let partialMarkerEntry = files.first(where: { $0.name == V1MigrationResidueFileNames.partialMigrationMarkerFileName })
                 let residueFiles = files.filter { !$0.isDirectory && Self.isResidueManifestName($0.name) }
+                if partialMarkerEntry == nil, !residueFiles.isEmpty {
+                    let markerPath = RemotePathBuilder.absolutePath(basePath: monthPath, remoteRelativePath: V1MigrationResidueFileNames.partialMigrationMarkerFileName)
+                    do {
+                        if let markerMeta = try await metadataIfPresent(path: markerPath) {
+                            v1MigrationResidueQuarantineLog.info(
+                                "preserving \(residueFiles.count, privacy: .public) V1 residue manifest(s): partial migration marker confirmed present via metadata probe at \(monthPath, privacy: .public)"
+                            )
+                            continue
+                        }
+                    } catch {
+                        if error is CancellationError { throw error }
+                        v1MigrationResidueQuarantineLog.info(
+                            "preserving \(residueFiles.count, privacy: .public) V1 residue manifest(s): partial migration marker probe inconclusive at \(monthPath, privacy: .public)"
+                        )
+                        continue
+                    }
+                }
                 if partialMarkerEntry != nil && !residueFiles.isEmpty {
                     if partialMarkerEntry?.isDirectory == true {
                         v1MigrationResidueQuarantineLog.warning(
