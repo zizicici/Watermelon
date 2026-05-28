@@ -30,14 +30,17 @@ enum RemoteContentTrust {
         expectedHash: Data
     ) async throws -> HashVerificationResult {
         do {
-            guard let metadata = try await client.metadata(path: remotePath), !metadata.isDirectory else {
+            guard let metadata = try await client.metadata(path: remotePath) else {
+                return .inconclusive
+            }
+            guard !metadata.isDirectory else {
                 return .noContent
             }
             guard metadata.size == expectedSize else {
                 return .noContent
             }
         } catch {
-            if isStorageNotFoundError(error) { return .noContent }
+            if isStorageNotFoundError(error) { return .inconclusive }
             throw error
         }
         try Task.checkCancellation()

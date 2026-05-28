@@ -278,6 +278,65 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
                        "OR-check across paths: pathB present is sufficient to keep asset healthy")
     }
 
+    /// A listed-file metadata 404 after the file appeared in the month listing must be
+    /// inconclusive, not authoritative absence. Previously the metadata 404 path in
+    /// RemoteContentTrust.verifyHashResult returned .noContent, which let verify-month
+    /// classify the resource as missing and issue tombstones against a healthy file.
+    func testListedFileMetadataNotFound_isInconclusive_notMissing() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/photo.jpg"
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
+        // File is on remote and will be listed.
+        await client.injectFile(path: "\(basePath)/\(path)", data: Self.expectedSizedBytes())
+        // Metadata probe returns not-found despite the file being listed.
+        await client.injectMetadataError(.notFound, for: "\(basePath)/\(path)")
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        // The resource was listed but metadata was uncertain — must not be cleanup-eligible.
+        let cleanupEligible = report.items.filter(\.allowsCleanup)
+        XCTAssertTrue(cleanupEligible.isEmpty,
+                      "listed file with metadata 404 must not be cleanup-eligible, got \(report.items.map(\.kind))")
+        // Should surface as verification-incomplete, not allResourcesGone.
+        XCTAssertEqual(report.items.count, 1)
+        XCTAssertEqual(report.items.first?.kind, .verificationIncomplete)
+    }
+
+    /// Production clients (S3/WebDAV/SFTP/SMB) return nil for not-found metadata rather than
+    /// throwing. This tests the nil-return path specifically: file is listed but metadata
+    /// returns nil (simulating stale listing, eventual-consistency race, etc.).
+    func testListedFileMetadataNil_isInconclusive_notMissing() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        let writer = CommitLogWriter(client: inner, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/photo.jpg"
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
+        // File exists on remote so the listing will see it.
+        await inner.injectFile(path: "\(basePath)/\(path)", data: Self.expectedSizedBytes())
+
+        // Wrap the client so metadata returns nil for the resource path (production not-found shape).
+        let resourcePath = "\(basePath)/\(path)"
+        let client = MetadataNilWrapper(inner: inner, nilPaths: [resourcePath])
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        let cleanupEligible = report.items.filter(\.allowsCleanup)
+        XCTAssertTrue(cleanupEligible.isEmpty,
+                      "listed file with metadata nil must not be cleanup-eligible, got \(report.items.map(\.kind))")
+        XCTAssertEqual(report.items.count, 1)
+        XCTAssertEqual(report.items.first?.kind, .verificationIncomplete)
+    }
+
 
     private struct ApplyTombstonesScaffold {
         let client: InMemoryRemoteStorageClient
@@ -385,4 +444,37 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
             respectTaskCancellation: false
         )
     }
+}
+
+/// Wraps a storage client and returns nil from metadata for specific paths,
+/// simulating the production S3/WebDAV/SFTP/SMB not-found behavior.
+private struct MetadataNilWrapper: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let nilPaths: Set<String>
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 0 }
+
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        if nilPaths.contains(path) { return nil }
+        return try await inner.metadata(path: path)
+    }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
 }
