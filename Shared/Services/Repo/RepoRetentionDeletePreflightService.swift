@@ -690,15 +690,10 @@ private struct RepoRetentionDeleteCandidateScanner: Sendable {
         do {
             entries = try await client.list(path: dir)
         } catch {
-            if isStorageNotFoundError(error) {
-                return RepoRetentionDeleteCandidateScanResult(
-                    candidates: [],
-                    protectedSummary: RepoRetentionProtectedSummary(),
-                    blockers: [],
-                    readConcurrencyLimit: 1
-                )
-            }
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            // A missing/unlistable commits namespace here (valid accepted snapshot + aged barrier
+            // already established) is damaged/ambiguous metadata, not proof of no candidates — fail
+            // closed like the snapshot scanner instead of reporting `.noDeleteCandidates`.
             return RepoRetentionDeleteCandidateScanResult(
                 candidates: [],
                 protectedSummary: RepoRetentionProtectedSummary(),

@@ -56,6 +56,9 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         ]
 
         private(set) var entries: [PropfindEntry] = []
+        // A `<response>` with no `<href>` is malformed Multi-Status, not absence;
+        // `list` fails closed on it rather than silently dropping a member.
+        private(set) var droppedResponseCount = 0
         private var currentEntry: PropfindEntry?
         private var textBuffer = ""
         private var elementStack: [String] = []
@@ -153,6 +156,8 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             if name == "response" {
                 if !entry.href.isEmpty {
                     entries.append(entry)
+                } else {
+                    droppedResponseCount += 1
                 }
                 currentEntry = nil
             } else {
@@ -587,11 +592,18 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
             throw Self.statusError(status, method: "PROPFIND", url: request.url)
         }
 
-        let parsedEntries = try PropfindXMLParser().parse(data)
+        let parser = PropfindXMLParser()
+        let parsedEntries = try parser.parse(data)
+        // A response element with no href is a malformed Multi-Status member; treat the
+        // whole listing as ambiguous rather than returning a silently partial one.
+        if parser.droppedResponseCount > 0 {
+            throw Self.unresolvedMultiStatusError(method: "PROPFIND", url: request.url)
+        }
         let baseURL = Self.directoryURL(from: response.url ?? targetURL)
         let normalizedTargetKey = try Self.canonicalRemotePath(normalizedTarget)
         var entries: [RemoteStorageEntry] = []
         entries.reserveCapacity(parsedEntries.count)
+        var sawTargetResponse = false
 
         for parsed in parsedEntries {
             // A Depth:1 child href that resolves to nothing under the endpoint prefix
@@ -601,6 +613,7 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 throw Self.unresolvedMultiStatusError(method: "PROPFIND", url: request.url)
             }
             if remotePath == normalizedTargetKey {
+                sawTargetResponse = true
                 if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
                     throw Self.statusError(parsed.firstFailureStatusCode ?? 404, method: "PROPFIND", url: request.url)
                 }
@@ -623,6 +636,12 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                     modificationDate: parsed.modificationDate
                 )
             )
+        }
+        // A Depth:1 207 that never identifies the requested collection is ambiguous
+        // (omitted/empty target response), not proof of an empty directory — fail closed
+        // so an existing repo cannot read as `.fresh`, mirroring `metadata(path:)`.
+        guard sawTargetResponse else {
+            throw Self.unresolvedMultiStatusError(method: "PROPFIND", url: request.url)
         }
         return entries
     }

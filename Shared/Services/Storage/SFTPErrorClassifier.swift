@@ -89,7 +89,12 @@ enum SFTPErrorClassifier {
                 Int(ENETRESET),
                 Int(EPIPE)
             ]
-            return networkCodes.contains(nsError.code)
+            if networkCodes.contains(nsError.code) { return true }
+        }
+        // Citadel/NIO can bridge a POSIX disconnect as a foreign NSError wrapping it under
+        // NSUnderlyingErrorKey; walk the chain like the not-found/cancellation classifiers do.
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isConnectionUnavailable(underlying)
         }
         return false
     }

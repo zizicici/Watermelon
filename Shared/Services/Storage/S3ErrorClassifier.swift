@@ -76,7 +76,9 @@ enum S3ErrorClassifier {
         NSURLErrorDNSLookupFailed,
         NSURLErrorCannotConnectToHost,
         NSURLErrorNotConnectedToInternet,
-        NSURLErrorNetworkConnectionLost
+        NSURLErrorNetworkConnectionLost,
+        NSURLErrorDataNotAllowed,
+        NSURLErrorInternationalRoamingOff
     ]
 
     private static func classify(_ error: Error) -> String? {

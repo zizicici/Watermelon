@@ -37,6 +37,22 @@ final class RemoteWriteClassifierTests: XCTestCase {
         XCTAssertEqual(RemoteWriteClassifier.classifyVerifyFailure(s3), .transient)
     }
 
+    func testClassifyVerifyFailure_s3OfflinePolicyURLCodesAreTransient() {
+        let offlineCodes = [NSURLErrorDataNotAllowed, NSURLErrorInternationalRoamingOff]
+        for code in offlineCodes {
+            let error = NSError(domain: NSURLErrorDomain, code: code)
+            XCTAssertTrue(
+                S3ErrorClassifier.isConnectionUnavailable(error),
+                "S3ErrorClassifier.isConnectionUnavailable expected true for NSURLError \(code)"
+            )
+            XCTAssertEqual(
+                RemoteWriteClassifier.classifyVerifyFailure(error),
+                .transient,
+                "expected transient for NSURLError \(code)"
+            )
+        }
+    }
+
     func testClassifyVerifyFailure_notFoundAndPermissionArePermanent() {
         let notFound = RemoteStorageClientError.underlying(NSError(
             domain: NSCocoaErrorDomain,
@@ -87,6 +103,25 @@ final class RemoteWriteClassifierTests: XCTestCase {
             underlying: RemoteStorageClientError.notConnected
         )
         XCTAssertEqual(RemoteWriteClassifier.classifyVerifyFailure(finalError), .transient)
+    }
+
+    func testClassifyVerifyFailure_sftpPosixDisconnectWrappedUnderUnderlyingKeyIsTransient() {
+        // Citadel/NIO can surface a POSIX disconnect bridged as a foreign NSError wrapping the
+        // POSIX error under NSUnderlyingErrorKey. The SFTP classifier must walk the chain so a
+        // V2 metadata verify maps this to transient retry, not a permanent verification failure.
+        let wrapped = NSError(
+            domain: "Citadel",
+            code: -1,
+            userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(ECONNRESET))]
+        )
+        XCTAssertTrue(SFTPErrorClassifier.isConnectionUnavailable(wrapped))
+        XCTAssertEqual(RemoteWriteClassifier.classifyVerifyFailure(wrapped), .transient)
+
+        let gateError = MetadataCreateGate.Error.finalVerificationFailed(
+            remotePath: "/test.json",
+            underlying: wrapped
+        )
+        XCTAssertEqual(RemoteWriteClassifier.classifyVerifyFailure(gateError), .transient)
     }
 
     func testClassifyVerifyFailure_metadataCreateGatePermanentWithoutUnderlying() {

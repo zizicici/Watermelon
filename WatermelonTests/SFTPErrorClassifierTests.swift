@@ -84,6 +84,26 @@ final class SFTPErrorClassifierTests: XCTestCase {
                 label: "non-POSIX NSError",
                 error: NSError(domain: NSCocoaErrorDomain, code: -1),
                 expected: false
+            ),
+
+            // Citadel/NIO bridge a POSIX disconnect under NSUnderlyingErrorKey
+            Case(
+                label: "foreign NSError wrapping POSIX ECONNRESET unwraps to true",
+                error: NSError(
+                    domain: "Citadel",
+                    code: -1,
+                    userInfo: [NSUnderlyingErrorKey: Self.posix(ECONNRESET)]
+                ),
+                expected: true
+            ),
+            Case(
+                label: "foreign NSError wrapping non-network POSIX EPERM stays false",
+                error: NSError(
+                    domain: "Citadel",
+                    code: -1,
+                    userInfo: [NSUnderlyingErrorKey: Self.posix(EPERM)]
+                ),
+                expected: false
             )
         ]
 

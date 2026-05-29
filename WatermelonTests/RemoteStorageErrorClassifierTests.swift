@@ -131,4 +131,33 @@ final class RemoteStorageErrorClassifierTests: XCTestCase {
             )
         }
     }
+
+    func testSMBPosixNetworkFailures_classifyConnectionUnavailable() {
+        let codes: [Int32] = [ECONNREFUSED, EHOSTUNREACH, ENETUNREACH, EPIPE]
+        for code in codes {
+            let direct = NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+            XCTAssertTrue(
+                SMBErrorClassifier.isConnectionUnavailable(direct),
+                "SMBErrorClassifier.isConnectionUnavailable expected true for POSIX \(code)"
+            )
+            XCTAssertTrue(
+                RemoteWriteClassifier.isTransientVerifyFailure(direct),
+                "isTransientVerifyFailure expected true for POSIX \(code)"
+            )
+
+            let wrapped = NSError(
+                domain: "AMSMB2",
+                code: -1,
+                userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(code))]
+            )
+            XCTAssertTrue(
+                SMBErrorClassifier.isConnectionUnavailable(wrapped),
+                "SMBErrorClassifier.isConnectionUnavailable expected true for wrapped POSIX \(code)"
+            )
+            XCTAssertTrue(
+                RemoteWriteClassifier.isTransientVerifyFailure(wrapped),
+                "isTransientVerifyFailure expected true for wrapped POSIX \(code)"
+            )
+        }
+    }
 }

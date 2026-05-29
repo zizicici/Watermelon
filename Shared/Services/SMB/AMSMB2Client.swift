@@ -434,7 +434,11 @@ enum SMBErrorClassifier {
         .ETIMEDOUT,
         .ENOTCONN,
         .ECONNRESET,
-        .ECONNABORTED
+        .ECONNABORTED,
+        .ECONNREFUSED,
+        .EHOSTUNREACH,
+        .ENETUNREACH,
+        .EPIPE
     ]
 
     static func isNotFound(_ error: Error) -> Bool {

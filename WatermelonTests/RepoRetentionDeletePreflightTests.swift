@@ -782,6 +782,32 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
         }
     }
 
+    // A not-found listing the commits namespace (after a valid accepted snapshot + aged barrier
+    // make retention otherwise eligible) is damaged/ambiguous metadata, not proof of no candidates.
+    // It must fail closed via `.candidateListFailed`, mirroring the snapshot scanner's missing-dir
+    // handling, rather than silently downgrading to `.noDeleteCandidates`.
+    func testCommitsDirectoryNotFoundFailsClosedAsCandidateListFailed() async throws {
+        let inner = try await makeReadyClient()
+        let notFound = CommitListFailingClient(
+            inner: inner,
+            commitsDirectoryPath: RepoLayout.commitsDirectoryPath(base: basePath),
+            failOnListCall: 3,
+            error: NSError(domain: "WebDAVClient", code: 404)
+        )
+        let result = try await service(client: notFound).makePlan(
+            month: month,
+            expectedRepoID: repoID,
+            mode: .dryRun,
+            nowMs: nowMs
+        )
+        if case .blocked(let blockers, let report) = result {
+            XCTAssertEqual(blockers, [.candidateListFailed])
+            XCTAssertEqual(report.candidateScan?.blockers, [.candidateListFailed])
+        } else {
+            XCTFail("expected .candidateListFailed for a missing commits namespace, got \(result)")
+        }
+    }
+
     // Bug-IX P01 R08 Codex A F1: a commit whose body contains an op at or above
     // `LamportClock.maxAdoptableValue` is rejected by the materializer's commit-trust pipeline.
     // Retention preflight must mirror that predicate so the file is not classified as a delete
