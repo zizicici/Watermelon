@@ -1,6 +1,13 @@
 import Foundation
 
 struct RemoteIndexV2SyncEngine: Sendable {
+    // Deterministic refusal raised when an accepted-`.v2` endpoint has no canonical identity:
+    // backup-flow can repair it, but sync must fail closed. Surfaced as a plain NSError (not a
+    // BackupCompatibilityError) so callers can distinguish it; the domain/code let the sync
+    // service recognise it and drop its stale committed view.
+    static let missingCanonicalIdentityErrorDomain = "RemoteIndexSyncService"
+    static let missingCanonicalIdentityErrorCode = -50
+
     func materialize(
         client: any RemoteStorageClientProtocol,
         basePath: String,
@@ -35,8 +42,8 @@ struct RemoteIndexV2SyncEngine: Sendable {
             return try await RepoCanonicalIdentityReader(client: client, basePath: basePath)
                 .requireCanonical(absentError: {
                     NSError(
-                        domain: "RemoteIndexSyncService",
-                        code: -50,
+                        domain: Self.missingCanonicalIdentityErrorDomain,
+                        code: Self.missingCanonicalIdentityErrorCode,
                         userInfo: [NSLocalizedDescriptionKey: "V2 repo missing canonical identity - backup-flow can repair, sync cannot"]
                     )
                 })

@@ -306,8 +306,17 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         if let preInspection {
             inspection = preInspection
         } else {
-            inspection = try await RemoteFormatCompatibilityService()
-                .inspectRemoteFormat(client: client, profile: profile)
+            do {
+                inspection = try await RemoteFormatCompatibilityService()
+                    .inspectRemoteFormat(client: client, profile: profile)
+            } catch let compat as BackupCompatibilityError {
+                // Deterministic format-damage (.damagedV2Repo) refuses the endpoint before a
+                // route exists, so it bypasses the route-decision reset below. Drop the stale
+                // committed view; transient list/transport failures throw raw errors (not
+                // BackupCompatibilityError) and are left untouched.
+                resetCommittedViewAndOverlayFreshness()
+                throw compat
+            }
         }
         let route: RemoteIndexSyncRoute
         do {
@@ -318,9 +327,12 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             )
         } catch {
             switch inspection {
-            case .v2WithV1Manifests, .v1, .fresh:
-                clearPhysicalPresenceOverlayFreshness()
-            case .unsupported, .v2, .v2WithPendingMigrationCleanup:
+            case .v2WithV1Manifests, .v1, .fresh, .unsupported:
+                // Route refused: endpoint is no longer a readable cached V2 repo (wrong or
+                // future format). Drop the stale committed view so Home can't keep serving
+                // the old V2 rows; unlike .v1/.fresh, an unsupported endpoint never self-heals.
+                resetCommittedViewAndOverlayFreshness()
+            case .v2, .v2WithPendingMigrationCleanup:
                 break
             }
             throw error
@@ -423,12 +435,36 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         preMaterialized: RepoMaterializer.MaterializeOutput? = nil,
         localRepoID: String? = nil
     ) async throws -> RemoteIndexSyncDigest {
-        let output = try await RemoteIndexV2SyncEngine().materialize(
-            client: client,
-            basePath: profile.basePath,
-            preMaterialized: preMaterialized,
-            localRepoID: localRepoID
-        )
+        // No persisted binding: fall back to the in-process materialized repo ID so an
+        // externally-swapped V2 repo can't be silently adopted — mirrors verifyMonthV2's
+        // nil-binding guard. First sync (no cached ID) still materializes freely.
+        let expectedRepoID: String?
+        if let localRepoID {
+            expectedRepoID = localRepoID
+        } else {
+            expectedRepoID = await state.getMaterializedRepoID()
+        }
+        let output: RepoMaterializer.MaterializeOutput
+        do {
+            output = try await RemoteIndexV2SyncEngine().materialize(
+                client: client,
+                basePath: profile.basePath,
+                preMaterialized: preMaterialized,
+                localRepoID: expectedRepoID
+            )
+        } catch let compat as BackupCompatibilityError {
+            // Route accepted .v2, but materialize proved the live repo isn't the cached one
+            // (repoIdentityMismatch / mapped damaged-identity). Drop the stale committed view
+            // before rethrowing; cancellation/transport errors propagate without clearing.
+            resetCommittedViewAndOverlayFreshness()
+            throw compat
+        } catch let nsError as NSError where Self.isMissingCanonicalIdentityRefusal(nsError) {
+            // Accepted .v2 but the live repo lacks canonical identity; sync can't trust
+            // materialization. Same fail-closed class — drop the stale view. This deterministic
+            // code is never a transport/cancellation error, which propagate without clearing.
+            resetCommittedViewAndOverlayFreshness()
+            throw nsError
+        }
         await state.setMaterializedRepoID(output.repoID)
         let priorOverlay = loadMaterializedCommittedView(output)
         do {
@@ -621,6 +657,13 @@ final class RemoteIndexSyncService: @unchecked Sendable {
     func resetForProfileSwitch() async {
         resetCommittedViewAndOverlayFreshness()
         await state.reset()
+    }
+
+    /// Drop the committed view after a deterministic identity/format refusal proved the current
+    /// endpoint is not the cached repo, so Home can't keep republishing the old repo's rows.
+    /// Keeps the cached repo ID so later guards still reject the swapped endpoint fail-closed.
+    func invalidateCommittedViewForCompatibilityFailure() {
+        resetCommittedViewAndOverlayFreshness()
     }
 
     private func loadMaterializedCommittedView(_ output: RepoMaterializer.MaterializeOutput) -> RemotePresenceSnapshot {
@@ -870,8 +913,19 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         isStorageNotFoundError(error)
     }
 
+    private static func isMissingCanonicalIdentityRefusal(_ error: NSError) -> Bool {
+        error.domain == RemoteIndexV2SyncEngine.missingCanonicalIdentityErrorDomain
+            && error.code == RemoteIndexV2SyncEngine.missingCanonicalIdentityErrorCode
+    }
+
     private static func remoteProfileKey(_ profile: ServerProfileRecord) -> String {
-        [
+        // External-volume endpoints live entirely in the bookmark; host/port/share/basePath are
+        // fixed sentinels, so a repoint to a different directory must enter the key here or the
+        // cached V2/V1 inspection + committed view carries over to the new endpoint.
+        let externalEndpoint = profile.resolvedStorageType == .externalVolume
+            ? (profile.externalVolumeParams?.displayPath ?? "")
+            : ""
+        return [
             String(profile.id ?? 0),
             profile.storageType,
             profile.host,
@@ -879,7 +933,8 @@ final class RemoteIndexSyncService: @unchecked Sendable {
             profile.shareName,
             profile.basePath,
             profile.username,
-            profile.domain ?? ""
+            profile.domain ?? "",
+            externalEndpoint
         ].joined(separator: "|")
     }
 

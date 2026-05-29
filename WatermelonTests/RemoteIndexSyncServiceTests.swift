@@ -1157,6 +1157,218 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         }
     }
 
+    func testSyncIndex_routeThrow_freshRemote_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        // First sync establishes the cached profile context against the fresh remote.
+        _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+        // Seed an in-process committed-view row as if a prior successful V2 sync had populated it.
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x81))
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        // Same endpoint, now V2-bound: the fresh remote must be refused as damaged.
+        do {
+            _ = try await service.syncIndex(client: client, profile: profile, localRepoID: "bound-repo-id")
+            XCTFail("expected damagedV2Repo — V2-bound fresh remote must throw")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+        XCTAssertTrue(service.fullSnapshot().assets.isEmpty,
+                      "a V2-bound endpoint that inspected as fresh must drop the stale committed view")
+    }
+
+    func testSyncIndex_routeThrow_v1Remote_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x82))
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        // The same endpoint is externally replaced with a V1 manifest layout.
+        try await seedV1Manifest(client: client, basePath: basePath, month: monthB, marker: 0x83)
+
+        do {
+            _ = try await service.syncIndex(client: client, profile: profile, localRepoID: "bound-repo-id")
+            XCTFail("expected requiresForegroundMigration — V2-bound V1 remote must throw")
+        } catch BackupCompatibilityError.requiresForegroundMigration {
+            // expected
+        }
+        XCTAssertTrue(service.fullSnapshot().assets.isEmpty,
+                      "a V2-bound endpoint that inspected as V1 must drop the stale committed view")
+    }
+
+    func testSyncIndex_routeThrow_unsupportedFormat_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        // First sync against the fresh remote establishes the cached profile context.
+        _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x84))
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        // The same endpoint is externally advanced to a future, unsupported repo format.
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+
+        do {
+            _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+            XCTFail("expected remoteFormatUnsupported")
+        } catch BackupCompatibilityError.remoteFormatUnsupported {
+            // expected
+        }
+        XCTAssertTrue(service.fullSnapshot().assets.isEmpty,
+                      "an endpoint that inspected as unsupported must drop the stale committed view")
+    }
+
+    func testSyncIndex_damagedV2Inspection_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        // First sync against the fresh remote establishes the cached profile context.
+        _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x85))
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        // The same endpoint becomes deterministically damaged V2: a .watermelon marker with
+        // commit data but no version.json. Inspection throws damagedV2Repo before any route.
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        let commits = RepoLayout.commitsDirectoryPath(base: basePath)
+        try await client.createDirectory(path: commits)
+        await client.injectFile(path: "\(commits)/leftover.jsonl", contents: "stale")
+
+        do {
+            _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+            XCTFail("expected damagedV2Repo from pre-route inspection")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+        XCTAssertTrue(service.fullSnapshot().assets.isEmpty,
+                      "a damaged-V2 inspection throw before route decision must drop the stale committed view")
+    }
+
+    func testSyncIndex_v2MaterializeIdentityMismatch_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.createDirectory(path: basePath)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        // First sync (nil binding) materializes the real V2 repo and sets the profile context.
+        _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x86))
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        // Same endpoint, accepted .v2 route, but the stored binding names a different repo.
+        // materialize throws repoIdentityMismatch before loadMaterializedCommittedView runs.
+        do {
+            _ = try await service.syncIndex(client: client, profile: profile, localRepoID: "different-repo-id")
+            XCTFail("expected repoIdentityMismatch from materialize")
+        } catch BackupCompatibilityError.repoIdentityMismatch {
+            // expected
+        }
+        XCTAssertTrue(service.fullSnapshot().assets.isEmpty,
+                      "an accepted-.v2 repo-identity mismatch must drop the stale committed view")
+    }
+
+    func testSyncIndex_nilBinding_endpointSwappedToDifferentV2Repo_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.createDirectory(path: basePath)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        // First sync with no persisted binding materializes repo A and caches its ID in-process.
+        _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+        let cachedID = await service.materializedRepoID()
+        XCTAssertEqual(cachedID, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x87))
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        // Same endpoint, same profile key, but externally replaced with a DIFFERENT valid V2 repo.
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee")
+
+        // Reload still passes localRepoID: nil; the cached repo A ID must be used as the expected
+        // identity so the swapped repo B is rejected instead of silently adopted.
+        do {
+            _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+            XCTFail("expected repoIdentityMismatch — nil-binding reload must reject a swapped V2 repo")
+        } catch BackupCompatibilityError.repoIdentityMismatch {
+            // expected
+        }
+        XCTAssertTrue(service.fullSnapshot().assets.isEmpty,
+                      "a nil-binding reload that detects a swapped V2 repo must drop the stale committed view")
+    }
+
+    func testSyncIndex_v2MissingCanonicalIdentity_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setMoveIfAbsentGuarantee(.exclusive)
+        try await client.createDirectory(path: basePath)
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/commits")
+        try await client.createDirectory(path: "\(basePath)/.watermelon/snapshots")
+        let profile = TestFixtures.makeServerProfile(id: 1, storageType: .webdav, basePath: basePath)
+
+        let service = RemoteIndexSyncService()
+        // First sync materializes the real V2 repo and populates the profile context.
+        _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x88))
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        // Same endpoint stays format-valid .v2 (version.json kept) but loses canonical identity.
+        // Inspection still routes .v2, so the refusal surfaces only at materialize as the raw
+        // missing-canonical NSError — not a BackupCompatibilityError.
+        try await client.delete(path: RepoLayout.identityFinalizationFilePath(base: basePath))
+        try await client.delete(path: RepoLayout.repoFilePath(base: basePath))
+
+        do {
+            _ = try await service.syncIndex(client: client, profile: profile, localRepoID: nil)
+            XCTFail("expected missing-canonical-identity refusal")
+        } catch let error as NSError {
+            XCTAssertEqual(error.domain, RemoteIndexV2SyncEngine.missingCanonicalIdentityErrorDomain)
+            XCTAssertEqual(error.code, RemoteIndexV2SyncEngine.missingCanonicalIdentityErrorCode)
+        }
+        XCTAssertTrue(service.fullSnapshot().assets.isEmpty,
+                      "an accepted-.v2 repo missing canonical identity must drop the stale committed view")
+    }
+
     func testSyncIndex_nilLocalRepoID_v2Repo_storesMaterializedRepoID() async throws {
         let basePath = "/repo"
         let client = InMemoryRemoteStorageClient()
@@ -1198,6 +1410,125 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         await service.resetForProfileSwitch()
         let clearedID = await service.materializedRepoID()
         XCTAssertNil(clearedID)
+    }
+
+    // MARK: - verifyMonthV2 identity-refusal stale-view drop
+
+    func testVerifyMonthV2_identityMismatch_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let storedRepoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        let observedRepoID = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let databaseManager = try DatabaseManager(databaseURL: dir.appendingPathComponent("test.sqlite"))
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID,
+                repoID: storedRepoID,
+                writerID: "w",
+                lastClock: 1,
+                lastSeq: 1,
+                migrationCompleted: 1
+            ).insert(db)
+        }
+
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        // The live endpoint's canonical identity names a different repo than the stored binding.
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: observedRepoID)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: observedRepoID)
+
+        let remoteIndexService = RemoteIndexSyncService()
+        let fp = seedCompleteAsset(in: remoteIndexService, month: monthA, contentHash: TestFixtures.fingerprint(0x89))
+        XCTAssertEqual(Set(remoteIndexService.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        let prep = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+        let profile = TestFixtures.makeServerProfile(id: profileID, storageType: .webdav, basePath: basePath)
+
+        do {
+            _ = try await prep.verifyMonthV2(client: client, basePath: basePath, month: monthA, profile: profile)
+            XCTFail("expected repoIdentityMismatch from verifyMonthV2 identity guard")
+        } catch BackupCompatibilityError.repoIdentityMismatch {
+            // expected
+        }
+        XCTAssertTrue(remoteIndexService.fullSnapshot().assets.isEmpty,
+                      "verifyMonthV2 identity refusal must drop the stale committed view so Home can't republish the old repo's rows")
+    }
+
+    // MARK: - External-volume repoint cache identity
+
+    private func makeExternalProfile(displayPath: String, basePath: String) -> ServerProfileRecord {
+        let params = ExternalVolumeConnectionParams(rootBookmarkData: Data(), displayPath: displayPath)
+        let encoded = try! ServerProfileRecord.encodedConnectionParams(params)
+        return ServerProfileRecord(
+            id: 1,
+            name: "ext",
+            storageType: StorageType.externalVolume.rawValue,
+            connectionParams: encoded,
+            sortOrder: 0,
+            host: "external",
+            port: 0,
+            shareName: "external-fixed",
+            basePath: basePath,
+            username: "local",
+            domain: nil,
+            credentialRef: "external:fixed",
+            backgroundBackupEnabled: false,
+            createdAt: Date(),
+            updatedAt: Date(),
+            writerID: nil
+        )
+    }
+
+    func testSyncIndex_externalRepoint_sameDisplayPath_keepsCachedCommittedView() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+
+        let service = RemoteIndexSyncService()
+        let profile = makeExternalProfile(displayPath: "/Volumes/A", basePath: basePath)
+        // First sync against a fresh remote establishes the cached profile context.
+        _ = try await service.syncIndex(client: client, profile: profile)
+        // Seed an in-process committed-view row that a context reset would clear.
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x71))
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        // Re-sync with the identical endpoint: no context reset, seeded row survives.
+        _ = try await service.syncIndex(client: client, profile: profile)
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp],
+                       "unchanged external endpoint must not reset the cached committed view")
+    }
+
+    func testSyncIndex_externalRepoint_changedDisplayPath_resetsCachedCommittedView() async throws {
+        let basePath = "/repo"
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+
+        let service = RemoteIndexSyncService()
+        let profileA = makeExternalProfile(displayPath: "/Volumes/A", basePath: basePath)
+        _ = try await service.syncIndex(client: client, profile: profileA)
+        _ = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0x72))
+        XCTAssertFalse(service.fullSnapshot().assets.isEmpty)
+
+        // Repoint the same row id at a different external directory. Every other key field
+        // (id/host/port/share/basePath/username) is unchanged — only the bookmark displayPath
+        // differs, which is exactly the production edit flow for external volumes.
+        let profileB = makeExternalProfile(displayPath: "/Volumes/B", basePath: basePath)
+        _ = try await service.syncIndex(client: client, profile: profileB)
+        XCTAssertTrue(service.fullSnapshot().assets.isEmpty,
+                      "changed external displayPath must reset the stale cached committed view")
     }
 
     private func seedV1Manifest(

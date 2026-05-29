@@ -332,14 +332,17 @@ struct BackupRunPreparationService: Sendable {
         if let profileID = profile?.id {
             let identity = RepoIdentity(database: databaseManager)
             let localState = try await identity.findRepoStateByProfile(profileID: profileID)
-            if let localState, localState.repoID != expectedRepoID {
-                throw BackupCompatibilityError.repoIdentityMismatch(stored: localState.repoID, observed: expectedRepoID)
+            let priorRepoID: String?
+            if let stateRepoID = localState?.repoID {
+                priorRepoID = stateRepoID
+            } else {
+                priorRepoID = await remoteIndexService.materializedRepoID()
             }
-            if localState == nil {
-                let cachedRepoID = await remoteIndexService.materializedRepoID()
-                if let cachedRepoID, cachedRepoID != expectedRepoID {
-                    throw BackupCompatibilityError.repoIdentityMismatch(stored: cachedRepoID, observed: expectedRepoID)
-                }
+            if let priorRepoID, priorRepoID != expectedRepoID {
+                // Proven a different repo at the same endpoint: drop the stale committed view so
+                // Home can't keep serving the old repo's rows after this verify refusal.
+                remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
+                throw BackupCompatibilityError.repoIdentityMismatch(stored: priorRepoID, observed: expectedRepoID)
             }
         }
         let verifier = RepoVerifyMonthService(client: metadataClient, basePath: basePath, expectedRepoID: expectedRepoID)
