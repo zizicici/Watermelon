@@ -225,6 +225,44 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
         await assertFile(inner, path: seq2Path, exists: true)
     }
 
+    // Bug-IX P04 R22 CodexChecker F1: no-op delete followed by partial failure must still
+    // probe absence for the earlier "deleted" candidate, not skip to .stopped with .passed.
+    func testNoOpDeleteFollowedByFailureStillProbesAbsence() async throws {
+        let inner = try await makeReadyClient(seqs: 1...2, covered: coveredRanges([(1, 2)]))
+        let seq1Path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        let seq2Path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 2)
+        let spy = ExecutorSpyClient(inner: inner, basePath: basePath)
+        spy.setDeleteHook { path in
+            if path == seq1Path { return }
+            if path == seq2Path { throw Self.transportError() }
+            try await inner.delete(path: path)
+        }
+
+        let result = try await executor(client: spy).execute(
+            month: month,
+            expectedRepoID: repoID,
+            nowMs: nowMs
+        )
+
+        guard case .verificationInconclusive(
+            let summary,
+            let stopReason?,
+            _,
+            .inconclusive(reason: .deleteTargetStillPresent(let foundPath))
+        ) = result else {
+            XCTFail("expected verificationInconclusive with still-present file, got \(result)")
+            return
+        }
+        XCTAssertEqual(summary.deleted.map(\.seq), [1])
+        XCTAssertEqual(foundPath, seq1Path)
+        if case .deleteFailed(let candidate, .other) = stopReason {
+            XCTAssertEqual(candidate.seq, 2)
+        } else {
+            XCTFail("unexpected stop reason \(stopReason)")
+        }
+        await assertFile(inner, path: seq1Path, exists: true)
+    }
+
     func testVerificationInconclusiveDominatesHardDeleteFailure() async throws {
         let inner = try await makeReadyClient(seqs: 1...2, covered: coveredRanges([(1, 2)]))
         let snapshotPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: snapshotLamport, writerID: writerA, runID: runID)
@@ -263,6 +301,228 @@ final class RepoRetentionCommitDeleteExecutorTests: XCTestCase {
             return
         }
         XCTAssertEqual(candidate.seq, 2)
+    }
+
+    // Bug-IX P04 R26 CodexReviewerA F1: a remote-fault delete that also removes/tampers the
+    // retained barrier checkpoint must fail post-delete verification, even when materialization
+    // still passes via a newer baseline.
+    func testCollateralBarrierCheckpointDeletion_failsPostDeleteVerification() async throws {
+        let inner = try await makeReadyClient(seqs: 1...2, covered: coveredRanges([(1, 2)]))
+        // Add a newer snapshot above the barrier checkpoint so materialize keeps passing
+        // after the checkpoint disappears.
+        let newerHeader = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(month),
+            writerID: writerA,
+            repoID: repoID,
+            covered: coveredRanges([(1, 2)])
+        )
+        let newerRows = RepoSnapshotBuilder.build(header: newerHeader, state: .empty)
+        _ = try await SnapshotWriter(client: inner, basePath: basePath).write(
+            header: newerHeader,
+            assets: newerRows.assets,
+            resources: newerRows.resources,
+            assetResources: newerRows.assetResources,
+            deletedKeys: newerRows.deletedKeys,
+            month: month,
+            lamport: snapshotLamport + 10,
+            runID: runID,
+            respectTaskCancellation: false
+        )
+
+        let barrierCheckpointPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: snapshotLamport, writerID: writerA, runID: runID
+        )
+        let seq1Path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        let spy = ExecutorSpyClient(inner: inner, basePath: basePath)
+        spy.setDeleteHook { path in
+            if path == seq1Path {
+                try await inner.delete(path: path)
+                try await inner.delete(path: barrierCheckpointPath)
+                return
+            }
+            try await inner.delete(path: path)
+        }
+
+        let result = try await executor(client: spy).execute(
+            month: month,
+            expectedRepoID: repoID,
+            nowMs: nowMs
+        )
+
+        guard case .verificationFailed(_, _, _, let verification) = result else {
+            return XCTFail("expected verificationFailed, got \(result)")
+        }
+        guard case .failed(let reason, _) = verification else {
+            return XCTFail("expected failed verification, got \(verification)")
+        }
+        guard case .retainedBarrierCheckpointMissingOrTampered(let filename, _, _) = reason else {
+            return XCTFail("expected retainedBarrierCheckpointMissingOrTampered, got \(reason)")
+        }
+        let expectedFilename = RepoLayout.snapshotFileName(
+            month: month, lamport: snapshotLamport, writerID: writerA, runID: runID
+        )
+        XCTAssertEqual(filename, expectedFilename)
+    }
+
+    // Bug-IX P04 R28 CodexChecker F1 / CodexReviewerA F2: pre-delete accepted baseline must
+    // be re-verified post-delete even when a newer baseline supersedes it. Storage fault
+    // that deletes a distinct accepted baseline (not a retained barrier checkpoint) during
+    // commit-prefix delete must fail closed, not return .completed via the supersede baseline.
+    func testCollateralAcceptedBaselineDeletion_failsPostDeleteVerification() async throws {
+        let inner = try await makeClient()
+        try await writeCommits(client: inner, seqs: 1...2)
+        let covered = coveredRanges([(1, 2)])
+        // Barrier checkpoint at lamport=snapshotLamport (10).
+        let barrierCheckpoint = try await writeSnapshot(client: inner, covered: covered)
+        try await writeBarrier(client: inner, covered: covered, checkpointSHA256Hex: barrierCheckpoint.sha256Hex)
+        // Distinct accepted baseline at lamport=15 (not a barrier checkpoint). This is what
+        // preflight observes as the accepted snapshot.
+        let acceptedHeader = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(month),
+            writerID: writerA,
+            repoID: repoID,
+            covered: covered
+        )
+        let acceptedRows = RepoSnapshotBuilder.build(header: acceptedHeader, state: .empty)
+        let acceptedLamport: UInt64 = 15
+        _ = try await SnapshotWriter(client: inner, basePath: basePath).write(
+            header: acceptedHeader,
+            assets: acceptedRows.assets,
+            resources: acceptedRows.resources,
+            assetResources: acceptedRows.assetResources,
+            deletedKeys: acceptedRows.deletedKeys,
+            month: month,
+            lamport: acceptedLamport,
+            runID: runID,
+            respectTaskCancellation: false
+        )
+        // Pre-build a supersede snapshot at lamport=25 that the hook injects mid-delete so
+        // it is absent at preflight but present at post-delete materialization (peer write
+        // during the remote-fault window).
+        let supersedeHeader = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(month),
+            writerID: writerA,
+            repoID: repoID,
+            covered: covered
+        )
+        let supersedeRows = RepoSnapshotBuilder.build(header: supersedeHeader, state: .empty)
+        let supersedeLamport: UInt64 = 25
+
+        let acceptedBaselinePath = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: acceptedLamport, writerID: writerA, runID: runID
+        )
+        let seq1Path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        let spy = ExecutorSpyClient(inner: inner, basePath: basePath)
+        let capturedBasePath = basePath
+        let capturedMonth = month
+        let capturedRunID = runID
+        spy.setDeleteHook { path in
+            if path == seq1Path {
+                try await inner.delete(path: path)
+                try await inner.delete(path: acceptedBaselinePath)
+                _ = try await SnapshotWriter(client: inner, basePath: capturedBasePath).write(
+                    header: supersedeHeader,
+                    assets: supersedeRows.assets,
+                    resources: supersedeRows.resources,
+                    assetResources: supersedeRows.assetResources,
+                    deletedKeys: supersedeRows.deletedKeys,
+                    month: capturedMonth,
+                    lamport: supersedeLamport,
+                    runID: capturedRunID,
+                    respectTaskCancellation: false
+                )
+                return
+            }
+            try await inner.delete(path: path)
+        }
+
+        let result = try await executor(client: spy).execute(
+            month: month,
+            expectedRepoID: repoID,
+            nowMs: nowMs
+        )
+
+        guard case .verificationFailed(_, _, _, let verification) = result else {
+            return XCTFail("expected verificationFailed, got \(result)")
+        }
+        guard case .failed(let reason, _) = verification else {
+            return XCTFail("expected failed verification, got \(verification)")
+        }
+        guard case .acceptedSnapshotMissingOrTampered(let filename, _, _) = reason else {
+            return XCTFail("expected acceptedSnapshotMissingOrTampered, got \(reason)")
+        }
+        let expectedFilename = RepoLayout.snapshotFileName(
+            month: month, lamport: acceptedLamport, writerID: writerA, runID: runID
+        )
+        XCTAssertEqual(filename, expectedFilename)
+    }
+
+    // Bug-IX P04 R28 CodexChecker F2 / CodexReviewerA F1: a fresh too-young unsuperseded
+    // barrier's checkpoint must be in the protection set. Pre-delete validation must read
+    // it; post-delete verifier must re-read it. If it's already missing at preflight, block.
+    func testFreshTooYoungBarrierCheckpointMissing_blocksPreflight() async throws {
+        let inner = try await makeClient()
+        try await writeCommits(client: inner, seqs: 1...2)
+        let covered = coveredRanges([(1, 2)])
+        // Old eligible barrier referencing snapshot at lamport=10 (present).
+        let eligibleCheckpoint = try await writeSnapshot(client: inner, covered: covered)
+        try await writeBarrier(client: inner, covered: covered, checkpointSHA256Hex: eligibleCheckpoint.sha256Hex)
+        // Fresh too-young unsuperseded barrier referencing a snapshot at lamport=20 that does
+        // NOT exist on disk. Older eligible authorizes deletion; fresh's checkpoint is the gap.
+        let freshLamport: UInt64 = 20
+        let freshCheckpointName = RepoLayout.snapshotFileName(
+            month: month, lamport: freshLamport, writerID: writerA, runID: runID
+        )
+        let freshManifest = RetentionManifest(
+            version: RetentionManifest.currentVersion,
+            repoID: repoID,
+            month: month,
+            createdByWriterID: writerA,
+            runID: UUID(uuidString: runID)!,
+            createdAtMs: nowMs, // brand new — too young to authorize deletion.
+            barrierLamport: freshLamport,
+            checkpointSnapshotName: freshCheckpointName,
+            checkpointSHA256Hex: String(repeating: "ab", count: 32),
+            coveredRanges: covered,
+            deletePrefixByWriter: policy.conservativeDeletePrefixByWriter(covered: covered),
+            observedSeqHighByWriter: covered.rangesByWriter.mapValues { ranges in
+                ranges.map(\.high).max() ?? 0
+            },
+            policy: RetentionManifestPolicy(
+                keepUncoveredCommits: true,
+                keepCorruptOrUntrustedCommits: true,
+                keepTombstones: true,
+                snapshotKeepCount: policy.snapshotFallbackKeepCount
+            ),
+            livenessGate: RetentionLivenessGate(
+                requiredCompleteView: true,
+                requiredNoActiveNonSelfWriters: true,
+                legacyClientGraceMs: 0
+            )
+        )
+        await inner.injectFile(
+            path: RepoLayout.retentionManifestPath(base: basePath, ref: freshManifest.ref),
+            data: try RetentionManifestStore.encode(freshManifest)
+        )
+
+        let result = try await executor(client: inner).execute(
+            month: month,
+            expectedRepoID: repoID,
+            nowMs: nowMs
+        )
+
+        guard case .preflightBlocked(let blockers, _) = result else {
+            return XCTFail("expected preflightBlocked, got \(result)")
+        }
+        let names = blockers.compactMap { blocker -> String? in
+            if case .barrierCheckpointReadFailed(let filename) = blocker { return filename }
+            return nil
+        }
+        XCTAssertTrue(names.contains(freshCheckpointName),
+                      "preflight must read fresh too-young barrier checkpoint; got blockers \(blockers)")
     }
 
     func testVerificationFailureDominatesHardDeleteFailure() async throws {

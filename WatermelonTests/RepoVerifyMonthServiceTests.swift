@@ -444,6 +444,65 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
             respectTaskCancellation: false
         )
     }
+
+    // P04 R25: nil metadata must be .inconclusive, not .noContent. Callers
+    // (verify-month, overlay probe) pre-list the directory and use .noContent as
+    // "try next match" → falls through to .missing → tombstones healthy bytes.
+    func testVerifyHashResult_nilMetadata_returnsInconclusive() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let hash = Data(SHA256.hash(data: Data("test".utf8)))
+        let result = try await RemoteContentTrust.verifyHashResult(
+            client: client,
+            remotePath: "/repo/nonexistent.dat",
+            expectedSize: 100,
+            expectedHash: hash
+        )
+        XCTAssertEqual(result, .inconclusive)
+    }
+
+    // P04 R26: metadata size disagreement after the caller's listing is an
+    // overwrite/truncation race, same class as nil. Must be .inconclusive
+    // to avoid tombstoning healthy bytes via the same caller fall-through.
+    func testVerifyHashResult_metadataSizeDisagreement_returnsInconclusive() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        let path = "/repo/2026/01/photo.jpg"
+        await inner.injectFile(path: path, data: Self.expectedSizedBytes())
+        let client = MetadataSizeOverrideWrapper(inner: inner, sizeOverrides: [path: 50])
+        let result = try await RemoteContentTrust.verifyHashResult(
+            client: client,
+            remotePath: path,
+            expectedSize: 100,
+            expectedHash: Self.expectedSizedHash
+        )
+        XCTAssertEqual(result, .inconclusive)
+    }
+
+    // P04 R26: end-to-end — verify-month must not tombstone a listed file whose
+    // metadata HEAD races to a different size (overwrite in flight).
+    func testListedFileMetadataSizeDisagreement_isInconclusive_notMissing() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        let writer = CommitLogWriter(client: inner, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/photo.jpg"
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
+        await inner.injectFile(path: "\(basePath)/\(path)", data: Self.expectedSizedBytes())
+        // metadata reports a different size than the listing (truncation in flight).
+        let client = MetadataSizeOverrideWrapper(inner: inner, sizeOverrides: ["\(basePath)/\(path)": 50])
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        let cleanupEligible = report.items.filter(\.allowsCleanup)
+        XCTAssertTrue(cleanupEligible.isEmpty,
+                      "listed file whose metadata size raced must not be cleanup-eligible, got \(report.items.map(\.kind))")
+        XCTAssertEqual(report.items.count, 1)
+        XCTAssertEqual(report.items.first?.kind, .verificationIncomplete)
+    }
 }
 
 /// Wraps a storage client and returns nil from metadata for specific paths,
@@ -460,6 +519,47 @@ private struct MetadataNilWrapper: RemoteStorageClientProtocol {
     func metadata(path: String) async throws -> RemoteStorageEntry? {
         if nilPaths.contains(path) { return nil }
         return try await inner.metadata(path: path)
+    }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+}
+
+/// Wraps a storage client and overrides metadata().size for specific paths,
+/// simulating an overwrite/truncation race observed between LIST and HEAD.
+private struct MetadataSizeOverrideWrapper: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let sizeOverrides: [String: Int64]
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 0 }
+
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        guard let original = try await inner.metadata(path: path) else { return nil }
+        guard let overrideSize = sizeOverrides[path] else { return original }
+        return RemoteStorageEntry(
+            path: original.path,
+            name: original.name,
+            isDirectory: original.isDirectory,
+            size: overrideSize,
+            creationDate: original.creationDate,
+            modificationDate: original.modificationDate
+        )
     }
     func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
     func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }

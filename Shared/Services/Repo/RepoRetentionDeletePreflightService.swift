@@ -97,10 +97,21 @@ enum RepoRetentionPostDeleteEquivalenceMode: Equatable, Sendable {
 struct RepoRetentionPostDeleteEquivalenceContract: Equatable, Sendable {
     let mode: RepoRetentionPostDeleteEquivalenceMode
     let acceptedSnapshotFilename: String
+    // SHA of the pre-delete accepted baseline. Post-delete verifier always re-reads this
+    // snapshot, even when a newer baseline supersedes — a non-target accepted-baseline
+    // disappearance during commit delete must fail closed.
+    let acceptedSnapshotSHA256Hex: String
     let acceptedSnapshotCovered: CoveredRanges
     let retainedBarrierUnionCovered: CoveredRanges
     let requiredObservedSeqByWriter: [String: UInt64]
     let expectedDeletePrefixByWriter: [String: UInt64]
+    // Retained barrier checkpoint snapshots that pre-delete validation accepted. Covers the
+    // union of age-eligible barriers (authorize deletion) and fresh too-young unsuperseded
+    // barriers (still-active retention evidence). A storage fault during commit delete that
+    // also removes/tampers any of these checkpoints would otherwise pass post-delete since
+    // materialization can still succeed from a newer baseline. The verifier re-reads each
+    // and fails closed on disappearance or SHA drift.
+    let retainedBarrierCheckpointSHA256ByFilename: [String: String]
     let preDeleteCovered: CoveredRanges
     let preDeleteState: RepoSnapshotState
 }
@@ -230,7 +241,15 @@ struct RepoRetentionDeletePreflightService: Sendable {
 
         let composedLivenessGate = barrierSet.composedLivenessGate
         report.composedLivenessGate = composedLivenessGate
-        blockers.append(contentsOf: try await barrierCheckpointEvidenceBlockers(barrierSet: barrierSet))
+        // Union of age-eligible barriers (authorize deletion) and fresh too-young
+        // unsuperseded barriers (still-active retention evidence). Mirror the snapshot-GC
+        // retained-union pattern so commit-prefix retention also protects fresh barrier
+        // checkpoints from disappearance/tampering during the delete window.
+        let retainedBarrierManifestsUnion = retainedBarrierManifests(
+            eligible: barrierSet,
+            allValid: allBarrierSet
+        )
+        blockers.append(contentsOf: try await barrierCheckpointEvidenceBlockers(manifests: retainedBarrierManifestsUnion))
         blockers.append(contentsOf: try await livenessBlockers(
             composedGate: composedLivenessGate,
             nowMs: nowMs,
@@ -339,6 +358,25 @@ struct RepoRetentionDeletePreflightService: Sendable {
             return .blocked(blockers: [.noDeleteCandidates], report: report)
         }
 
+        // Cover the same union the pre-delete validation step accepted; the post-delete
+        // verifier re-reads each checkpoint to confirm protected non-target evidence
+        // survived deletion. Same filename in both arms must carry the same SHA in practice.
+        let retainedBarrierCheckpointSHAByFilename: [String: String] = Dictionary(
+            retainedBarrierManifestsUnion.map { ($0.checkpointSnapshotName, $0.checkpointSHA256Hex) },
+            uniquingKeysWith: { _, new in new }
+        )
+
+        // Capture the pre-delete accepted snapshot SHA so post-delete verification can
+        // detect baseline disappearance/tampering even when a newer baseline supersedes.
+        let acceptedSnapshotFile: SnapshotFile
+        do {
+            acceptedSnapshotFile = try await SnapshotReader(client: client, basePath: basePath)
+                .read(filename: acceptedSnapshot.filename)
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            return .blocked(blockers: [.materializerReadFailed], report: report)
+        }
+
         let evidence = RepoRetentionPreDeleteEvidence(
             materializedState: materialized.state,
             materializedCovered: materializedCovered,
@@ -348,10 +386,12 @@ struct RepoRetentionDeletePreflightService: Sendable {
             postDeleteEquivalenceContract: RepoRetentionPostDeleteEquivalenceContract(
                 mode: .retentionSuperset,
                 acceptedSnapshotFilename: acceptedSnapshot.filename,
+                acceptedSnapshotSHA256Hex: acceptedSnapshotFile.sha256Hex.lowercased(),
                 acceptedSnapshotCovered: acceptedSnapshot.covered,
                 retainedBarrierUnionCovered: barrierSet.unionCovered,
                 requiredObservedSeqByWriter: requiredObservedSeqByWriter,
                 expectedDeletePrefixByWriter: deletePrefix,
+                retainedBarrierCheckpointSHA256ByFilename: retainedBarrierCheckpointSHAByFilename,
                 preDeleteCovered: materializedCovered,
                 preDeleteState: materialized.state
             )
@@ -382,11 +422,11 @@ struct RepoRetentionDeletePreflightService: Sendable {
     }
 
     private func barrierCheckpointEvidenceBlockers(
-        barrierSet: RetentionBarrierSet
+        manifests: [RetentionManifest]
     ) async throws -> [RepoRetentionDeletePreflightBlocker] {
         let reader = SnapshotReader(client: client, basePath: basePath)
         var blockers: [RepoRetentionDeletePreflightBlocker] = []
-        for manifest in barrierSet.unsuperseded.sorted(by: { lhs, rhs in
+        for manifest in manifests.sorted(by: { lhs, rhs in
             RetentionManifestStore.filename(for: lhs.ref) < RetentionManifestStore.filename(for: rhs.ref)
         }) {
             let filename = manifest.checkpointSnapshotName
@@ -403,6 +443,21 @@ struct RepoRetentionDeletePreflightService: Sendable {
             }
         }
         return blockers
+    }
+
+    private func retainedBarrierManifests(
+        eligible: RetentionBarrierSet,
+        allValid: RetentionBarrierSet
+    ) -> [RetentionManifest] {
+        var seenFilenames: Set<String> = []
+        var result: [RetentionManifest] = []
+        for manifest in eligible.unsuperseded + allValid.unsuperseded {
+            let filename = RetentionManifestStore.filename(for: manifest.ref)
+            if seenFilenames.insert(filename).inserted {
+                result.append(manifest)
+            }
+        }
+        return result
     }
 
     private func barrierCheckpointMismatch(

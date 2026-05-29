@@ -277,10 +277,12 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
         RepoRetentionPostDeleteEquivalenceContract(
             mode: .retentionSuperset,
             acceptedSnapshotFilename: acceptedSnapshotFilename,
+            acceptedSnapshotSHA256Hex: "",
             acceptedSnapshotCovered: acceptedSnapshotCovered ?? covered([(1, 5)]),
             retainedBarrierUnionCovered: retainedBarrierUnionCovered ?? covered([(1, 5)]),
             requiredObservedSeqByWriter: requiredObservedSeqByWriter ?? [writerA: 5],
             expectedDeletePrefixByWriter: expectedDeletePrefixByWriter ?? [writerA: 3],
+            retainedBarrierCheckpointSHA256ByFilename: [:],
             preDeleteCovered: preDeleteCovered ?? covered([(1, 5)]),
             preDeleteState: preDeleteState ?? RepoSnapshotState(
                 months: [month: monthStateWithAsset()],

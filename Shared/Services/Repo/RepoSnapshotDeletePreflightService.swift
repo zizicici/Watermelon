@@ -364,6 +364,32 @@ struct RepoSnapshotDeletePreflightService: Sendable {
             uniquingKeysWith: { _, new in new }
         )
 
+        // Any protected snapshot that is neither the accepted baseline nor a barrier
+        // checkpoint (e.g. fallback-protected by keepN) still must survive deletion; the
+        // verifier needs its SHA to detect tampering or disappearance. SHAs below the
+        // baseline come from the scanner; above-baseline ones (excluding the baseline)
+        // require an extra read.
+        var additionalProtectedSHAByFilename: [String: String] = [:]
+        let candidateSHAByFilename = Dictionary(uniqueKeysWithValues: scan.candidates.map {
+            ($0.filename, $0.sha256Hex.lowercased())
+        })
+        let snapshotReader = SnapshotReader(client: client, basePath: basePath)
+        for filename in protection.protectedFilenames.sorted() {
+            if filename == acceptedSnapshot.filename { continue }
+            if retainedSHAByFilename[filename] != nil { continue }
+            if let sha = candidateSHAByFilename[filename] {
+                additionalProtectedSHAByFilename[filename] = sha
+                continue
+            }
+            do {
+                let file = try await snapshotReader.read(filename: filename)
+                additionalProtectedSHAByFilename[filename] = file.sha256Hex.lowercased()
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                return .blocked(blockers: [.materializerReadFailed], report: report)
+            }
+        }
+
         let contract = RepoSnapshotPostDeleteEquivalenceContract(
             acceptedSnapshotFilename: acceptedSnapshot.filename,
             acceptedSnapshotLamport: acceptedSnapshot.lamport,
@@ -371,6 +397,7 @@ struct RepoSnapshotDeletePreflightService: Sendable {
             acceptedSnapshotCovered: acceptedSnapshot.covered,
             retainedBarrierUnionCovered: barrierSet.unionCovered,
             retainedManifestCheckpointSHA256ByFilename: retainedSHAByFilename,
+            additionalProtectedSnapshotSHA256ByFilename: additionalProtectedSHAByFilename,
             requiredObservedSeqByWriter: requiredObservedSeqByWriter,
             preDeleteCovered: materializedCovered,
             preDeleteState: materialized.state,

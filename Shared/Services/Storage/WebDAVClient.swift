@@ -602,7 +602,10 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 continue
             }
             if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
-                continue
+                // A child-entry 404 is not directory-not-found; remap so
+                // isStorageNotFoundError won't classify it as absence.
+                let raw = parsed.firstFailureStatusCode ?? 404
+                throw Self.statusError(raw == 404 ? 424 : raw, method: "PROPFIND", url: request.url)
             }
             let name = Self.entryName(forRemotePath: remotePath, displayName: parsed.displayName, href: parsed.href)
             entries.append(

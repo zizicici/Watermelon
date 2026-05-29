@@ -24,12 +24,16 @@ enum RepoRetentionPostDeleteVerificationFailure: Equatable, Sendable {
     case coveredRangeRegression
     case observedSeqRegression(writerID: String, expectedAtLeast: UInt64, observed: UInt64)
     case observedClockRegression(expectedAtLeast: UInt64, observed: UInt64)
+    case retainedBarrierCheckpointMissingOrTampered(filename: String, expectedSHA: String, observedSHA: String?)
+    case acceptedSnapshotMissingOrTampered(filename: String, expectedSHA: String, observedSHA: String?)
 }
 
 enum RepoRetentionPostDeleteVerificationInconclusive: Equatable, Sendable {
     case repoIdentityReadFailed
     case materializerReadRace
     case materializerReadFailed
+    case retainedBarrierCheckpointReadFailed(filename: String)
+    case acceptedSnapshotReadFailed(filename: String)
     case deleteTargetStillPresent(path: String)
     case cancelled
 }
@@ -86,6 +90,80 @@ struct RepoRetentionPostDeleteVerifier: Sendable {
         guard let acceptedSnapshot = output.acceptedSnapshotBaselinesByMonth[month] else {
             return .failed(reason: .missingAcceptedSnapshot(month: month), evidence: nil)
         }
+
+        // Always re-read the pre-delete accepted baseline SHA. The accepted baseline is
+        // protected non-target evidence even when a newer baseline supersedes it post-delete;
+        // a storage fault that removes/tampers the pre-delete baseline must fail closed.
+        let snapshotReader = SnapshotReader(client: client, basePath: basePath)
+        do {
+            let file = try await snapshotReader.read(filename: contract.acceptedSnapshotFilename)
+            guard file.sha256Hex.lowercased() == contract.acceptedSnapshotSHA256Hex.lowercased() else {
+                return .failed(
+                    reason: .acceptedSnapshotMissingOrTampered(
+                        filename: contract.acceptedSnapshotFilename,
+                        expectedSHA: contract.acceptedSnapshotSHA256Hex.lowercased(),
+                        observedSHA: file.sha256Hex.lowercased()
+                    ),
+                    evidence: nil
+                )
+            }
+        } catch let error as RepoJSONLReadError {
+            switch error {
+            case .notFound, .missingHeader, .missingEnd, .integrityMismatch, .decodeFailure:
+                return .failed(
+                    reason: .acceptedSnapshotMissingOrTampered(
+                        filename: contract.acceptedSnapshotFilename,
+                        expectedSHA: contract.acceptedSnapshotSHA256Hex.lowercased(),
+                        observedSHA: nil
+                    ),
+                    evidence: nil
+                )
+            }
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) {
+                return .inconclusive(reason: .cancelled)
+            }
+            return .inconclusive(reason: .acceptedSnapshotReadFailed(filename: contract.acceptedSnapshotFilename))
+        }
+
+        // Re-validate retained barrier checkpoint snapshots survived deletion intact. A
+        // storage fault during commit delete that also removes/tampers a checkpoint must
+        // fail closed even if materialization passes from a newer baseline.
+        for (filename, expectedSHA) in contract.retainedBarrierCheckpointSHA256ByFilename
+            .sorted(by: { $0.key < $1.key }) {
+            let snapshotFile: SnapshotFile
+            do {
+                snapshotFile = try await snapshotReader.read(filename: filename)
+            } catch let error as RepoJSONLReadError {
+                switch error {
+                case .notFound, .missingHeader, .missingEnd, .integrityMismatch, .decodeFailure:
+                    return .failed(
+                        reason: .retainedBarrierCheckpointMissingOrTampered(
+                            filename: filename,
+                            expectedSHA: expectedSHA,
+                            observedSHA: nil
+                        ),
+                        evidence: nil
+                    )
+                }
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) {
+                    return .inconclusive(reason: .cancelled)
+                }
+                return .inconclusive(reason: .retainedBarrierCheckpointReadFailed(filename: filename))
+            }
+            guard snapshotFile.sha256Hex.lowercased() == expectedSHA.lowercased() else {
+                return .failed(
+                    reason: .retainedBarrierCheckpointMissingOrTampered(
+                        filename: filename,
+                        expectedSHA: expectedSHA,
+                        observedSHA: snapshotFile.sha256Hex.lowercased()
+                    ),
+                    evidence: nil
+                )
+            }
+        }
+
         let evidence = RepoRetentionPostDeleteVerificationEvidence(
             acceptedSnapshot: acceptedSnapshot,
             materializedCovered: output.coveredByMonth[month, default: .empty],

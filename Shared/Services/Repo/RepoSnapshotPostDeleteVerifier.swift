@@ -46,6 +46,10 @@ struct RepoSnapshotPostDeleteEquivalenceContract: Equatable, Sendable {
     let acceptedSnapshotCovered: CoveredRanges
     let retainedBarrierUnionCovered: CoveredRanges
     let retainedManifestCheckpointSHA256ByFilename: [String: String]
+    // Protection-set snapshots that are neither the accepted baseline nor a barrier checkpoint
+    // (e.g. fallback-protected by snapshotKeepCount). Verifier checks these too so a storage
+    // fault that deletes a non-target protected snapshot during GC fails closed.
+    let additionalProtectedSnapshotSHA256ByFilename: [String: String]
     let requiredObservedSeqByWriter: [String: UInt64]
     let preDeleteCovered: CoveredRanges
     let preDeleteState: RepoSnapshotState
@@ -112,7 +116,14 @@ struct RepoSnapshotPostDeleteVerifier: Sendable {
         // Validate protected snapshots still parse and hash-match before signalling pass.
         let snapshotReader = SnapshotReader(client: client, basePath: basePath)
         var validatedFilenames: [String] = []
-        for (filename, expectedSHA) in contract.retainedManifestCheckpointSHA256ByFilename
+        // Merge barrier-checkpoint and additional fallback-protected SHAs. Same filename in
+        // both must have the same SHA in practice; keep the barrier SHA on collision for
+        // diagnostic clarity.
+        var protectedSHAByFilename = contract.additionalProtectedSnapshotSHA256ByFilename
+        for (filename, sha) in contract.retainedManifestCheckpointSHA256ByFilename {
+            protectedSHAByFilename[filename] = sha
+        }
+        for (filename, expectedSHA) in protectedSHAByFilename
             .sorted(by: { $0.key < $1.key }) {
             let snapshotFile: SnapshotFile
             do {
@@ -157,26 +168,49 @@ struct RepoSnapshotPostDeleteVerifier: Sendable {
             validatedFilenames.append(filename)
         }
 
-        // If the accepted baseline kept the same filename, verify SHA stability too.
-        if acceptedSnapshot.filename == contract.acceptedSnapshotFilename {
-            do {
-                let file = try await snapshotReader.read(filename: acceptedSnapshot.filename)
-                guard file.sha256Hex.lowercased() == contract.acceptedSnapshotSHA256Hex.lowercased() else {
+        // Always re-read the pre-delete accepted baseline. It's in protectedFilenames but
+        // excluded from `additionalProtectedSnapshotSHA256ByFilename` (carried as its own
+        // field). When a newer post-delete baseline supersedes it, skipping this check
+        // would let the pre-delete baseline silently disappear during the delete window.
+        do {
+            let file = try await snapshotReader.read(filename: contract.acceptedSnapshotFilename)
+            guard file.sha256Hex.lowercased() == contract.acceptedSnapshotSHA256Hex.lowercased() else {
+                if acceptedSnapshot.filename == contract.acceptedSnapshotFilename {
                     return .failed(
                         reason: .acceptedSnapshotContentMismatch(
-                            filename: acceptedSnapshot.filename,
+                            filename: contract.acceptedSnapshotFilename,
                             expectedSHA: contract.acceptedSnapshotSHA256Hex.lowercased(),
                             observedSHA: file.sha256Hex.lowercased()
                         ),
                         evidence: nil
                     )
                 }
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) {
-                    return .inconclusive(reason: .cancelled)
-                }
-                return .inconclusive(reason: .protectedSnapshotReadFailed(filename: acceptedSnapshot.filename))
+                return .failed(
+                    reason: .protectedSnapshotMissingOrTampered(
+                        filename: contract.acceptedSnapshotFilename,
+                        expectedSHA: contract.acceptedSnapshotSHA256Hex.lowercased(),
+                        observedSHA: file.sha256Hex.lowercased()
+                    ),
+                    evidence: nil
+                )
             }
+        } catch let error as RepoJSONLReadError {
+            switch error {
+            case .notFound, .missingHeader, .missingEnd, .integrityMismatch, .decodeFailure:
+                return .failed(
+                    reason: .protectedSnapshotMissingOrTampered(
+                        filename: contract.acceptedSnapshotFilename,
+                        expectedSHA: contract.acceptedSnapshotSHA256Hex.lowercased(),
+                        observedSHA: nil
+                    ),
+                    evidence: nil
+                )
+            }
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) {
+                return .inconclusive(reason: .cancelled)
+            }
+            return .inconclusive(reason: .protectedSnapshotReadFailed(filename: contract.acceptedSnapshotFilename))
         }
 
         let evidence = RepoSnapshotPostDeleteVerificationEvidence(

@@ -360,6 +360,7 @@ final class RepoSnapshotDeletePreflightTests: XCTestCase {
             acceptedSnapshotCovered: covered,
             retainedBarrierUnionCovered: covered,
             retainedManifestCheckpointSHA256ByFilename: [:],
+            additionalProtectedSnapshotSHA256ByFilename: [:],
             requiredObservedSeqByWriter: [:],
             preDeleteCovered: covered,
             preDeleteState: .empty,
@@ -622,6 +623,72 @@ final class RepoSnapshotDeletePreflightTests: XCTestCase {
         }
         let olderExists = await inner.hasFile(olderPath)
         XCTAssertTrue(olderExists)
+    }
+
+    // Bug-IX P04 R22 CodexChecker F2: snapshot GC no-op delete followed by partial failure
+    // must still probe absence for the earlier "deleted" candidate.
+    func testNoOpDeleteFollowedByFailureStillProbesAbsence() async throws {
+        let inner = try await makeReadyClient()
+        let covered = makeCovered(seqs: [(1, 1)])
+        _ = try await writeSnapshot(client: inner, covered: covered, lamport: 3)
+        _ = try await writeSnapshot(client: inner, covered: covered, lamport: 4)
+        let newest = try await writeSnapshot(client: inner, covered: covered, lamport: snapshotLamport)
+        try await writeBarrier(
+            client: inner,
+            covered: covered,
+            checkpointSHA256Hex: newest.sha256Hex,
+            createdAtMs: 0,
+            snapshotKeepCount: 1
+        )
+        let l3Path = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: 3, writerID: writerID, runID: runID
+        )
+        let l4Path = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: 4, writerID: writerID, runID: runID
+        )
+        let wrapper = SnapshotNoOpAndFailClient(
+            inner: inner,
+            noOpPaths: [l3Path],
+            failPaths: [l4Path]
+        )
+
+        let executorPolicy = RepoCompactionPolicy(
+            checkpointCommitThreshold: 1,
+            checkpointByteThreshold: Int64.max,
+            retentionStalenessThresholdSeconds: 0,
+            snapshotFallbackKeepCount: 1
+        )
+        let executor = RepoSnapshotDeleteExecutor(
+            client: wrapper,
+            basePath: basePath,
+            policy: executorPolicy,
+            isLocalVolume: true,
+            peerStatusProvider: { .empty }
+        )
+
+        let result = try await executor.execute(
+            month: month,
+            expectedRepoID: repoID,
+            nowMs: nowMs
+        )
+
+        guard case .verificationInconclusive(
+            let summary,
+            let stopReason?,
+            _,
+            .inconclusive(reason: .deleteTargetStillPresent(let foundPath))
+        ) = result else {
+            return XCTFail("expected verificationInconclusive with still-present snapshot, got \(result)")
+        }
+        XCTAssertEqual(summary.deletedCount, 1)
+        XCTAssertEqual(foundPath, l3Path)
+        if case .deleteFailed(let candidate, .other) = stopReason {
+            XCTAssertEqual(candidate.lamport, 4)
+        } else {
+            XCTFail("unexpected stop reason \(stopReason)")
+        }
+        let l3Exists = await inner.hasFile(l3Path)
+        XCTAssertTrue(l3Exists)
     }
 
     // Bug-IX P04 R03 CodexReviewerA F2: delete throws not-found but snapshot remains →
@@ -895,6 +962,170 @@ final class RepoSnapshotDeletePreflightTests: XCTestCase {
     // authorization contract; their `policy.snapshotKeepCount` is the floor for fallback
     // retention. A later runtime that lowered `snapshotFallbackKeepCount` must not delete
     // snapshots the retained barrier authorized to keep.
+    // Bug-IX P04 R25 CodexReviewerA: fallback-protected snapshots must be checked
+    // by the post-delete verifier. If a storage fault removes a non-barrier protected
+    // snapshot during GC, the verifier must fail closed rather than report .completed.
+    func testFallbackProtectedSnapshotMissingDuringDelete_failsClosed() async throws {
+        let inner = try await makeReadyClient()
+        let covered = makeCovered(seqs: [(1, 1)])
+        let acceptedLamport: UInt64 = 10
+        let accepted = try await writeSnapshot(client: inner, covered: covered, lamport: acceptedLamport)
+        _ = try await writeSnapshot(client: inner, covered: covered, lamport: 7)
+        _ = try await writeSnapshot(client: inner, covered: covered, lamport: 5)
+        try await writeBarrier(
+            client: inner,
+            covered: covered,
+            checkpointSHA256Hex: accepted.sha256Hex,
+            createdAtMs: 0,
+            snapshotKeepCount: 2,
+            barrierLamport: acceptedLamport
+        )
+
+        let l5Path = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: 5, writerID: writerID, runID: runID
+        )
+        let l7Path = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: 7, writerID: writerID, runID: runID
+        )
+        // Storage fault: delete(L5) also removes the fallback-protected L7.
+        let wrapper = SnapshotCollateralDeleteClient(
+            inner: inner,
+            collateralDeletePaths: [l5Path: [l7Path]]
+        )
+
+        let narrowedPolicy = RepoCompactionPolicy(
+            checkpointCommitThreshold: 1,
+            checkpointByteThreshold: Int64.max,
+            retentionStalenessThresholdSeconds: 0,
+            snapshotFallbackKeepCount: 0
+        )
+        let executor = RepoSnapshotDeleteExecutor(
+            client: wrapper,
+            basePath: basePath,
+            policy: narrowedPolicy,
+            isLocalVolume: true,
+            peerStatusProvider: { .empty }
+        )
+
+        let result = try await executor.execute(
+            month: month,
+            expectedRepoID: repoID,
+            nowMs: nowMs
+        )
+
+        guard case .verificationFailed(_, _, _, let verification) = result else {
+            return XCTFail("expected verificationFailed, got \(result)")
+        }
+        guard case .failed(let reason, _) = verification else {
+            return XCTFail("expected failed verification, got \(verification)")
+        }
+        guard case .protectedSnapshotMissingOrTampered(let filename, _, _) = reason else {
+            return XCTFail("expected protectedSnapshotMissingOrTampered, got \(reason)")
+        }
+        let l7Filename = RepoLayout.snapshotFileName(month: month, lamport: 7, writerID: writerID, runID: runID)
+        XCTAssertEqual(filename, l7Filename, "verifier must detect fallback-protected L7 gone")
+    }
+
+    // Bug-IX P04 R26 CodexReviewerA F2: pre-delete accepted baseline SHA must be checked
+    // even when a newer post-delete baseline supersedes it. Otherwise a remote-fault that
+    // removes the pre-delete baseline during GC silently passes when the new baseline can
+    // still materialize the month.
+    func testPreDeleteBaselineLossWithSupersede_failsClosed() async throws {
+        let inner = try await makeReadyClient()
+        let covered = makeCovered(seqs: [(1, 1)])
+        let baselineLamport: UInt64 = 10
+        let baseline = try await writeSnapshot(client: inner, covered: covered, lamport: baselineLamport)
+        // Older candidate, eligible for deletion.
+        _ = try await writeSnapshot(client: inner, covered: covered, lamport: 5)
+        try await writeBarrier(
+            client: inner,
+            covered: covered,
+            checkpointSHA256Hex: baseline.sha256Hex,
+            createdAtMs: 0,
+            snapshotKeepCount: 1,
+            barrierLamport: baselineLamport
+        )
+
+        // Pre-build a supersede snapshot (L20) to be injected during the delete hook so
+        // the post-delete materializer accepts it instead of the (now-missing) L10 baseline.
+        let supersedeLamport: UInt64 = 20
+        let supersedeHeader = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(month),
+            writerID: writerID,
+            repoID: repoID,
+            covered: covered
+        )
+        let supersedeRows = RepoSnapshotBuilder.build(header: supersedeHeader, state: .empty)
+        let supersedePath = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: supersedeLamport, writerID: writerID, runID: runID
+        )
+
+        let l5Path = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: 5, writerID: writerID, runID: runID
+        )
+        let baselinePath = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: baselineLamport, writerID: writerID, runID: runID
+        )
+
+        let capturedBasePath = basePath
+        let capturedMonth = month
+        let capturedRunID = runID
+        let wrapper = SnapshotSupersedeDeleteClient(
+            inner: inner,
+            triggerPath: l5Path,
+            collateralDeletePaths: [baselinePath],
+            supersedeWriter: { [supersedeHeader, supersedeRows] in
+                _ = try await SnapshotWriter(client: inner, basePath: capturedBasePath).write(
+                    header: supersedeHeader,
+                    assets: supersedeRows.assets,
+                    resources: supersedeRows.resources,
+                    assetResources: supersedeRows.assetResources,
+                    deletedKeys: supersedeRows.deletedKeys,
+                    month: capturedMonth,
+                    lamport: supersedeLamport,
+                    runID: capturedRunID,
+                    respectTaskCancellation: false
+                )
+            }
+        )
+
+        let narrowedPolicy = RepoCompactionPolicy(
+            checkpointCommitThreshold: 1,
+            checkpointByteThreshold: Int64.max,
+            retentionStalenessThresholdSeconds: 0,
+            snapshotFallbackKeepCount: 1
+        )
+        let executor = RepoSnapshotDeleteExecutor(
+            client: wrapper,
+            basePath: basePath,
+            policy: narrowedPolicy,
+            isLocalVolume: true,
+            peerStatusProvider: { .empty }
+        )
+
+        let result = try await executor.execute(
+            month: month,
+            expectedRepoID: repoID,
+            nowMs: nowMs
+        )
+
+        guard case .verificationFailed(_, _, _, let verification) = result else {
+            return XCTFail("expected verificationFailed, got \(result)")
+        }
+        guard case .failed(let reason, _) = verification else {
+            return XCTFail("expected failed verification, got \(verification)")
+        }
+        guard case .protectedSnapshotMissingOrTampered(let filename, _, _) = reason else {
+            return XCTFail("expected protectedSnapshotMissingOrTampered, got \(reason)")
+        }
+        let baselineFilename = RepoLayout.snapshotFileName(
+            month: month, lamport: baselineLamport, writerID: writerID, runID: runID
+        )
+        XCTAssertEqual(filename, baselineFilename,
+                       "verifier must always re-check pre-delete baseline SHA, even when superseded; supersede path: \(supersedePath)")
+    }
+
     func testRetainedBarrierKeepCountFloorsSnapshotGC() async throws {
         let client = try await makeReadyClient()
         let covered = makeCovered(seqs: [(1, 1)])
@@ -1252,4 +1483,192 @@ private final class SnapshotMetadataNotFoundThrowClient: @unchecked Sendable, Re
         try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
     }
     func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+}
+
+private final class SnapshotNoOpAndFailClient: @unchecked Sendable, RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    private let noOpPaths: Set<String>
+    private let failPaths: Set<String>
+
+    init(inner: InMemoryRemoteStorageClient, noOpPaths: [String], failPaths: [String]) {
+        self.inner = inner
+        self.noOpPaths = Set(noOpPaths.map(Self.normalize))
+        self.failPaths = Set(failPaths.map(Self.normalize))
+    }
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 0 }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func verifyWriteAccess() async throws {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool { true }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws {
+        let key = Self.normalize(path)
+        if noOpPaths.contains(key) { return }
+        if failPaths.contains(key) {
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut,
+                          userInfo: [NSLocalizedDescriptionKey: "transport failure"])
+        }
+        try await inner.delete(path: key)
+    }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+
+    private static func normalize(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard !trimmed.isEmpty else { return "/" }
+        return "/" + trimmed.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+    }
+}
+
+/// Client that, when asked to delete a primary path, also deletes the configured
+/// collateral paths from the inner store — models a storage fault that removes a
+/// non-target file during a delete.
+private final class SnapshotCollateralDeleteClient: @unchecked Sendable, RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    private let collateralByPrimary: [String: [String]]
+
+    init(inner: InMemoryRemoteStorageClient, collateralDeletePaths: [String: [String]]) {
+        self.inner = inner
+        var normalized: [String: [String]] = [:]
+        for (primary, others) in collateralDeletePaths {
+            normalized[Self.normalize(primary)] = others.map(Self.normalize)
+        }
+        self.collateralByPrimary = normalized
+    }
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 0 }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func verifyWriteAccess() async throws {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool { true }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws {
+        let key = Self.normalize(path)
+        try await inner.delete(path: key)
+        if let collateral = collateralByPrimary[key] {
+            for other in collateral {
+                try? await inner.delete(path: other)
+            }
+        }
+    }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+
+    private static func normalize(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard !trimmed.isEmpty else { return "/" }
+        return "/" + trimmed.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+    }
+}
+
+/// Client that, when asked to delete `triggerPath`, also deletes the configured collateral
+/// paths and then runs `supersedeWriter` to inject a newer snapshot into the inner store —
+/// models a remote-fault window where a peer publishes a newer baseline during delete and
+/// the pre-delete baseline is collaterally removed.
+private final class SnapshotSupersedeDeleteClient: @unchecked Sendable, RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    private let triggerPath: String
+    private let collateralDeletePaths: [String]
+    private let supersedeWriter: @Sendable () async throws -> Void
+
+    init(
+        inner: InMemoryRemoteStorageClient,
+        triggerPath: String,
+        collateralDeletePaths: [String],
+        supersedeWriter: @escaping @Sendable () async throws -> Void
+    ) {
+        self.inner = inner
+        self.triggerPath = Self.normalize(triggerPath)
+        self.collateralDeletePaths = collateralDeletePaths.map(Self.normalize)
+        self.supersedeWriter = supersedeWriter
+    }
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 0 }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { true }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func verifyWriteAccess() async throws {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool { true }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws {
+        let key = Self.normalize(path)
+        try await inner.delete(path: key)
+        if key == triggerPath {
+            for other in collateralDeletePaths {
+                try? await inner.delete(path: other)
+            }
+            try await supersedeWriter()
+        }
+    }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+
+    private static func normalize(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard !trimmed.isEmpty else { return "/" }
+        return "/" + trimmed.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+    }
 }

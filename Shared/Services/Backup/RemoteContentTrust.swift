@@ -30,14 +30,20 @@ enum RemoteContentTrust {
         expectedHash: Data
     ) async throws -> HashVerificationResult {
         do {
+            // nil metadata after the caller's listing already showed the file is a race, not
+            // confirmed absence. A false absent here drives tombstone issuance against healthy
+            // bytes in RepoVerifyMonthService / RemoteIndexPhysicalPresenceOverlayProbe.
             guard let metadata = try await client.metadata(path: remotePath) else {
                 return .inconclusive
             }
             guard !metadata.isDirectory else {
                 return .noContent
             }
+            // A size that changed between the caller's listing and this HEAD is a concurrent
+            // overwrite/truncation race, not confirmed absence. Same hazard class as nil: a
+            // false absent here drives tombstone issuance against healthy bytes.
             guard metadata.size == expectedSize else {
-                return .noContent
+                return .inconclusive
             }
         } catch {
             if isStorageNotFoundError(error) { return .inconclusive }

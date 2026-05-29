@@ -85,6 +85,14 @@ final class RemoteStorageErrorClassifierTests: XCTestCase {
         }
     }
 
+    // P04 R24: PROPFIND child-entry 404 is remapped to 424 so
+    // isStorageNotFoundError does not misclassify it as directory-not-found.
+    func testWebDAVChildPropfind424_isNotNotFound() {
+        let error = NSError(domain: WebDAVClient.errorDomain, code: 424)
+        XCTAssertFalse(RemoteStorageErrorClassifier.isNotFound(error))
+        XCTAssertEqual(RemoteStorageErrorClassifier.isNotFound(error), isStorageNotFoundError(error))
+    }
+
     func testWebDAVWatchdogTimeouts_classifyTransient() {
         let codes = [-1301, -1302, -1303]
         for code in codes {

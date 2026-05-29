@@ -220,6 +220,27 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
                 break
             }
         }
+        for candidate in summary.deleted + summary.alreadyMissing {
+            do {
+                if let _ = try await client.metadata(path: candidate.path) {
+                    return .verificationInconclusive(
+                        summary: summary,
+                        stopReason: stopReason,
+                        report: report,
+                        verification: .inconclusive(reason: .deleteTargetStillPresent(path: candidate.path))
+                    )
+                }
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                if isStorageNotFoundError(error) { continue }
+                return .verificationInconclusive(
+                    summary: summary,
+                    stopReason: stopReason,
+                    report: report,
+                    verification: .inconclusive(reason: .deleteTargetStillPresent(path: candidate.path))
+                )
+            }
+        }
         if let stopReason {
             return .stopped(summary: summary, reason: stopReason, report: report, verification: verification)
         }
@@ -230,27 +251,6 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
                 report: report,
                 verification: .inconclusive(reason: .materializerReadFailed)
             )
-        }
-        for candidate in summary.deleted + summary.alreadyMissing {
-            do {
-                if let _ = try await client.metadata(path: candidate.path) {
-                    return .verificationInconclusive(
-                        summary: summary,
-                        stopReason: nil,
-                        report: report,
-                        verification: .inconclusive(reason: .deleteTargetStillPresent(path: candidate.path))
-                    )
-                }
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                if isStorageNotFoundError(error) { continue }
-                return .verificationInconclusive(
-                    summary: summary,
-                    stopReason: nil,
-                    report: report,
-                    verification: .inconclusive(reason: .deleteTargetStillPresent(path: candidate.path))
-                )
-            }
         }
         return .completed(summary: summary, report: report, verification: verification)
     }
