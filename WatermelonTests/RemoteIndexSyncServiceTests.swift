@@ -1465,6 +1465,232 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
                       "verifyMonthV2 identity refusal must drop the stale committed view so Home can't republish the old repo's rows")
     }
 
+    func testVerifyMonthV2_missingCanonicalIdentity_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let storedRepoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let databaseManager = try DatabaseManager(databaseURL: dir.appendingPathComponent("test.sqlite"))
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID,
+                repoID: storedRepoID,
+                writerID: "w",
+                lastClock: 1,
+                lastSeq: 1,
+                migrationCompleted: 1
+            ).insert(db)
+        }
+
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        try await client.createDirectory(path: basePath)
+        // Format-valid V2 shape but no canonical identity (no repo.json / finalization marker).
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, writerID: "w")
+
+        let remoteIndexService = RemoteIndexSyncService()
+        let fp = seedCompleteAsset(in: remoteIndexService, month: monthA, contentHash: TestFixtures.fingerprint(0x8A))
+        XCTAssertEqual(Set(remoteIndexService.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        let prep = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+        let profile = TestFixtures.makeServerProfile(id: profileID, storageType: .webdav, basePath: basePath)
+
+        do {
+            _ = try await prep.verifyMonthV2(client: client, basePath: basePath, month: monthA, profile: profile)
+            XCTFail("expected missing-canonical-identity refusal from verifyMonthV2")
+        } catch let error as NSError where error.domain == "BackupRunPreparation" && error.code == -51 {
+            // expected
+        }
+        XCTAssertTrue(remoteIndexService.fullSnapshot().assets.isEmpty,
+                      "verifyMonthV2 missing-canonical refusal must drop the stale committed view")
+    }
+
+    func testVerifyMonthV2_tombstoneLeaseRefusal_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let storedRepoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let databaseManager = try DatabaseManager(databaseURL: dir.appendingPathComponent("test.sqlite"))
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID,
+                repoID: storedRepoID,
+                writerID: "w",
+                lastClock: 1,
+                lastSeq: 1,
+                migrationCompleted: 1
+            ).insert(db)
+        }
+
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        // Canonical identity matches the stored binding so the early identity guard passes.
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: storedRepoID)
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: storedRepoID)
+        // ...but the live version.json now declares an unsupported future format, so the tombstone
+        // lease's open refuses deterministically AFTER verify produced cleanup candidates.
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9", writerID: "w")
+
+        // One asset whose only resource is physically absent → allResourcesGone (cleanup-eligible).
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = TestFixtures.assetFingerprint(0x8C)
+        let body = CommitAddAssetBody(
+            assetFingerprint: fp,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resources: [
+                CommitResourceEntry(
+                    physicalRemotePath: "2025/01/missing.jpg",
+                    logicalName: "missing.jpg",
+                    contentHash: TestFixtures.fingerprint(0xCD),
+                    fileSize: 100,
+                    resourceType: ResourceTypeCode.photo,
+                    role: ResourceTypeCode.photo,
+                    slot: 0,
+                    crypto: nil
+                )
+            ]
+        )
+        let header = TestFixtures.makeCommitHeader(repoID: storedRepoID, writerID: "w", seq: 1, runID: "run-001", month: monthA)
+        _ = try await writer.write(
+            header: header,
+            ops: [CommitOp(opSeq: 0, clock: 1, body: .addAsset(body))],
+            month: monthA,
+            respectTaskCancellation: false
+        )
+        try await client.createDirectory(path: "\(basePath)/2025/01")
+
+        let remoteIndexService = RemoteIndexSyncService()
+        let stale = seedCompleteAsset(in: remoteIndexService, month: monthA, contentHash: TestFixtures.fingerprint(0x8D))
+        XCTAssertEqual(Set(remoteIndexService.fullSnapshot().assets.map(\.assetFingerprint)), [stale])
+
+        let prep = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+        let profile = TestFixtures.makeServerProfile(id: profileID, storageType: .webdav, basePath: basePath)
+
+        do {
+            _ = try await prep.verifyMonthV2(client: client, basePath: basePath, month: monthA, profile: profile)
+            XCTFail("expected remoteFormatUnsupported from the tombstone lease open")
+        } catch BackupCompatibilityError.remoteFormatUnsupported {
+            // expected
+        }
+        XCTAssertTrue(remoteIndexService.fullSnapshot().assets.isEmpty,
+                      "tombstone-lease deterministic refusal must drop the stale committed view")
+    }
+
+    // MARK: - verifyMonth planner-refusal stale-view drop
+
+    func testVerifyMonth_freshEndpointWithPriorBinding_clearsStaleCommittedView() async throws {
+        let basePath = "/repo"
+        let storedRepoID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let databaseManager = try DatabaseManager(databaseURL: dir.appendingPathComponent("test.sqlite"))
+
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+        try databaseManager.write { db in
+            try RepoStateRecord(
+                profileID: profileID,
+                repoID: storedRepoID,
+                writerID: "w",
+                lastClock: 1,
+                lastSeq: 1,
+                migrationCompleted: 1
+            ).insert(db)
+        }
+
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        // Fresh endpoint (no .watermelon) but a prior V2 binding exists -> planner refuses .throwDamagedV2Repo.
+        try await client.createDirectory(path: basePath)
+
+        let remoteIndexService = RemoteIndexSyncService()
+        let fp = seedCompleteAsset(in: remoteIndexService, month: monthA, contentHash: TestFixtures.fingerprint(0x8B))
+        XCTAssertEqual(Set(remoteIndexService.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        let prep = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+        let profile = TestFixtures.makeServerProfile(id: profileID, storageType: .webdav, basePath: basePath)
+
+        do {
+            _ = try await prep.verifyMonth(client: client, basePath: basePath, month: monthA, profile: profile)
+            XCTFail("expected damagedV2Repo refusal from verifyMonth planner")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        }
+        XCTAssertTrue(remoteIndexService.fullSnapshot().assets.isEmpty,
+                      "verifyMonth planner refusal with a prior V2 binding must drop the stale committed view")
+    }
+
+    func testVerifyMonth_unsupportedEndpointNoBinding_clearsStaleV1PopulatedView() async throws {
+        let basePath = "/repo"
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let databaseManager = try DatabaseManager(databaseURL: dir.appendingPathComponent("test.sqlite"))
+
+        // Profile exists but there is NO repo_state row and no in-process materializedRepoID,
+        // so hasPriorV2Binding is false — exactly the V1-reload-populated-view state.
+        let profileID = try TestFixtures.insertServerProfile(in: databaseManager, writerID: "w", basePath: basePath, storageType: .webdav)
+
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        // Endpoint externally advanced to a future, unsupported format. inspectRemoteFormat returns
+        // .unsupported regardless of binding, so the planner picks .throwUnsupported.
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath, formatVersion: 99, minAppVersion: "9.9.9")
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectIdentityFinalization(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+
+        let remoteIndexService = RemoteIndexSyncService()
+        let fp = seedCompleteAsset(in: remoteIndexService, month: monthA, contentHash: TestFixtures.fingerprint(0x8E))
+        XCTAssertEqual(Set(remoteIndexService.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        let prep = BackupRunPreparationService(
+            photoLibraryService: PhotoLibraryService(),
+            storageClientFactory: StorageClientFactory(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndexService,
+            databaseManager: databaseManager
+        )
+        let profile = TestFixtures.makeServerProfile(id: profileID, storageType: .webdav, basePath: basePath)
+
+        do {
+            _ = try await prep.verifyMonth(client: client, basePath: basePath, month: monthA, profile: profile)
+            XCTFail("expected remoteFormatUnsupported from verifyMonth planner")
+        } catch BackupCompatibilityError.remoteFormatUnsupported {
+            // expected
+        }
+        XCTAssertTrue(remoteIndexService.fullSnapshot().assets.isEmpty,
+                      "unsupported verifyMonth refusal must drop a V1-populated view even without a prior V2 binding")
+    }
+
     // MARK: - External-volume repoint cache identity
 
     private func makeExternalProfile(displayPath: String, basePath: String) -> ServerProfileRecord {

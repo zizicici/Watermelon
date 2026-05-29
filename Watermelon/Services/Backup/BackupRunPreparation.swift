@@ -178,6 +178,14 @@ struct BackupRunPreparationService: Sendable {
                     await lease.shutdown()
                 }
                 await client.disconnectSafely()
+                // Open happens before syncIndex, so a deterministic open-side refusal (identity swap /
+                // unsupported / regression / migration-required) never reaches syncIndex's own reset; drop
+                // the stale view here so Home can't keep republishing the prior repo's rows after the run fails.
+                // Unconditional like syncIndex's resets: a V1 reload populates the view without any V2 binding,
+                // and resetting an empty view is a no-op, so no binding gate.
+                if Self.isDeterministicCompatibilityRefusal(error) {
+                    remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
+                }
                 throw error
             }
         } catch {
@@ -285,11 +293,16 @@ struct BackupRunPreparationService: Sendable {
         )
         switch action {
         case .throwUnsupported(let minAppVersion):
+            // Deterministic refusal from a returned inspection proved this isn't the cached repo; drop the
+            // stale view (V1-populated or V2) so Home can't keep republishing the prior repo's rows.
+            // `.unsupported`/`.v2WithV1Manifests` route here regardless of binding, so no binding gate.
+            remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
             throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
         case .verifyMonthV2:
             _ = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
             return true
         case .throwRequiresForegroundMigration:
+            remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
             throw BackupCompatibilityError.requiresForegroundMigration
         case .verifyMonthV1:
             try await remoteIndexService.verifyMonth(
@@ -302,6 +315,9 @@ struct BackupRunPreparationService: Sendable {
         case .skipFreshRepo:
             return false
         case .throwDamagedV2Repo:
+            // Reached only with a prior binding (planner gate), from a successfully-read `.fresh`
+            // inspection — deterministic proof the repo is gone, so drop the stale view.
+            remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
             throw BackupCompatibilityError.damagedV2Repo
         }
     }
@@ -318,14 +334,20 @@ struct BackupRunPreparationService: Sendable {
         // Verifier needs remote repoID to filter foreign-id commits; absent on a V2 repo means broken identity, refuse.
         let expectedRepoID: String
         do {
-            expectedRepoID = try await RepoCanonicalIdentityReader(client: metadataClient, basePath: basePath)
-                .requireCanonical(absentError: {
-                    NSError(
-                        domain: "BackupRunPreparation",
-                        code: -51,
-                        userInfo: [NSLocalizedDescriptionKey: "V2 repo missing canonical identity - run a backup to repair before verifying"]
-                    )
-                })
+            switch try await RepoCanonicalIdentityReader(client: metadataClient, basePath: basePath).loadCanonical() {
+            case .found(let id):
+                expectedRepoID = id
+            case .absent:
+                // Successful read proved identity is genuinely gone on a format-valid V2 endpoint: drop
+                // the stale view before refusing so Home can't keep republishing the prior repo's rows.
+                // Only the proven-absent branch resets; BootstrapError below may wrap transport ioFailure.
+                remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
+                throw NSError(
+                    domain: "BackupRunPreparation",
+                    code: -51,
+                    userInfo: [NSLocalizedDescriptionKey: "V2 repo missing canonical identity - run a backup to repair before verifying"]
+                )
+            }
         } catch let bootstrap as RepoBootstrap.BootstrapError {
             throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: bootstrap)
         }
@@ -348,13 +370,24 @@ struct BackupRunPreparationService: Sendable {
         let verifier = RepoVerifyMonthService(client: metadataClient, basePath: basePath, expectedRepoID: expectedRepoID)
         var report = try await verifier.verify(month: month)
         if !report.cleanupCandidates.isEmpty, let profile {
-            let lease = try await BackupV2RuntimeLease.forVerifyMonth(
-                client: client,
-                borrowedMetadataClient: metadataClient,
-                profile: profile,
-                databaseManager: databaseManager,
-                format: formatCompatibilityService
-            )
+            let lease: BackupV2RuntimeLease
+            do {
+                lease = try await BackupV2RuntimeLease.forVerifyMonth(
+                    client: client,
+                    borrowedMetadataClient: metadataClient,
+                    profile: profile,
+                    databaseManager: databaseManager,
+                    format: formatCompatibilityService
+                )
+            } catch {
+                // Endpoint repointed between the canonical-identity guard and this tombstone lease open;
+                // a deterministic refusal proves it's no longer the cached repo, so drop the stale view
+                // (unconditional like syncIndex; resetting an empty view is a no-op).
+                if Self.isDeterministicCompatibilityRefusal(error) {
+                    remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
+                }
+                throw error
+            }
             do {
                 let appliedFingerprints = try await verifier.applyTombstones(
                     month: month,
@@ -469,6 +502,18 @@ struct BackupRunPreparationService: Sendable {
         }
 
         return estimatedBytesByMonth
+    }
+
+    /// Deterministic V2 refusals that prove the endpoint is no longer the cached repo. `damagedV2Repo`
+    /// is excluded because the open/inspection mapping can surface it from a transport `ioFailure`.
+    private static func isDeterministicCompatibilityRefusal(_ error: Error) -> Bool {
+        guard let compat = error as? BackupCompatibilityError else { return false }
+        switch compat {
+        case .repoIdentityMismatch, .remoteFormatUnsupported, .requiresForegroundMigration, .repoFormatRegression:
+            return true
+        case .damagedV2Repo:
+            return false
+        }
     }
 
     private func prepareV2Runtime(
