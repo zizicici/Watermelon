@@ -594,7 +594,12 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         entries.reserveCapacity(parsedEntries.count)
 
         for parsed in parsedEntries {
-            guard let remotePath = remotePath(fromHref: parsed.href, relativeTo: baseURL) else { continue }
+            // A Depth:1 child href that resolves to nothing under the endpoint prefix
+            // (proxy-rewritten path, malformed Multi-Status) is not absence — dropping it
+            // would return a partial listing and let an existing repo read as `.fresh`.
+            guard let remotePath = remotePath(fromHref: parsed.href, relativeTo: baseURL) else {
+                throw Self.unresolvedMultiStatusError(method: "PROPFIND", url: request.url)
+            }
             if remotePath == normalizedTargetKey {
                 if parsed.hasAnyStatus, !parsed.hasSuccessStatus {
                     throw Self.statusError(parsed.firstFailureStatusCode ?? 404, method: "PROPFIND", url: request.url)
@@ -675,7 +680,10 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                 modificationDate: parsed.modificationDate
             )
         }
-        return nil
+        // 404 already returned `nil` above; a 207/2xx body that resolves no entry
+        // for the target is ambiguous (malformed Multi-Status, omitted target, or
+        // hrefs outside the endpoint prefix), not confirmed absence — fail closed.
+        throw Self.unresolvedMultiStatusError(method: "PROPFIND", url: request.url)
     }
 
     func upload(
@@ -1798,6 +1806,21 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
                         statusCode,
                         target
                     )
+                ]
+            )
+        )
+    }
+
+    // Non-404 so `isStorageNotFoundError` cannot collapse an ambiguous Multi-Status into absence.
+    private static func unresolvedMultiStatusError(method: String, url: URL?) -> RemoteStorageClientError {
+        let target = url?.absoluteString ?? "(unknown URL)"
+        return .underlying(
+            NSError(
+                domain: WebDAVClient.errorDomain,
+                code: 1207,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "WebDAV \(method) returned a Multi-Status with no resolvable entry for \(target)"
                 ]
             )
         )

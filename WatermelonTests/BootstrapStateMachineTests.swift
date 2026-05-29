@@ -718,6 +718,33 @@ final class BootstrapStateMachineTests: XCTestCase {
         }
     }
 
+    /// A year directory listed in the base enumeration but 404ing on the follow-up list
+    /// (concurrent removal / eventual consistency) must be treated as absence, not a hard
+    /// inspection failure that fails the whole V2 open.
+    func testStaleV1YearDirNotFound_markerAbsent_returnsFreshNotThrow() async throws {
+        let (client, profile) = await makeFixture()
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        // Year dir is present in the base listing but vanishes before detectV1Manifests reads it.
+        await client.injectListError(.notFound, for: "\(basePath)/2025")
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .fresh, "vanished V1 year dir contributes no manifest; must not throw")
+    }
+
+    /// On a healthy V2 repo carrying residual V1 manifests, a month directory that 404s on
+    /// the follow-up list must not collapse the `.v2WithV1Manifests`/`.v2` decision into an
+    /// open failure.
+    func testStaleV1MonthDirNotFound_versionPresent_returnsV2NotThrow() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        await TestFixtures.injectV1ManifestSentinel(client, basePath: basePath, year: 2025, month: 6)
+        // Year lists fine (returns the 06 dir) but the month dir 404s on the follow-up list.
+        await client.injectListError(.notFound, for: "\(basePath)/2025/06")
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "vanished V1 month dir contributes no manifest; must resolve .v2, not throw")
+    }
+
     private func makeFixture() async -> (InMemoryRemoteStorageClient, ServerProfileRecord) {
         let client = InMemoryRemoteStorageClient()
         try? await client.connect()

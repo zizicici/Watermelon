@@ -83,7 +83,11 @@ enum SFTPErrorClassifier {
                 Int(EHOSTUNREACH),
                 Int(ENETUNREACH),
                 Int(ETIMEDOUT),
-                Int(ECONNRESET)
+                Int(ECONNRESET),
+                Int(ENOTCONN),
+                Int(ECONNABORTED),
+                Int(ENETRESET),
+                Int(EPIPE)
             ]
             return networkCodes.contains(nsError.code)
         }

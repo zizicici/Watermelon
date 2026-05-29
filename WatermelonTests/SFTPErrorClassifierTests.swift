@@ -73,6 +73,10 @@ final class SFTPErrorClassifierTests: XCTestCase {
             Case(label: "ENETUNREACH", error: Self.posix(ENETUNREACH), expected: true),
             Case(label: "ETIMEDOUT", error: Self.posix(ETIMEDOUT), expected: true),
             Case(label: "ECONNRESET", error: Self.posix(ECONNRESET), expected: true),
+            Case(label: "ENOTCONN", error: Self.posix(ENOTCONN), expected: true),
+            Case(label: "ECONNABORTED", error: Self.posix(ECONNABORTED), expected: true),
+            Case(label: "ENETRESET", error: Self.posix(ENETRESET), expected: true),
+            Case(label: "EPIPE", error: Self.posix(EPIPE), expected: true),
             Case(label: "EPERM is not a network code", error: Self.posix(EPERM), expected: false),
 
             // Foreign domains

@@ -153,11 +153,12 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         let root = try requireRootURL()
         do {
             let url = try remoteFileURL(forRemotePath: path, rootURL: root)
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                return nil
-            }
+            // `fileExists` can't tell absence from an access/stat fault; only a confirmed
+            // not-found may map to nil, every other fault must throw so the V2 delete
+            // verifier fails closed instead of reading an inaccessible file as absent.
             return try makeEntry(fileURL: url, rootURL: root)
         } catch {
+            if isStorageNotFoundError(error) { return nil }
             throw mapStorageError(error)
         }
     }
@@ -388,8 +389,10 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         let root = try requireRootURL()
         do {
             let url = try remoteFileURL(forRemotePath: path, rootURL: root)
-            return FileManager.default.fileExists(atPath: url.path)
+            _ = try FileManager.default.attributesOfItem(atPath: url.path)
+            return true
         } catch {
+            if isStorageNotFoundError(error) { return false }
             throw mapStorageError(error)
         }
     }
@@ -402,9 +405,12 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
                 throw RemoteStorageClientError.invalidConfiguration
             }
             let url = try remoteFileURL(forRemotePath: normalized, rootURL: root)
-            guard FileManager.default.fileExists(atPath: url.path) else { return }
+            // Attempt removal unconditionally: a `fileExists` precheck would treat an
+            // inaccessible-but-present target as absent and report a phantom success to
+            // the V2 retention/snapshot delete verifier. Only confirmed not-found is success.
             try FileManager.default.removeItem(at: url)
         } catch {
+            if isStorageNotFoundError(error) { return }
             throw mapStorageError(error)
         }
     }

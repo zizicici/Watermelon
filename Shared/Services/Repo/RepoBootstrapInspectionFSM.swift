@@ -245,6 +245,7 @@ struct RepoBootstrapInspectionFSM: Sendable {
                 monthEntries = try await client.list(path: yearPath)
             } catch {
                 if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                if isStorageNotFoundError(error) { continue }
                 throw error
             }
             for monthEntry in monthEntries where monthEntry.isDirectory && monthEntry.name.range(of: "^[0-9]{2}$", options: .regularExpression) != nil {
@@ -254,6 +255,7 @@ struct RepoBootstrapInspectionFSM: Sendable {
                     monthContents = try await client.list(path: monthPath)
                 } catch {
                     if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                    if isStorageNotFoundError(error) { continue }
                     throw error
                 }
                 if monthContents.contains(where: { !$0.isDirectory && $0.name == MonthManifestStore.manifestFileName }) {
