@@ -20,11 +20,7 @@ nonisolated enum RemoteStorageErrorClassifier {
             return true
         }
         if nsError.domain == S3ErrorClassifier.errorDomain {
-            if let serverCode = nsError.userInfo[S3ErrorClassifier.userInfoServerCodeKey] as? String {
-                if serverCode == "NoSuchKey" || serverCode == "NotFound" { return true }
-                if serverCode == "NoSuchBucket" { return false }
-            }
-            if nsError.code == 404 { return true }
+            return S3ErrorClassifier.isNotFound(error)
         }
         if SMBErrorClassifier.isNotFound(error) {
             return true

@@ -36,6 +36,20 @@ enum S3ErrorClassifier {
         return false
     }
 
+    /// Single S3 not-found home so `S3Client` and `RemoteStorageErrorClassifier` stop each
+    /// hand-matching domain/serverCode/404. `NoSuchBucket` is explicitly NOT absence.
+    static func isNotFound(_ error: Error) -> Bool {
+        for nsError in nsErrorChain(error) {
+            guard nsError.domain == errorDomain else { continue }
+            if let code = serverCode(in: nsError) {
+                if code == "NoSuchKey" || code == "NotFound" { return true }
+                if code == "NoSuchBucket" { return false }
+            }
+            if nsError.code == 404 { return true }
+        }
+        return false
+    }
+
     enum S3ErrorCode: String {
         case invalidAccessKeyID = "InvalidAccessKeyId"
         case signatureDoesNotMatch = "SignatureDoesNotMatch"
@@ -177,23 +191,6 @@ enum S3ErrorClassifier {
     }
 
     private static func nsErrorChain(_ error: Error) -> [NSError] {
-        var visited: Set<String> = []
-        var collected: [NSError] = []
-        var pending: [Error] = [error]
-        while let next = pending.popLast() {
-            if let storage = next as? RemoteStorageClientError,
-               case .underlying(let inner) = storage {
-                pending.append(inner)
-                continue
-            }
-            let ns = next as NSError
-            let key = "\(ns.domain)#\(ns.code)"
-            guard visited.insert(key).inserted else { continue }
-            collected.append(ns)
-            if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? Error {
-                pending.append(underlying)
-            }
-        }
-        return collected
+        BackupErrorChain.nsErrorChain(error)
     }
 }

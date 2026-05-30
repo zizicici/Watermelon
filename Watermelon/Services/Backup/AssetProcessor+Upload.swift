@@ -756,24 +756,7 @@ extension AssetProcessor {
     }
 
     private static func nsErrorChain(_ error: Error) -> [NSError] {
-        var pending: [Error] = [error]
-        var seen: Set<String> = []
-        var result: [NSError] = []
-        while let next = pending.popLast() {
-            if let storage = next as? RemoteStorageClientError,
-               case .underlying(let inner) = storage {
-                pending.append(inner)
-                continue
-            }
-            let nsError = next as NSError
-            let key = "\(nsError.domain)#\(nsError.code)"
-            guard seen.insert(key).inserted else { continue }
-            result.append(nsError)
-            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
-                pending.append(underlying)
-            }
-        }
-        return result
+        BackupErrorChain.nsErrorChain(error)
     }
 
     static func isCancellationError(_ error: Error) -> Bool {

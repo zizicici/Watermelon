@@ -490,22 +490,6 @@ enum SMBErrorClassifier {
     }
 
     private static func nsErrors(for error: Error) -> [NSError] {
-        var collected: [NSError] = []
-        var pending: [NSError] = [error as NSError]
-        var visited: Set<String> = []
-
-        while let current = pending.popLast() {
-            let key = "\(current.domain)#\(current.code)#\(current.localizedDescription)"
-            guard visited.insert(key).inserted else { continue }
-            collected.append(current)
-
-            if let underlying = current.userInfo[NSUnderlyingErrorKey] as? NSError {
-                pending.append(underlying)
-            } else if let underlying = current.userInfo[NSUnderlyingErrorKey] as? Error {
-                pending.append(underlying as NSError)
-            }
-        }
-
-        return collected
+        BackupErrorChain.nsErrorChain(error)
     }
 }

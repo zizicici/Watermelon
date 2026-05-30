@@ -98,21 +98,6 @@ nonisolated enum RemoteWriteClassifier {
     }
 
     static func nsErrorChain(_ error: Error) -> [NSError] {
-        var collected: [NSError] = []
-        var pending: [Error] = [error]
-        var visited: Set<ObjectIdentifier> = []
-        while let current = pending.popLast() {
-            if case RemoteStorageClientError.underlying(let underlying) = current {
-                pending.append(underlying)
-                continue
-            }
-            let nsError = current as NSError
-            guard visited.insert(ObjectIdentifier(nsError)).inserted else { continue }
-            collected.append(nsError)
-            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
-                pending.append(underlying)
-            }
-        }
-        return collected
+        BackupErrorChain.nsErrorChain(error)
     }
 }

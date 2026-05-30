@@ -92,4 +92,16 @@ nonisolated enum BackupErrorChain {
         }
         return match
     }
+
+    /// The single NSError collector for the whole repo: descends every V2 wrapper type via `walk`,
+    /// so per-classifier copies don't each re-implement (and diverge on) chain traversal.
+    /// `walk` dedups by ObjectIdentifier — stricter than domain#code, so it never drops a distinct node.
+    static func nsErrorChain(_ error: Error) -> [NSError] {
+        var collected: [NSError] = []
+        walk(error) { node in
+            collected.append(node as NSError)
+            return .continue
+        }
+        return collected
+    }
 }
