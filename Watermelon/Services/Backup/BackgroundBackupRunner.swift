@@ -684,7 +684,7 @@ final class BackgroundBackupRunner {
                 // U01 R05: drop the in-process optimistic month overlay so stale per-asset
                 // `appendAsset` rows from the aborted batch don't keep surfacing through
                 // `RemoteIndexSyncService.committedView`.
-                assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: monthKey)
+                MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
                 break
             }
             var eomOutcome: V2MonthFlushOutcome?
@@ -699,13 +699,13 @@ final class BackgroundBackupRunner {
                 switch BackupFlushFailureClassification.classify(error, on: profile).backgroundEndOfMonthAction {
                 case .continueMonthLoop:
                     await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
-                    assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: monthKey)
+                    MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
                     continue
                 case .ignoreSilently:
                     break
                 case .abortProfileLogError:
                     await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
-                    assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: monthKey)
+                    MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
                     connectionUnavailableAbort = true
                     anyMonthFailed = true
                     await writer.appendLog(
@@ -714,7 +714,7 @@ final class BackgroundBackupRunner {
                     )
                 case .recordReasonLogError:
                     await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
-                    assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: monthKey)
+                    MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
                     let reason = profile.userFacingStorageErrorMessage(error)
                     monthFlushFailureReason = reason
                     await writer.appendLog(
@@ -746,7 +746,7 @@ final class BackgroundBackupRunner {
                 await assetProcessor.clearPendingHashIndexIntents(month: monthKey)
                 // U01 R05: drop the optimistic month overlay so chunk-N+1's stale appendAsset
                 // rows don't leak into the in-process committed view after the abort.
-                assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: monthKey)
+                MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: monthKey)
                 let displayError = outcome.displayError
                 let underlyingMessage = displayError.map {
                     profile.userFacingStorageErrorMessage($0)

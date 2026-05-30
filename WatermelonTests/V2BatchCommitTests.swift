@@ -850,6 +850,33 @@ final class V2BatchCommitTests: XCTestCase {
         )
     }
 
+    // Arch-VII A-II B3: `MonthOverlayCoordinator.onHardAbort(month:)` must produce the exact same
+    // observable overlay state as a bare `dropOptimisticMonthIfStale(month:)` — a thin
+    // behavior-preserving indirection, not a new operation.
+    func testMonthOverlayCoordinator_onHardAbort_dropsUncommittedOptimisticMonth() async throws {
+        let remoteIndex = RemoteIndexSyncService()
+        let rows = makeAssetRows(index: 0)
+        let writer = remoteIndex.makeOptimisticAssetWriter()
+        writer.appendResource(rows.resource)
+        writer.appendAsset(rows.asset, links: [rows.link])
+        XCTAssertEqual(
+            remoteIndex.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey],
+            [rows.asset.assetFingerprint],
+            "precondition: optimistic append visible before onHardAbort"
+        )
+
+        MonthOverlayCoordinator(remoteIndexService: remoteIndex).onHardAbort(month: monthKey)
+
+        XCTAssertNil(
+            remoteIndex.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey],
+            "onHardAbort must drop the month exactly like dropOptimisticMonthIfStale"
+        )
+        XCTAssertNil(
+            remoteIndex.remoteMonthRawData(for: monthKey),
+            "onHardAbort must leave the dropped month absent from remoteMonthRawData"
+        )
+    }
+
     // U01 fixer R05 — executor wiring: `rollBackProvisionalAndIntentsForHardAbort` MUST call
     // `dropOptimisticMonthIfStale` alongside the existing aggregator + intent-queue cleanup.
     // This pins that the helper is the single reconciliation point so all hard-abort callers

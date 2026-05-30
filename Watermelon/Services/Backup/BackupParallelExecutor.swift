@@ -1147,7 +1147,7 @@ struct BackupParallelExecutor: Sendable {
                 fingerprints: rolledBackFingerprints
             )
         }
-        assetProcessor.remoteIndexService.dropOptimisticMonthIfStale(month: month)
+        MonthOverlayCoordinator(remoteIndexService: assetProcessor.remoteIndexService).onHardAbort(month: month)
     }
 
     @discardableResult
