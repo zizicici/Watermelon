@@ -211,29 +211,26 @@ struct RetentionManifestRemoteStore: Sendable {
     // a listed manifest as `.vanishedDuringRead`; zero-grace backends keep their single read, and a
     // not-found persisting past the deadline still surfaces so the caller stays fail-closed.
     private func downloadToleratingVisibilityLag(remotePath: String, to temp: URL) async throws -> Data {
-        do {
-            try await client.download(remotePath: remotePath, localURL: temp)
-            return try Data(contentsOf: temp)
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            guard client.readAfterWriteGraceSeconds > 0, isStorageNotFoundError(error) else { throw error }
-            let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
-            var lastError = error
-            var attempt = 0
-            while Date() < deadline {
-                try await Task.sleep(nanoseconds: UInt64(200 * (1 << min(attempt, 3))) * 1_000_000)
-                attempt += 1
-                do {
-                    try await client.download(remotePath: remotePath, localURL: temp)
-                    return try Data(contentsOf: temp)
-                } catch {
-                    if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                    guard isStorageNotFoundError(error) else { throw error }
-                    lastError = error
-                }
+        var lastError: Error?
+        let data = try await GracefulRead.retryWithinGrace(
+            client: client,
+            floorSeconds: 1,
+            backoff: .exponential(baseMs: 200, maxShift: 3)
+        ) {
+            do {
+                try await client.download(remotePath: remotePath, localURL: temp)
+                return try Data(contentsOf: temp)
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                guard isStorageNotFoundError(error) else { throw error }
+                lastError = error
+                return nil
             }
-            throw lastError
         }
+        if let data { return data }
+        // Zero-grace or persistent not-found past the deadline surfaces the retained not-found so
+        // the caller stays fail-closed rather than classifying a lagging manifest as vanished.
+        throw lastError ?? CancellationError()
     }
 
     private func metadataExists(path: String) async throws -> Bool {

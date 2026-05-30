@@ -814,11 +814,11 @@ extension AssetProcessor {
         cancellationController: BackupCancellationController?,
         isConnectionUnavailable: (Error) -> Bool = { _ in false }
     ) async throws -> Bool {
-        let deadline = client.readAfterWriteGraceSeconds > 0
-            ? client.metadataReadAfterWriteDeadline(floorSeconds: 1)
-            : nil
-        var attempt = 0
-        while true {
+        let verdict = try await GracefulRead.retryWithinGrace(
+            client: client,
+            floorSeconds: 1,
+            backoff: .exponential(baseMs: 200, maxShift: 3)
+        ) { () -> Bool? in
             switch try await probeRemoteContentOnce(
                 client: client,
                 remotePath: remotePath,
@@ -832,16 +832,11 @@ extension AssetProcessor {
             case .conflict:
                 return true
             case .notSettled:
-                guard let deadline, Date() < deadline else { return true }
-            }
-            let millis = 200 * (1 << min(attempt, 3))
-            attempt += 1
-            do {
-                try await Task.sleep(nanoseconds: UInt64(millis) * 1_000_000)
-            } catch {
-                throw CancellationError()
+                return nil
             }
         }
+        // Zero-grace or unsettled past the deadline assumes race so the caller falls back to rename.
+        return verdict ?? true
     }
 
     private enum RemoteContentProbeOutcome {

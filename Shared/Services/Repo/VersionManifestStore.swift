@@ -90,17 +90,27 @@ nonisolated struct VersionManifestStore: Sendable {
     /// is then a grace-backend metadata flap, not a fresh endpoint, so spend the grace budget on it and
     /// fail closed (throw) past the deadline rather than demoting a proven V2 marker to absence.
     func loadAfterProvenMetadataToleratingVisibilityLag() async throws -> VersionManifest {
-        let initialError: Error
-        do {
-            if case .found(let manifest) = try await load() { return manifest }
-            initialError = Self.proveMetadataVisibilityLagNotFound()
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            guard isStorageNotFoundError(error) else { throw error }
-            initialError = error
+        var lastError: Error = Self.proveMetadataVisibilityLagNotFound()
+        let manifest = try await GracefulRead.retryWithinGrace(
+            client: client,
+            floorSeconds: 1,
+            backoff: .exponential(baseMs: 200, maxShift: 3)
+        ) {
+            do {
+                if case .found(let manifest) = try await load() { return manifest }
+                // A returned `.absent` on a proven marker is a grace-backend metadata flap — retry.
+                return nil
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                guard isStorageNotFoundError(error) else { throw error }
+                lastError = error
+                return nil
+            }
         }
-        guard client.readAfterWriteGraceSeconds > 0 else { throw initialError }
-        return try await retryProvenManifestWithinGrace(initialError: initialError)
+        if let manifest { return manifest }
+        // Zero-grace or persistent not-found past the deadline rethrows the retained not-found
+        // (fail closed) rather than demoting a proven V2 marker to absence.
+        throw lastError
     }
 
     /// Spend the read-after-write grace budget re-reading a manifest already proven to exist. Returns on

@@ -42,16 +42,17 @@ struct RepoCanonicalIdentityReader: Sendable {
     /// identity and non-not-found transport failures throw out of `loadCanonical` (they never surface
     /// as `.absent`), so this stays fail-closed; a persistent absence past the deadline is still `.absent`.
     func loadCanonicalProvenV2() async throws -> Load {
-        let first = try await loadCanonical()
-        if case .found = first { return first }
-        guard client.readAfterWriteGraceSeconds > 0 else { return first }
-        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
-        var attempt = 0
-        while Date() < deadline {
-            try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
-            attempt += 1
-            if case .found(let id) = try await loadCanonical() { return .found(id) }
+        let id = try await GracefulRead.retryWithinGrace(
+            client: client,
+            floorSeconds: 1,
+            backoff: .exponential(baseMs: 200, maxShift: 3)
+        ) {
+            if case .found(let id) = try await loadCanonical() { return id }
+            return nil
         }
+        if let id { return .found(id) }
+        // Zero-grace or persistent absence past the deadline both report `.absent`; malformed
+        // identity / transport failures already threw out of `loadCanonical` (fail closed).
         return .absent
     }
 

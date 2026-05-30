@@ -158,20 +158,19 @@ struct RepoBootstrapInspectionFSM: Sendable {
         store: VersionManifestStore,
         client: any RemoteStorageClientProtocol
     ) async throws -> VersionManifestStore.Load {
-        let first = try await store.loadToleratingDownloadVisibilityLag()
-        if case .found = first { return first }
-        guard client.readAfterWriteGraceSeconds > 0 else { return first }
-        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
-        var attempt = 0
-        while Date() < deadline {
-            let millis = 200 * (1 << min(attempt, 3))
-            attempt += 1
-            try await Task.sleep(nanoseconds: UInt64(millis) * 1_000_000)
+        let manifest = try await GracefulRead.retryWithinGrace(
+            client: client,
+            floorSeconds: 1,
+            backoff: .exponential(baseMs: 200, maxShift: 3)
+        ) {
             if case .found(let manifest) = try await store.loadToleratingDownloadVisibilityLag() {
-                return .found(manifest)
+                return manifest
             }
+            return nil
         }
-        return first
+        if let manifest { return .found(manifest) }
+        // Zero-grace or persistent absence past the deadline keeps the absent verdict.
+        return .absent
     }
 
     private func inspectVersionAbsent(

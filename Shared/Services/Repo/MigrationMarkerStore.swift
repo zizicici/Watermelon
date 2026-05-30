@@ -166,32 +166,27 @@ nonisolated struct MigrationMarkerStore: Sendable {
     /// After grace, fail closed with `InvalidMarker`. Zero-grace backends have no visibility lag, so
     /// a listed-but-404 file is a genuine concurrent deletion and returns nil to be skipped.
     private func downloadListedMarkerToleratingVisibilityLag(path: String, localURL: URL) async throws -> Data? {
-        do {
-            try await client.download(remotePath: path, localURL: localURL)
-            return try Data(contentsOf: localURL)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            guard isStorageNotFoundError(error) else { throw error }
-            guard client.readAfterWriteGraceSeconds > 0 else { return nil }
-            let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
-            var attempt = 0
-            while Date() < deadline {
-                try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
-                attempt += 1
-                do {
-                    try await client.download(remotePath: path, localURL: localURL)
-                    return try Data(contentsOf: localURL)
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                    guard isStorageNotFoundError(error) else { throw error }
-                }
+        let data = try await GracefulRead.retryWithinGrace(
+            client: client,
+            floorSeconds: 1,
+            backoff: .exponential(baseMs: 200, maxShift: 3)
+        ) {
+            do {
+                try await client.download(remotePath: path, localURL: localURL)
+                return try Data(contentsOf: localURL)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                guard isStorageNotFoundError(error) else { throw error }
+                return nil
             }
-            throw InvalidMarker(path: path, reason: "marker listed but unreadable within read-after-write grace")
         }
+        if let data { return data }
+        guard client.readAfterWriteGraceSeconds > 0 else { return nil }
+        // Listed-but-unreadable past grace fails closed; a dropped marker must not silently
+        // flip inspection away from the pending-cleanup route.
+        throw InvalidMarker(path: path, reason: "marker listed but unreadable within read-after-write grace")
     }
 
     func writePhase(writerID: String, phase: MigrationMarkerPhase, runID: String) async throws {

@@ -164,24 +164,24 @@ struct RepoIdentityAuthority: Sendable {
         client: any RemoteStorageClientProtocol,
         _ read: @Sendable () async throws -> T
     ) async throws -> T {
-        do {
-            return try await read()
-        } catch let error as RepoJSONLReadError {
-            guard case .notFound = error, client.readAfterWriteGraceSeconds > 0 else { throw error }
-            let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
-            var lastError: Error = error
-            var attempt = 0
-            while Date() < deadline {
-                try await Task.sleep(nanoseconds: UInt64(200 * (1 << min(attempt, 3))) * 1_000_000)
-                attempt += 1
-                do {
-                    return try await read()
-                } catch let retryError as RepoJSONLReadError {
-                    guard case .notFound = retryError else { throw retryError }
-                    lastError = retryError
-                }
+        // Only a `.notFound` is retryable absence; corrupt-file errors and any non-not-found surface
+        // immediately. `retryWithinGrace` short-circuits zero-grace to one attempt, then the retained
+        // not-found rethrows past the deadline so the caller stays fail-closed.
+        var lastNotFound: RepoJSONLReadError?
+        let value = try await GracefulRead.retryWithinGrace(
+            client: client,
+            floorSeconds: 1,
+            backoff: .exponential(baseMs: 200, maxShift: 3)
+        ) {
+            do {
+                return try await read()
+            } catch let error as RepoJSONLReadError {
+                guard case .notFound = error else { throw error }
+                lastNotFound = error
+                return nil
             }
-            throw lastError
         }
+        if let value { return value }
+        throw lastNotFound!
     }
 }
