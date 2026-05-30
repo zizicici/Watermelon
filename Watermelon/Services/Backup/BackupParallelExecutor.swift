@@ -4,7 +4,7 @@ import os.log
 
 private let executorLog = Logger(subsystem: "com.zizicici.watermelon", category: "BackupParallel")
 
-private actor BackupThermalThrottle {
+actor BackupThermalThrottle {
     static let shared = BackupThermalThrottle()
     private var lastObservedState: ProcessInfo.ThermalState = .nominal
 
@@ -52,9 +52,9 @@ struct BackupParallelExecutor: Sendable {
         return paused
     }
 
-    private let hashIndexRepository: ContentHashIndexRepository
-    private let assetProcessor: AssetProcessor
-    private let remoteIndexService: RemoteIndexSyncService
+    let hashIndexRepository: ContentHashIndexRepository
+    let assetProcessor: AssetProcessor
+    let remoteIndexService: RemoteIndexSyncService
 
     init(
         hashIndexRepository: ContentHashIndexRepository,
@@ -257,11 +257,6 @@ struct BackupParallelExecutor: Sendable {
                     month: monthKey,
                     workerID: workerID + 1
                 )
-                let fetchBatchSize = 500
-                var missingAssetCount = 0
-                var hasLoggedLocalHashCacheWarning = false
-                var flushCounter = AssetBatchFlushCounter(threshold: Self.flushInterval)
-
                 let skippedMonthShortCircuit = await emitMonthSkipIfFullyBackedUp(
                     monthAssetIDs: monthAssetIDs,
                     monthStore: monthStore,
@@ -272,348 +267,23 @@ struct BackupParallelExecutor: Sendable {
                 )
 
                 if !skippedMonthShortCircuit {
-                for batchStart in stride(from: 0, to: monthAssetIDs.count, by: fetchBatchSize) {
-                    let batchEnd = min(batchStart + fetchBatchSize, monthAssetIDs.count)
-                    let batchAssetIDs = Array(monthAssetIDs[batchStart ..< batchEnd])
-                    guard !batchAssetIDs.isEmpty else { continue }
-
-                    var batchLocalHashCacheByAssetID: [PhotoKitLocalIdentifier: LocalAssetHashCache]
-                    do {
-                        batchLocalHashCacheByAssetID = try hashIndexRepository.fetchAssetHashCaches(
-                            assetIDs: Set(batchAssetIDs)
-                        )
-                    } catch {
-                        if !hasLoggedLocalHashCacheWarning {
-                            eventStream.emitLog(
-                                String.localizedStringWithFormat(
-                                    String(localized: "backup.parallel.localHashCacheWarning"),
-                                    workerID + 1,
-                                    monthKey.text,
-                                    error.localizedDescription
-                                ),
-                                level: .warning
-                            )
-                            hasLoggedLocalHashCacheWarning = true
-                        }
-                        batchLocalHashCacheByAssetID = [:]
-                    }
-
-                    let batchAssetsResult = PHAsset.fetchAssets(
-                        withLocalIdentifiers: batchAssetIDs.rawValues,
-                        options: nil
-                    )
-                    var batchAssetsByLocalIdentifier: [PhotoKitLocalIdentifier: PHAsset] = [:]
-                    batchAssetsByLocalIdentifier.reserveCapacity(batchAssetsResult.count)
-                    for index in 0 ..< batchAssetsResult.count {
-                        let asset = batchAssetsResult.object(at: index)
-                        batchAssetsByLocalIdentifier[PhotoKitLocalIdentifier(asset)] = asset
-                    }
-                    missingAssetCount += max(batchAssetIDs.count - batchAssetsByLocalIdentifier.count, 0)
-
-                    for assetID in batchAssetIDs {
-                        if Task.isCancelled {
-                            workUnit.markPaused()
-                            break
-                        }
-
-                        await BackupThermalThrottle.shared.waitIfNeeded()
-                        if Task.isCancelled {
-                            workUnit.markPaused()
-                            break
-                        }
-
-                        guard let asset = batchAssetsByLocalIdentifier.removeValue(forKey: assetID) else {
-                            await aggregator.reduceTotalForEmptyAsset()
-                            continue
-                        }
-
-                        let selectedResources = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(
-                            from: PHAssetResource.assetResources(for: asset)
-                        )
-                        if selectedResources.isEmpty {
-                            await aggregator.reduceTotalForEmptyAsset()
-                            continue
-                        }
-
-                        let dispatch = await aggregator.allocateDispatchSlot()
-                        let cachedLocalHash = batchLocalHashCacheByAssetID.removeValue(forKey: assetID)
-
-                        do {
-                            let context = AssetProcessContext(
-                                workerID: workerID + 1,
-                                asset: asset,
-                                selectedResources: selectedResources,
-                                cachedLocalHash: cachedLocalHash,
-                                iCloudPhotoBackupMode: iCloudPhotoBackupMode,
-                                monthStore: monthStore,
-                                profile: profile,
-                                assetPosition: dispatch.position,
-                                totalAssets: dispatch.total
-                            )
-
-                            let result = try await assetProcessor.process(
-                                context: context,
-                                client: client,
-                                eventStream: eventStream,
-                                cancellationController: nil
-                            )
-                            let progressState = await aggregator.record(result: result)
-
-                            emitProgress(
-                                eventStream: eventStream,
-                                state: progressState.state,
-                                result: result,
-                                position: progressState.position,
-                                asset: asset,
-                                workerID: workerID + 1,
-                                monthText: monthKey.text
-                            )
-                            if let timingSummary = progressState.timingSummary {
-                                eventStream.emitLog(timingSummary, level: .debug)
-                            }
-
-                            // U01 provisional tracking — V2 only AND only for results that
-                            // actually added a pending V2 row (`wroteProvisionalV2Row == true`).
-                            // The durable cached-skip short-circuit (`asset_exists_cached`) writes
-                            // its hash-index row inline and never calls `finalizeRowWritingAsset`,
-                            // so its row is already durable and must NOT enter the rollback buffer
-                            // — otherwise a later batch failure would revert an unrelated cached
-                            // skip. V1 is also excluded (eager commit inside upsertAsset).
-                            if v2Services != nil,
-                               result.wroteProvisionalV2Row,
-                               let fingerprint = result.assetFingerprint {
-                                switch result.status {
-                                case .success:
-                                    await aggregator.recordProvisional(
-                                        month: monthKey,
-                                        fingerprint: fingerprint,
-                                        assetLocalIdentifier: PhotoKitLocalIdentifier(asset),
-                                        status: .success,
-                                        tombstonedSubsets: result.tombstonedSubsetFingerprints
-                                    )
-                                case .skipped:
-                                    await aggregator.recordProvisional(
-                                        month: monthKey,
-                                        fingerprint: fingerprint,
-                                        assetLocalIdentifier: PhotoKitLocalIdentifier(asset),
-                                        status: .skipped,
-                                        tombstonedSubsets: result.tombstonedSubsetFingerprints
-                                    )
-                                case .failed:
-                                    break
-                                }
-                            }
-
-                            // Cached-reuse `.skipped` also writes asset rows; only `.failed`
-                            // skips the batch counter.
-                            if result.status != .failed {
-                                if flushCounter.recordSuccessAndCheckThreshold() {
-                                    var intervalOutcome: V2MonthFlushOutcome?
-                                    var shouldBreakAssetLoop = false
-                                    do {
-                                        intervalOutcome = try await Self.flushMonthStorePublishingDefensiveCommits(
-                                            monthStore: monthStore,
-                                            month: monthKey,
-                                            remoteIndexService: remoteIndexService,
-                                            ignoreCancellation: false
-                                        )
-                                    } catch {
-                                        switch BackupFlushFailureClassification.classify(error, on: profile).foregroundIntervalAction {
-                                        case .continueAssetLoopAndResetCounter:
-                                            // No commit landed; pending stays in memory for the
-                                            // next attempt — provisional buffer also carries.
-                                            flushCounter.reset()
-                                            continue
-                                        case .pauseAndBreakAssetLoop:
-                                            // U01 R03: do NOT roll back provisional/intents here.
-                                            // The paused end-of-month flush below runs with
-                                            // ignoreCancellation=true and can still commit these
-                                            // same pending V2 ops; pre-emptive rollback would
-                                            // discard intents/counters for assets that ultimately
-                                            // become durable. Reconciliation happens after EOM
-                                            // (applyDurableBatchSideEffects + hasUncommittedV2Ops
-                                            // branch, EOM catch, or EOM-skip branch below).
-                                            workUnit.markPaused()
-                                            shouldBreakAssetLoop = true
-                                        case .abortMonthBreakAssetLoop:
-                                            // U01 R03: see above — EOM-skip branch below rolls
-                                            // back any remaining buffer/intents for the
-                                            // connection-unavailable abort path that suppresses
-                                            // the final flush.
-                                            workUnit.markFatal(error)
-                                            eventStream.emitLog(
-                                                String.localizedStringWithFormat(
-                                                    String(localized: "backup.parallel.flushManifestFailed"),
-                                                    workerID + 1,
-                                                    monthKey.text,
-                                                    profile.userFacingStorageErrorMessage(error)
-                                                ),
-                                                level: .error
-                                            )
-                                            shouldBreakAssetLoop = true
-                                        case .logWarningAndContinue:
-                                            // U01: classifier no longer returns this for V2; kept
-                                            // for compiler-required exhaustive switch over the
-                                            // unchanged enum.
-                                            eventStream.emitLog(
-                                                String.localizedStringWithFormat(
-                                                    String(localized: "backup.parallel.flushManifestFailed"),
-                                                    workerID + 1,
-                                                    monthKey.text,
-                                                    profile.userFacingStorageErrorMessage(error)
-                                                ),
-                                                level: .warning
-                                            )
-                                        }
-                                    }
-                                    if let outcome = intervalOutcome {
-                                        await transaction.applyDurableSideEffects(outcome: outcome)
-                                    }
-                                    // U01 R02: partial multi-chunk failure at interval (chunk N+1
-                                    // still pending). Force a hard stop so the asset loop cannot
-                                    // accumulate past the 200-op boundary. R03: do NOT roll back
-                                    // here — the paused EOM flush below can still commit chunk N+1
-                                    // (or the abort-path EOM-skip branch will reconcile it).
-                                    if let outcome = intervalOutcome,
-                                       monthStore.hasUncommittedV2Ops {
-                                        let displayError = outcome.displayError
-                                        let underlyingMessage = displayError.map {
-                                            profile.userFacingStorageErrorMessage($0)
-                                        } ?? ""
-                                        eventStream.emitLog(
-                                            String.localizedStringWithFormat(
-                                                String(localized: "backup.parallel.flushManifestFailed"),
-                                                workerID + 1,
-                                                monthKey.text,
-                                                underlyingMessage
-                                            ),
-                                            level: .error
-                                        )
-                                        if let displayError,
-                                           profile.isConnectionUnavailableErrorIncludingFlushUnderlying(displayError) {
-                                            workUnit.markFatal(displayError)
-                                        } else {
-                                            workUnit.markPaused()
-                                        }
-                                        shouldBreakAssetLoop = true
-                                    } else if let outcome = intervalOutcome,
-                                       let dispatch = BackupFlushFailureClassification.foregroundIntervalPartialDispatch(
-                                            outcome: outcome,
-                                            profile: profile
-                                       ) {
-                                        switch dispatch.action {
-                                        case .pauseAndBreakAssetLoop:
-                                            workUnit.markPaused()
-                                            shouldBreakAssetLoop = true
-                                        case .abortMonthBreakAssetLoop:
-                                            workUnit.markFatal(dispatch.displayError)
-                                            eventStream.emitLog(
-                                                String.localizedStringWithFormat(
-                                                    String(localized: "backup.parallel.flushManifestFailed"),
-                                                    workerID + 1,
-                                                    monthKey.text,
-                                                    profile.userFacingStorageErrorMessage(dispatch.displayError)
-                                                ),
-                                                level: .error
-                                            )
-                                            shouldBreakAssetLoop = true
-                                        case .logWarningAndContinue:
-                                            eventStream.emitLog(
-                                                String.localizedStringWithFormat(
-                                                    String(localized: "backup.parallel.flushManifestFailed"),
-                                                    workerID + 1,
-                                                    monthKey.text,
-                                                    profile.userFacingStorageErrorMessage(dispatch.displayError)
-                                                ),
-                                                level: .warning
-                                            )
-                                        }
-                                    }
-                                    if shouldBreakAssetLoop { break }
-                                    flushCounter.reset()
-                                }
-                            }
-                        } catch {
-                            let assetDispatch = BackupFlushFailureClassification.foregroundAssetErrorDispatch(
-                                error: error,
-                                profile: profile
-                            )
-                            var shouldBreakAssetLoop = false
-                            switch assetDispatch.action {
-                            case .pauseAndBreakAssetLoop:
-                                workUnit.markPaused()
-                                shouldBreakAssetLoop = true
-                            case .abortMonthDataConnectionLossBreakAssetLoop:
-                                let displayName = BackupAssetResourcePlanner.assetDisplayName(
-                                    asset: asset,
-                                    selectedResources: selectedResources
-                                )
-                                let errorMessage = profile.userFacingStorageErrorMessage(assetDispatch.error)
-                                workUnit.markDataConnectionLost(assetDispatch.error)
-                                eventStream.emitLog(
-                                    String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.connectionLostDuringAsset"),
-                                        workerID + 1,
-                                        displayName,
-                                        monthKey.text,
-                                        errorMessage
-                                    ),
-                                    level: .error
-                                )
-                                shouldBreakAssetLoop = true
-                            case .logGenericFailureAndContinue:
-                                let displayName = BackupAssetResourcePlanner.assetDisplayName(
-                                    asset: asset,
-                                    selectedResources: selectedResources
-                                )
-                                let errorMessage = profile.userFacingStorageErrorMessage(assetDispatch.error)
-                                print("[BackupUpload] asset processing FAILED: asset=\(displayName), reason=\(errorMessage)")
-                                eventStream.emitLog(
-                                    String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.failedAssetLog"),
-                                        displayName,
-                                        errorMessage
-                                    ) + Self.contextSuffix(workerID: workerID + 1, monthText: monthKey.text),
-                                    level: .error
-                                )
-                                let progressState = await aggregator.recordFailure()
-                                emitFailureProgress(
-                                    eventStream: eventStream,
-                                    state: progressState.state,
-                                    asset: asset,
-                                    displayName: displayName,
-                                    errorMessage: errorMessage,
-                                    position: progressState.position,
-                                    workerID: workerID + 1,
-                                    monthText: monthKey.text
-                                )
-                                if let timingSummary = progressState.timingSummary {
-                                    eventStream.emitLog(timingSummary, level: .debug)
-                                }
-                            }
-                            if shouldBreakAssetLoop { break }
-                        }
-                    }
-
-                    if workUnit.paused || workUnit.hasFatal {
-                        break
-                    }
-
-                    batchAssetsByLocalIdentifier.removeAll(keepingCapacity: false)
-                    batchLocalHashCacheByAssetID.removeAll(keepingCapacity: false)
-                }
-
-                if missingAssetCount > 0 {
-                    eventStream.emitLog(
-                        String.localizedStringWithFormat(
-                            String(localized: "backup.parallel.missingAssets"),
-                            workerID + 1,
-                            monthKey.text,
-                            missingAssetCount
+                    await processMonthBatches(
+                        context: MonthBatchContext(
+                            monthKey: monthKey,
+                            monthAssetIDs: monthAssetIDs,
+                            monthStore: monthStore,
+                            workerID: workerID,
+                            iCloudPhotoBackupMode: iCloudPhotoBackupMode,
+                            profile: profile,
+                            v2Services: v2Services,
+                            transaction: transaction,
+                            fetchBatchSize: 500
                         ),
-                        level: .warning
+                        client: client,
+                        eventStream: eventStream,
+                        aggregator: aggregator,
+                        workUnit: &workUnit
                     )
-                }
                 }
 
                 let eomFlow = try await finishMonthFlushingAndPublishing(
@@ -1202,7 +872,7 @@ struct BackupParallelExecutor: Sendable {
         return true
     }
 
-    private func emitProgress(
+    func emitProgress(
         eventStream: BackupEventStream,
         state: BackupRunState,
         result: AssetProcessResult,
@@ -1239,7 +909,7 @@ struct BackupParallelExecutor: Sendable {
         )))
     }
 
-    private func emitFailureProgress(
+    func emitFailureProgress(
         eventStream: BackupEventStream,
         state: BackupRunState,
         asset: PHAsset,
@@ -1346,7 +1016,7 @@ struct BackupParallelExecutor: Sendable {
         )
     }
 
-    private static func contextSuffix(workerID: Int, monthText: String) -> String {
+    static func contextSuffix(workerID: Int, monthText: String) -> String {
         String.localizedStringWithFormat(
             String(localized: "backup.progress.assetContextSuffix"),
             workerID,

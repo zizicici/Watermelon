@@ -9,6 +9,21 @@ enum MonthLoopFlow {
     case breakMonthLoop
 }
 
+/// Result of processing one asset in the inner loop. Swift `break`/`continue` cannot cross a
+/// helper's function boundary, so the caller acts on this instead of a `shouldBreak` boolean:
+/// `.breakAssetLoop` -> `break`, `.skippedEmpty`/`.processed` -> next iteration.
+enum AssetLoopFlow {
+    case processed
+    case skippedEmpty
+    case breakAssetLoop
+}
+
+/// Result of one batch. `.breakBatchLoop` mirrors the inline `if workUnit.paused || hasFatal { break }`.
+enum BatchLoopFlow {
+    case completed
+    case breakBatchLoop
+}
+
 /// Arch-VII A-II B5: explicit representation of the four cross-phase lifecycle flags that
 /// `runParallelMonthWorker` previously tracked as loose mutable `var`s. Each old flag maps to one
 /// field and each old assignment maps to one named transition, so the control flow stays byte-identical.
