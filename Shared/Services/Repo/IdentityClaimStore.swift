@@ -126,9 +126,24 @@ nonisolated struct IdentityClaimStore: Sendable {
             .appendingPathComponent("own-claim-read-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
         do {
-            try await client.download(remotePath: claimPath, localURL: temp)
+            try await downloadListedClaimToleratingVisibilityLag(remotePath: claimPath, localURL: temp)
         } catch {
-            if isStorageNotFoundError(error) { return nil }
+            if isStorageNotFoundError(error) {
+                // Metadata above proved the claim exists. On a grace backend a still-unreadable
+                // claim after the whole read-after-write budget must NOT collapse to "no claim":
+                // that preserves a stale repo fallback and drives a false repoIdentityMismatch.
+                // Zero-grace backends have no visibility lag, so a 404 here is a genuine concurrent
+                // deletion — report absence as before.
+                if client.readAfterWriteGraceSeconds > 0 {
+                    throw RepoBootstrap.BootstrapError.ioFailure(NSError(
+                        domain: "RepoBootstrap",
+                        code: 20,
+                        userInfo: [NSLocalizedDescriptionKey:
+                            "own identity claim metadata-visible but unreadable within read-after-write grace at \(claimPath)"]
+                    ))
+                }
+                return nil
+            }
             throw RemoteWriteClassifier.normalizedCancellation(error)
         }
         let data = try Data(contentsOf: temp)
@@ -149,7 +164,15 @@ nonisolated struct IdentityClaimStore: Sendable {
             let temp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("self-claim-preflight-\(UUID().uuidString).json")
             defer { try? FileManager.default.removeItem(at: temp) }
-            try await client.download(remotePath: claimPath, localURL: temp)
+            do {
+                try await downloadListedClaimToleratingVisibilityLag(remotePath: claimPath, localURL: temp)
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                // A metadata-visible zero-byte claim whose GET stays 404 past grace is already gone:
+                // the broken claim this heal targets no longer exists, so don't abort bootstrap.
+                if isStorageNotFoundError(error) { return }
+                throw error
+            }
             // Surface local-read failures: silently treating them as empty would delete a non-zero remote claim under disk pressure.
             let data = try Data(contentsOf: temp)
             guard data.isEmpty else { return }
@@ -204,7 +227,10 @@ nonisolated struct IdentityClaimStore: Sendable {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("claim-precheck-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
-        try await client.download(remotePath: claimPath, localURL: temp)
+        // Caller reached here via a metadata hit; on grace backends the data-path GET can still
+        // 404 inside the visibility window. Spend the grace budget before letting a not-found abort
+        // bootstrap / claim rewrite — a persistent not-found after grace still surfaces as an error.
+        try await downloadListedClaimToleratingVisibilityLag(remotePath: claimPath, localURL: temp)
         // Surface local-read failures: silently classifying as zero-byte would delete and reclaim a healthy remote on disk pressure.
         let data = try Data(contentsOf: temp)
         if data.isEmpty { return .zeroByte }
@@ -315,16 +341,34 @@ nonisolated struct IdentityClaimStore: Sendable {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("claim-fetch-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
-        do {
-            try await downloadWithRetry(remotePath: path, localURL: temp, attempts: 3)
-        } catch {
-            if isStorageNotFoundError(error) { return .none }
-            throw RemoteWriteClassifier.normalizedCancellation(error)
-        }
-        let data = try Data(contentsOf: temp)
         // Filename must be a `<writerID>.json` shape; payload's writer_id must match —
         // otherwise a stray .json with a forged older timestamp could win election.
         let expectedWriterID = entryName.hasSuffix(".json") ? String(entryName.dropLast(5)) : entryName
+        do {
+            try await downloadListedClaimToleratingVisibilityLag(remotePath: path, localURL: temp)
+        } catch {
+            if isStorageNotFoundError(error) {
+                // The file was listed, so it existed; on a grace backend an unreadable-within-grace
+                // writerID-shaped claim could be the lex-min canonical one — fail closed rather than
+                // silently flip the adopted repoID. Self is included: dropping an unreadable own claim
+                // here lets a peer win election, then writeOwnClaim deletes the now-visible self claim
+                // as stale, turning a transient self-read lag into a durable repo-ID flip. Zero-grace
+                // backends have no visibility lag, so a 404 is a genuine concurrent deletion; only
+                // non-claim-shaped names are skipped.
+                if client.readAfterWriteGraceSeconds > 0,
+                   RepoLayout.isValidWriterID(expectedWriterID) {
+                    throw RepoBootstrap.BootstrapError.ioFailure(NSError(
+                        domain: "RepoBootstrap",
+                        code: 9,
+                        userInfo: [NSLocalizedDescriptionKey:
+                            "identity claim \(entryName) listed but unreadable within read-after-write grace — refusing election to avoid silent canonical flip (inspect/delete manually)"]
+                    ))
+                }
+                return .none
+            }
+            throw RemoteWriteClassifier.normalizedCancellation(error)
+        }
+        let data = try Data(contentsOf: temp)
         if let wire = try? IdentityClaimWire(data: data),
            wire.writerID == expectedWriterID,
            RepoLayout.isValidWriterID(wire.writerID) {
@@ -425,6 +469,36 @@ nonisolated struct IdentityClaimStore: Sendable {
                 code: 5,
                 userInfo: [NSLocalizedDescriptionKey: "identity claim content drift at \(claimPath): expected (\(writerID), \(createdAtMs)) got (\(wire.writerID), \(wire.createdAtMs))"]
             ))
+        }
+    }
+
+    /// A claim entry surfaced by the directory listing exists, but on grace backends its data-path
+    /// download can 404 while list/HEAD already see it. Spend the read-after-write grace budget on
+    /// that not-found before reporting absence; every other error and zero-grace backends keep the
+    /// single authoritative read.
+    private func downloadListedClaimToleratingVisibilityLag(remotePath: String, localURL: URL) async throws {
+        do {
+            try await downloadWithRetry(remotePath: remotePath, localURL: localURL, attempts: 3)
+            return
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            guard client.readAfterWriteGraceSeconds > 0, isStorageNotFoundError(error) else { throw error }
+            let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+            var lastError = error
+            var attempt = 0
+            while Date() < deadline {
+                try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
+                attempt += 1
+                do {
+                    try await downloadWithRetry(remotePath: remotePath, localURL: localURL, attempts: 3)
+                    return
+                } catch {
+                    if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                    guard isStorageNotFoundError(error) else { throw error }
+                    lastError = error
+                }
+            }
+            throw lastError
         }
     }
 

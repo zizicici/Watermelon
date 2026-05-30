@@ -136,9 +136,25 @@ final class V2MonthSession: BackupMonthStore {
             ))
             throw error
         }
-        let remoteFilesByName = MonthManifestStore.dedupedRemoteFilesByName(
+        var remoteFilesByName = MonthManifestStore.dedupedRemoteFilesByName(
             entries: entries, year: year, month: month
         )
+        // The month LIST can omit a materialized resource two ways: a grace backend's stale listing
+        // hides a peer's just-written file, or an exact-match normalizing server (HFS+/SFTP) lists the
+        // recorded NFC leaf back as NFD so the byte-exact presence key misses. Either way the resource
+        // would be marked physically missing and drive a duplicate repair upload/commit. Probe the
+        // recorded path directly and treat a content-confirmed hit as listed so the existing-hash fast
+        // path still dedups. Unconfirmed omissions stay missing — the conservative duplicate, never a
+        // wrong-bytes bind. Case-insensitive zero-grace backends fold NFC and lag-free, so they skip this.
+        if client.readAfterWriteGraceSeconds > 0
+            || client.backendNameCaseSensitivity.usesExactNameMatchingForPresence {
+            remoteFilesByName = try await reconcileListOmittedResources(
+                client: client,
+                basePath: basePath,
+                monthState: monthState,
+                remoteFilesByName: remoteFilesByName
+            )
+        }
 
         let session = V2MonthSession(
             client: client,
@@ -158,6 +174,60 @@ final class V2MonthSession: BackupMonthStore {
             session.requestSnapshotRebaseline()
         }
         return session
+    }
+
+    private static let listReconcileMaxVerifiedFiles = 64
+    private static let listReconcileMaxVerifiedBytes: Int64 = 32 * 1024 * 1024
+
+    /// Confirm materialized resources the month LIST omitted by probing their recorded paths directly,
+    /// so a stale grace-backend listing or an NFC/NFD normalization divergence can't disable the dedup
+    /// fast path. Only content-confirmed hits are promoted to "listed"; not-found/size races and
+    /// transport failures stay omitted (→ missing).
+    private static func reconcileListOmittedResources(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        monthState: RepoMonthState,
+        remoteFilesByName: [String: MonthManifestStore.RemoteFileMetadata]
+    ) async throws -> [String: MonthManifestStore.RemoteFileMetadata] {
+        let nameCase = client.backendNameCaseSensitivity
+        var sizesByPresenceKey: [String: Set<Int64>] = [:]
+        for (name, meta) in remoteFilesByName {
+            sizesByPresenceKey[nameCase.presenceKey(for: name), default: []].insert(meta.size)
+        }
+        var result = remoteFilesByName
+        var verifiedFileCount = 0
+        var verifiedByteCount: Int64 = 0
+        for row in monthState.resources.values {
+            let leaf = (row.physicalRemotePath as NSString).lastPathComponent
+            let key = nameCase.presenceKey(for: leaf)
+            if sizesByPresenceKey[key]?.contains(row.fileSize) == true { continue }
+            if verifiedFileCount >= listReconcileMaxVerifiedFiles { break }
+            if verifiedByteCount + max(row.fileSize, 0) > listReconcileMaxVerifiedBytes { break }
+            let path = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: row.physicalRemotePath)
+            let outcome: RemoteContentTrust.HashVerificationResult
+            do {
+                outcome = try await RemoteContentTrust.verifyHashResult(
+                    client: client,
+                    remotePath: path,
+                    expectedSize: row.fileSize,
+                    expectedHash: row.contentHash
+                )
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                continue
+            }
+            verifiedFileCount += 1
+            verifiedByteCount += max(row.fileSize, 0)
+            if case .matched = outcome {
+                // Re-key under the recorded leaf: a normalizing backend listed an NFD spelling whose
+                // String key canonically equals our NFC leaf, so a plain insert keeps the NFD key and
+                // the byte-exact presence key still misses. Drop the divergent spelling, then insert.
+                result.removeValue(forKey: leaf)
+                result[leaf] = MonthManifestStore.RemoteFileMetadata(size: row.fileSize)
+                sizesByPresenceKey[key, default: []].insert(row.fileSize)
+            }
+        }
+        return result
     }
 
     func requestSnapshotRebaseline() {

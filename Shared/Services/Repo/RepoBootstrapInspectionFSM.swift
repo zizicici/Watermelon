@@ -20,6 +20,17 @@ struct RepoBootstrapInspectionFSM: Sendable {
         }
 
         guard markerExists else {
+            // A just-written `.watermelon/` can be omitted from one base LIST on a grace backend while
+            // version.json is already readable (direct object reads lead parent-prefix listings). A
+            // V2-bound syncIndex treats the resulting `.fresh`/`.v1` as a deterministic format regression
+            // and clears the live committed view, so reconfirm marker absence within grace before routing.
+            if let reconfirmed = try await reconfirmMarkerAbsentWithinGrace(client: client, basePath: basePath) {
+                return try await inspectMarkerPresent(
+                    client: client,
+                    basePath: basePath,
+                    entries: reconfirmed
+                )
+            }
             let hasV1 = try await Self.detectV1Manifests(client: client, basePath: basePath, entries: entries)
             return hasV1 ? .v1 : .fresh
         }
@@ -29,6 +40,50 @@ struct RepoBootstrapInspectionFSM: Sendable {
             basePath: basePath,
             entries: entries
         )
+    }
+
+    /// A marker-absent base LIST on a fresh/V1 remote is the common case, so its reconfirm must not pay
+    /// the full read-after-write ceiling: when `version.json` metadata is genuinely absent there is no
+    /// pending write to wait on. Cap the metadata-visibility flap retry at a few quick reads instead.
+    private static let negativeMarkerReconfirmRetryCount = 4
+
+    /// On a grace backend, re-prove a marker-absent base LIST against the more read-after-write-consistent
+    /// version.json object before letting `.absent` drive `.fresh`/`.v1`. Returns a fresh base listing to
+    /// route as marker-present once the manifest reappears; nil (genuinely fresh, or zero-grace) keeps the
+    /// single authoritative listing. The tolerant loader also reconfirms a metadata-visible / download-404
+    /// version read within grace (no early abort). A genuinely-absent version.json only triggers a small
+    /// bounded retry — not the full grace ceiling — so empty/legacy opens stay fast; transport errors
+    /// propagate (fail closed) and never silently demote to `.fresh`.
+    private func reconfirmMarkerAbsentWithinGrace(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> [RemoteStorageEntry]? {
+        guard client.readAfterWriteGraceSeconds > 0 else { return nil }
+        let versionStore = VersionManifestStore(client: client, basePath: basePath)
+        if case .found = try await versionStore.loadToleratingDownloadVisibilityLag() {
+            return try await listBase(client: client, basePath: basePath)
+        }
+        var attempt = 0
+        while attempt < Self.negativeMarkerReconfirmRetryCount {
+            try await Task.sleep(nanoseconds: UInt64(200 * (1 << min(attempt, 3))) * 1_000_000)
+            attempt += 1
+            if case .found = try await versionStore.loadToleratingDownloadVisibilityLag() {
+                return try await listBase(client: client, basePath: basePath)
+            }
+        }
+        return nil
+    }
+
+    private func listBase(
+        client: any RemoteStorageClientProtocol,
+        basePath: String
+    ) async throws -> [RemoteStorageEntry] {
+        do {
+            return try await client.list(path: basePath)
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            throw error
+        }
     }
 
     static func hasAnyV2CommitOrSnapshotData(
@@ -45,7 +100,10 @@ struct RepoBootstrapInspectionFSM: Sendable {
     ) async throws -> RemoteFormatInspection {
         let manifest: VersionManifestStore.Load
         do {
-            manifest = try await VersionManifestStore(client: client, basePath: basePath).load()
+            manifest = try await loadVersionReconfirmingAbsenceWithinGrace(
+                store: VersionManifestStore(client: client, basePath: basePath),
+                client: client
+            )
         } catch is RepoBootstrap.VersionConflict {
             throw BackupCompatibilityError.damagedV2Repo
         } catch let bootstrap as RepoBootstrap.BootstrapError {
@@ -88,6 +146,32 @@ struct RepoBootstrapInspectionFSM: Sendable {
                 hasV1Manifests: hasV1Manifests
             )
         }
+    }
+
+    // `.watermelon/` is present, so a not-found version.json on a backend advertising metadata
+    // read-after-write lag is not stable evidence of a fresh endpoint — it can be a just-written
+    // manifest still propagating. Re-read within the grace window before letting `.absent` drive
+    // the `.fresh` route; zero-grace backends keep their single authoritative read. The per-read
+    // `loadToleratingDownloadVisibilityLag` also covers the metadata-visible / download-404 race so
+    // a lagging data-path GET reconfirms to `.found` rather than aborting inspection with a raw error.
+    private func loadVersionReconfirmingAbsenceWithinGrace(
+        store: VersionManifestStore,
+        client: any RemoteStorageClientProtocol
+    ) async throws -> VersionManifestStore.Load {
+        let first = try await store.loadToleratingDownloadVisibilityLag()
+        if case .found = first { return first }
+        guard client.readAfterWriteGraceSeconds > 0 else { return first }
+        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+        var attempt = 0
+        while Date() < deadline {
+            let millis = 200 * (1 << min(attempt, 3))
+            attempt += 1
+            try await Task.sleep(nanoseconds: UInt64(millis) * 1_000_000)
+            if case .found(let manifest) = try await store.loadToleratingDownloadVisibilityLag() {
+                return .found(manifest)
+            }
+        }
+        return first
     }
 
     private func inspectVersionAbsent(

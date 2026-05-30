@@ -46,6 +46,99 @@ final class RemoteFileNamingTests: XCTestCase {
         )
     }
 
+    // MARK: - presenceKey
+
+    func testPresenceKey_normalizesUnicodeComposition_onCaseInsensitiveBackend() {
+        // Case-insensitive filesystems compare canonically, so NFC vs NFD of the same name is
+        // one file; presence must collapse them or a normalizing listing reads as missing.
+        let composed = "caf\u{00E9}.jpg"
+        let decomposed = "cafe\u{0301}.jpg"
+        XCTAssertEqual(
+            BackendNameCaseSensitivity.caseInsensitive.presenceKey(for: composed),
+            BackendNameCaseSensitivity.caseInsensitive.presenceKey(for: decomposed)
+        )
+    }
+
+    func testPresenceKey_distinguishesUnicodeComposition_onExactMatchBackends() {
+        // S3 keys are byte-exact: NFC and NFD spellings are distinct objects. Collapsing them
+        // would mark an absent committed key present when a same-size different-spelling object
+        // is listed, binding V2 metadata to bytes that aren't at the recorded path.
+        let composed = "caf\u{00E9}.jpg"
+        let decomposed = "cafe\u{0301}.jpg"
+        for sensitivity in [BackendNameCaseSensitivity.unknown, .caseSensitive] {
+            XCTAssertNotEqual(
+                sensitivity.presenceKey(for: composed),
+                sensitivity.presenceKey(for: decomposed),
+                "exact-match backend \(sensitivity) must keep distinct Unicode spellings distinct"
+            )
+        }
+    }
+
+    func testPresenceKey_distinguishesDiacritics_onCaseInsensitiveBackend() {
+        // Case-insensitive filesystems (SMB/NTFS, HFS+) are diacritic-SENSITIVE: café.jpg and
+        // cafe.jpg are distinct physical files. Presence must not conflate them, or a same-size
+        // absent sibling is falsely marked present (durable backup gap).
+        XCTAssertNotEqual(
+            BackendNameCaseSensitivity.caseInsensitive.presenceKey(for: "café.jpg"),
+            BackendNameCaseSensitivity.caseInsensitive.presenceKey(for: "cafe.jpg")
+        )
+    }
+
+    func testPresenceKey_foldsCase_onCaseInsensitiveBackend() {
+        XCTAssertEqual(
+            BackendNameCaseSensitivity.caseInsensitive.presenceKey(for: "IMG.HEIC"),
+            BackendNameCaseSensitivity.caseInsensitive.presenceKey(for: "img.heic")
+        )
+    }
+
+    func testPresenceKey_distinguishesCase_onExactMatchBackends() {
+        for sensitivity in [BackendNameCaseSensitivity.unknown, .caseSensitive] {
+            XCTAssertNotEqual(
+                sensitivity.presenceKey(for: "IMG.HEIC"),
+                sensitivity.presenceKey(for: "img.heic"),
+                "exact-match backend \(sensitivity) must distinguish case"
+            )
+        }
+    }
+
+    // MARK: - nameKey
+
+    func testNameKey_distinguishesUnicodeComposition_onCaseSensitiveBackend() {
+        // Byte-exact backends (S3/SFTP) store NFC and NFD as distinct keys; the collision-avoidance
+        // key must not fold them (Swift `String` equality would), or a name the backend can hold is
+        // needlessly suffixed.
+        let composed = "caf\u{00E9}.jpg"
+        let decomposed = "cafe\u{0301}.jpg"
+        XCTAssertNotEqual(
+            RemoteFileNaming.nameKey(for: composed, caseSensitivity: .caseSensitive),
+            RemoteFileNaming.nameKey(for: decomposed, caseSensitivity: .caseSensitive)
+        )
+        // Case-insensitive (folding) backends still collapse them — one file on the filesystem.
+        XCTAssertEqual(
+            RemoteFileNaming.nameKey(for: composed, caseSensitivity: .caseInsensitive),
+            RemoteFileNaming.nameKey(for: decomposed, caseSensitivity: .caseInsensitive)
+        )
+    }
+
+    func testResolveNextAvailableName_caseSensitive_nfcVsNfdDoNotCollide() {
+        let composed = "caf\u{00E9}.jpg"
+        let decomposed = "cafe\u{0301}.jpg"
+        // Existing byte-distinct NFD key must not force the NFC upload to suffix on an exact-match backend.
+        let exact = RemoteFileNaming.resolveNextAvailableName(
+            baseName: composed,
+            occupiedNames: [decomposed],
+            caseSensitivity: .caseSensitive
+        )
+        XCTAssertEqual(exact, composed)
+        // A folding backend treats them as the same name, so the upload must suffix.
+        let folded = RemoteFileNaming.resolveNextAvailableName(
+            baseName: composed,
+            occupiedNames: [decomposed],
+            caseSensitivity: .caseInsensitive
+        )
+        XCTAssertNotEqual(folded, composed)
+    }
+
     // MARK: - resolveNextAvailableName
 
     func testResolveNextAvailableName_returnsBaseWhenNoCollision() {

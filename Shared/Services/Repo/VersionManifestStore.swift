@@ -65,6 +65,69 @@ nonisolated struct VersionManifestStore: Sendable {
         ))
     }
 
+    /// Spend the read-after-write grace budget on a version *download* that 404s behind
+    /// already-visible metadata: list/HEAD can lead the data-path GET on grace backends, so a
+    /// just-written manifest can be listable while its bytes are not yet readable. `.found` and
+    /// `.absent` return immediately; while the only failure is a not-found from the download,
+    /// retry until `metadataReadAfterWriteDeadline(floorSeconds: 1)`. A persistent not-found after
+    /// the deadline and every non-not-found error (parse/permission/transport/directory) propagate
+    /// so callers stay fail-closed. Zero-grace backends keep their single authoritative read.
+    func loadToleratingDownloadVisibilityLag() async throws -> Load {
+        do {
+            return try await load()
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            guard client.readAfterWriteGraceSeconds > 0, isStorageNotFoundError(error) else { throw error }
+            // The catch only fires after `load()` proved the manifest's metadata exists (the data-path
+            // GET 404'd behind it). A retry `.absent` is then the metadata read flapping not-found on a
+            // grace backend, so keep spending the budget rather than demoting a proven manifest; past the
+            // deadline the retained download-lag error rethrows (fail closed), never a bare `.absent`.
+            return .found(try await retryProvenManifestWithinGrace(initialError: error))
+        }
+    }
+
+    /// The caller already proved `version.json` metadata exists. Any subsequent `.absent` from the read
+    /// is then a grace-backend metadata flap, not a fresh endpoint, so spend the grace budget on it and
+    /// fail closed (throw) past the deadline rather than demoting a proven V2 marker to absence.
+    func loadAfterProvenMetadataToleratingVisibilityLag() async throws -> VersionManifest {
+        let initialError: Error
+        do {
+            if case .found(let manifest) = try await load() { return manifest }
+            initialError = Self.proveMetadataVisibilityLagNotFound()
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            guard isStorageNotFoundError(error) else { throw error }
+            initialError = error
+        }
+        guard client.readAfterWriteGraceSeconds > 0 else { throw initialError }
+        return try await retryProvenManifestWithinGrace(initialError: initialError)
+    }
+
+    /// Spend the read-after-write grace budget re-reading a manifest already proven to exist. Returns on
+    /// the first `.found`; a retry `.absent` or not-found download stays retryable inside the deadline;
+    /// past it the retained not-found rethrows so callers stay fail-closed.
+    private func retryProvenManifestWithinGrace(initialError: Error) async throws -> VersionManifest {
+        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+        var lastError = initialError
+        var attempt = 0
+        while Date() < deadline {
+            try await Task.sleep(nanoseconds: UInt64(200 * (1 << min(attempt, 3))) * 1_000_000)
+            attempt += 1
+            do {
+                if case .found(let manifest) = try await load() { return manifest }
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                guard isStorageNotFoundError(error) else { throw error }
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    private static func proveMetadataVisibilityLagNotFound() -> Error {
+        NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError)
+    }
+
     /// Tolerant wrapper for diagnostics (e.g. surfacing `min_app_version` in an unsupported error).
     /// Any failure mode collapses to `nil`.
     func loadOrNil() async -> VersionManifest? {

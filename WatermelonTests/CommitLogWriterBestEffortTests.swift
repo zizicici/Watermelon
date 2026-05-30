@@ -322,11 +322,12 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         let header = makeHeader(seq: 1, clock: 1)
         let op = sampleOp(opSeq: 0, clock: 1)
         // Pre-populate the final path so atomicCreate returns .alreadyExists, then
-        // arm the next verify download to fail transiently.
+        // arm the verify download to fail transiently for the whole grace window
+        // (persistent — a transient blip that resolves within grace now recovers to matched).
         let bytes = try Self.encodeCommit(header: header, ops: [op])
         let path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerID, seq: 1)
         await client.injectFile(path: path, data: bytes)
-        await client.injectDownloadError(.transport, for: path)
+        await client.injectPersistentDownloadError(.transport, for: path)
 
         do {
             _ = try await writer.write(
@@ -443,8 +444,9 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         let bytes = try Self.encodeCommit(header: header, ops: [op])
         let path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerID, seq: 1)
         await client.injectFile(path: path, data: bytes)
-        // Permission denied — NOT transient. Must propagate as .ioFailure.
-        await client.injectDownloadError(.permission, for: path)
+        // Permission denied — NOT transient. Persistent so it outlasts the read-after-write
+        // grace retry loop and propagates as .ioFailure.
+        await client.injectPersistentDownloadError(.permission, for: path)
 
         do {
             _ = try await writer.write(
@@ -471,13 +473,15 @@ final class CommitLogWriterBestEffortTests: XCTestCase {
         let bytes = try Self.encodeCommit(header: header, ops: [op])
         let path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerID, seq: 1)
         await client.injectFile(path: path, data: bytes)
-        await client.injectDownloadError(.notFound, for: path)
+        // Persistent not-found: a 404 that survives the entire read-after-write grace window
+        // is a genuine anomaly (a transient visibility-lag 404 that resolves now recovers).
+        await client.injectPersistentDownloadError(.notFound, for: path)
 
         do {
             _ = try await writer.write(
                 header: header, ops: [op], month: month, respectTaskCancellation: false
             )
-            XCTFail("expected .ioFailure — not-found during verify is a genuine anomaly, not a seq collision")
+            XCTFail("expected .ioFailure — not-found persisting through grace is a genuine anomaly, not a seq collision")
         } catch CommitLogWriter.WriteError.ioFailure {
             // expected
         } catch CommitLogWriter.WriteError.alreadyExists {

@@ -542,7 +542,9 @@ enum RemoteFileNaming {
 
     static func nameKey(for fileName: String, caseSensitivity: BackendNameCaseSensitivity) -> String {
         switch caseSensitivity {
-        case .caseSensitive: return fileName
+        // Byte-exact backends store NFC and NFD as distinct keys; Swift `String` equality folds them,
+        // so compare raw UTF-8 bytes or collision avoidance would suffix a name the backend can hold.
+        case .caseSensitive: return Data(fileName.utf8).hexString
         case .caseInsensitive, .unknown: return collisionKey(for: fileName)
         }
     }
@@ -620,8 +622,26 @@ enum RemoteFileNaming {
 
 extension BackendNameCaseSensitivity {
     /// Key callers compare for "is this leaf present on the remote".
-    /// Case-insensitive backends fold; case-sensitive and unknown backends use the raw name.
+    /// Exact-match backends (S3 byte-exact, unknown) must distinguish NFC vs NFD: they are
+    /// distinct keys there, so collapsing them would mark an absent committed key present when a
+    /// different-spelling same-size object is listed. Swift String compares by canonical
+    /// equivalence, so compare the raw UTF-8 bytes to stay byte-exact. Case-insensitive
+    /// filesystems compare canonically, so they case-fold + NFC-normalize, but stay
+    /// diacritic-sensitive (`café` ≠ `cafe`) — folding diacritics here would over-claim presence.
     func presenceKey(for fileName: String) -> String {
-        usesExactNameMatchingForPresence ? fileName : RemoteFileNaming.collisionKey(for: fileName)
+        guard !usesExactNameMatchingForPresence else { return Data(fileName.utf8).hexString }
+        return fileName.precomposedStringWithCanonicalMapping
+            .folding(options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+    }
+
+    /// Loosened-but-still-distinct match for hash-gated probe fallback: a byte-exact `presenceKey`
+    /// miss on an exact-match backend can be a normalizing server (HFS+/SFTP) that listed our NFC
+    /// leaf back as NFD. Folding to NFC recovers that same-file divergence; the probe still verifies
+    /// the hash, so a genuinely different same-size object is rejected. Never used for the no-probe
+    /// presence path, which keeps `presenceKey`'s byte-exact distinctness.
+    func canonicalEquivalenceKey(for fileName: String) -> String {
+        let normalized = fileName.precomposedStringWithCanonicalMapping
+        guard !usesExactNameMatchingForPresence else { return normalized }
+        return normalized.folding(options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
     }
 }

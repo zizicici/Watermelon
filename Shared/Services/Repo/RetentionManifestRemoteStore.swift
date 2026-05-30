@@ -158,8 +158,7 @@ struct RetentionManifestRemoteStore: Sendable {
             defer { try? FileManager.default.removeItem(at: temp) }
             let data: Data
             do {
-                try await client.download(remotePath: remotePath, localURL: temp)
-                data = try Data(contentsOf: temp)
+                data = try await downloadToleratingVisibilityLag(remotePath: remotePath, to: temp)
             } catch {
                 if isStorageNotFoundError(error) {
                     invalid.append(InvalidRetentionManifestEntry(filename: entry.name, reason: .vanishedDuringRead))
@@ -207,6 +206,36 @@ struct RetentionManifestRemoteStore: Sendable {
         )
     }
 
+    // list/HEAD can lead the data-path GET on grace backends, so a listed retention manifest can 404
+    // on download until its bytes settle. Spend the read-after-write grace before the caller classifies
+    // a listed manifest as `.vanishedDuringRead`; zero-grace backends keep their single read, and a
+    // not-found persisting past the deadline still surfaces so the caller stays fail-closed.
+    private func downloadToleratingVisibilityLag(remotePath: String, to temp: URL) async throws -> Data {
+        do {
+            try await client.download(remotePath: remotePath, localURL: temp)
+            return try Data(contentsOf: temp)
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            guard client.readAfterWriteGraceSeconds > 0, isStorageNotFoundError(error) else { throw error }
+            let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+            var lastError = error
+            var attempt = 0
+            while Date() < deadline {
+                try await Task.sleep(nanoseconds: UInt64(200 * (1 << min(attempt, 3))) * 1_000_000)
+                attempt += 1
+                do {
+                    try await client.download(remotePath: remotePath, localURL: temp)
+                    return try Data(contentsOf: temp)
+                } catch {
+                    if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                    guard isStorageNotFoundError(error) else { throw error }
+                    lastError = error
+                }
+            }
+            throw lastError
+        }
+    }
+
     private func metadataExists(path: String) async throws -> Bool {
         do {
             return try await client.metadata(path: path) != nil
@@ -239,8 +268,10 @@ struct RetentionManifestRemoteStore: Sendable {
             .appendingPathComponent("retention-manifest-readback-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
         do {
-            try await client.download(remotePath: remotePath, localURL: temp)
-            let data = try Data(contentsOf: temp)
+            // The byte-equality verifier above already spent the read-after-write grace budget; share the
+            // same grace contract here so a transient data-path lag-404 on the second GET can't reclassify
+            // an already-verified write as a decode failure and block barrier publication.
+            let data = try await downloadToleratingVisibilityLag(remotePath: remotePath, to: temp)
             let decoded: RetentionManifest
             do {
                 decoded = try RetentionManifestStore.decode(data)

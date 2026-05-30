@@ -166,8 +166,29 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
         } catch {
             if isStorageNotFoundError(error) {
                 var presence: [Data: RemoteResourcePresence] = [:]
-                for resource in resources {
-                    presence[resource.contentHash] = .inconclusive(.probeFailure)
+                let graceSeconds = client.readAfterWriteGraceSeconds
+                if graceSeconds > 0 {
+                    // Grace backend: gate each resource on freshness (mirrors the file-level recorded-path
+                    // probe and verify's month-dir gate). An old resource whose whole month dir is gone is
+                    // genuinely missing so Home can repair it; a within-grace resource could be a
+                    // just-written month not yet listed → inconclusive (keeps the month non-authoritative).
+                    let now = Date()
+                    var withinGraceByHash: [Data: Bool] = [:]
+                    for resource in resources {
+                        let within = RepoVerifyMonthService.isWithinGraceWindow(
+                            backedUpAtMs: resource.backedUpAtMs, now: now, graceSeconds: graceSeconds
+                        )
+                        withinGraceByHash[resource.contentHash] = (withinGraceByHash[resource.contentHash] ?? false) || within
+                    }
+                    for (hash, within) in withinGraceByHash {
+                        presence[hash] = within ? .inconclusive(.probeFailure) : .missing
+                    }
+                } else {
+                    // Zero-grace: a whole-month 404 stays a transient probe failure rather than widening
+                    // every recorded hash to missing off one listing.
+                    for resource in resources {
+                        presence[resource.contentHash] = .inconclusive(.probeFailure)
+                    }
                 }
                 return RemoteIndexOverlayMonthProbe(month: month, presenceByHash: presence)
             }
@@ -180,13 +201,18 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
             let size: Int64
         }
         var entriesByKey: [String: [ListedFile]] = [:]
+        var entriesByCanonicalKey: [String: [ListedFile]] = [:]
         for entry in entries where !entry.isDirectory {
             entriesByKey[nameCase.presenceKey(for: entry.name), default: []].append(ListedFile(name: entry.name, size: entry.size))
+            entriesByCanonicalKey[nameCase.canonicalEquivalenceKey(for: entry.name), default: []].append(ListedFile(name: entry.name, size: entry.size))
         }
         var resourcesByHash: [Data: [RemoteManifestResource]] = [:]
         for resource in resources {
             resourcesByHash[resource.contentHash, default: []].append(resource)
         }
+        let graceSeconds = client.readAfterWriteGraceSeconds
+        let graceBackend = graceSeconds > 0
+        let now = Date()
         var verifiedFileCount = 0
         var verifiedByteCount: Int64 = 0
         var loggedProbeBudgetExhausted = false
@@ -197,10 +223,39 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
             candidateScan: for resource in group {
                 try Task.checkCancellation()
                 let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
-                guard let listed = entriesByKey[nameCase.presenceKey(for: leaf)] else { continue }
+                let listed = entriesByKey[nameCase.presenceKey(for: leaf)] ?? []
                 let sizeMatches = listed.filter { $0.size == resource.fileSize }
-                if sizeMatches.isEmpty { continue }
-                for match in sizeMatches {
+                let probePaths: [String]
+                // A grace recorded-path probe found nothing but the resource is older than the
+                // read-after-write window: the 404 is genuine absence, so let it fall through to
+                // .missing instead of latching inconclusive (which keeps the month non-authoritative forever).
+                var staleRecordedPathProbe = false
+                if sizeMatches.isEmpty {
+                    // Byte-exact key missed. A listed canonically-equivalent same-size leaf (a normalizing
+                    // HFS+/SFTP server that stored our NFC leaf as NFD), or — on a grace backend — a stale
+                    // LIST that hid a just-written file, is only a reason to probe. Probe the *recorded*
+                    // path that restore uses, never a listed sibling: an exact-name backend can list an
+                    // unrelated same-hash orphan under an equivalent spelling while the committed object is
+                    // gone, and proving presence from that orphan marks a non-restorable asset healthy.
+                    let hasCanonicalMatch = !(entriesByCanonicalKey[nameCase.canonicalEquivalenceKey(for: leaf)] ?? [])
+                        .filter { $0.size == resource.fileSize }.isEmpty
+                    guard hasCanonicalMatch || graceBackend else { continue }
+                    staleRecordedPathProbe = !RepoVerifyMonthService.isWithinGraceWindow(
+                        backedUpAtMs: resource.backedUpAtMs, now: now, graceSeconds: graceSeconds
+                    )
+                    probePaths = [RemotePathBuilder.absolutePath(
+                        basePath: basePath,
+                        remoteRelativePath: resource.physicalRemotePath
+                    )]
+                } else {
+                    probePaths = sizeMatches.map { match in
+                        RemotePathBuilder.absolutePath(
+                            basePath: basePath,
+                            remoteRelativePath: monthRel + "/" + match.name
+                        )
+                    }
+                }
+                for path in probePaths {
                     if let budget {
                         let fileCap = verifiedFileCount >= budget.maxVerifiedFilesPerMonth
                         let byteCap = verifiedByteCount + max(resource.fileSize, 0) > budget.maxVerifiedBytesPerMonth
@@ -213,10 +268,6 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                             break candidateScan
                         }
                     }
-                    let path = RemotePathBuilder.absolutePath(
-                        basePath: basePath,
-                        remoteRelativePath: monthRel + "/" + match.name
-                    )
                     do {
                         switch try await RemoteContentTrust.verifyHashResult(
                             client: client,
@@ -235,6 +286,9 @@ struct RemoteIndexPhysicalPresenceOverlayProbe: Sendable {
                         case .noContent:
                             continue
                         case .inconclusive:
+                            // A not-found recorded-path probe past the grace window is genuine absence;
+                            // fall through to .missing so Home repairs it instead of staying non-authoritative.
+                            if staleRecordedPathProbe { continue }
                             inconclusiveReason = .probeFailure
                         }
                     } catch {

@@ -141,15 +141,7 @@ nonisolated struct MigrationMarkerStore: Sendable {
             let temp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("migration-marker-detect-\(UUID().uuidString).json")
             defer { try? FileManager.default.removeItem(at: temp) }
-            let data: Data
-            do {
-                try await client.download(remotePath: path, localURL: temp)
-                data = try Data(contentsOf: temp)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                if !isStorageNotFoundError(error) { throw error }
+            guard let data = try await downloadListedMarkerToleratingVisibilityLag(path: path, localURL: temp) else {
                 continue
             }
             do {
@@ -166,6 +158,41 @@ nonisolated struct MigrationMarkerStore: Sendable {
         return results
     }
 
+
+    /// A marker surfaced by the directory listing exists, but on grace backends its data-path
+    /// download can 404 while the listing already sees it. Spend the read-after-write grace budget
+    /// on that not-found before deciding the marker is gone: a dropped marker silently flips
+    /// inspection away from the pending-cleanup route (or misroutes a recoverable repo as damaged).
+    /// After grace, fail closed with `InvalidMarker`. Zero-grace backends have no visibility lag, so
+    /// a listed-but-404 file is a genuine concurrent deletion and returns nil to be skipped.
+    private func downloadListedMarkerToleratingVisibilityLag(path: String, localURL: URL) async throws -> Data? {
+        do {
+            try await client.download(remotePath: path, localURL: localURL)
+            return try Data(contentsOf: localURL)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            guard isStorageNotFoundError(error) else { throw error }
+            guard client.readAfterWriteGraceSeconds > 0 else { return nil }
+            let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+            var attempt = 0
+            while Date() < deadline {
+                try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
+                attempt += 1
+                do {
+                    try await client.download(remotePath: path, localURL: localURL)
+                    return try Data(contentsOf: localURL)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                    guard isStorageNotFoundError(error) else { throw error }
+                }
+            }
+            throw InvalidMarker(path: path, reason: "marker listed but unreadable within read-after-write grace")
+        }
+    }
 
     func writePhase(writerID: String, phase: MigrationMarkerPhase, runID: String) async throws {
         do {

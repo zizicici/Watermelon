@@ -109,6 +109,26 @@ final class RepoCheckpointServiceTests: XCTestCase {
         XCTAssertEqual(retention.count, 0)
     }
 
+    func testStaleSnapshotListingWithinGraceEventuallyAccepts() async throws {
+        let inner = try await makeClient()
+        try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x91)
+        try await writeAddCommit(client: inner, seq: 2, clock: 2, assetByte: 0x92)
+        // Clock observes materialized clock 2, then ticks once → snapshot lamport 3.
+        let snapshotName = RepoLayout.snapshotFileName(month: month, lamport: 3, writerID: writerID, runID: runID)
+        let client = CheckpointHookClient(inner: inner)
+        // The first post-write snapshots LIST is stale (omits the just-written snapshot) even
+        // though it is already readable by name; the accept loop must retry within the grace window.
+        client.hideSnapshotFromListing(snapshotName, forFirstListCalls: 1)
+
+        let result = try await service(client: client, clock: LamportClock(initial: 0))
+            .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+
+        XCTAssertEqual(result.outcome, .writtenAccepted)
+        XCTAssertEqual(result.snapshotName, snapshotName)
+        XCTAssertEqual(result.acceptedSnapshot?.filename, snapshotName)
+        XCTAssertEqual(result.covered, covered([(1, 2)]))
+    }
+
     func testSkipForceAndRepairCorruptBaselinePaths() async throws {
         let belowClient = try await makeClient()
         try await writeAddCommit(client: belowClient, seq: 1, clock: 1, assetByte: 0xF1)
@@ -561,7 +581,29 @@ private final class CheckpointHookClient: @unchecked Sendable, RemoteStorageClie
     func disconnect() async { await inner.disconnect() }
     func verifyWriteAccess() async throws {}
     func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
-    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+
+    private var hiddenSnapshotName: String?
+    private var hiddenListRemaining = 0
+
+    func hideSnapshotFromListing(_ filename: String, forFirstListCalls n: Int) {
+        lock.lock()
+        hiddenSnapshotName = filename
+        hiddenListRemaining = n
+        lock.unlock()
+    }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        let entries = try await inner.list(path: path)
+        lock.lock()
+        defer { lock.unlock() }
+        guard let name = hiddenSnapshotName, hiddenListRemaining > 0,
+              entries.contains(where: { $0.name == name }) else {
+            return entries
+        }
+        hiddenListRemaining -= 1
+        return entries.filter { $0.name != name }
+    }
+
     func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
     func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .exclusive }
     var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }

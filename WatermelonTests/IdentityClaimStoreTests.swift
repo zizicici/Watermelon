@@ -294,6 +294,36 @@ final class IdentityClaimStoreTests: XCTestCase {
         // no throw, nothing to assert beyond absence of a file
     }
 
+    /// A zero-byte self claim is metadata-visible but its GET 404s once inside grace. Heal must spend
+    /// the grace budget like the other claim reads, then delete the empty claim, instead of throwing
+    /// and aborting the own-claim election (raw `download` did the latter).
+    func testHeal_zeroByteSelfClaim_downloadVisibilityLagWithinGrace_stillDeletes() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(3)
+        let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        await client.injectFile(path: path, data: Data())
+        await client.injectDownloadError(.notFound, for: path)
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+
+        try await store.healZeroByteSelfClaim(writerID: selfWriter)
+
+        let gone = await client.hasFile(path) == false
+        XCTAssertTrue(gone, "a zero-byte claim hidden by a one-shot download lag must still be healed, not abort bootstrap")
+    }
+
+    /// Zero-grace backends: a metadata-visible zero-byte claim whose GET stays 404 is a genuine
+    /// concurrent deletion. Heal must treat it as already gone and not abort bootstrap.
+    func testHeal_zeroByteSelfClaim_zeroGracePersistentDownloadNotFound_isNoOp() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        await client.injectFile(path: path, data: Data())
+        await client.injectPersistentDownloadError(.notFound, for: path)
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+        try await store.healZeroByteSelfClaim(writerID: selfWriter)  // must not throw
+    }
+
 
     func testWriteOwn_noPriorClaim_writesValidPayload() async throws {
         let (client, store) = await makeStore()
@@ -528,6 +558,136 @@ final class IdentityClaimStoreTests: XCTestCase {
         XCTAssertEqual(result, "11111111-1111-1111-1111-111111111111", "transient error mid-window must not abort")
     }
 
+
+    /// A grace backend can list a peer claim whose data-path download still 404s; the listed
+    /// lex-min claim must not be silently dropped — spend the grace budget and adopt it.
+    func testCanonicalElection_listedPeerClaimDownloadVisibilityLag_resolvesPeerID() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        await injectValidClaim(client, writerID: otherWriter, repoID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", createdAtMs: 1_000)
+        // Listing sees the peer claim, but the first download 404s inside the visibility window.
+        await client.injectDownloadError(.notFound, for: RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter))
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+        let result = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
+        XCTAssertEqual(result.repoID, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                       "a listed peer claim hidden by a download visibility lag must still win election")
+    }
+
+    /// After the grace budget is spent and a listed writerID-shaped peer claim is still unreadable,
+    /// election must fail closed rather than dropping a possibly-canonical claim.
+    func testCanonicalElection_listedPeerClaimPersistentDownloadNotFound_failsClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(0.2)
+        await injectValidClaim(client, writerID: otherWriter, repoID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", createdAtMs: 1_000)
+        await client.injectPersistentDownloadError(.notFound, for: RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter))
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+        do {
+            _ = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
+            XCTFail("expected fail-closed throw for a permanently-unreadable listed peer claim")
+        } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
+            XCTAssertEqual(error.domain, "RepoBootstrap")
+            XCTAssertEqual(error.code, 9)
+        }
+    }
+
+    /// An own claim listed but unreadable past grace must also fail closed during election, not be
+    /// silently dropped: dropping it lets a peer claim win, and the now-visible self claim is then
+    /// deleted as stale by writeOwnClaim — a transient self-read lag turned into a durable repo-ID flip.
+    func testCanonicalElection_listedSelfClaimPersistentDownloadNotFound_failsClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(0.2)
+        // Self claim is the earlier (lex-min canonical) one; a peer claim for a different repo coexists.
+        await injectValidClaim(client, writerID: selfWriter, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", createdAtMs: 500)
+        await injectValidClaim(client, writerID: otherWriter, repoID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", createdAtMs: 1_000)
+        await client.injectPersistentDownloadError(.notFound, for: RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter))
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+        do {
+            _ = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
+            XCTFail("expected fail-closed throw for a permanently-unreadable listed self claim, not a peer-ID flip")
+        } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
+            XCTAssertEqual(error.domain, "RepoBootstrap")
+            XCTAssertEqual(error.code, 9)
+        }
+    }
+
+    /// Zero-grace backends have no read-after-write lag, so a listed-but-download-404 claim is a
+    /// genuine concurrent deletion: skip it, never block election.
+    func testCanonicalElection_zeroGraceListedClaimDownloadNotFound_skips() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        await injectValidClaim(client, writerID: otherWriter, repoID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", createdAtMs: 1_000)
+        await client.injectPersistentDownloadError(.notFound, for: RepoLayout.identityClaimPath(base: basePath, writerID: otherWriter))
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+        let result = try await store.canonicalElection(ignoringCorruptSelfClaimFor: selfWriter)
+        XCTAssertNil(result.repoID, "zero-grace listed-but-gone claim must be skipped, not fail closed")
+    }
+
+    /// `readOwnClaim` proves the claim exists via metadata; on a grace backend the data-path GET
+    /// can still 404 inside the window. It must spend the grace budget, not collapse to "no claim"
+    /// (which would preserve a stale repo fallback and drive a false repoIdentityMismatch).
+    func testReadOwnClaim_metadataVisibleDownloadVisibilityLag_resolves() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        await injectValidClaim(client, writerID: selfWriter, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", createdAtMs: 1_000)
+        await client.injectDownloadError(.notFound, for: RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter))
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+        let claim = try await store.readOwnClaim(writerID: selfWriter)
+        XCTAssertEqual(claim?.repoID, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                       "metadata-visible own claim hidden by a download lag must still resolve")
+    }
+
+    /// After the grace budget is spent and a metadata-visible own claim is still unreadable,
+    /// `readOwnClaim` must fail closed rather than return nil and preserve a stale repo fallback.
+    func testReadOwnClaim_metadataVisiblePersistentDownloadNotFound_failsClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(0.2)
+        await injectValidClaim(client, writerID: selfWriter, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", createdAtMs: 1_000)
+        await client.injectPersistentDownloadError(.notFound, for: RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter))
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+        do {
+            _ = try await store.readOwnClaim(writerID: selfWriter)
+            XCTFail("expected fail-closed throw for a metadata-visible but permanently-unreadable own claim")
+        } catch let RepoBootstrap.BootstrapError.ioFailure(error as NSError) {
+            XCTAssertEqual(error.domain, "RepoBootstrap")
+            XCTAssertEqual(error.code, 20)
+        }
+    }
+
+    /// Zero-grace backends have no read-after-write lag, so a metadata-visible but download-404 own
+    /// claim is a genuine concurrent deletion: report absence, never block the recovery path.
+    func testReadOwnClaim_zeroGracePersistentDownloadNotFound_returnsNil() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        await injectValidClaim(client, writerID: selfWriter, repoID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", createdAtMs: 1_000)
+        await client.injectPersistentDownloadError(.notFound, for: RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter))
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+        let claim = try await store.readOwnClaim(writerID: selfWriter)
+        XCTAssertNil(claim, "zero-grace metadata-visible-but-gone own claim must report absence")
+    }
+
+    /// The self-claim precheck that gates bootstrap (`classifyExistingClaim`, reached through
+    /// `writeOwnClaim`) must spend the same grace budget: a download lag must not abort the rewrite
+    /// nor cause a redundant delete + re-create of a healthy `.ours` claim.
+    func testWriteOwn_priorClaimIsOurs_downloadVisibilityLag_doesNotRewrite() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let repoID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        await injectValidClaim(client, writerID: selfWriter, repoID: repoID, createdAtMs: 1_000)
+        let path = RepoLayout.identityClaimPath(base: basePath, writerID: selfWriter)
+        await client.injectDownloadError(.notFound, for: path)
+        let store = IdentityClaimStore(client: client, basePath: basePath)
+        try await store.writeOwnClaim(repoID: repoID, writerID: selfWriter, createdAtMs: 5_000)
+        let snapshot = await client.snapshotFiles()
+        let wire = try IdentityClaimWire(data: try XCTUnwrap(snapshot[path]))
+        XCTAssertEqual(wire.createdAtMs, 1_000,
+                       "an existing .ours claim hidden by a download lag must survive the grace retry, not be rewritten")
+    }
 
     private func makeStore() async -> (InMemoryRemoteStorageClient, IdentityClaimStore) {
         let client = InMemoryRemoteStorageClient()

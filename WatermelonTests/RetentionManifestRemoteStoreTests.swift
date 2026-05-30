@@ -68,6 +68,22 @@ final class RetentionManifestRemoteStoreTests: XCTestCase {
         }
     }
 
+    /// The byte-equality verifier already spent the read-after-write grace and confirmed the manifest
+    /// bytes; a transient data-path lag-404 on the immediate decode-roundtrip GET must be reread within
+    /// grace, not reclassified as a write failure that blocks barrier publication.
+    func testDecodeRoundtripDownloadLaggingWithinGraceStillSucceeds() async throws {
+        let inner = try await makeClient()
+        let manifest = makeManifest()
+        // 404 only the decode-roundtrip readback GET once; the byte verifier's read goes through.
+        let client = DecodeReadbackLagClient(inner: inner, graceSeconds: 2)
+
+        let result = try await store(client).writeVerified(manifest, respectTaskCancellation: true)
+        XCTAssertEqual(result.outcome, .wroteVerified,
+                       "a lag-404 on the decode roundtrip within grace must not fail a verified write")
+        let didLag = await client.didInjectReadbackLag()
+        XCTAssertTrue(didLag, "test must actually exercise the decode-roundtrip readback path")
+    }
+
     func testLoadSurfacesInvalidManifestEntriesSeparately() async throws {
         let client = try await makeClient()
         let retentionDir = RepoLayout.retentionDirectoryPath(base: basePath)
@@ -127,6 +143,41 @@ final class RetentionManifestRemoteStoreTests: XCTestCase {
         let barrier = try await store(client).loadBarrierSet(expectedRepoID: repoID, month: month)
         XCTAssertFalse(barrier.isComplete)
         XCTAssertEqual(barrier.valid, [valid])
+    }
+
+    func testListedManifestDownloadLaggingWithinGraceResolvesComplete() async throws {
+        let client = try await makeClient()
+        client.setReadAfterWriteGrace(2)
+        let retentionDir = RepoLayout.retentionDirectoryPath(base: basePath)
+        try await client.createDirectory(path: retentionDir)
+        let valid = makeManifest()
+        let validPath = RepoLayout.retentionManifestPath(base: basePath, ref: valid.ref)
+        await client.injectFile(path: validPath, data: try RetentionManifestStore.encode(valid))
+        // Listed but its GET 404s once inside grace; the load must reread rather than mark it vanished.
+        await client.injectDownloadError(.notFound, for: validPath)
+
+        let barrier = try await store(client).loadBarrierSet(expectedRepoID: repoID, month: month)
+
+        XCTAssertTrue(barrier.isComplete)
+        XCTAssertEqual(barrier.valid, [valid])
+    }
+
+    func testListedManifestPersistentNotFoundPastGraceStaysVanished() async throws {
+        let client = try await makeClient()
+        client.setReadAfterWriteGrace(1)
+        let retentionDir = RepoLayout.retentionDirectoryPath(base: basePath)
+        try await client.createDirectory(path: retentionDir)
+        let valid = makeManifest()
+        let validPath = RepoLayout.retentionManifestPath(base: basePath, ref: valid.ref)
+        await client.injectFile(path: validPath, data: try RetentionManifestStore.encode(valid))
+        await client.injectPersistentDownloadError(.notFound, for: validPath)
+
+        let loaded = try await store(client).loadManifests(expectedRepoID: repoID, month: month)
+        let barrier = try await store(client).loadBarrierSet(expectedRepoID: repoID, month: month)
+
+        XCTAssertEqual(loaded.valid, [])
+        XCTAssertEqual(Set(loaded.invalid.map(\.reason)), [.vanishedDuringRead])
+        XCTAssertFalse(barrier.isComplete)
     }
 
     func testDirectoryShapedRetentionManifest_isInvalid() async throws {
@@ -317,6 +368,59 @@ final class RetentionManifestRemoteStoreTests: XCTestCase {
     private let writerB = "22222222-2222-2222-2222-bbbbbbbbbbbb"
     private let runID = "33333333-3333-3333-3333-333333333333"
     private let month = LibraryMonthKey(year: 2026, month: 5)
+}
+
+/// 404s the decode-roundtrip readback GET exactly once (identified by the `retention-manifest-readback`
+/// temp filename) to model a data-path GET that lags behind a byte-verified write on a grace backend.
+private actor DecodeReadbackLagClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated let graceSeconds: TimeInterval
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { graceSeconds }
+
+    private let inner: InMemoryRemoteStorageClient
+    private var injectedReadbackLag = false
+
+    init(inner: InMemoryRemoteStorageClient, graceSeconds: TimeInterval) {
+        self.inner = inner
+        self.graceSeconds = graceSeconds
+    }
+
+    func didInjectReadbackLag() -> Bool { injectedReadbackLag }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        inner.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
+    }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws {
+        try await inner.setModificationDate(date, forPath: path)
+    }
+    func download(remotePath: String, localURL: URL) async throws {
+        if localURL.lastPathComponent.contains("retention-manifest-readback"), !injectedReadbackLag {
+            injectedReadbackLag = true
+            throw RemoteStorageClientError.underlying(NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError))
+        }
+        try await inner.download(remotePath: remotePath, localURL: localURL)
+    }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
 }
 
 private final class PostWriteCorruptingClient: @unchecked Sendable, RemoteStorageClientProtocol {

@@ -139,7 +139,10 @@ extension AssetProcessor {
         if nameCaseSensitivity.foldsCaseForCollisionAvoidance {
             occupiedNameKeys = monthStore.existingCollisionKeys()
         } else {
-            occupiedNameKeys = monthStore.existingFileNames()
+            occupiedNameKeys = RemoteFileNaming.nameKeySet(
+                from: monthStore.existingFileNames(),
+                caseSensitivity: nameCaseSensitivity
+            )
         }
         func nameKey(_ name: String) -> String {
             RemoteFileNaming.nameKey(for: name, caseSensitivity: nameCaseSensitivity)
@@ -810,10 +813,16 @@ extension AssetProcessor {
         )
     }
 
-    /// Semantics are inverted from "trusting": any non-cancellation failure → race assumed
+    /// Semantics are inverted from "trusting": failure to verify → race assumed
     /// so the caller falls back to collision rename. Cancellation propagates as `CancellationError`.
     /// `isConnectionUnavailable` lets callers (wrapper) re-throw transport errors that should
     /// kill the session instead of being treated as "race".
+    ///
+    /// On read-after-write-lag backends a just-written object can be durable yet briefly
+    /// invisible; spend the advertised grace before concluding race so visibility lag isn't
+    /// misread as a peer overwrite (the writer/run-suffixed data path makes a true peer race
+    /// effectively impossible). A confirmed wrong hash or directory at our path is a real
+    /// conflict and returns immediately; zero-grace backends keep their single authoritative probe.
     static func detectRemoteContentRace(
         client: RemoteStorageClientProtocol,
         remotePath: String,
@@ -822,6 +831,52 @@ extension AssetProcessor {
         cancellationController: BackupCancellationController?,
         isConnectionUnavailable: (Error) -> Bool = { _ in false }
     ) async throws -> Bool {
+        let deadline = client.readAfterWriteGraceSeconds > 0
+            ? client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+            : nil
+        var attempt = 0
+        while true {
+            switch try await probeRemoteContentOnce(
+                client: client,
+                remotePath: remotePath,
+                expectedSize: expectedSize,
+                expectedHash: expectedHash,
+                cancellationController: cancellationController,
+                isConnectionUnavailable: isConnectionUnavailable
+            ) {
+            case .matched:
+                return false
+            case .conflict:
+                return true
+            case .notSettled:
+                guard let deadline, Date() < deadline else { return true }
+            }
+            let millis = 200 * (1 << min(attempt, 3))
+            attempt += 1
+            do {
+                try await Task.sleep(nanoseconds: UInt64(millis) * 1_000_000)
+            } catch {
+                throw CancellationError()
+            }
+        }
+    }
+
+    private enum RemoteContentProbeOutcome {
+        case matched
+        /// Confirmed wrong bytes or a directory at our path — a real conflict, never visibility lag.
+        case conflict
+        /// Not visible yet, transient read failure, or unsettled size — may resolve within grace.
+        case notSettled
+    }
+
+    private static func probeRemoteContentOnce(
+        client: RemoteStorageClientProtocol,
+        remotePath: String,
+        expectedSize: Int64,
+        expectedHash: Data,
+        cancellationController: BackupCancellationController?,
+        isConnectionUnavailable: (Error) -> Bool
+    ) async throws -> RemoteContentProbeOutcome {
         try cancellationController?.throwIfCancelled()
         try Task.checkCancellation()
         let entry: RemoteStorageEntry?
@@ -832,11 +887,11 @@ extension AssetProcessor {
                 throw CancellationError()
             }
             if isConnectionUnavailable(error) { throw error }
-            return true
+            return .notSettled
         }
-        guard let entry else { return true }
-        guard !entry.isDirectory else { return true }
-        if entry.size != expectedSize { return true }
+        guard let entry else { return .notSettled }
+        guard !entry.isDirectory else { return .conflict }
+        if entry.size != expectedSize { return .notSettled }
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("upload-verify-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tempURL) }
@@ -847,13 +902,13 @@ extension AssetProcessor {
             try cancellationController?.throwIfCancelled()
             try Task.checkCancellation()
             let actualHash = try Self.contentHash(of: tempURL, cancellationController: cancellationController)
-            return actualHash != expectedHash
+            return actualHash == expectedHash ? .matched : .conflict
         } catch {
             if error is CancellationError || Task.isCancelled || cancellationController?.isCancelled == true {
                 throw CancellationError()
             }
             if isConnectionUnavailable(error) { throw error }
-            return true
+            return .notSettled
         }
     }
 

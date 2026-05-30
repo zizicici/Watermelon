@@ -146,18 +146,12 @@ struct RepoCheckpointService: Sendable {
         let snapshotName = RepoLayout.snapshotFileName(month: month, lamport: lamport, writerID: writerID, runID: runID)
         try await verifyReadback(expected: expected, snapshotName: snapshotName)
 
-        let after = try await RepoMaterializer(client: client, basePath: basePath)
-            .materializeMonth(month, expectedRepoID: repoID)
-        guard let accepted = after.acceptedSnapshotBaselinesByMonth[month],
-              accepted.filename == snapshotName else {
-            throw RepoCheckpointError.notAcceptedAfterWrite(snapshotName: snapshotName)
-        }
-        guard accepted.covered == covered else {
-            throw RepoCheckpointError.acceptedCoverageMismatch(snapshotName: snapshotName)
-        }
-        guard isRetentionEquivalent(before: materialized, after: after, month: month) else {
-            throw RepoCheckpointError.materializeRegression(snapshotName: snapshotName)
-        }
+        let (after, accepted) = try await materializeUntilSnapshotAccepted(
+            month: month,
+            snapshotName: snapshotName,
+            expectedCovered: covered,
+            before: materialized
+        )
         let afterReport = try await monthReport(for: month, materialized: after)
         return RepoCheckpointResult(
             outcome: .writtenAccepted,
@@ -215,6 +209,42 @@ struct RepoCheckpointService: Sendable {
             }
             guard Date() < deadline else {
                 throw RepoCheckpointError.readbackMismatch(snapshotName: snapshotName, reason: lastReason)
+            }
+            let millis = 200 * (1 << min(attempt, 3))
+            attempt += 1
+            try await Task.sleep(nanoseconds: UInt64(millis) * 1_000_000)
+        }
+    }
+
+    // The just-written snapshot is readable by name (verifyReadback proved it) but the
+    // snapshots-directory LIST that materialize relies on can still be stale inside the
+    // backend read-after-write grace window. Retry the accept check until the deadline so
+    // a recoverable visibility lag isn't reported as a checkpoint rejection. The coverage
+    // and regression guards only fire once the snapshot IS accepted — those are logical, not
+    // visibility, failures.
+    private func materializeUntilSnapshotAccepted(
+        month: LibraryMonthKey,
+        snapshotName: String,
+        expectedCovered: CoveredRanges,
+        before: RepoMaterializer.MaterializeOutput
+    ) async throws -> (after: RepoMaterializer.MaterializeOutput, accepted: RepoMaterializer.AcceptedSnapshotBaselineInfo) {
+        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+        var attempt = 0
+        while true {
+            let after = try await RepoMaterializer(client: client, basePath: basePath)
+                .materializeMonth(month, expectedRepoID: repoID)
+            if let accepted = after.acceptedSnapshotBaselinesByMonth[month],
+               accepted.filename == snapshotName {
+                guard accepted.covered == expectedCovered else {
+                    throw RepoCheckpointError.acceptedCoverageMismatch(snapshotName: snapshotName)
+                }
+                guard isRetentionEquivalent(before: before, after: after, month: month) else {
+                    throw RepoCheckpointError.materializeRegression(snapshotName: snapshotName)
+                }
+                return (after, accepted)
+            }
+            guard Date() < deadline else {
+                throw RepoCheckpointError.notAcceptedAfterWrite(snapshotName: snapshotName)
             }
             let millis = 200 * (1 << min(attempt, 3))
             attempt += 1

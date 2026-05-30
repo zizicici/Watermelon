@@ -66,6 +66,120 @@ final class BootstrapStateMachineTests: XCTestCase {
         XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion))
     }
 
+    func testWatermelonPresent_versionLagHiddenOnGraceBackend_returnsV2NotFresh() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        // Backend advertises metadata read-after-write lag; the first version.json metadata read
+        // 404s (just-written manifest still propagating) while the file is genuinely present.
+        client.setReadAfterWriteGrace(2)
+        await client.injectMetadataError(.notFound, for: RepoLayout.versionFilePath(base: basePath))
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "marker-present + version lag-hidden on a grace backend must reconfirm to .v2, not route .fresh")
+    }
+
+    func testWatermelonPresent_versionDownloadLagHiddenOnGraceBackend_returnsV2NotError() async throws {
+        let (client, profile) = await makeFixture()
+        try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        // version.json metadata/list is visible, but the first data-path GET 404s (data-path GET
+        // lagging behind metadata on a grace backend); it becomes readable on retry.
+        client.setReadAfterWriteGrace(2)
+        await client.injectDownloadError(.notFound, for: RepoLayout.versionFilePath(base: basePath))
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "metadata-visible version.json whose download lag-404s within grace must reconfirm to .v2, not abort with a raw error")
+    }
+
+    func testWatermelonPresent_versionStablyAbsentOnGraceBackend_returnsFresh() async throws {
+        // Same grace backend, but version.json is genuinely absent (empty .watermelon). The
+        // reconfirm loop must still settle on .fresh rather than hang or misclassify.
+        let (client, profile) = await makeFixture()
+        try await client.createDirectory(path: "\(basePath)/.watermelon")
+        client.setReadAfterWriteGrace(1)
+
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .fresh)
+    }
+
+    /// A grace backend's base LIST can transiently omit a just-written `.watermelon/` while version.json
+    /// is already readable (direct object reads lead the parent-prefix listing). Inspection must reconfirm
+    /// the marker within grace and route .v2, not demote a live V2 repo to .fresh — a V2-bound syncIndex
+    /// treats .fresh/.v1 as a deterministic format regression and clears the committed view.
+    func testWatermelonMarkerLagOmittedFromBaseListOnGraceBackend_reconfirmsV2NotFresh() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        try await TestFixtures.injectRepoJSON(inner, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectVersionJSON(inner, basePath: basePath)
+        let client = BaseListMarkerOmitWrapper(inner: inner, grace: 2)
+        let profile = TestFixtures.makeServerProfile(
+            id: 1, name: "Test", storageType: .webdav,
+            host: "host", port: 0, shareName: "", basePath: basePath, username: ""
+        )
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "marker lag-omitted from one base LIST on a grace backend must reconfirm to .v2, not route .fresh")
+    }
+
+    /// Same wrapper but zero grace: a marker-absent base LIST is authoritative and must route .fresh
+    /// without spending any reconfirm budget.
+    func testWatermelonMarkerOmittedFromBaseListOnZeroGraceBackend_routesFresh() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        try await TestFixtures.injectRepoJSON(inner, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectVersionJSON(inner, basePath: basePath)
+        let client = BaseListMarkerOmitWrapper(inner: inner, grace: 0)
+        let profile = TestFixtures.makeServerProfile(
+            id: 1, name: "Test", storageType: .webdav,
+            host: "host", port: 0, shareName: "", basePath: basePath, username: ""
+        )
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .fresh,
+                       "zero-grace backend: a marker-absent base LIST is authoritative")
+    }
+
+    /// Mixed-lag marker omission: the base LIST omits `.watermelon/` AND the first version.json data-path
+    /// GET 404s behind already-visible metadata. The reconfirm must use the download-lag-tolerant loader so
+    /// it reconfirms `.v2` within grace instead of aborting inspection with the raw download not-found.
+    func testWatermelonMarkerLagOmitted_versionDownloadLag404OnGraceBackend_reconfirmsV2() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        try await TestFixtures.injectRepoJSON(inner, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        try await TestFixtures.injectVersionJSON(inner, basePath: basePath)
+        // version.json metadata is visible; the first data-path GET 404s within grace, then resolves.
+        await inner.injectDownloadError(.notFound, for: RepoLayout.versionFilePath(base: basePath))
+        let client = BaseListMarkerOmitWrapper(inner: inner, grace: 2)
+        let profile = TestFixtures.makeServerProfile(
+            id: 1, name: "Test", storageType: .webdav,
+            host: "host", port: 0, shareName: "", basePath: basePath, username: ""
+        )
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "marker omitted + version.json download lag-404 within grace must reconfirm to .v2, not abort with the raw download error")
+    }
+
+    /// A genuinely-fresh empty remote on a high-grace backend has no `.watermelon/` and no version.json,
+    /// so the marker-absent reconfirm must settle on `.fresh` after only a few bounded reads — not poll the
+    /// full read-after-write ceiling (which would stall every empty/legacy open by ~grace seconds).
+    func testFreshEmptyRemoteOnHighGraceBackend_routesFreshWithBoundedReads() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        try await inner.createDirectory(path: basePath)
+        let client = MetadataCountingClient(inner: inner, grace: 30)
+        let profile = TestFixtures.makeServerProfile(
+            id: 1, name: "Test", storageType: .webdav,
+            host: "host", port: 0, shareName: "", basePath: basePath, username: ""
+        )
+        let outcome = try await format.inspectRemoteFormat(client: client, profile: profile)
+        XCTAssertEqual(outcome, .fresh)
+        let reads = await client.metadataCalls()
+        XCTAssertLessThanOrEqual(reads, 8,
+                                 "marker-absent reconfirm on a fresh remote must be bounded, not a full-grace-ceiling poll (got \(reads) reads)")
+    }
+
     func testWatermelonPresent_versionHigher_returnsUnsupported() async throws {
         let (client, profile) = await makeFixture()
         try await TestFixtures.injectRepoJSON(client, basePath: basePath, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -850,6 +964,19 @@ final class BootstrapStateMachineTests: XCTestCase {
         XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion))
     }
 
+    func testProfileless_versionDownloadLagHiddenOnGraceBackend_returnsV2() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try? await client.connect()
+        try await TestFixtures.injectVersionJSON(client, basePath: basePath)
+        // Metadata precheck sees version.json; the first download 404s within grace, then resolves.
+        client.setReadAfterWriteGrace(2)
+        await client.injectDownloadError(.notFound, for: RepoLayout.versionFilePath(base: basePath))
+
+        let outcome = try await format.inspectRemoteFormatProfileless(client: client, basePath: basePath)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "profileless verify must reconfirm a lag-404'd version download to .v2, not abort")
+    }
+
     func testProfileless_versionHigher_returnsUnsupported() async throws {
         let client = InMemoryRemoteStorageClient()
         try? await client.connect()
@@ -858,4 +985,243 @@ final class BootstrapStateMachineTests: XCTestCase {
         let outcome = try await format.inspectRemoteFormatProfileless(client: client, basePath: basePath)
         XCTAssertEqual(outcome, .unsupported(minAppVersion: "9.9.9"))
     }
+
+    /// Mixed lag: precheck proves version.json metadata, the data-path GET 404s, and a retry's metadata
+    /// read then flaps to not-found mid-grace before resolving. The tolerant proven-metadata loader must
+    /// keep spending the grace budget and reconfirm `.v2`, never demote the proven marker to `.v1`.
+    func testProfileless_versionDownloadLagThenMetadataFlapWithinGrace_returnsV2() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        try await TestFixtures.injectVersionJSON(inner, basePath: basePath)
+        let versionPath = RepoLayout.versionFilePath(base: basePath)
+        // metadata: present (precheck #1), present (first load #2), absent (retry flap #3), present (#4).
+        // download: 404 once (first load), then served.
+        let client = VersionPathFlapClient(
+            inner: inner,
+            targetPath: versionPath,
+            metadataNilCallIndices: [3],
+            downloadNotFoundCallIndices: [1],
+            graceSeconds: 3
+        )
+
+        let outcome = try await format.inspectRemoteFormatProfileless(client: client, basePath: basePath)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "download-lag then metadata flap within grace must reconfirm .v2, not demote to .v1")
+    }
+
+    /// The precheck proves version.json metadata, but the very first tolerant `load()` metadata read
+    /// flaps to not-found before any download. With the proven precheck, that absence is visibility lag,
+    /// not a fresh endpoint — the loader must reconfirm `.v2` within grace, not return `.v1`.
+    func testProfileless_metadataFlapsAbsentOnFirstLoadWithinGrace_returnsV2() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        try await TestFixtures.injectVersionJSON(inner, basePath: basePath)
+        let versionPath = RepoLayout.versionFilePath(base: basePath)
+        // metadata: present (precheck #1), absent (first load #2 flap), present (#3).
+        let client = VersionPathFlapClient(
+            inner: inner,
+            targetPath: versionPath,
+            metadataNilCallIndices: [2],
+            downloadNotFoundCallIndices: [],
+            graceSeconds: 3
+        )
+
+        let outcome = try await format.inspectRemoteFormatProfileless(client: client, basePath: basePath)
+        XCTAssertEqual(outcome, .v2(formatVersion: RepoLayout.formatVersion),
+                       "a metadata flap after a proven precheck must not demote a V2 marker to .v1")
+    }
+
+    /// Once the precheck proved version.json metadata and the marker then stays unreadable past grace,
+    /// the proven-metadata loader must fail closed (throw) rather than returning `.absent`/routing `.v1`.
+    func testProfileless_metadataFlapsAbsentPastGrace_failsClosedNotV1() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        try await TestFixtures.injectVersionJSON(inner, basePath: basePath)
+        let versionPath = RepoLayout.versionFilePath(base: basePath)
+        // metadata: present (precheck #1), then absent from #2 onward; grace too small to recover.
+        let client = VersionPathFlapClient(
+            inner: inner,
+            targetPath: versionPath,
+            metadataNilFromIndex: 2,
+            downloadNotFoundCallIndices: [],
+            graceSeconds: 0.3
+        )
+
+        do {
+            let outcome = try await format.inspectRemoteFormatProfileless(client: client, basePath: basePath)
+            XCTFail("expected fail-closed throw, got \(outcome)")
+        } catch is BackupCompatibilityError {
+            // acceptable fail-closed mapping
+        } catch {
+            // raw fail-closed propagation is also acceptable; the only forbidden outcome is `.v1`.
+        }
+    }
+}
+
+/// Flaps `metadata`/`download` for one target path to model an eventually-consistent grace backend:
+/// metadata can report not-found on chosen call indices (or from a given index onward) and `download`
+/// can 404 on chosen call indices, all against a file whose bytes are present in the inner store.
+private actor VersionPathFlapClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
+    nonisolated let graceSeconds: TimeInterval
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { graceSeconds }
+
+    private let inner: InMemoryRemoteStorageClient
+    private let targetPath: String
+    private let metadataNilCallIndices: Set<Int>
+    private let metadataNilFromIndex: Int?
+    private let downloadNotFoundCallIndices: Set<Int>
+    private var metadataCalls = 0
+    private var downloadCalls = 0
+
+    init(
+        inner: InMemoryRemoteStorageClient,
+        targetPath: String,
+        metadataNilCallIndices: Set<Int> = [],
+        metadataNilFromIndex: Int? = nil,
+        downloadNotFoundCallIndices: Set<Int> = [],
+        graceSeconds: TimeInterval
+    ) {
+        self.inner = inner
+        self.targetPath = targetPath
+        self.metadataNilCallIndices = metadataNilCallIndices
+        self.metadataNilFromIndex = metadataNilFromIndex
+        self.downloadNotFoundCallIndices = downloadNotFoundCallIndices
+        self.graceSeconds = graceSeconds
+    }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        inner.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
+    }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        guard normalize(path) == normalize(targetPath) else { return try await inner.metadata(path: path) }
+        metadataCalls += 1
+        if metadataNilCallIndices.contains(metadataCalls) { return nil }
+        if let from = metadataNilFromIndex, metadataCalls >= from { return nil }
+        return try await inner.metadata(path: path)
+    }
+
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws {
+        try await inner.setModificationDate(date, forPath: path)
+    }
+    func download(remotePath: String, localURL: URL) async throws {
+        guard normalize(remotePath) == normalize(targetPath) else {
+            try await inner.download(remotePath: remotePath, localURL: localURL)
+            return
+        }
+        downloadCalls += 1
+        if downloadNotFoundCallIndices.contains(downloadCalls) {
+            throw RemoteStorageClientError.underlying(NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError))
+        }
+        try await inner.download(remotePath: remotePath, localURL: localURL)
+    }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+
+    nonisolated private func normalize(_ p: String) -> String {
+        let trimmed = p.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard !trimmed.isEmpty, trimmed != "." else { return "/" }
+        let collapsed = trimmed.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+        return "/" + collapsed
+    }
+}
+
+/// Models a grace backend whose parent-prefix LIST omits the just-written `.watermelon/` directory while
+/// the underlying objects (version.json, repo.json) stay metadata/download-readable. Used to prove that
+/// inspection reconfirms the marker against the more-consistent object reads instead of demoting to .fresh.
+private struct BaseListMarkerOmitWrapper: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let grace: TimeInterval
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    var readAfterWriteGraceSeconds: TimeInterval { grace }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        try await inner.list(path: path).filter { !($0.isDirectory && $0.name == RepoLayout.watermelonDirectory) }
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+}
+
+/// Counts `metadata` reads so a test can prove a marker-absent reconfirm on a high-grace backend issues
+/// only a small bounded number of version.json probes rather than polling the full grace ceiling.
+private actor MetadataCountingClient: RemoteStorageClientProtocol {
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated let graceSeconds: TimeInterval
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { graceSeconds }
+
+    private let inner: InMemoryRemoteStorageClient
+    private var metadataCallCount = 0
+
+    init(inner: InMemoryRemoteStorageClient, grace: TimeInterval) {
+        self.inner = inner
+        self.graceSeconds = grace
+    }
+
+    func metadataCalls() -> Int { metadataCallCount }
+
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
+        inner.atomicCreateGuarantee(forFileSize: size, remotePath: remotePath)
+    }
+
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        metadataCallCount += 1
+        return try await inner.metadata(path: path)
+    }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult {
+        try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult {
+        try await inner.moveIfAbsent(from: sourcePath, to: destinationPath)
+    }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
 }

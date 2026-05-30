@@ -45,6 +45,28 @@ final class RepoRetentionBarrierServiceTests: XCTestCase {
         XCTAssertEqual(afterProtected, beforeProtected)
     }
 
+    func testPublisherRetriesStaleRetentionListingWithinGraceThenPublishes() async throws {
+        let inner = try await makeClient()
+        try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0xA7)
+        let checkpoint = try await writeAcceptedCheckpoint(client: inner)
+        let client = BarrierHookClient(inner: inner, readAfterWriteGraceSeconds: 2)
+        let filename = RetentionManifestStore.filename(for: RetentionManifestRef(
+            month: month,
+            lamport: try XCTUnwrap(checkpoint.lamport),
+            writerID: writerA,
+            runIDPrefix: RepoLayout.runIDPrefix(runID)
+        ))
+        // The manifest is readable by name after writeVerified, but the first retention-dir LIST
+        // omits it (visibility lag). The accept loop must retry within grace rather than fail closed.
+        client.hideListEntry(named: filename, path: RepoLayout.retentionDirectoryPath(base: basePath), forFirstListCalls: 1)
+
+        let result = try await service(client: client).publishBarrier(for: checkpoint, respectTaskCancellation: true)
+
+        XCTAssertEqual(result.filename, filename)
+        XCTAssertTrue(result.barrierSet.unionCovered.superset(of: result.manifest.coveredRanges))
+        XCTAssertEqual(result.loadInvalidEntries, [])
+    }
+
     func testPublisherRejectsStaleCheckpointAndDoesNotWriteRetention() async throws {
         let client = try await makeClient()
         try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xB1)
@@ -523,14 +545,27 @@ private final class BarrierHookClient: @unchecked Sendable, RemoteStorageClientP
     private var cancelledAtomicCreateSubstrings: [String] = []
     private var downloadHooks: [DownloadHook] = []
     private var downloadCounts: [String: Int] = [:]
+    private let grace: TimeInterval
+    private var hiddenListEntryName: String?
+    private var hiddenListPath: String?
+    private var hiddenListRemaining = 0
 
-    init(inner: InMemoryRemoteStorageClient) {
+    init(inner: InMemoryRemoteStorageClient, readAfterWriteGraceSeconds: TimeInterval = 0) {
         self.inner = inner
+        self.grace = readAfterWriteGraceSeconds
     }
 
     func cancelNextList(path: String) {
         lock.withLock {
             _ = cancelledListPaths.insert(Self.normalize(path))
+        }
+    }
+
+    func hideListEntry(named name: String, path: String, forFirstListCalls n: Int) {
+        lock.withLock {
+            hiddenListEntryName = name
+            hiddenListPath = Self.normalize(path)
+            hiddenListRemaining = n
         }
     }
 
@@ -561,7 +596,7 @@ private final class BarrierHookClient: @unchecked Sendable, RemoteStorageClientP
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     nonisolated var supportsLivenessSafeOverwriteMove: Bool { true }
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
-    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 0 }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { grace }
     var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
     var supportsLivenessSafeOverwriteUpload: Bool { false }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
@@ -577,7 +612,16 @@ private final class BarrierHookClient: @unchecked Sendable, RemoteStorageClientP
         let normalized = Self.normalize(path)
         let shouldCancel = lock.withLock { cancelledListPaths.remove(normalized) != nil }
         if shouldCancel { throw CancellationError() }
-        return try await inner.list(path: path)
+        let entries = try await inner.list(path: path)
+        return lock.withLock { () -> [RemoteStorageEntry] in
+            guard let name = hiddenListEntryName, hiddenListRemaining > 0,
+                  hiddenListPath == normalized,
+                  entries.contains(where: { $0.name == name }) else {
+                return entries
+            }
+            hiddenListRemaining -= 1
+            return entries.filter { $0.name != name }
+        }
     }
     func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
     func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {

@@ -257,7 +257,8 @@ final class MetadataWriteVerifierTests: XCTestCase {
         let commit = try Self.encodeCommit()
         let local = try writeLocalFile(commit.data)
         defer { deleteFile(local) }
-        await client.injectDownloadError(.transport, for: remotePath)
+        // Persistent so it outlasts the read-after-write grace retry loop and is classified after the deadline.
+        await client.injectPersistentDownloadError(.transport, for: remotePath)
 
         let verifier = MetadataWriteVerifiers.commitAware(
             expectedSha: commit.sha, expectedRowCount: commit.rowCount
@@ -275,11 +276,8 @@ final class MetadataWriteVerifierTests: XCTestCase {
         let commit = try Self.encodeCommit()
         let local = try writeLocalFile(commit.data)
         defer { deleteFile(local) }
-        let rawPermanent = NSError(
-            domain: "com.test.permanent", code: 42,
-            userInfo: [NSLocalizedDescriptionKey: "unrecognized permanent failure"]
-        )
-        await client.injectRawDownloadError(rawPermanent, for: remotePath)
+        // Persistent permission error (non-notFound permanent) survives the grace retry loop.
+        await client.injectPersistentDownloadError(.permission, for: remotePath)
 
         let verifier = MetadataWriteVerifiers.commitAware(
             expectedSha: commit.sha, expectedRowCount: commit.rowCount
@@ -289,6 +287,27 @@ final class MetadataWriteVerifierTests: XCTestCase {
             XCTFail("expected .permanentFailure, got \(outcome)"); return
         }
         XCTAssertEqual(RemoteWriteClassifier.classifyVerifyFailure(underlying), .permanent)
+    }
+
+    func testCommitAware_NotFoundThenVisibleWithinGrace_ReturnsMatched() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(5)
+        let commit = try Self.encodeCommit()
+        let local = try writeLocalFile(commit.data)
+        defer { deleteFile(local) }
+        // First readback 404s (read-after-write visibility lag); the commit is durable and
+        // becomes readable on the retry. One-shot notFound is consumed before the file is served.
+        await client.injectDownloadError(.notFound, for: remotePath)
+        await client.injectFile(path: remotePath, data: commit.data)
+
+        let verifier = MetadataWriteVerifiers.commitAware(
+            expectedSha: commit.sha, expectedRowCount: commit.rowCount
+        )
+        let outcome = await verifier.verify(client: client, remotePath: remotePath, localURL: local)
+        guard case .matched = outcome else {
+            XCTFail("expected .matched after read-after-write lag, got \(outcome)"); return
+        }
     }
 
     func testCommitAware_CancellationDuringDownload_ReturnsCancelled() async throws {

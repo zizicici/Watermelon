@@ -166,34 +166,68 @@ private struct CommitAwareVerifier: MetadataWriteVerifier {
         remotePath: String,
         localURL: URL
     ) async -> MetadataWriteVerifyOutcome {
+        var lastError: (any Error)?
+        // A just-written commit can 404 inside the backend read-after-write grace window;
+        // retry the structured readback until the deadline (like ByteEqualityVerifier) so
+        // visibility lag isn't misclassified as a permanent ioFailure that fails the flush.
+        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+        var attempt = 0
+        while true {
+            do {
+                if try await downloadAndCompare(client: client, remotePath: remotePath) {
+                    return .matched
+                }
+                // Content-addressed mismatch is deterministic (full object or 404, never a
+                // stale-but-parseable body), so reseq promptly instead of spending the budget.
+                return .deterministicMismatch
+            } catch is CancellationError {
+                return .cancelled
+            } catch {
+                if RemoteWriteClassifier.isCancellation(error) { return .cancelled }
+                lastError = error
+            }
+            guard Date() < deadline else {
+                if let lastError {
+                    switch RemoteWriteClassifier.classifyVerifyFailure(lastError) {
+                    case .cancelled:
+                        return .cancelled
+                    case .transient:
+                        return .transientFailure(underlying: lastError)
+                    case .permanent:
+                        return .permanentFailure(underlying: lastError)
+                    }
+                }
+                return .deterministicMismatch
+            }
+            do {
+                try await Task.sleep(for: .milliseconds(200 * (1 << min(attempt, 3))))
+            } catch {
+                return .cancelled
+            }
+            attempt += 1
+        }
+    }
+
+    // Returns true on full match, false on a deterministic parse/sha/rowCount mismatch.
+    // Transport failures throw so the caller can retry within the grace window.
+    private func downloadAndCompare(
+        client: any RemoteStorageClientProtocol,
+        remotePath: String
+    ) async throws -> Bool {
         let verifyURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("commit-verify-\(UUID().uuidString).jsonl")
         defer { try? FileManager.default.removeItem(at: verifyURL) }
-        do {
-            try await client.download(remotePath: remotePath, localURL: verifyURL)
-        } catch is CancellationError {
-            return .cancelled
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { return .cancelled }
-            switch RemoteWriteClassifier.classifyVerifyFailure(error) {
-            case .cancelled:
-                return .cancelled
-            case .transient:
-                return .transientFailure(underlying: error)
-            case .permanent:
-                return .permanentFailure(underlying: error)
-            }
-        }
+        try await client.download(remotePath: remotePath, localURL: verifyURL)
         let parsed: CommitFile
         do {
             parsed = try CommitLogReader.parse(localURL: verifyURL)
         } catch {
-            return .deterministicMismatch
+            return false
         }
         if parsed.sha256Hex.lowercased() != expectedSha.lowercased() || parsed.rowCount != expectedRowCount {
-            return .deterministicMismatch
+            return false
         }
-        return .matched
+        return true
     }
 }
 

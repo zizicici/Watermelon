@@ -238,38 +238,71 @@ final class RestoreService {
         localURL: URL
     ) async throws {
         let candidatePaths = [instance.remoteRelativePath] + instance.alternateRemoteRelativePaths
+        // A just-committed object (e.g. a single-part create) can be durable yet briefly unreadable
+        // inside the backend's advertised read-after-write window. Retry the candidate set within
+        // grace when every failure was a data-path not-found; proven wrong bytes (size/hash mismatch)
+        // never grace-retry since waiting cannot heal them.
+        let graceDeadline = storageClient.readAfterWriteGraceSeconds > 0
+            ? storageClient.metadataReadAfterWriteDeadline(floorSeconds: 1)
+            : nil
         var lastError: Error?
-        for path in candidatePaths {
-            let remotePath = RemotePathBuilder.absolutePath(
-                basePath: profile.basePath,
-                remoteRelativePath: path
-            )
-            do {
-                try? FileManager.default.removeItem(at: localURL)
-                try await storageClient.download(remotePath: remotePath, localURL: localURL)
-                if let mismatch = try Self.contentMismatchReason(
-                    localURL: localURL,
-                    expectedSize: instance.fileSize,
-                    expectedHash: instance.resourceHash
-                ) {
-                    print("[RestoreService]   download integrity mismatch: \(instance.fileName), remotePath=\(remotePath), \(mismatch)")
+        // Proven wrong bytes cannot heal by waiting; keep the strongest mismatch to surface over any 404.
+        var integrityMismatch: Error?
+        var attempt = 0
+        while true {
+            var sawNotFoundLag = false
+            var allFailuresWereNotFound = true
+            for path in candidatePaths {
+                let remotePath = RemotePathBuilder.absolutePath(
+                    basePath: profile.basePath,
+                    remoteRelativePath: path
+                )
+                do {
                     try? FileManager.default.removeItem(at: localURL)
-                    lastError = NSError(
-                        domain: "RestoreService",
-                        code: -10,
-                        userInfo: [NSLocalizedDescriptionKey: "downloaded bytes don't match manifest (\(mismatch))"]
-                    )
-                    continue
+                    try await storageClient.download(remotePath: remotePath, localURL: localURL)
+                    if let mismatch = try Self.contentMismatchReason(
+                        localURL: localURL,
+                        expectedSize: instance.fileSize,
+                        expectedHash: instance.resourceHash
+                    ) {
+                        print("[RestoreService]   download integrity mismatch: \(instance.fileName), remotePath=\(remotePath), \(mismatch)")
+                        try? FileManager.default.removeItem(at: localURL)
+                        let mismatchError = NSError(
+                            domain: "RestoreService",
+                            code: -10,
+                            userInfo: [NSLocalizedDescriptionKey: "downloaded bytes don't match manifest (\(mismatch))"]
+                        )
+                        lastError = mismatchError
+                        if integrityMismatch == nil { integrityMismatch = mismatchError }
+                        allFailuresWereNotFound = false
+                        continue
+                    }
+                    return
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    lastError = error
+                    if isStorageNotFoundError(error) {
+                        sawNotFoundLag = true
+                    } else {
+                        allFailuresWereNotFound = false
+                    }
+                    print("[RestoreService]   download FAILED: \(instance.fileName), remotePath=\(remotePath), reason=\(error.localizedDescription)")
                 }
-                return
-            } catch is CancellationError {
-                throw CancellationError()
+            }
+            // Grace-retry only a pure read-after-write lag: every failure was a data-path 404 and no
+            // candidate proved wrong bytes. A deterministic mismatch is surfaced over any later 404.
+            guard let graceDeadline, sawNotFoundLag, allFailuresWereNotFound, Date() < graceDeadline else {
+                throw integrityMismatch ?? lastError ?? CancellationError()
+            }
+            let millis = 200 * (1 << min(attempt, 3))
+            attempt += 1
+            do {
+                try await Task.sleep(nanoseconds: UInt64(millis) * 1_000_000)
             } catch {
-                lastError = error
-                print("[RestoreService]   download FAILED: \(instance.fileName), remotePath=\(remotePath), reason=\(error.localizedDescription)")
+                throw CancellationError()
             }
         }
-        throw lastError ?? CancellationError()
     }
 
     /// Returns nil when the file matches both expected size and (when known) hash.

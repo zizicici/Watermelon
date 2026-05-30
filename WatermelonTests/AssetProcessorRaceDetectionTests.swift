@@ -110,6 +110,65 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
         XCTAssertTrue(race, "download failure during hash verify must trigger collision rename")
     }
 
+    func testNoRace_metadataLagThenVisible_graceBackend_returnsFalse() async throws {
+        let bytes = Data(repeating: 0xAB, count: 256)
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(5)
+        await client.injectFile(path: remotePath, data: bytes)
+        // One-shot metadata error simulates the object being durable but not yet visible.
+        await client.injectMetadataError(.transport, for: remotePath)
+
+        let race = try await AssetProcessor.detectRemoteContentRace(
+            client: client,
+            remotePath: remotePath,
+            expectedSize: Int64(bytes.count),
+            expectedHash: Self.sha256(bytes),
+            cancellationController: nil
+        )
+        XCTAssertFalse(race, "metadata visibility lag inside grace must reconfirm to our bytes, not race")
+    }
+
+    func testNoRace_downloadLagThenVisible_graceBackend_returnsFalse() async throws {
+        let bytes = Data(repeating: 0xAB, count: 256)
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(5)
+        await client.injectFile(path: remotePath, data: bytes)
+        // One-shot download error simulates a GET that hasn't propagated yet.
+        await client.injectDownloadError(.transport, for: remotePath)
+
+        let race = try await AssetProcessor.detectRemoteContentRace(
+            client: client,
+            remotePath: remotePath,
+            expectedSize: Int64(bytes.count),
+            expectedHash: Self.sha256(bytes),
+            cancellationController: nil
+        )
+        XCTAssertFalse(race, "download visibility lag inside grace must reconfirm, not race")
+    }
+
+    func testRace_wrongHashOnGraceBackend_returnsTrueWithoutBurningGrace() async throws {
+        let theirBytes = Data(repeating: 0xCD, count: 256)
+        let ourBytes = Data(repeating: 0xAB, count: 256)
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        await client.injectFile(path: remotePath, data: theirBytes)
+
+        let start = Date()
+        let race = try await AssetProcessor.detectRemoteContentRace(
+            client: client,
+            remotePath: remotePath,
+            expectedSize: Int64(ourBytes.count),
+            expectedHash: Self.sha256(ourBytes),
+            cancellationController: nil
+        )
+        XCTAssertTrue(race, "confirmed wrong hash is a real conflict even on a grace backend")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 10,
+                          "wrong hash must return immediately, not wait out the grace window")
+    }
+
     /// U01: V2 finalize no longer commits per-asset; it enqueues a hash-index intent for
     /// post-batch-commit drain. This test verifies the V1 finalize path keeps its prior contract:
     /// commit-call → publish → inline hash-index write, with a thrown commit blocking the write.

@@ -124,7 +124,9 @@ struct RepoIdentityAuthority: Sendable {
         for filename in try await commitFilenames {
             guard RepoLayout.parseCommitFilename(filename) != nil else { continue }
             do {
-                let file = try await commitReader.read(filename: filename)
+                let file = try await Self.readSpendingGraceOnNotFound(client: effectiveClient) {
+                    try await commitReader.read(filename: filename)
+                }
                 repoIDs.insert(file.header.repoID)
             } catch is CancellationError {
                 throw CancellationError()
@@ -138,7 +140,9 @@ struct RepoIdentityAuthority: Sendable {
         for filename in try await snapshotFilenames {
             guard RepoLayout.parseSnapshotFilename(filename) != nil else { continue }
             do {
-                let file = try await snapshotReader.read(filename: filename)
+                let file = try await Self.readSpendingGraceOnNotFound(client: effectiveClient) {
+                    try await snapshotReader.read(filename: filename)
+                }
                 repoIDs.insert(file.header.repoID)
             } catch is CancellationError {
                 throw CancellationError()
@@ -150,5 +154,34 @@ struct RepoIdentityAuthority: Sendable {
             }
         }
         return repoIDs
+    }
+
+    // A listed commit/snapshot can 404 on GET inside the backend read-after-write window. Spend the
+    // grace budget on a `.notFound` before letting the caller skip it; otherwise a lagging-but-listed
+    // sole data file would scan to empty and route the repo to `damagedV2Repo`. Corrupt-file errors
+    // and post-grace not-found still surface immediately so the caller's skip/fail-closed paths hold.
+    private static func readSpendingGraceOnNotFound<T>(
+        client: any RemoteStorageClientProtocol,
+        _ read: @Sendable () async throws -> T
+    ) async throws -> T {
+        do {
+            return try await read()
+        } catch let error as RepoJSONLReadError {
+            guard case .notFound = error, client.readAfterWriteGraceSeconds > 0 else { throw error }
+            let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+            var lastError: Error = error
+            var attempt = 0
+            while Date() < deadline {
+                try await Task.sleep(nanoseconds: UInt64(200 * (1 << min(attempt, 3))) * 1_000_000)
+                attempt += 1
+                do {
+                    return try await read()
+                } catch let retryError as RepoJSONLReadError {
+                    guard case .notFound = retryError else { throw retryError }
+                    lastError = retryError
+                }
+            }
+            throw lastError
+        }
     }
 }

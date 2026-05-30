@@ -59,7 +59,7 @@ actor RepoBootstrap {
             try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
             try await client.createDirectory(path: RepoLayout.identityDirectoryPath(base: basePath))
 
-            let firstFinalizedRepoID = try await loadFinalizedRepoID()
+            let firstFinalizedRepoID = try await loadFinalizedRepoIDToleratingDownloadVisibilityLag()
 
             let election = try await claims.runOwnClaimElection(
                 requestedRepoID: requestedRepoID,
@@ -68,7 +68,7 @@ actor RepoBootstrap {
             )
 
             // Peer-finalize observation must precede any post-write claim re-read.
-            let refreshedFinalizedRepoID = try await loadFinalizedRepoID()
+            let refreshedFinalizedRepoID = try await loadFinalizedRepoIDToleratingDownloadVisibilityLag()
             var canonical: String
             if let refreshedFinalizedRepoID {
                 canonical = refreshedFinalizedRepoID
@@ -104,7 +104,7 @@ actor RepoBootstrap {
         let canonicalRepoID = try Self.canonicalRepoID(repoID, code: 21)
         do {
             try await client.createDirectory(path: RepoLayout.normalize(joining: [basePath, RepoLayout.watermelonDirectory]))
-            if let finalized = try await loadFinalizedRepoID() {
+            if let finalized = try await loadFinalizedRepoIDToleratingDownloadVisibilityLag() {
                 return finalized
             }
 
@@ -179,6 +179,46 @@ actor RepoBootstrap {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             throw BootstrapError.ioFailure(error)
         }
+    }
+
+    /// A finalized marker can be metadata-visible while its data-path download still 404s inside a
+    /// grace backend's read-after-write window; spend that budget instead of classifying the
+    /// recoverable absence as a damaged repo. Genuine absence (no metadata) returns nil fast, so
+    /// fresh remotes are not slowed; malformed/transport/format errors keep their strict mapping.
+    func loadFinalizedRepoIDToleratingDownloadVisibilityLag() async throws -> String? {
+        do {
+            return try await loadFinalizedRepoID()
+        } catch {
+            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+            guard client.readAfterWriteGraceSeconds > 0, Self.isDownloadVisibilityLag(error) else { throw error }
+            let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+            var lastError = error
+            var attempt = 0
+            while Date() < deadline {
+                try await sleepBeforePostCreateReadRetry(attempt: attempt)
+                attempt += 1
+                do {
+                    if let finalized = try await loadFinalizedRepoID() {
+                        return finalized
+                    }
+                    // The first read proved the finalized marker's metadata exists; a `nil` here means
+                    // the metadata read itself flapped to not-found mid-grace. Inside the window that is
+                    // still visibility lag, not deletion — keep spending the budget rather than demoting
+                    // an authoritative finalized identity to absence. Past the deadline the retained
+                    // download-lag `lastError` rethrows (fail-closed), never a bare nil.
+                } catch {
+                    if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                    guard Self.isDownloadVisibilityLag(error) else { throw error }
+                    lastError = error
+                }
+            }
+            throw lastError
+        }
+    }
+
+    private static func isDownloadVisibilityLag(_ error: Error) -> Bool {
+        guard case BootstrapError.ioFailure(let underlying) = error else { return false }
+        return isStorageNotFoundError(underlying)
     }
 
     private func writeRepoJSONCache(canonical: String, writerID: String, createdAtMs: Int64) async throws {
@@ -291,7 +331,7 @@ actor RepoBootstrap {
 
     /// Finalized identity is authoritative; claims remain the pre-finalization election.
     func loadRepoIDStrict() async throws -> RepoIDLoad {
-        if let finalized = try await loadFinalizedRepoID() {
+        if let finalized = try await loadFinalizedRepoIDToleratingDownloadVisibilityLag() {
             return .found(finalized)
         }
         if let canonical = try await claims.canonicalRepoID() {

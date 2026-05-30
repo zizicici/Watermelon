@@ -4,6 +4,7 @@ import os.log
 private let materializerLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoMaterializer")
 
 actor RepoMaterializer {
+    private let client: any RemoteStorageClientProtocol
     private let snapshotReader: SnapshotReader
     private let commitReader: CommitLogReader
     private let crossRepoIndexReader: RepoCrossRepoIndexReader
@@ -11,6 +12,7 @@ actor RepoMaterializer {
     init(client: any RemoteStorageClientProtocol, basePath: String) {
         // Internal TaskGroups fan out N concurrent read ops; `.serialOnly` backends need serialization.
         let effective = wrapIfSerial(client)
+        self.client = effective
         self.snapshotReader = SnapshotReader(client: effective, basePath: basePath)
         self.commitReader = CommitLogReader(client: effective, basePath: basePath)
         self.crossRepoIndexReader = RepoCrossRepoIndexReader(client: effective, basePath: basePath)
@@ -90,17 +92,53 @@ actor RepoMaterializer {
         } catch {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             guard let race = error as? InternalMetadataReadRace else { throw error }
-            do {
-                let retry = try await materializeOnce(filterMonth: filterMonth, expectedRepoID: expectedRepoID)
-                try validateRetry(retry, recovers: race)
-                return retry
-            } catch {
-                if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                if error is InternalMetadataReadRace {
-                    throw MetadataReadRaceError.metadataChangedAgainAfterRetry
+            // A listed commit/snapshot can 404 on GET inside the backend read-after-write window.
+            // Zero-grace backends keep the single immediate retry (concurrent-delete guard); grace
+            // backends keep retrying within the grace budget before treating the listed file as a
+            // genuine metadata race. A successful read that still lacks coverage means the file was
+            // truly deleted, so validateRetry fails closed without further retry.
+            let deadline: Date? = client.readAfterWriteGraceSeconds > 0
+                ? client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+                : nil
+            var attempt = 0
+            while true {
+                do {
+                    let retry = try await materializeOnce(filterMonth: filterMonth, expectedRepoID: expectedRepoID)
+                    try validateRetry(retry, recovers: race)
+                    return retry
+                } catch {
+                    if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                    if error is InternalMetadataReadRace {
+                        guard let deadline, Date() < deadline else {
+                            throw MetadataReadRaceError.metadataChangedAgainAfterRetry
+                        }
+                        try await Task.sleep(nanoseconds: UInt64(200 * (1 << min(attempt, 3))) * 1_000_000)
+                        attempt += 1
+                        continue
+                    }
+                    // A grace-backend retry listing can omit the same lagging file, so materializeOnce
+                    // succeeds without it and validateRetry reports the original race's coverage still
+                    // missing. Inside the grace window that is list visibility lag, not a confirmed
+                    // delete — keep retrying. Zero-grace backends and the post-deadline case keep the
+                    // immediate fail-closed propagation of the original race error.
+                    if let deadline, Date() < deadline, Self.isRecoverableRetryRaceFailure(error) {
+                        try await Task.sleep(nanoseconds: UInt64(200 * (1 << min(attempt, 3))) * 1_000_000)
+                        attempt += 1
+                        continue
+                    }
+                    throw error
                 }
-                throw error
             }
+        }
+    }
+
+    private static func isRecoverableRetryRaceFailure(_ error: Error) -> Bool {
+        guard let race = error as? MetadataReadRaceError else { return false }
+        switch race {
+        case .requiredCommitVanished, .snapshotVanishedWithoutRecovery:
+            return true
+        case .metadataChangedAgainAfterRetry:
+            return false
         }
     }
 

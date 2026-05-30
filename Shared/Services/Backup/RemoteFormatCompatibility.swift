@@ -78,9 +78,13 @@ struct RemoteFormatCompatibilityService: Sendable {
               meta.size <= Self.maxProfileLessVersionFileBytes else {
             throw BackupCompatibilityError.damagedV2Repo
         }
-        let load: VersionManifestStore.Load
+        let manifest: VersionManifest
         do {
-            load = try await VersionManifestStore(client: client, basePath: basePath).load()
+            // Metadata is proven present above, but the data-path GET (and a later metadata re-read) can
+            // lag on grace backends; treat any subsequent absence as visibility lag and fail closed
+            // rather than demoting a proven V2 marker to `.v1`.
+            manifest = try await VersionManifestStore(client: client, basePath: basePath)
+                .loadAfterProvenMetadataToleratingVisibilityLag()
         } catch let conflict as RepoBootstrap.VersionConflict {
             switch conflict {
             case .unreadable:
@@ -91,19 +95,14 @@ struct RemoteFormatCompatibilityService: Sendable {
         } catch let bootstrap as RepoBootstrap.BootstrapError {
             throw BackupV2RuntimeOpenErrorMapping.translateToCompatibilityError(bootstrapError: bootstrap)
         }
-        switch load {
-        case .absent:
-            return .v1
-        case .found(let manifest):
-            let formatVersion = manifest.formatVersion
-            if formatVersion > RepoLayout.currentSupportedFormatVersion {
-                return .unsupported(minAppVersion: manifest.minAppVersion)
-            }
-            if formatVersion >= 2 {
-                return .v2(formatVersion: formatVersion)
-            }
+        let formatVersion = manifest.formatVersion
+        if formatVersion > RepoLayout.currentSupportedFormatVersion {
             return .unsupported(minAppVersion: manifest.minAppVersion)
         }
+        if formatVersion >= 2 {
+            return .v2(formatVersion: formatVersion)
+        }
+        return .unsupported(minAppVersion: manifest.minAppVersion)
     }
 
     private static let maxProfileLessVersionFileBytes: Int64 = 64 * 1024

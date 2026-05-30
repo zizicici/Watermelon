@@ -99,6 +99,103 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
         }
     }
 
+    func testCommitListedButLaggingWithinGraceRetriesUntilReadable() async throws {
+        let client = try await makeClient()
+        let fp = TestFixtures.assetFingerprint(0x50)
+        try await writeAddCommit(client: client, seq: 1, fingerprint: fp)
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        let race = ReadRaceClient(inner: client)
+        race.setReadAfterWriteGrace(3)
+        // 404 on the initial pass AND the first immediate retry; only the in-grace retry reads it.
+        // Zero-grace code (single immediate retry) would fail closed here.
+        let calls = LockedCounter()
+        race.setDownloadHook(path: commitPath, once: false) { _ in
+            if calls.increment() <= 2 { throw Self.notFoundError() }
+        }
+
+        let output = try await RepoMaterializer(client: race, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNotNil(output.state.months[month]?.assets[fp])
+        XCTAssertTrue((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 1))
+        XCTAssertGreaterThanOrEqual(race.downloadCount(path: commitPath), 3)
+    }
+
+    func testSnapshotListedButLaggingWithinGraceRetriesUntilReadable() async throws {
+        let client = try await makeClient()
+        let fp = TestFixtures.assetFingerprint(0x51)
+        try await writeSnapshot(client: client, lamport: 100, writerID: writerA, coveredSeqs: [], fingerprints: [fp])
+        let snapshotPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 100, writerID: writerA, runID: runID)
+        let race = ReadRaceClient(inner: client)
+        race.setReadAfterWriteGrace(3)
+        let calls = LockedCounter()
+        race.setDownloadHook(path: snapshotPath, once: false) { _ in
+            if calls.increment() <= 2 { throw Self.notFoundError() }
+        }
+
+        let output = try await RepoMaterializer(client: race, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNotNil(output.state.months[month]?.assets[fp])
+        XCTAssertEqual(output.acceptedSnapshotBaselinesByMonth[month]?.lamport, 100)
+        XCTAssertGreaterThanOrEqual(race.downloadCount(path: snapshotPath), 3)
+    }
+
+    func testCommitListedThenRetryListingOmitsThenReappearsWithinGraceSucceeds() async throws {
+        let client = try await makeClient()
+        let fp = TestFixtures.assetFingerprint(0x60)
+        try await writeAddCommit(client: client, seq: 1, fingerprint: fp)
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        let commitFilename = RepoLayout.commitFileName(month: month, writerID: writerA, seq: 1)
+        let race = ReadRaceClient(inner: client)
+        race.setReadAfterWriteGrace(3)
+        // Pass 1: listed + GET 404. Pass 2 retry: listing omits the same file, so validateRetry
+        // reports the original commit's coverage missing (MetadataReadRaceError, not the internal
+        // race). The grace loop must keep retrying; pass 3 lists it again and the GET succeeds.
+        race.setListHook(path: RepoLayout.commitsDirectoryPath(base: basePath)) { callIndex, entries in
+            callIndex == 2 ? entries.filter { $0.name != commitFilename } : entries
+        }
+        race.setDownloadHook(path: commitPath, once: true) { _ in throw Self.notFoundError() }
+
+        let output = try await RepoMaterializer(client: race, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNotNil(output.state.months[month]?.assets[fp])
+        XCTAssertTrue((output.coveredByMonth[month] ?? .empty).contains(writerID: writerA, seq: 1))
+        XCTAssertGreaterThanOrEqual(race.listCount(path: RepoLayout.commitsDirectoryPath(base: basePath)), 3)
+    }
+
+    func testSnapshotListedThenRetryListingOmitsThenReappearsWithinGraceSucceeds() async throws {
+        let client = try await makeClient()
+        let fp = TestFixtures.assetFingerprint(0x61)
+        try await writeSnapshot(client: client, lamport: 100, writerID: writerA, coveredSeqs: [], fingerprints: [fp])
+        let snapshotPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 100, writerID: writerA, runID: runID)
+        let snapshotFilename = RepoLayout.snapshotFileName(month: month, lamport: 100, writerID: writerA, runID: runID)
+        let race = ReadRaceClient(inner: client)
+        race.setReadAfterWriteGrace(3)
+        race.setListHook(path: RepoLayout.snapshotsDirectoryPath(base: basePath)) { callIndex, entries in
+            callIndex == 2 ? entries.filter { $0.name != snapshotFilename } : entries
+        }
+        race.setDownloadHook(path: snapshotPath, once: true) { _ in throw Self.notFoundError() }
+
+        let output = try await RepoMaterializer(client: race, basePath: basePath).materialize(expectedRepoID: repoID)
+
+        XCTAssertNotNil(output.state.months[month]?.assets[fp])
+        XCTAssertEqual(output.acceptedSnapshotBaselinesByMonth[month]?.lamport, 100)
+        XCTAssertGreaterThanOrEqual(race.listCount(path: RepoLayout.snapshotsDirectoryPath(base: basePath)), 3)
+    }
+
+    func testCommitPersistentNotFoundPastGraceFailsClosed() async throws {
+        let client = try await makeClient()
+        client.setReadAfterWriteGrace(1)
+        try await writeAddCommit(client: client, seq: 1, fingerprint: TestFixtures.assetFingerprint(0x52))
+        let commitPath = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        await client.injectPersistentDownloadError(.notFound, for: commitPath)
+
+        do {
+            _ = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+            XCTFail("expected metadataChangedAgainAfterRetry after grace budget is spent")
+        } catch RepoMaterializer.MetadataReadRaceError.metadataChangedAgainAfterRetry {
+        }
+    }
+
     func testUnclassifiedCommitReadErrorFailsWithoutRestart() async throws {
         let client = try await makeClient()
         try await writeAddCommit(client: client, seq: 1, fingerprint: TestFixtures.assetFingerprint(0x14))
@@ -361,6 +458,37 @@ final class RepoMaterializerReadRaceTests: XCTestCase {
         XCTAssertEqual(resolution.suggested, repoID)
     }
 
+    func testIdentityScanSpendsGraceOnSoleLaggingListedMetadata() async throws {
+        let client = try await makeClient()
+        client.setReadAfterWriteGrace(2)
+        // The only V2 data file is listed but its GET 404s once inside grace. Skipping it outright
+        // would scan to empty while the directory is non-empty, routing the repo to damagedV2Repo.
+        try await writeAddCommit(client: client, seq: 1, fingerprint: TestFixtures.assetFingerprint(0x33))
+        let path = RepoLayout.commitFilePath(base: basePath, month: month, writerID: writerA, seq: 1)
+        await client.injectDownloadError(.notFound, for: path)
+        let identity = RepoIdentity(database: databaseManager)
+        let profileID = try TestFixtures.insertServerProfile(
+            in: databaseManager,
+            writerID: writerA,
+            basePath: basePath,
+            storageType: .webdav
+        )
+
+        let resolution = try await RepoIdentityAuthority(
+            context: RepoIdentityAuthorityContext(
+                profileID: profileID,
+                writerID: writerA,
+                basePath: basePath,
+                dataClient: client,
+                identity: identity,
+                format: RemoteFormatCompatibilityService()
+            )
+        ).resolve()
+
+        XCTAssertEqual(resolution.data, repoID)
+        XCTAssertEqual(resolution.suggested, repoID)
+    }
+
     func testCrossMonthObservedSeqDoesNotRecoverVanishedCommit() async throws {
         let otherMonth = LibraryMonthKey(year: 2026, month: 2)
         let client = try await makeClient()
@@ -530,17 +658,22 @@ private final class ReadRaceClient: @unchecked Sendable, RemoteStorageClientProt
 
     nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
-    nonisolated var readAfterWriteGraceSeconds: TimeInterval { 0 }
+    nonisolated var readAfterWriteGraceSeconds: TimeInterval { lock.withLock { graceSeconds } }
+    private var graceSeconds: TimeInterval = 0
+    func setReadAfterWriteGrace(_ seconds: TimeInterval) { lock.withLock { graceSeconds = seconds } }
     nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
     nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee {
         .exclusive
     }
+
+    typealias ListHook = @Sendable (_ callIndex: Int, _ entries: [RemoteStorageEntry]) -> [RemoteStorageEntry]
 
     private let inner: InMemoryRemoteStorageClient
     private let lock = NSLock()
     private var listCounts: [String: Int] = [:]
     private var downloadCounts: [String: Int] = [:]
     private var hooks: [String: (once: Bool, hook: DownloadHook)] = [:]
+    private var listHooks: [String: ListHook] = [:]
 
     init(inner: InMemoryRemoteStorageClient) {
         self.inner = inner
@@ -549,6 +682,12 @@ private final class ReadRaceClient: @unchecked Sendable, RemoteStorageClientProt
     func setDownloadHook(path: String, once: Bool = true, hook: @escaping DownloadHook) {
         lock.withLock {
             hooks[Self.normalize(path)] = (once, hook)
+        }
+    }
+
+    func setListHook(path: String, hook: @escaping ListHook) {
+        lock.withLock {
+            listHooks[Self.normalize(path)] = hook
         }
     }
 
@@ -566,8 +705,13 @@ private final class ReadRaceClient: @unchecked Sendable, RemoteStorageClientProt
 
     func list(path: String) async throws -> [RemoteStorageEntry] {
         let key = Self.normalize(path)
-        lock.withLock { listCounts[key, default: 0] += 1 }
-        return try await inner.list(path: path)
+        let (callIndex, hook): (Int, ListHook?) = lock.withLock {
+            listCounts[key, default: 0] += 1
+            return (listCounts[key] ?? 0, listHooks[key])
+        }
+        let entries = try await inner.list(path: path)
+        guard let hook else { return entries }
+        return hook(callIndex, entries)
     }
 
     func metadata(path: String) async throws -> RemoteStorageEntry? {

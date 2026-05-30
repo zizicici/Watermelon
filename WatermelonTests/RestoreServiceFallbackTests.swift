@@ -130,6 +130,82 @@ final class RestoreServiceFallbackTests: XCTestCase {
                        "hash mismatch on primary (same size) must fall back to alternate")
     }
 
+    /// On a grace backend a just-committed object can be durable yet briefly return a data-path 404.
+    /// Restore must retry within the read-after-write window rather than failing the item from one 404.
+    func testGraceBackend_transientNotFound_retriesWithinGraceAndSucceeds() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(5)
+        let bytes = "durable-bytes"
+        await client.injectFile(path: "\(basePath)/2026/01/photo.jpg", contents: bytes)
+        // First GET 404s inside the visibility window; the injected error clears after one throw.
+        await client.injectDownloadError(.notFound, for: "\(basePath)/2026/01/photo.jpg")
+
+        let instance = makeInstance(
+            primary: "2026/01/photo.jpg",
+            alternates: [],
+            fileSize: Int64(bytes.utf8.count),
+            resourceHash: Self.sha256(of: bytes)
+        )
+
+        let tempURL = makeTempURL()
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        try await RestoreService.downloadWithFallback(
+            instance: instance,
+            profile: makeProfile(),
+            storageClient: client,
+            localURL: tempURL
+        )
+
+        let downloaded = try Data(contentsOf: tempURL)
+        XCTAssertEqual(String(data: downloaded, encoding: .utf8), bytes,
+                       "transient data-path 404 within grace must be retried, not treated as durable absence")
+    }
+
+    /// Primary downloads but is corrupt (same-size hash mismatch) and the only alternate is absent (404)
+    /// on a grace backend. Proven wrong bytes cannot heal by waiting, so restore must fail promptly with
+    /// the integrity mismatch — not spend the grace window retrying nor mask it as the alternate's 404.
+    func testGraceBackend_primaryMismatchAlternate404_failsPromptlyWithMismatch() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let goodBytes = "correct-byte" // 12 bytes
+        let badBytes = "wrong-bytes!"  // 12 bytes — same size, different content
+        await client.injectFile(path: "\(basePath)/2026/01/photo.jpg", contents: badBytes)
+        // Alternate path is never injected → genuine 404.
+
+        let instance = makeInstance(
+            primary: "2026/01/photo.jpg",
+            alternates: ["2026/01/photo~widB.jpg"],
+            fileSize: Int64(goodBytes.utf8.count),
+            resourceHash: Self.sha256(of: goodBytes)
+        )
+
+        let tempURL = makeTempURL()
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let start = Date()
+        do {
+            try await RestoreService.downloadWithFallback(
+                instance: instance,
+                profile: makeProfile(),
+                storageClient: client,
+                localURL: tempURL
+            )
+            XCTFail("expected integrity mismatch throw")
+        } catch {
+            let elapsed = Date().timeIntervalSince(start)
+            XCTAssertLessThan(elapsed, 5,
+                              "proven wrong bytes must not spend the read-after-write grace window")
+            let ns = error as NSError
+            XCTAssertEqual(ns.domain, "RestoreService",
+                           "must surface the deterministic mismatch, not the alternate's 404")
+            XCTAssertTrue(ns.localizedDescription.contains("don't match manifest"),
+                          "error should be the integrity mismatch: \(ns.localizedDescription)")
+        }
+    }
+
     func testAllPathsMissing_throwsLastError() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

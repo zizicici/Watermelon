@@ -1024,6 +1024,37 @@ final class V2FlushTests: XCTestCase {
                         "the orphan row's content hash must round-trip exactly — drift would corrupt the snapshot baseline")
     }
 
+    func testV2MonthIndexes_exactMatchBackend_nfdListingDoesNotMarkNfcResourcePresent() throws {
+        // S3 (.caseSensitive, byte-exact): committed resource is at the NFC leaf, but only a
+        // distinct same-size NFD-spelled object is listed. The exact committed key is absent, so
+        // the resource must stay missing — collapsing NFC/NFD would bind dedup to absent bytes.
+        let hash = TestFixtures.fingerprint(0x5A)
+        let nfcPath = "2026/01/caf\u{00E9}.jpg"
+        let nfdLeaf = "cafe\u{0301}.jpg"
+
+        var materialized = RepoMonthState.empty
+        materialized.resources[nfcPath] = SnapshotResourceRow(
+            physicalRemotePath: nfcPath,
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 0,
+            crypto: nil
+        )
+
+        let indexes = V2MonthIndexes(
+            year: year, month: month,
+            materializedState: materialized,
+            remoteFilesByName: [nfdLeaf: MonthManifestStore.RemoteFileMetadata(size: 100)],
+            verifiedMissingHashes: nil,
+            nameCase: .caseSensitive
+        )
+
+        XCTAssertNil(indexes.findResourceByHash(hash),
+            "exact-match backend must not treat a same-size NFD object as the committed NFC key")
+    }
+
     func testFlushV2_postTombstoneOrphanResource_survivesAcrossFlushes() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

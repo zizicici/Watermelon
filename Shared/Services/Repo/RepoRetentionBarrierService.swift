@@ -118,7 +118,12 @@ struct RepoRetentionBarrierService: Sendable {
             )
             let store = RetentionManifestRemoteStore(client: client, basePath: basePath)
             let write = try await store.writeVerified(manifest, respectTaskCancellation: respectTaskCancellation)
-            let loaded = try await store.loadBarrierSet(expectedRepoID: repoID, month: checkpoint.month)
+            let loaded = try await loadBarrierSetUntilManifestVisible(
+                store: store,
+                month: checkpoint.month,
+                manifest: manifest,
+                writtenFilename: write.filename
+            )
             guard loaded.valid.contains(manifest) else {
                 throw RepoRetentionBarrierError.invalidBarrierSet(loaded.invalid)
             }
@@ -139,6 +144,31 @@ struct RepoRetentionBarrierService: Sendable {
         } catch {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             throw error
+        }
+    }
+
+    // writeVerified proved the manifest is readable by name, but loadBarrierSet rediscovers it
+    // through a retention-directory LIST that can still be stale inside the backend read-after-write
+    // grace window. Retry while the only obstruction is the just-written manifest's own absence /
+    // vanished-during-read; real invalid siblings stay observed so the caller's guards fail closed.
+    private func loadBarrierSetUntilManifestVisible(
+        store: RetentionManifestRemoteStore,
+        month: LibraryMonthKey,
+        manifest: RetentionManifest,
+        writtenFilename: String
+    ) async throws -> RetentionManifestBarrierLoadResult {
+        let deadline = client.metadataReadAfterWriteDeadline(floorSeconds: 1)
+        var attempt = 0
+        while true {
+            let loaded = try await store.loadBarrierSet(expectedRepoID: repoID, month: month)
+            let onlySelfVisibilityLag = !loaded.valid.contains(manifest)
+                && loaded.invalid.allSatisfy { $0.filename == writtenFilename && $0.reason == .vanishedDuringRead }
+            if !onlySelfVisibilityLag || Date() >= deadline {
+                return loaded
+            }
+            let millis = 200 * (1 << min(attempt, 3))
+            attempt += 1
+            try await Task.sleep(nanoseconds: UInt64(millis) * 1_000_000)
         }
     }
 }

@@ -32,6 +32,11 @@ actor RepoVerifyMonthService {
         }
     }
 
+    /// Read-after-write lag only hides a *recently* written file; future timestamps (peer clock skew) count as fresh.
+    static func isWithinGraceWindow(backedUpAtMs: Int64, now: Date, graceSeconds: TimeInterval) -> Bool {
+        now.timeIntervalSince1970 - Double(backedUpAtMs) / 1000.0 <= graceSeconds
+    }
+
     init(client: any RemoteStorageClientProtocol, basePath: String, expectedRepoID: String) {
         self.client = client
         self.basePath = basePath
@@ -98,36 +103,65 @@ actor RepoVerifyMonthService {
         } catch {
             if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
             if isStorageNotFoundError(error) {
-                // A transient 404 on a month dir that the manifest expects to be populated
-                // would otherwise tombstone healthy bytes. Refuse to classify as missing.
-                if !state.resources.isEmpty {
+                if state.resources.isEmpty {
+                    return { _ in .missing }
+                }
+                let graceSeconds = client.readAfterWriteGraceSeconds
+                // Zero-grace: a whole-month 404 is treated conservatively as a transient probe failure
+                // rather than tombstoning every recorded resource off one listing.
+                guard graceSeconds > 0 else {
                     return { _ in .inconclusive(.probeFailure) }
                 }
-                return { _ in .missing }
+                // Grace backend: gate each resource on freshness, mirroring the file-level recorded-path
+                // probe. An old committed resource whose entire month dir is gone has had ample time to
+                // become consistent → genuinely missing (cleanup-eligible); a within-grace resource could
+                // be a just-written month not yet listed → inconclusive.
+                let now = Date()
+                var withinGraceByHash: [Data: Bool] = [:]
+                for resource in state.resources.values {
+                    let within = Self.isWithinGraceWindow(
+                        backedUpAtMs: resource.backedUpAtMs, now: now, graceSeconds: graceSeconds
+                    )
+                    withinGraceByHash[resource.contentHash] = (withinGraceByHash[resource.contentHash] ?? false) || within
+                }
+                return { hash in
+                    (withinGraceByHash[hash] ?? false) ? .inconclusive(.probeFailure) : .missing
+                }
             }
             throw error
         }
         let nameCase = client.backendNameCaseSensitivity
         var entriesByKey: [String: [(size: Int64, name: String)]] = [:]
+        var entriesByCanonicalKey: [String: [(size: Int64, name: String)]] = [:]
         for entry in entries where !entry.isDirectory {
             entriesByKey[nameCase.presenceKey(for: entry.name), default: []].append((entry.size, entry.name))
+            entriesByCanonicalKey[nameCase.canonicalEquivalenceKey(for: entry.name), default: []].append((entry.size, entry.name))
         }
         struct Expected: Sendable {
             let key: String
+            let canonicalKey: String
             let size: Int64
             let hash: Data
+            let relativePath: String
+            let backedUpAtMs: Int64
         }
         var expectationsByHash: [Data: [Expected]] = [:]
         for resource in state.resources.values {
             let leaf = (resource.physicalRemotePath as NSString).lastPathComponent
             expectationsByHash[resource.contentHash, default: []].append(Expected(
                 key: nameCase.presenceKey(for: leaf),
+                canonicalKey: nameCase.canonicalEquivalenceKey(for: leaf),
                 size: resource.fileSize,
-                hash: resource.contentHash
+                hash: resource.contentHash,
+                relativePath: resource.physicalRemotePath,
+                backedUpAtMs: resource.backedUpAtMs
             ))
         }
         let clientRef = client
         let basePathRef = basePath
+        let graceSeconds = client.readAfterWriteGraceSeconds
+        let graceBackend = graceSeconds > 0
+        let now = Date()
         var verifiedFileCount = 0
         var verifiedByteCount: Int64 = 0
         return { hash in
@@ -136,18 +170,43 @@ actor RepoVerifyMonthService {
             for candidate in candidates {
                 let listed = entriesByKey[candidate.key] ?? []
                 let sizeMatches = listed.filter { $0.size == candidate.size }
-                if sizeMatches.isEmpty { continue }
-                for match in sizeMatches {
+                let probePaths: [String]
+                // A grace recorded-path probe found nothing but the resource is older than the
+                // read-after-write window: the 404 is genuine absence, so let it fall through to
+                // .missing for cleanup instead of looping on .inconclusive forever.
+                var staleRecordedPathProbe = false
+                if sizeMatches.isEmpty {
+                    // Byte-exact key missed. A listed canonically-equivalent same-size leaf (a normalizing
+                    // HFS+/SFTP server that stored our NFC leaf as NFD), or — on a grace backend — a stale
+                    // LIST that hid a just-written file, is only a reason to probe. Probe the *recorded*
+                    // path that restore uses, never a listed sibling: an exact-name backend can list an
+                    // unrelated same-hash orphan under an equivalent spelling while the committed object is
+                    // gone, and proving presence from that orphan marks a non-restorable asset healthy.
+                    let hasCanonicalMatch = !(entriesByCanonicalKey[candidate.canonicalKey] ?? [])
+                        .filter { $0.size == candidate.size }.isEmpty
+                    guard hasCanonicalMatch || graceBackend else { continue }
+                    staleRecordedPathProbe = !Self.isWithinGraceWindow(
+                        backedUpAtMs: candidate.backedUpAtMs, now: now, graceSeconds: graceSeconds
+                    )
+                    probePaths = [RemotePathBuilder.absolutePath(
+                        basePath: basePathRef,
+                        remoteRelativePath: candidate.relativePath
+                    )]
+                } else {
+                    probePaths = sizeMatches.map { match in
+                        RemotePathBuilder.absolutePath(
+                            basePath: basePathRef,
+                            remoteRelativePath: monthRelativePath + "/" + match.name
+                        )
+                    }
+                }
+                for path in probePaths {
                     let candidateSize = max(candidate.size, 0)
                     let fileCap = verifiedFileCount >= Self.contentTrustMaxVerifiedFilesPerMonth
                     let byteCap = verifiedByteCount + candidateSize > Self.contentTrustMaxVerifiedBytesPerMonth
                     if fileCap || byteCap {
                         return .inconclusive(.verifyBudgetExhausted)
                     }
-                    let path = RemotePathBuilder.absolutePath(
-                        basePath: basePathRef,
-                        remoteRelativePath: monthRelativePath + "/" + match.name
-                    )
                     // Transport errors must abort verify rather than be silently classified absent — a false absent here drives tombstone issuance against healthy bytes.
                     do {
                         switch try await RemoteContentTrust.verifyHashResult(
@@ -166,6 +225,9 @@ actor RepoVerifyMonthService {
                         case .noContent:
                             continue
                         case .inconclusive:
+                            // A not-found recorded-path probe past the grace window is genuine absence;
+                            // don't latch inconclusive or cleanup could never tombstone a gone resource.
+                            if staleRecordedPathProbe { continue }
                             inconclusiveReason = .probeFailure
                         }
                     } catch {

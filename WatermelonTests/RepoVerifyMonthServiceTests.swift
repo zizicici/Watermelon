@@ -409,12 +409,13 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         fp: AssetFingerprint,
         hash: Data,
         path: String,
-        writerID: String? = nil
+        writerID: String? = nil,
+        backedUpAtMs: Int64 = 1
     ) async throws {
         let body = CommitAddAssetBody(
             assetFingerprint: fp,
             creationDateMs: nil,
-            backedUpAtMs: 1,
+            backedUpAtMs: backedUpAtMs,
             resources: [
                 CommitResourceEntry(
                     physicalRemotePath: path,
@@ -443,6 +444,123 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
             month: month,
             respectTaskCancellation: false
         )
+    }
+
+    /// A grace backend's month LIST can omit a just-written, durable resource. Verify must probe the
+    /// recorded path directly before concluding absence, not tombstone healthy bytes from one stale LIST.
+    func testGraceBackend_listOmitsPresentResource_recoveredAsHealthy() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        let writer = CommitLogWriter(client: inner, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let path = "2026/01/photo.jpg"
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
+        // File is durable on remote, but the month listing (grace lag) omits it.
+        await inner.injectFile(path: "\(basePath)/\(path)", data: Self.expectedSizedBytes())
+        let client = ListOmitGraceWrapper(inner: inner, omittedPaths: ["\(basePath)/\(path)"], grace: 30)
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        XCTAssertTrue(report.items.isEmpty,
+                      "grace backend: a present resource omitted from one stale LIST must be recovered via direct probe, got \(report.items.map(\.kind))")
+    }
+
+    /// Same path on a grace backend when a *recently* written resource is genuinely unreadable: verify
+    /// must stay inconclusive (not cleanup-eligible) rather than tombstone — list omission within the
+    /// read-after-write window is not proof of absence. Cleanup defers to a later verify outside it.
+    func testGraceBackend_listOmitsFreshUnreadableResource_isInconclusiveNotCleanup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = TestFixtures.assetFingerprint(0x22)
+        let hash = TestFixtures.fingerprint(0x92)
+        let freshMs = Int64(Date().timeIntervalSince1970 * 1000)
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/lagging.jpg", backedUpAtMs: freshMs)
+        // Month dir exists (listing succeeds) but the data file is not present yet.
+        try await client.createDirectory(path: "\(basePath)/2026/01")
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        let cleanupEligible = report.items.filter(\.allowsCleanup)
+        XCTAssertTrue(cleanupEligible.isEmpty,
+                      "grace backend: a freshly-written list-omitted resource must not be cleanup-eligible, got \(report.items.map(\.kind))")
+        XCTAssertEqual(report.items.first?.kind, .verificationIncomplete)
+    }
+
+    /// A grace backend's recorded-path probe must be gated on freshness, not just capability: an OLD
+    /// committed resource whose physical file is genuinely gone has had ample time to become consistent,
+    /// so verify must classify it `.allResourcesGone` (cleanup-eligible) rather than loop on
+    /// `.verificationIncomplete` forever and never tombstone the stale commit/snapshot state.
+    func testGraceBackend_listOmitsStaleUnreadableResource_isCleanupEligible() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = TestFixtures.assetFingerprint(0x23)
+        let hash = TestFixtures.fingerprint(0x93)
+        // backedUpAtMs: 1 — committed in 1970, far outside any read-after-write window.
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/gone.jpg", backedUpAtMs: 1)
+        // Month dir exists (listing succeeds) but the data file is genuinely absent.
+        try await client.createDirectory(path: "\(basePath)/2026/01")
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        XCTAssertEqual(report.items.count, 1)
+        let item = try XCTUnwrap(report.items.first)
+        XCTAssertEqual(item.kind, .allResourcesGone,
+                       "grace backend: an old genuinely-gone resource must be cleanup-eligible, got \(report.items.map(\.kind))")
+        XCTAssertTrue(item.allowsCleanup)
+    }
+
+    /// The whole physical month directory genuinely 404s on a grace backend (not just one file). An OLD
+    /// committed resource must still be cleanup-eligible — the directory-level boundary gets the same
+    /// freshness gate as the file-level recorded-path probe, so verify can finally tombstone gone bytes
+    /// instead of looping `.verificationIncomplete` forever.
+    func testGraceBackend_monthDirNotFound_staleResource_isCleanupEligible() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = TestFixtures.assetFingerprint(0x24)
+        let hash = TestFixtures.fingerprint(0x94)
+        // backedUpAtMs: 1 — committed in 1970, far outside any read-after-write window.
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/gone.jpg", backedUpAtMs: 1)
+        // Entire month directory LIST 404s (directory genuinely removed), not just the file.
+        await client.injectListError(.notFound, for: "\(basePath)/2026/01")
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        XCTAssertEqual(report.items.count, 1)
+        let item = try XCTUnwrap(report.items.first)
+        XCTAssertEqual(item.kind, .allResourcesGone,
+                       "grace backend: an old resource whose whole month dir is gone must be cleanup-eligible, got \(report.items.map(\.kind))")
+        XCTAssertTrue(item.allowsCleanup)
+    }
+
+    /// Same whole-month 404 but the resource was written within the grace window: the directory listing
+    /// may simply be lagging the just-written month, so verify must stay `.verificationIncomplete`
+    /// (not cleanup-eligible) and defer to a later verify outside the window.
+    func testGraceBackend_monthDirNotFound_freshResource_isInconclusiveNotCleanup() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+        let fp = TestFixtures.assetFingerprint(0x25)
+        let hash = TestFixtures.fingerprint(0x95)
+        let freshMs = Int64(Date().timeIntervalSince1970 * 1000)
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/fresh.jpg", backedUpAtMs: freshMs)
+        await client.injectListError(.notFound, for: "\(basePath)/2026/01")
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        let cleanupEligible = report.items.filter(\.allowsCleanup)
+        XCTAssertTrue(cleanupEligible.isEmpty,
+                      "grace backend: a fresh resource whose whole month dir 404s must not be cleanup-eligible, got \(report.items.map(\.kind))")
+        XCTAssertEqual(report.items.first?.kind, .verificationIncomplete)
     }
 
     // P04 R25: nil metadata must be .inconclusive, not .noContent. Callers
@@ -503,6 +621,166 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         XCTAssertEqual(report.items.count, 1)
         XCTAssertEqual(report.items.first?.kind, .verificationIncomplete)
     }
+
+    /// Zero-grace case-sensitive backend (SFTP / case-sensitive external volume) that stores the leaf
+    /// in a different Unicode normalization than the recorded NFC path. Byte-exact presenceKey no longer
+    /// matches the listed leaf, so verify must direct-probe the recorded path before tombstoning healthy bytes.
+    func testZeroGraceCaseSensitive_listNFDvsRecordedNFC_recoveredAsHealthy() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        let writer = CommitLogWriter(client: inner, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let baseLeaf = "cafe\u{0301}.jpg"
+        let nfcLeaf = baseLeaf.precomposedStringWithCanonicalMapping
+        let nfdLeaf = baseLeaf.decomposedStringWithCanonicalMapping
+        XCTAssertNotEqual(Data(nfcLeaf.utf8), Data(nfdLeaf.utf8), "test premise: NFC and NFD bytes differ")
+
+        let path = "2026/01/\(nfcLeaf)"
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: path)
+        await inner.injectFile(path: "\(basePath)/\(path)", data: Self.expectedSizedBytes())
+        // Case-sensitive backend lists the same file under its NFD leaf; metadata/download still serve NFC.
+        let client = ListLeafNormalizationWrapper(inner: inner, recordedLeafToListedLeaf: [nfcLeaf: nfdLeaf])
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        XCTAssertTrue(report.items.isEmpty,
+                      "zero-grace case-sensitive backend: a present resource listed under a canonically-equivalent NFD leaf must be recovered via direct probe, got \(report.items.map(\.kind))")
+    }
+
+    /// Byte-exact backend: the committed (recorded) NFC path is genuinely absent and only a same-size,
+    /// same-hash *orphan* exists under the canonically-equivalent NFD leaf. The canonical-equivalence
+    /// fallback must prove the recorded path before returning present — restore only ever fetches the
+    /// committed path, so hashing the orphan would mark a non-restorable asset healthy.
+    func testZeroGraceCaseSensitive_committedPathAbsent_orphanSiblingSameHash_notHealthy() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        let writer = CommitLogWriter(client: inner, basePath: basePath)
+        let hash = Self.expectedSizedHash
+        let fp = BackupAssetResourcePlanner.assetFingerprint(
+            resourceRoleSlotHashes: [(role: ResourceTypeCode.photo, slot: 0, contentHash: hash)]
+        )
+        let baseLeaf = "cafe\u{0301}.jpg"
+        let nfcLeaf = baseLeaf.precomposedStringWithCanonicalMapping
+        let nfdLeaf = baseLeaf.decomposedStringWithCanonicalMapping
+        XCTAssertNotEqual(Data(nfcLeaf.utf8), Data(nfdLeaf.utf8), "test premise: NFC and NFD bytes differ")
+
+        // Recorded committed path is the NFC leaf; it is genuinely gone (never injected at NFC).
+        try await writeAssetCommit(writer: writer, seq: 1, clock: 1, fp: fp, hash: hash, path: "2026/01/\(nfcLeaf)", backedUpAtMs: 1)
+        let client = OrphanCanonicalSiblingWrapper(
+            inner: inner,
+            monthDirAbs: "\(basePath)/2026/01",
+            orphanLeaf: nfdLeaf,
+            orphanData: Self.expectedSizedBytes()
+        )
+
+        let verifier = RepoVerifyMonthService(client: client, basePath: basePath, expectedRepoID: repoID)
+        let report = try await verifier.verify(month: month)
+        XCTAssertEqual(report.items.first?.kind, .allResourcesGone,
+                       "committed path absent must not be proven present from an uncommitted canonical sibling, got \(report.items.map(\.kind))")
+    }
+}
+
+/// Byte-exact (case-sensitive) backend where the recorded committed path is genuinely absent and only a
+/// same-size, same-hash *orphan* exists under a canonically-equivalent (NFD) leaf. Unlike InMemory's
+/// Swift-String keys (which collapse NFC/NFD), metadata/download here keep the two byte-distinct, so a
+/// recorded-NFC probe 404s while the orphan-NFD probe would succeed. `.watermelon/` paths pass through.
+private struct OrphanCanonicalSiblingWrapper: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let monthDirAbs: String
+    let orphanLeaf: String
+    let orphanData: Data
+
+    private var orphanAbs: String { "\(monthDirAbs)/\(orphanLeaf)" }
+    private func byteEqual(_ a: String, _ b: String) -> Bool { Data(a.utf8) == Data(b.utf8) }
+    private var orphanEntry: RemoteStorageEntry {
+        RemoteStorageEntry(path: orphanAbs, name: orphanLeaf, isDirectory: false,
+                           size: Int64(orphanData.count), creationDate: nil, modificationDate: nil)
+    }
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    var readAfterWriteGraceSeconds: TimeInterval { 0 }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        if byteEqual(path, monthDirAbs) { return [orphanEntry] }
+        return try await inner.list(path: path)
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? {
+        if byteEqual(path, orphanAbs) { return orphanEntry }
+        if path.hasPrefix("\(monthDirAbs)/") { return nil }
+        return try await inner.metadata(path: path)
+    }
+    func download(remotePath: String, localURL: URL) async throws {
+        if byteEqual(remotePath, orphanAbs) { try orphanData.write(to: localURL); return }
+        if remotePath.hasPrefix("\(monthDirAbs)/") {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileNoSuchFileError)
+        }
+        try await inner.download(remotePath: remotePath, localURL: localURL)
+    }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+}
+
+/// Zero-grace, case-sensitive backend whose listing returns a leaf under a canonically-equivalent but
+/// byte-different Unicode normalization than the recorded path, while metadata/download serve the
+/// recorded path. Simulates an HFS+/SFTP endpoint that stores NFD while the manifest recorded NFC.
+private struct ListLeafNormalizationWrapper: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let recordedLeafToListedLeaf: [String: String]
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    var readAfterWriteGraceSeconds: TimeInterval { 0 }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        try await inner.list(path: path).map { entry in
+            guard let listed = recordedLeafToListedLeaf[entry.name] else { return entry }
+            let parent = (entry.path as NSString).deletingLastPathComponent
+            return RemoteStorageEntry(
+                path: parent.isEmpty ? listed : "\(parent)/\(listed)",
+                name: listed,
+                isDirectory: entry.isDirectory,
+                size: entry.size,
+                creationDate: entry.creationDate,
+                modificationDate: entry.modificationDate
+            )
+        }
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
 }
 
 /// Wraps a storage client and returns nil from metadata for specific paths,
@@ -521,6 +799,39 @@ private struct MetadataNilWrapper: RemoteStorageClientProtocol {
         return try await inner.metadata(path: path)
     }
     func list(path: String) async throws -> [RemoteStorageEntry] { try await inner.list(path: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+}
+
+/// Wraps a storage client and drops specific paths from `list` results while still serving them
+/// via metadata/download, simulating a grace backend whose month listing omits a durable file.
+private struct ListOmitGraceWrapper: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let omittedPaths: Set<String>
+    let grace: TimeInterval
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    var readAfterWriteGraceSeconds: TimeInterval { grace }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        try await inner.list(path: path).filter { !omittedPaths.contains($0.path) }
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
     func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
     func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
     func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }

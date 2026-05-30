@@ -436,6 +436,52 @@ final class MigrationMarkerStoreTests: XCTestCase {
         XCTAssertTrue(parsed.isEmpty, "file deleted between list and download must skip, not throw")
     }
 
+    /// A listed marker whose data-path GET 404s inside the grace window must not be silently
+    /// dropped — dropping it flips inspection away from the pending-cleanup route. Spend the grace
+    /// budget and parse it once the bytes become readable.
+    func testParseEntries_listedMarkerDownloadVisibilityLag_resolves() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(30)
+        let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
+        try await client.createDirectory(path: dir)
+        let markerPath = RepoLayout.migrationPhaseMarkerPath(
+            base: basePath, writerID: validWriterID, phase: 2, markerID: "cccc3333-cccc-3333-cccc-333333333333"
+        )
+        try await injectValidMarker(client, path: markerPath, writerID: validWriterID, phase: 2)
+        await client.injectDownloadError(.notFound, for: markerPath)
+
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+        let entries = try await store.migrationsDirectoryEntries()
+        let parsed = try await store.parseEntries(entries)
+        XCTAssertEqual(parsed.count, 1, "a listed marker hidden by a download lag must still parse")
+        XCTAssertEqual(parsed.first?.writerID, validWriterID)
+    }
+
+    /// After grace, a listed-but-unreadable marker must fail closed with `InvalidMarker` so the
+    /// inspection FSM routes to `damagedV2Repo` rather than skipping required migration cleanup.
+    func testParseEntries_listedMarkerPersistentDownloadNotFound_failsClosed() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setReadAfterWriteGrace(0.2)
+        let dir = RepoLayout.migrationsDirectoryPath(base: basePath)
+        try await client.createDirectory(path: dir)
+        let markerPath = RepoLayout.migrationPhaseMarkerPath(
+            base: basePath, writerID: validWriterID, phase: 2, markerID: "cccc3333-cccc-3333-cccc-333333333333"
+        )
+        try await injectValidMarker(client, path: markerPath, writerID: validWriterID, phase: 2)
+        await client.injectPersistentDownloadError(.notFound, for: markerPath)
+
+        let store = MigrationMarkerStore(client: client, basePath: basePath)
+        let entries = try await store.migrationsDirectoryEntries()
+        do {
+            _ = try await store.parseEntries(entries)
+            XCTFail("expected InvalidMarker for a listed marker still unreadable after grace")
+        } catch let invalid as MigrationMarkerStore.InvalidMarker {
+            XCTAssertEqual(invalid.path, markerPath)
+        }
+    }
+
     func testParseEntries_rethrowsNonNotFoundDownloadErrors() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

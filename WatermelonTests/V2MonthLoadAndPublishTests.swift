@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import Watermelon
 
@@ -377,6 +378,132 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
                        "committed view's non-authoritative missing set survives publish")
     }
 
+    // MARK: - Grace backend: data-dir LIST omits a durable resource (dedup fast path must survive)
+
+    func testLoadOrCreate_graceBackend_dataListOmitsDurableResource_findResourceByHashRecovers() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        let v2 = try await makeV2Services(client: inner)
+
+        // Seed a committed resource so the materializer returns a non-empty month state.
+        let bytes = Data("bf2-grace-omit-durable".utf8)
+        let hash = Data(SHA256.hash(data: bytes))
+        let assetFP = TestFixtures.assetFingerprint(0x7A)
+        let physicalPath = "2026/01/photo.jpg"
+        let resource = RemoteManifestResource(
+            year: year, month: month,
+            physicalRemotePath: physicalPath,
+            contentHash: hash,
+            fileSize: Int64(bytes.count),
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 0
+        )
+        let asset = RemoteManifestAsset(
+            year: year, month: month,
+            assetFingerprint: assetFP,
+            creationDateMs: 1_700_000_000_000,
+            backedUpAtMs: 1_700_000_001_000,
+            resourceCount: 1,
+            totalFileSizeBytes: Int64(bytes.count)
+        )
+        let link = RemoteAssetResourceLink(
+            year: year, month: month,
+            assetFingerprint: assetFP,
+            resourceHash: hash,
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            logicalName: "photo.jpg"
+        )
+        let seedStore = try await V2MonthSession.loadOrCreate(
+            client: inner, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        _ = try seedStore.upsertResource(resource)
+        try seedStore.upsertAsset(asset, links: [link])
+        _ = try await seedStore.flushToRemote()
+
+        // The data file is durable on remote, but a stale grace-backend month-dir LIST omits it
+        // while the commit is already materialized.
+        await inner.injectFile(path: "\(basePath)/\(physicalPath)", data: bytes)
+        let client = DataListOmitGraceWrapper(
+            inner: inner,
+            omittedPaths: ["\(basePath)/\(physicalPath)"],
+            grace: 30
+        )
+
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        XCTAssertNotNil(store.findResourceByHash(hash),
+                        "grace backend: a durable resource omitted from one stale data-dir LIST must be recovered via direct probe so the existing-hash dedup fast path is not disabled")
+    }
+
+    /// Zero-grace, exact-match (case-sensitive) normalizing backend: the recorded NFC leaf is listed
+    /// back as NFD, so the byte-exact presence key misses and V2MonthIndexes would mark the resource
+    /// `.missing` — disabling the dedup fast path and driving a redundant re-upload of bytes already
+    /// present. loadOrCreate must hash-probe the recorded path on exact-match backends (not only grace
+    /// backends) so findResourceByHash / findByFileName still recover the committed resource.
+    func testLoadOrCreate_zeroGraceExactMatch_listNFDvsRecordedNFC_findRecovers() async throws {
+        let inner = InMemoryRemoteStorageClient()
+        try await inner.connect()
+        let v2 = try await makeV2Services(client: inner)
+
+        let bytes = Data("bf2-nfc-nfd-dedup".utf8)
+        let hash = Data(SHA256.hash(data: bytes))
+        let assetFP = TestFixtures.assetFingerprint(0x7B)
+        let baseLeaf = "cafe\u{0301}.jpg"
+        let nfcLeaf = baseLeaf.precomposedStringWithCanonicalMapping
+        let nfdLeaf = baseLeaf.decomposedStringWithCanonicalMapping
+        XCTAssertNotEqual(Data(nfcLeaf.utf8), Data(nfdLeaf.utf8), "test premise: NFC and NFD bytes differ")
+        let physicalPath = "2026/01/\(nfcLeaf)"
+        let resource = RemoteManifestResource(
+            year: year, month: month,
+            physicalRemotePath: physicalPath,
+            contentHash: hash,
+            fileSize: Int64(bytes.count),
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 0
+        )
+        let asset = RemoteManifestAsset(
+            year: year, month: month,
+            assetFingerprint: assetFP,
+            creationDateMs: 1_700_000_000_000,
+            backedUpAtMs: 1_700_000_001_000,
+            resourceCount: 1,
+            totalFileSizeBytes: Int64(bytes.count)
+        )
+        let link = RemoteAssetResourceLink(
+            year: year, month: month,
+            assetFingerprint: assetFP,
+            resourceHash: hash,
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            logicalName: nfcLeaf
+        )
+        let seedStore = try await V2MonthSession.loadOrCreate(
+            client: inner, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        _ = try seedStore.upsertResource(resource)
+        try seedStore.upsertAsset(asset, links: [link])
+        _ = try await seedStore.flushToRemote()
+
+        // Bytes are durable under the recorded NFC path; the case-sensitive backend lists the same
+        // file under its NFD leaf, so the byte-exact presence key no longer matches.
+        await inner.injectFile(path: "\(basePath)/\(physicalPath)", data: bytes)
+        let client = DataListLeafNormalizationWrapper(inner: inner, recordedLeafToListedLeaf: [nfcLeaf: nfdLeaf])
+
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+
+        XCTAssertNotNil(store.findResourceByHash(hash),
+                        "zero-grace exact-match backend: a durable resource listed under a canonically-equivalent NFD leaf must be recovered via direct probe so the dedup fast path is not disabled")
+        XCTAssertNotNil(store.findByFileName(nfcLeaf),
+                        "findByFileName must also recover the divergent-normalization resource")
+    }
+
     // MARK: - Helpers
 
     private func makeV2Services(client: InMemoryRemoteStorageClient) async throws -> BackupV2RuntimeServices {
@@ -411,4 +538,82 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
             sweepTask: nil
         )
     }
+}
+
+/// Wraps an InMemory client and drops specific paths from list() while still serving them
+/// via metadata/download, simulating a grace backend whose data-dir listing omits a durable file.
+private struct DataListOmitGraceWrapper: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let omittedPaths: Set<String>
+    let grace: TimeInterval
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    var readAfterWriteGraceSeconds: TimeInterval { grace }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        try await inner.list(path: path).filter { !omittedPaths.contains($0.path) }
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
+}
+
+/// Zero-grace, case-sensitive backend whose listing returns specific leaves under a canonically-equivalent
+/// but byte-different Unicode normalization, while metadata/download still serve the recorded path.
+/// Simulates an HFS+/SFTP endpoint that stores NFD while the manifest recorded NFC.
+private struct DataListLeafNormalizationWrapper: RemoteStorageClientProtocol {
+    let inner: InMemoryRemoteStorageClient
+    let recordedLeafToListedLeaf: [String: String]
+
+    nonisolated var concurrencyMode: ClientConcurrencyMode { .concurrent }
+    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
+    nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .exclusive }
+    nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
+    var readAfterWriteGraceSeconds: TimeInterval { 0 }
+
+    func list(path: String) async throws -> [RemoteStorageEntry] {
+        try await inner.list(path: path).map { entry in
+            guard let listed = recordedLeafToListedLeaf[entry.name] else { return entry }
+            let parent = (entry.path as NSString).deletingLastPathComponent
+            return RemoteStorageEntry(
+                path: parent.isEmpty ? listed : "\(parent)/\(listed)",
+                name: listed,
+                isDirectory: entry.isDirectory,
+                size: entry.size,
+                creationDate: entry.creationDate,
+                modificationDate: entry.modificationDate
+            )
+        }
+    }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await inner.metadata(path: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await inner.download(remotePath: remotePath, localURL: localURL) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws { try await inner.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func atomicCreate(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws -> AtomicCreateResult { try await inner.atomicCreate(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress) }
+    func delete(path: String) async throws { try await inner.delete(path: path) }
+    func exists(path: String) async throws -> Bool { try await inner.exists(path: path) }
+    func createDirectory(path: String) async throws { try await inner.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await inner.move(from: sourcePath, to: destinationPath) }
+    func moveIfAbsent(from sourcePath: String, to destinationPath: String) async throws -> AtomicCreateResult { try await inner.moveIfAbsent(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await inner.copy(from: sourcePath, to: destinationPath) }
+    func connect() async throws { try await inner.connect() }
+    func disconnect() async { await inner.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { try await inner.storageCapacity() }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await inner.setModificationDate(date, forPath: path) }
+    func supportsExclusiveMoveIfAbsent(forDestinationPath path: String) async throws -> Bool { try await inner.supportsExclusiveMoveIfAbsent(forDestinationPath: path) }
+    nonisolated func atomicCreateGuarantee(forFileSize size: Int64, remotePath: String) -> CreateGuarantee { .overwritePossible }
 }
