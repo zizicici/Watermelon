@@ -334,7 +334,7 @@ struct BackupRunPreparationService: Sendable {
         // Verifier needs remote repoID to filter foreign-id commits; absent on a V2 repo means broken identity, refuse.
         let expectedRepoID: String
         do {
-            switch try await RepoCanonicalIdentityReader(client: metadataClient, basePath: basePath).loadCanonical() {
+            switch try await RepoCanonicalIdentityReader(client: metadataClient, basePath: basePath).loadCanonicalProvenV2() {
             case .found(let id):
                 expectedRepoID = id
             case .absent:

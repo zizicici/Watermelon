@@ -97,6 +97,66 @@ final class RepoCanonicalIdentityReaderTests: XCTestCase {
         }
     }
 
+    func testLoadCanonicalProvenV2_GraceBackend_IdentityMetadataLag_RetriesUntilFinalizedAppears() async throws {
+        let client = await makeClient()
+        await client.setReadAfterWriteGrace(5)
+        try await installFinalized(client, repoID: finalizedRepoID)
+        // Finalization marker's metadata is lagging behind the already-visible V2 format marker on
+        // the first read, so the strict load reports `.absent`; it clears (single-shot) and the
+        // marker becomes visible on the next read.
+        await client.injectMetadataError(.notFound, for: RepoLayout.identityFinalizationFilePath(base: basePath))
+        let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
+        let load = try await reader.loadCanonicalProvenV2()
+        XCTAssertEqual(load, .found(finalizedRepoID))
+    }
+
+    func testLoadCanonicalProvenV2_GraceBackend_IdentityMetadataLag_ClaimAppears() async throws {
+        let client = await makeClient()
+        await client.setReadAfterWriteGrace(5)
+        try await installClaim(client, repoID: claimRepoID)
+        // No finalized marker; the identity claim directory listing 404s first (visibility lag) then
+        // resolves — proven-V2 retry must elect the claim rather than report deterministic absence.
+        await client.injectListError(.notFound, for: RepoLayout.identityDirectoryPath(base: basePath))
+        let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
+        let load = try await reader.loadCanonicalProvenV2()
+        XCTAssertEqual(load, .found(claimRepoID))
+    }
+
+    func testLoadCanonicalProvenV2_ZeroGraceBackend_GenuineAbsence_ReturnsAbsentWithoutPolling() async throws {
+        let client = await makeClient()
+        // grace defaults to 0; proven-V2 must not introduce any delay on a zero-grace backend.
+        let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
+        let start = Date()
+        let load = try await reader.loadCanonicalProvenV2()
+        XCTAssertEqual(load, .absent)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
+    }
+
+    func testLoadCanonicalProvenV2_GraceBackend_PersistentAbsence_ReturnsAbsentAfterDeadline() async throws {
+        let client = await makeClient()
+        await client.setReadAfterWriteGrace(1)
+        let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
+        let load = try await reader.loadCanonicalProvenV2()
+        XCTAssertEqual(load, .absent)
+    }
+
+    func testLoadCanonicalProvenV2_MalformedMarker_StaysFailClosed() async throws {
+        let client = await makeClient()
+        await client.setReadAfterWriteGrace(5)
+        await client.injectFile(path: RepoLayout.identityFinalizationFilePath(base: basePath), data: Data("malformed".utf8))
+        let reader = RepoCanonicalIdentityReader(client: client, basePath: basePath)
+        do {
+            _ = try await reader.loadCanonicalProvenV2()
+            XCTFail("expected malformed marker to throw rather than be retried to absence")
+        } catch let bootstrap as RepoBootstrap.BootstrapError {
+            if case .ioFailure(let underlying) = bootstrap {
+                XCTAssertEqual((underlying as NSError).code, 12)
+            } else {
+                XCTFail("expected BootstrapError.ioFailure, got \(bootstrap)")
+            }
+        }
+    }
+
     func testRequireCanonical_FinalizedMarkerMalformed_PropagatesBootstrapError() async throws {
         let client = await makeClient()
         await client.injectFile(path: RepoLayout.identityFinalizationFilePath(base: basePath), data: Data("malformed".utf8))

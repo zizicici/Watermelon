@@ -40,7 +40,7 @@ struct RemoteIndexV2SyncEngine: Sendable {
     ) async throws -> String {
         do {
             return try await RepoCanonicalIdentityReader(client: client, basePath: basePath)
-                .requireCanonical(absentError: {
+                .requireCanonicalProvenV2(absentError: {
                     NSError(
                         domain: Self.missingCanonicalIdentityErrorDomain,
                         code: Self.missingCanonicalIdentityErrorCode,
