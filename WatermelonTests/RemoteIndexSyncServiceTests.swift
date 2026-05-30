@@ -65,6 +65,62 @@ final class RemoteIndexSyncServiceTests: XCTestCase {
         return fp
     }
 
+    // MARK: - withCommittedViewInvalidationOnCompatibilityFailure
+
+    private struct NonCompatibilityError: Error {}
+
+    /// A seeded committed-view asset is the observable proxy for invalidation: the wrapper's
+    /// `invalidateCommittedViewForCompatibilityFailure` resets the view, emptying `fullSnapshot().assets`.
+    func testWrapperInvalidatesCommittedViewWhenBodyThrowsCompatibilityError() async {
+        let service = RemoteIndexSyncService()
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0xF1))
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        do {
+            _ = try await service.withCommittedViewInvalidationOnCompatibilityFailure {
+                throw BackupCompatibilityError.damagedV2Repo
+            }
+            XCTFail("expected the compatibility error to propagate")
+        } catch BackupCompatibilityError.damagedV2Repo {
+            // expected
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
+        XCTAssertTrue(service.fullSnapshot().assets.isEmpty,
+                      "a BackupCompatibilityError from the body must invalidate the committed view exactly once")
+    }
+
+    func testWrapperDoesNotInvalidateCommittedViewWhenBodyThrowsNonCompatibilityError() async {
+        let service = RemoteIndexSyncService()
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0xF2))
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        do {
+            _ = try await service.withCommittedViewInvalidationOnCompatibilityFailure {
+                throw NonCompatibilityError()
+            }
+            XCTFail("expected the non-compatibility error to propagate")
+        } catch is NonCompatibilityError {
+            // expected
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp],
+                       "a non-compatibility error must leave the committed view untouched")
+    }
+
+    func testWrapperPassesSuccessValueThroughWithoutInvalidating() async throws {
+        let service = RemoteIndexSyncService()
+        let fp = seedCompleteAsset(in: service, month: monthA, contentHash: TestFixtures.fingerprint(0xF3))
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp])
+
+        // `try` is required because the body type is `() async throws -> T`, even though this body never throws.
+        let value = try await service.withCommittedViewInvalidationOnCompatibilityFailure { () async throws -> Int in 42 }
+        XCTAssertEqual(value, 42)
+        XCTAssertEqual(Set(service.fullSnapshot().assets.map(\.assetFingerprint)), [fp],
+                       "a successful body must pass its value through and leave the committed view intact")
+    }
+
     func testOptimisticallyAppendedAssetIsCommittedWithoutClearCall() {
         let service = RemoteIndexSyncService()
         let hash = TestFixtures.fingerprint(0xAB)

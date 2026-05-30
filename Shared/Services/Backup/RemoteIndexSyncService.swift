@@ -666,6 +666,18 @@ final class RemoteIndexSyncService: @unchecked Sendable {
         resetCommittedViewAndOverlayFreshness()
     }
 
+    /// Structural form of the compatibility-failure invalidation: invalidates the committed view iff
+    /// `body` throws a `BackupCompatibilityError`, then rethrows. Non-compatibility errors pass through
+    /// untouched. Only wrap regions where every reachable compatibility throw already invalidates today.
+    func withCommittedViewInvalidationOnCompatibilityFailure<T>(_ body: () async throws -> T) async rethrows -> T {
+        do {
+            return try await body()
+        } catch let error as BackupCompatibilityError {
+            invalidateCommittedViewForCompatibilityFailure()
+            throw error
+        }
+    }
+
     private func loadMaterializedCommittedView(_ output: RepoMaterializer.MaterializeOutput) -> RemotePresenceSnapshot {
         optimisticMutationLock.withLock {
             committedView.loadFromMaterialize(output)
