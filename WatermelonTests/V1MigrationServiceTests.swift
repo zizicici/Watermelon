@@ -107,7 +107,7 @@ final class V1MigrationServiceTests: XCTestCase {
         let monthState = try XCTUnwrap(output.state.months[LibraryMonthKey(year: 2025, month: 6)])
         let asset = try XCTUnwrap(monthState.assets[assetFPTyped], "V1 asset must be visible after V2 materialize")
         let resourcePath = "2025/06/\(logicalName)"
-        XCTAssertEqual(monthState.resources[resourcePath]?.contentHash, contentHash)
+        XCTAssertEqual(monthState.resources[RemotePhysicalPathKey(resourcePath)]?.contentHash, contentHash)
         let arKey = AssetResourceKey(assetFingerprint: assetFPTyped, role: ResourceTypeCode.photo, slot: 0)
         XCTAssertEqual(monthState.assetResources[arKey]?.resourceHash, contentHash)
         // Migration writes V2 snapshot rows; stamp is required so future stale-add
@@ -121,7 +121,7 @@ final class V1MigrationServiceTests: XCTestCase {
         // V1 migration) is also gated by opStampPrecedes. Without it, a peer's
         // stale uncovered add at the same physicalRemotePath would silently
         // overwrite the migration row on next materialize.
-        let resourceStamp = try XCTUnwrap(monthState.resources[resourcePath]?.stamp,
+        let resourceStamp = try XCTUnwrap(monthState.resources[RemotePhysicalPathKey(resourcePath)]?.stamp,
                                           "migration-produced resource row must carry an OpStamp")
         XCTAssertEqual(resourceStamp, stamp,
                        "resource row stamp must match its producing asset's stamp (same writer/seq/clock)")

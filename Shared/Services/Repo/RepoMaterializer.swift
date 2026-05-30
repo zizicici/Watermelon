@@ -613,7 +613,7 @@ private struct SnapshotTrustPipeline {
                 materializerLog.warning("reject snapshot with out-of-month resource month=\(month.text, privacy: .public) path=\(resource.physicalRemotePath, privacy: .public)")
                 return nil
             }
-            state.resources[resource.physicalRemotePath] = resource
+            state.resources[RemotePhysicalPathKey(resource.physicalRemotePath)] = resource
         }
         for ar in file.assetResources {
             let key = AssetResourceKey(assetFingerprint: ar.assetFingerprint, role: ar.role, slot: ar.slot)
@@ -817,10 +817,11 @@ private struct MaterializerReplayProjector {
                     stamp: incoming
                 )
                 for resource in body.resources {
-                    let keepExistingResource = state.resources[resource.physicalRemotePath]
+                    let resourceKey = RemotePhysicalPathKey(resource.physicalRemotePath)
+                    let keepExistingResource = state.resources[resourceKey]
                         .map { opStampPrecedes(incoming, $0.stamp) } ?? false
                     if !keepExistingResource {
-                        state.resources[resource.physicalRemotePath] = SnapshotResourceRow(
+                        state.resources[resourceKey] = SnapshotResourceRow(
                             physicalRemotePath: resource.physicalRemotePath,
                             contentHash: resource.contentHash,
                             fileSize: resource.fileSize,
@@ -1026,7 +1027,7 @@ private struct CrossRepoIndexTrustPipeline {
                     baselineStamps[asset.assetFingerprint] = asset.stamp
                 }
                 for resource in section.resources {
-                    monthState.resources[resource.physicalRemotePath] = resource
+                    monthState.resources[RemotePhysicalPathKey(resource.physicalRemotePath)] = resource
                 }
                 for ar in section.assetResources {
                     let key = AssetResourceKey(assetFingerprint: ar.assetFingerprint, role: ar.role, slot: ar.slot)

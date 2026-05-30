@@ -326,7 +326,7 @@ final class RepoCommittedViewPresenceTests: XCTestCase {
         let monthState = RepoMonthState(
             assets: [:],
             resources: [
-                physicalPath: SnapshotResourceRow(
+                RemotePhysicalPathKey(physicalPath): SnapshotResourceRow(
                     physicalRemotePath: physicalPath,
                     contentHash: h,
                     fileSize: 100,

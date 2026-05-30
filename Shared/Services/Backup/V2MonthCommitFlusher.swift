@@ -42,9 +42,9 @@ struct V2MonthCommitFlusher {
         var committedAddAssetClocks: [AssetFingerprint: UInt64] = [:]
         var committedTombstoneClocks: [AssetFingerprint: UInt64] = [:]
         // Build rows with replay's projection so snapshot baselines equal materialized commits.
-        var committedResources: [String: RemoteManifestResource] = [:]
+        var committedResources: [RemotePhysicalPathKey: RemoteManifestResource] = [:]
         // Defer row stamps until seq allocation completes.
-        var committedResourceClocks: [String: UInt64] = [:]
+        var committedResourceClocks: [RemotePhysicalPathKey: UInt64] = [:]
         while true {
             let observedBasis: TombstoneObservationBasis
             if let barrierAwareBasis {
@@ -84,7 +84,8 @@ struct V2MonthCommitFlusher {
                         slot: link.slot,
                         crypto: resource.crypto
                     ))
-                    committedResources[resource.physicalRemotePath] = RemoteManifestResource(
+                    let resourcePathKey = RemotePhysicalPathKey(resource.physicalRemotePath)
+                    committedResources[resourcePathKey] = RemoteManifestResource(
                         year: monthKey.year,
                         month: monthKey.month,
                         physicalRemotePath: resource.physicalRemotePath,
@@ -95,7 +96,7 @@ struct V2MonthCommitFlusher {
                         backedUpAtMs: asset.backedUpAtMs,
                         crypto: resource.crypto
                     )
-                    committedResourceClocks[resource.physicalRemotePath] = clockCursor
+                    committedResourceClocks[resourcePathKey] = clockCursor
                 }
                 ops.append(CommitOp(opSeq: opSeq, clock: clockCursor, body: .addAsset(CommitAddAssetBody(
                     assetFingerprint: fp,

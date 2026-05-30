@@ -98,7 +98,7 @@ final class V2FlushTests: XCTestCase {
         XCTAssertEqual(materializedAsset.backedUpAtMs, asset.backedUpAtMs)
         XCTAssertEqual(materializedAsset.resourceCount, asset.resourceCount)
 
-        let materializedResource = try XCTUnwrap(monthState.resources["2026/01/photo.jpg"],
+        let materializedResource = try XCTUnwrap(monthState.resources[RemotePhysicalPathKey("2026/01/photo.jpg")],
             "resource must be at the physical path we wrote")
         XCTAssertEqual(materializedResource.contentHash, hash,
             "content hash must round-trip exactly — a swap or truncation here means the commit body is wrong")
@@ -668,10 +668,10 @@ final class V2FlushTests: XCTestCase {
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[monthKey])
         // pathA is in the addAsset commit body (lex-min present path for hash).
-        XCTAssertNotNil(monthState.resources[pathA], "committed path must survive")
-        XCTAssertEqual(monthState.resources[pathA]?.contentHash, hash)
+        XCTAssertNotNil(monthState.resources[RemotePhysicalPathKey(pathA)], "committed path must survive")
+        XCTAssertEqual(monthState.resources[RemotePhysicalPathKey(pathA)]?.contentHash, hash)
         // pathB was upserted but never linked through any committed asset → orphan.
-        XCTAssertNil(monthState.resources[pathB],
+        XCTAssertNil(monthState.resources[RemotePhysicalPathKey(pathB)],
                      "orphan path (no commit body references it) must not be in snapshot — would break state == fold(commits)")
     }
 
@@ -871,9 +871,9 @@ final class V2FlushTests: XCTestCase {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[monthKey])
-        XCTAssertNotNil(monthState.resources[legitPath],
+        XCTAssertNotNil(monthState.resources[RemotePhysicalPathKey(legitPath)],
                         "committed resource must survive the materialize round-trip")
-        XCTAssertNil(monthState.resources[orphanPath],
+        XCTAssertNil(monthState.resources[RemotePhysicalPathKey(orphanPath)],
                      "orphan resource (upserted but never linked to a committed asset) must not be in snapshot — snapshot ≠ fold(commits)")
     }
 
@@ -950,7 +950,7 @@ final class V2FlushTests: XCTestCase {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[monthKey])
-        let retainedRow = try XCTUnwrap(monthState.resources[path],
+        let retainedRow = try XCTUnwrap(monthState.resources[RemotePhysicalPathKey(path)],
             "originally committed path must remain in snapshot — covered range includes its addAsset commit")
         XCTAssertEqual(retainedRow.contentHash, oldHash,
             "snapshot resource row at path must reflect the COMMITTED hash, not the in-session upsert overwrite")
@@ -979,7 +979,7 @@ final class V2FlushTests: XCTestCase {
             totalFileSizeBytes: 50,
             stamp: OpStamp(writerID: writerID, seq: 1, clock: 1)
         )
-        materialized.resources[livingPath] = SnapshotResourceRow(
+        materialized.resources[RemotePhysicalPathKey(livingPath)] = SnapshotResourceRow(
             physicalRemotePath: livingPath,
             contentHash: livingHash,
             fileSize: 50,
@@ -988,7 +988,7 @@ final class V2FlushTests: XCTestCase {
             backedUpAtMs: 1,
             crypto: nil
         )
-        materialized.resources[tombstonedPath] = SnapshotResourceRow(
+        materialized.resources[RemotePhysicalPathKey(tombstonedPath)] = SnapshotResourceRow(
             physicalRemotePath: tombstonedPath,
             contentHash: tombstonedHash,
             fileSize: 100,
@@ -1015,11 +1015,11 @@ final class V2FlushTests: XCTestCase {
             nameCase: .caseSensitive
         )
         let state = indexes.currentMaterializedState()
-        XCTAssertNotNil(state.resources[livingPath],
+        XCTAssertNotNil(state.resources[RemotePhysicalPathKey(livingPath)],
                         "linked resource row must survive seed")
-        XCTAssertNotNil(state.resources[tombstonedPath],
+        XCTAssertNotNil(state.resources[RemotePhysicalPathKey(tombstonedPath)],
                         "post-tombstone orphan row must survive seed — RepoMaterializer leaves it in fold(covered), so dropping it here would break state == fold(covered)")
-        XCTAssertEqual(state.resources[tombstonedPath]?.contentHash, tombstonedHash,
+        XCTAssertEqual(state.resources[RemotePhysicalPathKey(tombstonedPath)]?.contentHash, tombstonedHash,
                         "the orphan row's content hash must round-trip exactly — drift would corrupt the snapshot baseline")
     }
 
@@ -1032,7 +1032,7 @@ final class V2FlushTests: XCTestCase {
         let nfdLeaf = "cafe\u{0301}.jpg"
 
         var materialized = RepoMonthState.empty
-        materialized.resources[nfcPath] = SnapshotResourceRow(
+        materialized.resources[RemotePhysicalPathKey(nfcPath)] = SnapshotResourceRow(
             physicalRemotePath: nfcPath,
             contentHash: hash,
             fileSize: 100,
@@ -1099,7 +1099,7 @@ final class V2FlushTests: XCTestCase {
         // Reload + flush an unrelated asset; the resulting snapshot must still emit
         // the resource row for `physicalPath` because fold(covered) includes both
         // the addAsset(A) and the tombstone(A) commits, and the materializer's
-        // tombstone handling preserves `state.resources[physicalPath]`.
+        // tombstone handling preserves `state.resources[RemotePhysicalPathKey(physicalPath)]`.
         let store2 = try await V2MonthSession.loadOrCreate(
             client: client, basePath: basePath, year: year, month: month, v2Services: v2
         )
@@ -1127,9 +1127,9 @@ final class V2FlushTests: XCTestCase {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[monthKey])
-        XCTAssertNotNil(monthState.resources[physicalPath],
+        XCTAssertNotNil(monthState.resources[RemotePhysicalPathKey(physicalPath)],
                         "post-tombstone orphan resource row must survive reload+flush — fold(covered) preserves it")
-        XCTAssertEqual(monthState.resources[physicalPath]?.contentHash, hash)
+        XCTAssertEqual(monthState.resources[RemotePhysicalPathKey(physicalPath)]?.contentHash, hash)
     }
 
     func testFlushV2_committedRowDates_matchAssetBodyNotResource() async throws {
@@ -1170,7 +1170,7 @@ final class V2FlushTests: XCTestCase {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[monthKey])
-        let row = try XCTUnwrap(monthState.resources[path])
+        let row = try XCTUnwrap(monthState.resources[RemotePhysicalPathKey(path)])
         XCTAssertEqual(row.creationDateMs, asset.creationDateMs,
                        "resource row's creationDateMs must come from asset body, not the live resource — replay derives it from body")
         XCTAssertEqual(row.backedUpAtMs, asset.backedUpAtMs,
@@ -1212,7 +1212,7 @@ final class V2FlushTests: XCTestCase {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[monthKey])
-        let resourceRow = try XCTUnwrap(monthState.resources[path],
+        let resourceRow = try XCTUnwrap(monthState.resources[RemotePhysicalPathKey(path)],
                                          "production flush must publish a resource row at the path")
         let resourceStamp = try XCTUnwrap(resourceRow.stamp,
                                            "production flush must stamp resource rows for path-level LWW")

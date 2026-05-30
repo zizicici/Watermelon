@@ -913,7 +913,7 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
             totalFileSizeBytes: 11,
             stamp: OpStamp(writerID: writerA, seq: 1, clock: 1)
         )
-        state.resources[resourceA.physicalRemotePath] = SnapshotResourceRow(
+        state.resources[RemotePhysicalPathKey(resourceA.physicalRemotePath)] = SnapshotResourceRow(
             physicalRemotePath: resourceA.physicalRemotePath,
             contentHash: resourceA.contentHash,
             fileSize: resourceA.fileSize,
@@ -968,7 +968,7 @@ final class RepoRetentionDeletePreflightTests: XCTestCase {
         XCTAssertEqual(contract.expectedDeletePrefixByWriter, [writerA: 2, writerB: 1])
         XCTAssertEqual(contract.preDeleteState.months[month]?.assets[fpA], state.assets[fpA])
         XCTAssertEqual(contract.preDeleteState.months[month]?.assets[fpB], state.assets[fpB])
-        XCTAssertEqual(contract.preDeleteState.months[month]?.resources[resourceA.physicalRemotePath], state.resources[resourceA.physicalRemotePath])
+        XCTAssertEqual(contract.preDeleteState.months[month]?.resources[RemotePhysicalPathKey(resourceA.physicalRemotePath)], state.resources[RemotePhysicalPathKey(resourceA.physicalRemotePath)])
     }
 
     func testReadOnlyClientSeesNoRemoteMutation() async throws {

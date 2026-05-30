@@ -18,7 +18,7 @@ final class V2MonthIndexes {
     let year: Int
     let month: Int
 
-    private var resourcesByPath: [String: RemoteManifestResource]
+    private var resourcesByPath: [RemotePhysicalPathKey: RemoteManifestResource]
     private var assetsByFingerprint: [AssetFingerprint: RemoteManifestAsset]
     private var linksByFingerprint: [AssetFingerprint: [RemoteAssetResourceLink]]
     /// Derived from linksByFingerprint; future link-state mutators must use the index helpers.
@@ -40,7 +40,7 @@ final class V2MonthIndexes {
     private(set) var deletedAssetStamps: [AssetFingerprint: OpStamp]
 
     /// Snapshot emission reads committed rows so live same-path overwrites cannot enter the covered baseline.
-    private var committedResourceByPath: [String: SnapshotResourceRow]
+    private var committedResourceByPath: [RemotePhysicalPathKey: SnapshotResourceRow]
 
     private(set) var pendingV2AssetFingerprints: Set<AssetFingerprint> = []
     private(set) var pendingV2TombstoneFingerprints: Set<AssetFingerprint> = []
@@ -72,7 +72,7 @@ final class V2MonthIndexes {
         self.existingFileNameSet = Set(remoteFilesByName.keys)
 
         // Faithful projection; filtering here would leak into snapshot writes and break the covered-range invariant.
-        var resourcesByPath: [String: RemoteManifestResource] = [:]
+        var resourcesByPath: [RemotePhysicalPathKey: RemoteManifestResource] = [:]
         var pathsByHash: [Data: Set<String>] = [:]
         var resourcesByLeafName: [String: [RemoteManifestResource]] = [:]
         var resourcesByCollisionKey: [String: [RemoteManifestResource]] = [:]
@@ -110,7 +110,7 @@ final class V2MonthIndexes {
                 backedUpAtMs: row.backedUpAtMs,
                 crypto: row.crypto
             )
-            resourcesByPath[row.physicalRemotePath] = resource
+            resourcesByPath[RemotePhysicalPathKey(row.physicalRemotePath)] = resource
             pathsByHash[row.contentHash, default: []].insert(row.physicalRemotePath)
             let leaf = (row.physicalRemotePath as NSString).lastPathComponent
             resourcesByLeafName[leaf, default: []].append(resource)
@@ -278,7 +278,7 @@ final class V2MonthIndexes {
     func findResourceByHash(_ contentHash: Data) -> RemoteManifestResource? {
         // Lex-min over all paths would let a missing path shadow a present one and bind metadata to undownloadable bytes.
         guard let chosen = anyPresentPath(forHash: contentHash) else { return nil }
-        return resourcesByPath[chosen]
+        return resourcesByPath[RemotePhysicalPathKey(chosen)]
     }
 
     func findByFileName(_ logicalName: String) -> RemoteManifestResource? {
@@ -334,8 +334,9 @@ final class V2MonthIndexes {
 
     @discardableResult
     func upsertResource(_ resource: RemoteManifestResource) throws -> RemoteManifestResource {
+        let pathKey = RemotePhysicalPathKey(resource.physicalRemotePath)
         // Drop the old hash mapping before repurposing a path, or lookups can return wrong bytes.
-        if let existing = resourcesByPath[resource.physicalRemotePath],
+        if let existing = resourcesByPath[pathKey],
            existing.contentHash != resource.contentHash {
             let oldHash = existing.contentHash
             pathsByHash[oldHash]?.remove(resource.physicalRemotePath)
@@ -343,10 +344,10 @@ final class V2MonthIndexes {
                 pathsByHash.removeValue(forKey: oldHash)
             }
         }
-        if let existing = resourcesByPath[resource.physicalRemotePath] {
+        if let existing = resourcesByPath[pathKey] {
             removeNameIndexes(for: existing)
         }
-        resourcesByPath[resource.physicalRemotePath] = resource
+        resourcesByPath[pathKey] = resource
         pathsByHash[resource.contentHash, default: []].insert(resource.physicalRemotePath)
         addNameIndexes(for: resource)
         if !existingFileNameSet.contains(resource.logicalName) {
@@ -473,8 +474,8 @@ final class V2MonthIndexes {
     func recordCommit(
         assetClocks: [AssetFingerprint: UInt64],
         tombstoneClocks: [AssetFingerprint: UInt64],
-        committedResources: [String: RemoteManifestResource],
-        committedResourceClocks: [String: UInt64],
+        committedResources: [RemotePhysicalPathKey: RemoteManifestResource],
+        committedResourceClocks: [RemotePhysicalPathKey: UInt64],
         writerID: String,
         seq: UInt64
     ) {

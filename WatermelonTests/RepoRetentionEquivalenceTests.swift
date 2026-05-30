@@ -86,7 +86,7 @@ final class RepoRetentionEquivalenceTests: XCTestCase {
         let before = makeOutput()
         var after = before
         var monthState = after.state.months[month]!
-        monthState.resources.removeValue(forKey: resourcePath)
+        monthState.resources.removeValue(forKey: RemotePhysicalPathKey(resourcePath))
         monthState.deletedAssetStamps[fp] = OpStamp(writerID: Self.writerA, seq: 6, clock: 110)
         after = replacingMonth(after, with: monthState)
         XCTAssertFalse(RepoRetentionEquivalence.matches(before, after, month: month, mode: .retentionSuperset))
@@ -128,7 +128,7 @@ final class RepoRetentionEquivalenceTests: XCTestCase {
     ) -> RepoMaterializer.MaterializeOutput {
         let monthState = RepoMonthState(
             assets: [fp: asset(stamp: assetStamp)],
-            resources: [resourcePath: resource(stamp: resourceStamp)],
+            resources: [RemotePhysicalPathKey(resourcePath): resource(stamp: resourceStamp)],
             assetResources: [
                 AssetResourceKey(assetFingerprint: fp, role: 1, slot: 0): SnapshotAssetResourceRow(
                     assetFingerprint: fp,

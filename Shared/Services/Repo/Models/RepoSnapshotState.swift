@@ -2,13 +2,15 @@ import Foundation
 
 struct RepoMonthState: Equatable, Sendable {
     var assets: [AssetFingerprint: SnapshotAssetRow]
-    var resources: [String: SnapshotResourceRow]
+    /// Byte-exact keyed so NFC/NFD-distinct physical paths on exact-name backends
+    /// survive as two rows instead of collapsing to one Swift-String key.
+    var resources: [RemotePhysicalPathKey: SnapshotResourceRow]
     var assetResources: [AssetResourceKey: SnapshotAssetResourceRow]
     var deletedAssetStamps: [AssetFingerprint: OpStamp]
 
     init(
         assets: [AssetFingerprint: SnapshotAssetRow],
-        resources: [String: SnapshotResourceRow],
+        resources: [RemotePhysicalPathKey: SnapshotResourceRow],
         assetResources: [AssetResourceKey: SnapshotAssetResourceRow],
         deletedAssetStamps: [AssetFingerprint: OpStamp]
     ) {

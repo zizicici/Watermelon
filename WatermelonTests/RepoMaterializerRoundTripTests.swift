@@ -41,7 +41,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
 
         let monthState = try XCTUnwrap(output.state.months[month])
         XCTAssertEqual(monthState.assets[fp]?.assetFingerprint, fp)
-        XCTAssertEqual(monthState.resources["2026/01/photo.jpg"]?.contentHash, hash)
+        XCTAssertEqual(monthState.resources[RemotePhysicalPathKey("2026/01/photo.jpg")]?.contentHash, hash)
         XCTAssertEqual(output.observedSeqByWriter[writerA], 1)
         XCTAssertEqual(output.state.observedClock, 1)
     }
@@ -601,7 +601,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
 
         XCTAssertNotNil(state.assets[olderFP], "older snapshot's asset should survive")
         XCTAssertNil(state.assets[newerFP], "newer rejected snapshot's asset should not appear")
-        XCTAssertNotNil(state.resources["2026/01/valid.jpg"], "older snapshot's resource should survive")
+        XCTAssertNotNil(state.resources[RemotePhysicalPathKey("2026/01/valid.jpg")], "older snapshot's resource should survive")
         XCTAssertEqual(output.state.observedClock, 2)
         XCTAssertFalse(output.corruptedSnapshotMonths.contains(month), "month should not be marked corrupted when a valid older snapshot exists")
     }
@@ -1985,6 +1985,126 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
         )
         XCTAssertNotNil(output.state.months[month]?.assets[goodFP])
         XCTAssertNil(output.state.months[month]?.assets[poisonedFP])
+    }
+
+    // MARK: - Byte-exact (NFC vs NFD) physical-path keying
+    func testSnapshotBaselinePreservesNFCAndNFDPaths() async throws {
+        let nfcLeaf = "caf\u{00E9}.jpg"
+        let nfdLeaf = "cafe\u{0301}.jpg"
+        XCTAssertNotEqual(Array(nfcLeaf.utf8), Array(nfdLeaf.utf8))
+        XCTAssertEqual(nfcLeaf, nfdLeaf)
+
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
+
+        let nfcPath = "2026/01/\(nfcLeaf)"
+        let nfdPath = "2026/01/\(nfdLeaf)"
+        let baseStamp = OpStamp(writerID: writerA, seq: 1, clock: 5)
+        var covered = CoveredRanges()
+        covered.add(writerID: writerA, range: ClosedSeqRange(low: 1, high: 1))
+        let header = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(month),
+            writerID: writerA,
+            repoID: repoID,
+            covered: covered
+        )
+        func row(_ path: String, _ hashByte: UInt8) -> SnapshotResourceRow {
+            SnapshotResourceRow(
+                physicalRemotePath: path,
+                contentHash: Self.contentHash(hashByte),
+                fileSize: 10,
+                resourceType: ResourceTypeCode.photo,
+                creationDateMs: nil,
+                backedUpAtMs: 1,
+                crypto: nil,
+                stamp: baseStamp
+            )
+        }
+        _ = try await snapshotWriter.write(
+            header: header,
+            assets: [],
+            resources: [row(nfcPath, 0xA1), row(nfdPath, 0xB2)],
+            assetResources: [],
+            deletedKeys: [],
+            month: month,
+            lamport: 5,
+            runID: runID,
+            respectTaskCancellation: false
+        )
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+        XCTAssertEqual(monthState.resources.count, 2, "snapshot baseline must keep both NFC and NFD rows")
+        XCTAssertEqual(monthState.resources[RemotePhysicalPathKey(nfcPath)]?.contentHash, Self.contentHash(0xA1))
+        XCTAssertEqual(monthState.resources[RemotePhysicalPathKey(nfdPath)]?.contentHash, Self.contentHash(0xB2))
+    }
+
+
+    // "café.jpg": U+00E9 (NFC) vs e + U+0301 (NFD). Byte-distinct, Swift-String-equal.
+    // An exact-name backend stores both as distinct objects; a [String: ...]-keyed state
+    // would collapse them to one row.
+    func testCommitReplayPreservesNFCAndNFDPaths() async throws {
+        let nfcLeaf = "caf\u{00E9}.jpg"
+        let nfdLeaf = "cafe\u{0301}.jpg"
+        // Guard the premise: byte-distinct yet String-equal.
+        XCTAssertNotEqual(Array(nfcLeaf.utf8), Array(nfdLeaf.utf8))
+        XCTAssertEqual(nfcLeaf, nfdLeaf)
+
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        let writer = CommitLogWriter(client: client, basePath: basePath)
+
+        let nfcPath = "2026/01/\(nfcLeaf)"
+        let nfdPath = "2026/01/\(nfdLeaf)"
+        let fpNFC = Self.fingerprint(0xA1)
+        let fpNFD = Self.fingerprint(0xB2)
+        let hashNFC = Self.contentHash(0xA1)
+        let hashNFD = Self.contentHash(0xB2)
+
+        let commit = CommitOp(opSeq: 0, clock: 1, body: .addAsset(CommitAddAssetBody(
+            assetFingerprint: fpNFC,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resources: [
+                CommitResourceEntry(
+                    physicalRemotePath: nfcPath,
+                    logicalName: nfcLeaf,
+                    contentHash: hashNFC,
+                    fileSize: 10,
+                    resourceType: ResourceTypeCode.photo,
+                    role: ResourceTypeCode.photo,
+                    slot: 0,
+                    crypto: nil
+                )
+            ]
+        )))
+        let commit2 = CommitOp(opSeq: 0, clock: 2, body: .addAsset(CommitAddAssetBody(
+            assetFingerprint: fpNFD,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resources: [
+                CommitResourceEntry(
+                    physicalRemotePath: nfdPath,
+                    logicalName: nfdLeaf,
+                    contentHash: hashNFD,
+                    fileSize: 10,
+                    resourceType: ResourceTypeCode.photo,
+                    role: ResourceTypeCode.photo,
+                    slot: 0,
+                    crypto: nil
+                )
+            ]
+        )))
+        _ = try await writer.write(header: makeHeader(seq: 1, clockMin: 1, clockMax: 1), ops: [commit], month: month, respectTaskCancellation: false)
+        _ = try await writer.write(header: makeHeader(seq: 2, clockMin: 2, clockMax: 2), ops: [commit2], month: month, respectTaskCancellation: false)
+
+        let output = try await RepoMaterializer(client: client, basePath: basePath).materialize(expectedRepoID: repoID)
+        let monthState = try XCTUnwrap(output.state.months[month])
+        XCTAssertEqual(monthState.resources.count, 2, "commit replay must keep both NFC and NFD rows")
+        XCTAssertEqual(monthState.resources[RemotePhysicalPathKey(nfcPath)]?.contentHash, hashNFC)
+        XCTAssertEqual(monthState.resources[RemotePhysicalPathKey(nfdPath)]?.contentHash, hashNFD)
     }
 
     private func makeHeader(

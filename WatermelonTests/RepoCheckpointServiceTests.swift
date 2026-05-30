@@ -182,7 +182,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         }
         let after = try await RepoMaterializer(client: client, basePath: basePath).materializeMonth(month, expectedRepoID: repoID)
         XCTAssertTrue(RepoRetentionEquivalence.matches(before, after, month: month, mode: .retentionSuperset))
-        XCTAssertNotNil(after.state.months[month]?.resources["2026/05/asset-61.jpg"])
+        XCTAssertNotNil(after.state.months[month]?.resources[RemotePhysicalPathKey("2026/05/asset-61.jpg")])
         XCTAssertTrue(after.state.months[month]?.deletedAssetStamps.keys.contains(TestFixtures.assetFingerprint(0x62)) == true)
     }
 

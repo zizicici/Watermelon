@@ -254,7 +254,7 @@ actor V1MigrationService {
                     stamp: stamp
                 )
                 for resource in body.resources {
-                    state.resources[resource.physicalRemotePath] = SnapshotResourceRow(
+                    state.resources[RemotePhysicalPathKey(resource.physicalRemotePath)] = SnapshotResourceRow(
                         physicalRemotePath: resource.physicalRemotePath,
                         contentHash: resource.contentHash,
                         fileSize: resource.fileSize,

@@ -106,7 +106,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
                 stamp: OpStamp(writerID: writerB, seq: 1, clock: 200)
             )],
             resources: [
-                "2026/03/a-from-B.jpg": SnapshotResourceRow(
+                RemotePhysicalPathKey("2026/03/a-from-B.jpg"): SnapshotResourceRow(
                     physicalRemotePath: "2026/03/a-from-B.jpg",
                     contentHash: TestFixtures.fingerprint(0xC2),
                     fileSize: 100, resourceType: ResourceTypeCode.photo,
@@ -325,7 +325,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
                 resourceCount: 1, totalFileSizeBytes: 100, stamp: bStamp
             )],
             resources: [
-                sharedPath: SnapshotResourceRow(
+                RemotePhysicalPathKey(sharedPath): SnapshotResourceRow(
                     physicalRemotePath: sharedPath,
                     contentHash: hashH2,
                     fileSize: 100, resourceType: ResourceTypeCode.photo,
@@ -365,7 +365,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materialize(expectedRepoID: repoID)
         let monthState = try XCTUnwrap(output.state.months[month])
-        let row = try XCTUnwrap(monthState.resources[sharedPath])
+        let row = try XCTUnwrap(monthState.resources[RemotePhysicalPathKey(sharedPath)])
         XCTAssertEqual(row.contentHash, hashH2,
                        "stale uncovered add at clock=100 must NOT replace baseline H2 row at the shared path")
         XCTAssertEqual(row.stamp.clock, 200, "winning row's stamp must be B's")
