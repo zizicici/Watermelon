@@ -926,6 +926,122 @@ final class V2BatchCommitTests: XCTestCase {
                      "R05: optimistic month overlay also dropped — the helper is the single reconciliation point")
     }
 
+    // Arch-VII A-II B4: `MonthCommitTransaction.applyDurableSideEffects` must run the same fixed
+    // pipeline as the static helper — drain only the committed (chunk-1) fingerprints' intents and
+    // mark them durable, leaving chunk 2 queued. Mirrors the R03 applyDurableBatchSideEffects test.
+    func testMonthCommitTransaction_applyDurableSideEffects_drainsOnlyCommittedIntents() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await client.connect()
+        client.setAtomicCreateGuarantee(.exclusive)
+        let v2 = try await makeV2Services(client: client)
+        let store = try await V2MonthSession.loadOrCreate(
+            client: client, basePath: basePath, year: year, month: month, v2Services: v2
+        )
+        let remoteIndex = RemoteIndexSyncService()
+        let processor = AssetProcessor(
+            photoLibraryService: PhotoLibraryService(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndex
+        )
+        let cap = BackupV2Constants.batchFlushInterval
+        let aggregator = ParallelBackupProgressAggregator(total: cap + 1)
+        for index in 0 ..< (cap + 1) {
+            let rows = makeAssetRows(index: index)
+            _ = try store.upsertResource(rows.resource)
+            try store.upsertAsset(rows.asset, links: [rows.link])
+            await processor.pendingHashIndexIntents.enqueue(month: monthKey, intent: HashIndexUpsertIntent(
+                assetLocalIdentifier: PhotoKitLocalIdentifier(rawValue: "local-\(index)"), assetFingerprint: rows.asset.assetFingerprint,
+                totalFileSizeBytes: 1, modificationDateMs: nil,
+                body: .fingerprintOnly(resourceCount: 1)
+            ))
+            _ = await aggregator.record(result: AssetProcessResult(
+                status: .success, reason: nil, displayName: "asset-\(index)",
+                assetFingerprint: rows.asset.assetFingerprint,
+                timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 1
+            ))
+            await aggregator.recordProvisional(
+                month: monthKey, fingerprint: rows.asset.assetFingerprint,
+                assetLocalIdentifier: PhotoKitLocalIdentifier(rawValue: "local-\(index)"), status: .success
+            )
+        }
+        let chunk2Path = RepoLayout.commitFilePath(base: basePath, month: monthKey, writerID: writerID, seq: 2)
+        await client.injectUploadError(.transport, for: chunk2Path)
+
+        let outcome = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
+            monthStore: store, month: monthKey, remoteIndexService: remoteIndex, ignoreCancellation: false
+        )
+        guard case .commitDurableSnapshotDeferred(let delta, _) = outcome else {
+            XCTFail("expected commitDurableSnapshotDeferred after chunk-2 upload error")
+            return
+        }
+        let transaction = MonthCommitTransaction(
+            aggregator: aggregator,
+            assetProcessor: processor,
+            eventStream: BackupEventStream(),
+            profile: TestFixtures.makeServerProfile(storageType: .webdav),
+            month: monthKey,
+            workerID: 1
+        )
+        await transaction.applyDurableSideEffects(outcome: outcome)
+        let intentsAfter = await processor.pendingHashIndexIntents.pendingFingerprintCountForTest(month: monthKey)
+        let provisionalAfter = await aggregator.provisionalCountForTest(month: monthKey)
+        XCTAssertEqual(intentsAfter, (cap + 1) - delta.committedAssetFingerprints.count,
+                       "transaction.applyDurableSideEffects drains only chunk-1's intents — chunk 2 stays queued")
+        XCTAssertEqual(provisionalAfter, intentsAfter,
+                       "provisional buffer shrinks by the same amount as the intent queue (same pipeline as the static helper)")
+        XCTAssertTrue(store.hasUncommittedV2Ops, "chunk 2 is still pending in V2MonthIndexes")
+    }
+
+    // Arch-VII A-II B4: `MonthCommitTransaction.abort` must reproduce the static hard-abort
+    // rollback — revert provisional counters, discard intents, and drop the optimistic overlay.
+    // Mirrors testRollBackProvisionalAndIntentsForHardAbort_AlsoDropsOptimisticMonth.
+    func testMonthCommitTransaction_abort_rollsBackProvisionalIntentsAndOverlay() async throws {
+        let remoteIndex = RemoteIndexSyncService()
+        let processor = AssetProcessor(
+            photoLibraryService: PhotoLibraryService(),
+            hashIndexRepository: ContentHashIndexRepository(databaseManager: databaseManager),
+            remoteIndexService: remoteIndex
+        )
+        let aggregator = ParallelBackupProgressAggregator(total: 1)
+        let rows = makeAssetRows(index: 0)
+        let writer = remoteIndex.makeOptimisticAssetWriter()
+        writer.appendResource(rows.resource)
+        writer.appendAsset(rows.asset, links: [rows.link])
+        await processor.pendingHashIndexIntents.enqueue(month: monthKey, intent: HashIndexUpsertIntent(
+            assetLocalIdentifier: "local-0", assetFingerprint: rows.asset.assetFingerprint,
+            totalFileSizeBytes: 1, modificationDateMs: nil,
+            body: .fingerprintOnly(resourceCount: 1)
+        ))
+        _ = await aggregator.record(result: AssetProcessResult(
+            status: .success, reason: nil, displayName: "asset-0",
+            assetFingerprint: rows.asset.assetFingerprint,
+            timing: AssetProcessTiming(), totalFileSizeBytes: 1, uploadedFileSizeBytes: 1
+        ))
+        await aggregator.recordProvisional(
+            month: monthKey, fingerprint: rows.asset.assetFingerprint,
+            assetLocalIdentifier: "local-0", status: .success
+        )
+        XCTAssertNotNil(remoteIndex.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey],
+                        "preconditions: optimistic asset visible before abort")
+
+        let transaction = MonthCommitTransaction(
+            aggregator: aggregator,
+            assetProcessor: processor,
+            eventStream: BackupEventStream(),
+            profile: TestFixtures.makeServerProfile(storageType: .webdav),
+            month: monthKey,
+            workerID: 1
+        )
+        await transaction.abort()
+
+        let intentsAfter = await processor.pendingHashIndexIntents.pendingFingerprintCountForTest(month: monthKey)
+        let provisionalAfter = await aggregator.provisionalCountForTest(month: monthKey)
+        XCTAssertEqual(intentsAfter, 0, "transaction.abort rolled back hash-index intents")
+        XCTAssertEqual(provisionalAfter, 0, "transaction.abort rolled back the provisional buffer")
+        XCTAssertNil(remoteIndex.resumeSafeToSkipAssetFingerprintsByMonth()[monthKey],
+                     "transaction.abort also drops the optimistic month overlay (same body as the static helper)")
+    }
+
     // MARK: - Helpers
 
     private func makeV2Services(client: InMemoryRemoteStorageClient) async throws -> BackupV2RuntimeServices {

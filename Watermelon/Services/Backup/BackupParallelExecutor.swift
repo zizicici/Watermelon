@@ -280,6 +280,14 @@ struct BackupParallelExecutor: Sendable {
                 )))
 
                 var monthFatalError: Error?
+                let transaction = MonthCommitTransaction(
+                    aggregator: aggregator,
+                    assetProcessor: assetProcessor,
+                    eventStream: eventStream,
+                    profile: profile,
+                    month: monthKey,
+                    workerID: workerID + 1
+                )
                 let fetchBatchSize = 500
                 var missingAssetCount = 0
                 var hasLoggedLocalHashCacheWarning = false
@@ -511,15 +519,7 @@ struct BackupParallelExecutor: Sendable {
                                         }
                                     }
                                     if let outcome = intervalOutcome {
-                                        await Self.applyDurableBatchSideEffects(
-                                            aggregator: aggregator,
-                                            assetProcessor: assetProcessor,
-                                            month: monthKey,
-                                            outcome: outcome,
-                                            eventStream: eventStream,
-                                            profile: profile,
-                                            workerID: workerID + 1
-                                        )
+                                        await transaction.applyDurableSideEffects(outcome: outcome)
                                     }
                                     // U01 R02: partial multi-chunk failure at interval (chunk N+1
                                     // still pending). Force a hard stop so the asset loop cannot
@@ -692,11 +692,7 @@ struct BackupParallelExecutor: Sendable {
                     // for the pause-EOM-may-commit case). For the EOM-skip case (typically
                     // connection-unavailable abort), the buffer/queue is stale and must be
                     // rolled back so counters and queued local writes match reality.
-                    await Self.rollBackProvisionalAndIntentsForHardAbort(
-                        aggregator: aggregator,
-                        assetProcessor: assetProcessor,
-                        month: monthKey
-                    )
+                    await transaction.abort()
                 } else {
                     var eomOutcome: V2MonthFlushOutcome?
                     var shouldBreakMonthLoop = false
@@ -716,19 +712,11 @@ struct BackupParallelExecutor: Sendable {
                             // Another flusher owns the pending state.
                             break
                         case .pauseAndBreakMonthLoop:
-                            await Self.rollBackProvisionalAndIntentsForHardAbort(
-                                aggregator: aggregator,
-                                assetProcessor: assetProcessor,
-                                month: monthKey
-                            )
+                            await transaction.abort()
                             workerState.paused = true
                             shouldBreakMonthLoop = true
                         case .abortMonthBreakMonthLoop:
-                            await Self.rollBackProvisionalAndIntentsForHardAbort(
-                                aggregator: aggregator,
-                                assetProcessor: assetProcessor,
-                                month: monthKey
-                            )
+                            await transaction.abort()
                             clientReusable = false
                             monthFatalError = error
                             eventStream.emitErrorLog(
@@ -742,11 +730,7 @@ struct BackupParallelExecutor: Sendable {
                             )
                             shouldBreakMonthLoop = true
                         case .logErrorAndRethrow:
-                            await Self.rollBackProvisionalAndIntentsForHardAbort(
-                                aggregator: aggregator,
-                                assetProcessor: assetProcessor,
-                                month: monthKey
-                            )
+                            await transaction.abort()
                             eventStream.emitErrorLog(
                                 String.localizedStringWithFormat(
                                     String(localized: "backup.parallel.flushManifestFailed"),
@@ -761,24 +745,12 @@ struct BackupParallelExecutor: Sendable {
                     }
 
                     if let outcome = eomOutcome {
-                        await Self.applyDurableBatchSideEffects(
-                            aggregator: aggregator,
-                            assetProcessor: assetProcessor,
-                            month: monthKey,
-                            outcome: outcome,
-                            eventStream: eventStream,
-                            profile: profile,
-                            workerID: workerID + 1
-                        )
+                        await transaction.applyDurableSideEffects(outcome: outcome)
                         // U01 R02: end-of-month partial multi-chunk failure. The remaining
                         // V2 pending ops die with this V2MonthSession (no further flush in
                         // this session for this month), so reconcile counters + intents.
                         if monthStore.hasUncommittedV2Ops {
-                            await Self.rollBackProvisionalAndIntentsForHardAbort(
-                                aggregator: aggregator,
-                                assetProcessor: assetProcessor,
-                                month: monthKey
-                            )
+                            await transaction.abort()
                             let displayError = outcome.displayError
                             let underlyingMessage = displayError.map {
                                 profile.userFacingStorageErrorMessage($0)
