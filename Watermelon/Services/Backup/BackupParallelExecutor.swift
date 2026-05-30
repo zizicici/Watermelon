@@ -219,47 +219,17 @@ struct BackupParallelExecutor: Sendable {
                 let monthKey = monthPlan.month
                 let monthAssetIDs = monthPlan.assetLocalIdentifiers
 
-                let monthStore: any BackupMonthStore
-                do {
-                    if let v2Services {
-                        monthStore = try await V2MonthLoadAndPublish.loadAndPublishSnapshot(
-                            client: client,
-                            basePath: profile.basePath,
-                            month: monthKey,
-                            v2Services: v2Services,
-                            remoteIndexService: remoteIndexService,
-                            stepLogger: { message in
-                                eventStream.emitLog(message, level: .error)
-                            }
-                        )
-                    } else {
-                        monthStore = try await MonthManifestStore.loadOrCreate(
-                            client: client,
-                            basePath: profile.basePath,
-                            year: monthKey.year,
-                            month: monthKey.month,
-                            stepLogger: { message in
-                                eventStream.emitLog(message, level: .error)
-                            }
-                        )
-                        // loadOrCreate may have cleaned manifest rows; sync to snapshotCache so consumers don't see stale state.
-                        remoteIndexService.publishMonthSnapshot(of: monthStore, for: monthKey)
-                    }
-                } catch {
-                    if error is CancellationError {
-                        workUnit.markPaused()
-                        break
-                    }
-                    eventStream.emitLog(
-                        String.localizedStringWithFormat(
-                            String(localized: "backup.parallel.loadManifestFailed"),
-                            workerID + 1,
-                            monthKey.text,
-                            profile.userFacingStorageErrorMessage(error)
-                        ),
-                        level: .error
-                    )
-                    throw error
+                guard let monthStore = try await loadMonthStoreForWorker(
+                    client: client,
+                    monthKey: monthKey,
+                    profile: profile,
+                    workerID: workerID,
+                    v2Services: v2Services,
+                    eventStream: eventStream,
+                    workUnit: &workUnit
+                ) else {
+                    // nil == cancellation during load; workUnit already marked paused.
+                    break
                 }
 
                 eventStream.emitLog(
@@ -292,33 +262,14 @@ struct BackupParallelExecutor: Sendable {
                 var hasLoggedLocalHashCacheWarning = false
                 var flushCounter = AssetBatchFlushCounter(threshold: Self.flushInterval)
 
-                var skippedMonthShortCircuit = false
-                if monthAlreadyFullyBackedUp(
+                let skippedMonthShortCircuit = await emitMonthSkipIfFullyBackedUp(
                     monthAssetIDs: monthAssetIDs,
-                    monthStore: monthStore
-                ) {
-                    let progressState = await aggregator.recordMonthSkipped(count: monthAssetIDs.count)
-                    eventStream.emit(.progress(BackupProgress(
-                        succeeded: progressState.state.succeeded,
-                        failed: progressState.state.failed,
-                        skipped: progressState.state.skipped,
-                        total: progressState.state.total,
-                        message: String.localizedStringWithFormat(
-                            String(localized: "backup.parallel.monthPreCovered"),
-                            workerID + 1,
-                            monthKey.text,
-                            monthAssetIDs.count
-                        ),
-                        logMessage: nil,
-                        logLevel: .info,
-                        itemEvent: nil,
-                        transferState: nil
-                    )))
-                    if let timingSummary = progressState.timingSummary {
-                        eventStream.emitLog(timingSummary, level: .debug)
-                    }
-                    skippedMonthShortCircuit = true
-                }
+                    monthStore: monthStore,
+                    monthKey: monthKey,
+                    workerID: workerID,
+                    aggregator: aggregator,
+                    eventStream: eventStream
+                )
 
                 if !skippedMonthShortCircuit {
                 for batchStart in stride(from: 0, to: monthAssetIDs.count, by: fetchBatchSize) {
@@ -665,245 +616,19 @@ struct BackupParallelExecutor: Sendable {
                 }
                 }
 
-                let shouldFinishMonth = !workUnit.paused && !workUnit.hasFatal
-                let hadDirtyManifestBeforeFinalize = monthStore.dirty
-                let skipFlushDueToUnavailable = workUnit.fatalError.map(profile.isConnectionUnavailableErrorIncludingFlushUnderlying) ?? false
-                let canFlushV2AfterDataConnectionLoss = skipFlushDueToUnavailable && v2Services != nil && workUnit.shouldFlushAfterDataConnectionLoss
-
-                if skipFlushDueToUnavailable && !canFlushV2AfterDataConnectionLoss {
-                    eventStream.emitLog(
-                        String.localizedStringWithFormat(
-                            String(localized: "backup.parallel.skipManifestFlush"),
-                            workerID + 1,
-                            monthKey.text
-                        ),
-                        level: .error
-                    )
-                    // U01 R03: EOM was skipped — no further flush attempt will commit the
-                    // remaining V2 pending ops. Reconcile any provisional progress / hash-index
-                    // intents left from earlier interval-fail paths (R03 deferred those rollbacks
-                    // for the pause-EOM-may-commit case). For the EOM-skip case (typically
-                    // connection-unavailable abort), the buffer/queue is stale and must be
-                    // rolled back so counters and queued local writes match reality.
-                    await transaction.abort()
-                } else {
-                    var eomOutcome: V2MonthFlushOutcome?
-                    var shouldBreakMonthLoop = false
-                    do {
-                        eomOutcome = try await Self.flushMonthStorePublishingDefensiveCommits(
-                            monthStore: monthStore,
-                            month: monthKey,
-                            remoteIndexService: remoteIndexService,
-                            ignoreCancellation: Self.foregroundFinalFlushIgnoresCancellation(
-                                paused: workUnit.paused,
-                                hasV2Services: monthStore.v2Services != nil
-                            )
-                        )
-                    } catch {
-                        switch BackupFlushFailureClassification.classify(error, on: profile).foregroundEndOfMonthAction {
-                        case .ignoreConcurrentReject:
-                            // Another flusher owns the pending state.
-                            break
-                        case .pauseAndBreakMonthLoop:
-                            await transaction.abort()
-                            workUnit.markPaused()
-                            shouldBreakMonthLoop = true
-                        case .abortMonthBreakMonthLoop:
-                            await transaction.abort()
-                            workUnit.markFatal(error)
-                            eventStream.emitErrorLog(
-                                String.localizedStringWithFormat(
-                                    String(localized: "backup.parallel.flushManifestFailed"),
-                                    workerID + 1,
-                                    monthKey.text,
-                                    profile.userFacingStorageErrorMessage(error)
-                                ),
-                                unless: error
-                            )
-                            shouldBreakMonthLoop = true
-                        case .logErrorAndRethrow:
-                            await transaction.abort()
-                            eventStream.emitErrorLog(
-                                String.localizedStringWithFormat(
-                                    String(localized: "backup.parallel.flushManifestFailed"),
-                                    workerID + 1,
-                                    monthKey.text,
-                                    profile.userFacingStorageErrorMessage(error)
-                                ),
-                                unless: error
-                            )
-                            throw error
-                        }
-                    }
-
-                    if let outcome = eomOutcome {
-                        await transaction.applyDurableSideEffects(outcome: outcome)
-                        // U01 R02: end-of-month partial multi-chunk failure. The remaining
-                        // V2 pending ops die with this V2MonthSession (no further flush in
-                        // this session for this month), so reconcile counters + intents.
-                        if monthStore.hasUncommittedV2Ops {
-                            await transaction.abort()
-                            let displayError = outcome.displayError
-                            let underlyingMessage = displayError.map {
-                                profile.userFacingStorageErrorMessage($0)
-                            } ?? ""
-                            eventStream.emitErrorLog(
-                                String.localizedStringWithFormat(
-                                    String(localized: "backup.parallel.flushManifestFailed"),
-                                    workerID + 1,
-                                    monthKey.text,
-                                    underlyingMessage
-                                ),
-                                unless: displayError ?? NSError(domain: "U01Partial", code: 0)
-                            )
-                            if let displayError,
-                               profile.isConnectionUnavailableErrorIncludingFlushUnderlying(displayError) {
-                                workUnit.markFatal(displayError)
-                            } else {
-                                workUnit.markPaused()
-                            }
-                            shouldBreakMonthLoop = true
-                        } else if let dispatch = BackupFlushFailureClassification.foregroundEndOfMonthPartialDispatch(
-                            outcome: outcome,
-                            profile: profile,
-                            shouldFinishMonth: shouldFinishMonth
-                        ) {
-                            switch dispatch.action {
-                            case .pauseAndBreakMonthLoop:
-                                workUnit.markPaused()
-                                shouldBreakMonthLoop = true
-                            case .abortMonthBreakMonthLoop:
-                                workUnit.markFatal(dispatch.displayError)
-                                eventStream.emitErrorLog(
-                                    String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.flushManifestFailed"),
-                                        workerID + 1,
-                                        monthKey.text,
-                                        profile.userFacingStorageErrorMessage(dispatch.displayError)
-                                    ),
-                                    unless: dispatch.displayError
-                                )
-                                shouldBreakMonthLoop = true
-                            case .logErrorAndEmitDeferred:
-                                eventStream.emitErrorLog(
-                                    String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.flushManifestFailed"),
-                                        workerID + 1,
-                                        monthKey.text,
-                                        profile.userFacingStorageErrorMessage(dispatch.displayError)
-                                    ),
-                                    unless: dispatch.displayError
-                                )
-                                Self.emitUploadDurableSnapshotDeferred(
-                                    eventStream: eventStream,
-                                    month: monthKey,
-                                    message: profile.userFacingStorageErrorMessage(dispatch.displayError)
-                                )
-                            case .logErrorOnly:
-                                eventStream.emitErrorLog(
-                                    String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.flushManifestFailed"),
-                                        workerID + 1,
-                                        monthKey.text,
-                                        profile.userFacingStorageErrorMessage(dispatch.displayError)
-                                    ),
-                                    unless: dispatch.displayError
-                                )
-                            }
-                        } else if shouldFinishMonth {
-                            let emitCompleted: () -> Void = {
-                                eventStream.emit(.monthChanged(MonthChangeEvent(
-                                    year: monthKey.year,
-                                    month: monthKey.month,
-                                    action: .completed
-                                )))
-                            }
-                            if let onMonthUploaded {
-                                switch await onMonthUploaded(monthKey) {
-                                case .success:
-                                    emitCompleted()
-                                case .incomplete(let summary):
-                                    let message = BackupMonthIncompleteSummaryRenderer.message(for: summary, month: monthKey)
-                                    eventStream.emitLog(
-                                        String.localizedStringWithFormat(
-                                            String(localized: "backup.parallel.finalizationFailed"),
-                                            workerID + 1,
-                                            monthKey.text,
-                                            message
-                                        ),
-                                        level: .warning
-                                    )
-                                    eventStream.emit(.monthChanged(MonthChangeEvent(
-                                        year: monthKey.year,
-                                        month: monthKey.month,
-                                        action: .incomplete(summary)
-                                    )))
-                                case .failed(let failure):
-                                    eventStream.emitLog(
-                                        String.localizedStringWithFormat(
-                                            String(localized: "backup.parallel.finalizationFailed"),
-                                            workerID + 1,
-                                            monthKey.text,
-                                            failure.message
-                                        ),
-                                        level: .error
-                                    )
-                                    // Surface as fatal so Home and the worker agree the month failed.
-                                    var userInfo: [String: Any] = [
-                                        NSLocalizedDescriptionKey: "onMonthUploaded failed: \(failure.message)"
-                                    ]
-                                    if let underlyingError = failure.underlyingError {
-                                        userInfo[NSUnderlyingErrorKey] = underlyingError
-                                    }
-                                    workUnit.markFatalKeepingClient(NSError(
-                                        domain: "BackupParallelExecutor",
-                                        code: -201,
-                                        userInfo: userInfo
-                                    ))
-                                case .cancelled:
-                                    workUnit.markPaused()
-                                    eventStream.emitLog(
-                                        String.localizedStringWithFormat(
-                                            String(localized: "backup.parallel.finalizationCancelled"),
-                                            workerID + 1,
-                                            monthKey.text
-                                        ),
-                                        level: .info
-                                    )
-                                }
-                                if workUnit.paused {
-                                    break
-                                }
-                            } else {
-                                emitCompleted()
-                            }
-                        } else {
-                            if workUnit.hasFatal {
-                                eventStream.emitLog(
-                                    String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.monthFatalError"),
-                                        workerID + 1,
-                                        monthKey.text
-                                    ),
-                                    level: .error
-                                )
-                            } else {
-                                let pauseLog = hadDirtyManifestBeforeFinalize
-                                    ? String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.monthPausedFlushed"),
-                                        workerID + 1,
-                                        monthKey.text
-                                    )
-                                    : String.localizedStringWithFormat(
-                                        String(localized: "backup.parallel.monthPaused"),
-                                        workerID + 1,
-                                        monthKey.text
-                                    )
-                                eventStream.emitLog(pauseLog, level: .info)
-                            }
-                        }
-                    }
-                    if shouldBreakMonthLoop { break }
+                let eomFlow = try await finishMonthFlushingAndPublishing(
+                    monthStore: monthStore,
+                    monthKey: monthKey,
+                    profile: profile,
+                    workerID: workerID,
+                    v2Services: v2Services,
+                    transaction: transaction,
+                    onMonthUploaded: onMonthUploaded,
+                    workUnit: &workUnit,
+                    eventStream: eventStream
+                )
+                if case .breakMonthLoop = eomFlow {
+                    break
                 }
 
                 if let monthFatalError = workUnit.fatalError {
@@ -924,6 +649,357 @@ struct BackupParallelExecutor: Sendable {
             await clientPool.release(client, reusable: workUnit.clientReusable)
             throw error
         }
+    }
+
+    /// Returns the loaded month store, or `nil` to signal a cancellation `break` of the month loop
+    /// (workUnit is marked paused before returning nil). Load failures throw, propagating exactly
+    /// as the inline `throw error` did.
+    private func loadMonthStoreForWorker(
+        client: any RemoteStorageClientProtocol,
+        monthKey: LibraryMonthKey,
+        profile: ServerProfileRecord,
+        workerID: Int,
+        v2Services: BackupV2RuntimeServices?,
+        eventStream: BackupEventStream,
+        workUnit: inout MonthWorkUnit
+    ) async throws -> (any BackupMonthStore)? {
+        let monthStore: any BackupMonthStore
+        do {
+            if let v2Services {
+                monthStore = try await V2MonthLoadAndPublish.loadAndPublishSnapshot(
+                    client: client,
+                    basePath: profile.basePath,
+                    month: monthKey,
+                    v2Services: v2Services,
+                    remoteIndexService: remoteIndexService,
+                    stepLogger: { message in
+                        eventStream.emitLog(message, level: .error)
+                    }
+                )
+            } else {
+                monthStore = try await MonthManifestStore.loadOrCreate(
+                    client: client,
+                    basePath: profile.basePath,
+                    year: monthKey.year,
+                    month: monthKey.month,
+                    stepLogger: { message in
+                        eventStream.emitLog(message, level: .error)
+                    }
+                )
+                // loadOrCreate may have cleaned manifest rows; sync to snapshotCache so consumers don't see stale state.
+                remoteIndexService.publishMonthSnapshot(of: monthStore, for: monthKey)
+            }
+        } catch {
+            if error is CancellationError {
+                workUnit.markPaused()
+                return nil
+            }
+            eventStream.emitLog(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.parallel.loadManifestFailed"),
+                    workerID + 1,
+                    monthKey.text,
+                    profile.userFacingStorageErrorMessage(error)
+                ),
+                level: .error
+            )
+            throw error
+        }
+        return monthStore
+    }
+
+    private func emitMonthSkipIfFullyBackedUp(
+        monthAssetIDs: [PhotoKitLocalIdentifier],
+        monthStore: any BackupMonthStore,
+        monthKey: LibraryMonthKey,
+        workerID: Int,
+        aggregator: ParallelBackupProgressAggregator,
+        eventStream: BackupEventStream
+    ) async -> Bool {
+        guard monthAlreadyFullyBackedUp(
+            monthAssetIDs: monthAssetIDs,
+            monthStore: monthStore
+        ) else {
+            return false
+        }
+        let progressState = await aggregator.recordMonthSkipped(count: monthAssetIDs.count)
+        eventStream.emit(.progress(BackupProgress(
+            succeeded: progressState.state.succeeded,
+            failed: progressState.state.failed,
+            skipped: progressState.state.skipped,
+            total: progressState.state.total,
+            message: String.localizedStringWithFormat(
+                String(localized: "backup.parallel.monthPreCovered"),
+                workerID + 1,
+                monthKey.text,
+                monthAssetIDs.count
+            ),
+            logMessage: nil,
+            logLevel: .info,
+            itemEvent: nil,
+            transferState: nil
+        )))
+        if let timingSummary = progressState.timingSummary {
+            eventStream.emitLog(timingSummary, level: .debug)
+        }
+        return true
+    }
+
+    /// End-of-month flush + finish/publish. Returns `.breakMonthLoop` for every path the inline code
+    /// broke the month loop on (the `shouldBreakMonthLoop` flag and the embedded onMonthUploaded
+    /// pause-break), `.proceed` otherwise. The `logErrorAndRethrow` path throws, propagating unchanged.
+    private func finishMonthFlushingAndPublishing(
+        monthStore: any BackupMonthStore,
+        monthKey: LibraryMonthKey,
+        profile: ServerProfileRecord,
+        workerID: Int,
+        v2Services: BackupV2RuntimeServices?,
+        transaction: MonthCommitTransaction,
+        onMonthUploaded: BackupMonthFinalizer?,
+        workUnit: inout MonthWorkUnit,
+        eventStream: BackupEventStream
+    ) async throws -> MonthLoopFlow {
+        let shouldFinishMonth = !workUnit.paused && !workUnit.hasFatal
+        let hadDirtyManifestBeforeFinalize = monthStore.dirty
+        let skipFlushDueToUnavailable = workUnit.fatalError.map(profile.isConnectionUnavailableErrorIncludingFlushUnderlying) ?? false
+        let canFlushV2AfterDataConnectionLoss = skipFlushDueToUnavailable && v2Services != nil && workUnit.shouldFlushAfterDataConnectionLoss
+
+        if skipFlushDueToUnavailable && !canFlushV2AfterDataConnectionLoss {
+            eventStream.emitLog(
+                String.localizedStringWithFormat(
+                    String(localized: "backup.parallel.skipManifestFlush"),
+                    workerID + 1,
+                    monthKey.text
+                ),
+                level: .error
+            )
+            // U01 R03: EOM was skipped — no further flush attempt will commit the
+            // remaining V2 pending ops. Reconcile any provisional progress / hash-index
+            // intents left from earlier interval-fail paths (R03 deferred those rollbacks
+            // for the pause-EOM-may-commit case). For the EOM-skip case (typically
+            // connection-unavailable abort), the buffer/queue is stale and must be
+            // rolled back so counters and queued local writes match reality.
+            await transaction.abort()
+        } else {
+            var eomOutcome: V2MonthFlushOutcome?
+            var shouldBreakMonthLoop = false
+            do {
+                eomOutcome = try await Self.flushMonthStorePublishingDefensiveCommits(
+                    monthStore: monthStore,
+                    month: monthKey,
+                    remoteIndexService: remoteIndexService,
+                    ignoreCancellation: Self.foregroundFinalFlushIgnoresCancellation(
+                        paused: workUnit.paused,
+                        hasV2Services: monthStore.v2Services != nil
+                    )
+                )
+            } catch {
+                switch BackupFlushFailureClassification.classify(error, on: profile).foregroundEndOfMonthAction {
+                case .ignoreConcurrentReject:
+                    // Another flusher owns the pending state.
+                    break
+                case .pauseAndBreakMonthLoop:
+                    await transaction.abort()
+                    workUnit.markPaused()
+                    shouldBreakMonthLoop = true
+                case .abortMonthBreakMonthLoop:
+                    await transaction.abort()
+                    workUnit.markFatal(error)
+                    eventStream.emitErrorLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.parallel.flushManifestFailed"),
+                            workerID + 1,
+                            monthKey.text,
+                            profile.userFacingStorageErrorMessage(error)
+                        ),
+                        unless: error
+                    )
+                    shouldBreakMonthLoop = true
+                case .logErrorAndRethrow:
+                    await transaction.abort()
+                    eventStream.emitErrorLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.parallel.flushManifestFailed"),
+                            workerID + 1,
+                            monthKey.text,
+                            profile.userFacingStorageErrorMessage(error)
+                        ),
+                        unless: error
+                    )
+                    throw error
+                }
+            }
+
+            if let outcome = eomOutcome {
+                await transaction.applyDurableSideEffects(outcome: outcome)
+                // U01 R02: end-of-month partial multi-chunk failure. The remaining
+                // V2 pending ops die with this V2MonthSession (no further flush in
+                // this session for this month), so reconcile counters + intents.
+                if monthStore.hasUncommittedV2Ops {
+                    await transaction.abort()
+                    let displayError = outcome.displayError
+                    let underlyingMessage = displayError.map {
+                        profile.userFacingStorageErrorMessage($0)
+                    } ?? ""
+                    eventStream.emitErrorLog(
+                        String.localizedStringWithFormat(
+                            String(localized: "backup.parallel.flushManifestFailed"),
+                            workerID + 1,
+                            monthKey.text,
+                            underlyingMessage
+                        ),
+                        unless: displayError ?? NSError(domain: "U01Partial", code: 0)
+                    )
+                    if let displayError,
+                       profile.isConnectionUnavailableErrorIncludingFlushUnderlying(displayError) {
+                        workUnit.markFatal(displayError)
+                    } else {
+                        workUnit.markPaused()
+                    }
+                    shouldBreakMonthLoop = true
+                } else if let dispatch = BackupFlushFailureClassification.foregroundEndOfMonthPartialDispatch(
+                    outcome: outcome,
+                    profile: profile,
+                    shouldFinishMonth: shouldFinishMonth
+                ) {
+                    switch dispatch.action {
+                    case .pauseAndBreakMonthLoop:
+                        workUnit.markPaused()
+                        shouldBreakMonthLoop = true
+                    case .abortMonthBreakMonthLoop:
+                        workUnit.markFatal(dispatch.displayError)
+                        eventStream.emitErrorLog(
+                            String.localizedStringWithFormat(
+                                String(localized: "backup.parallel.flushManifestFailed"),
+                                workerID + 1,
+                                monthKey.text,
+                                profile.userFacingStorageErrorMessage(dispatch.displayError)
+                            ),
+                            unless: dispatch.displayError
+                        )
+                        shouldBreakMonthLoop = true
+                    case .logErrorAndEmitDeferred:
+                        eventStream.emitErrorLog(
+                            String.localizedStringWithFormat(
+                                String(localized: "backup.parallel.flushManifestFailed"),
+                                workerID + 1,
+                                monthKey.text,
+                                profile.userFacingStorageErrorMessage(dispatch.displayError)
+                            ),
+                            unless: dispatch.displayError
+                        )
+                        Self.emitUploadDurableSnapshotDeferred(
+                            eventStream: eventStream,
+                            month: monthKey,
+                            message: profile.userFacingStorageErrorMessage(dispatch.displayError)
+                        )
+                    case .logErrorOnly:
+                        eventStream.emitErrorLog(
+                            String.localizedStringWithFormat(
+                                String(localized: "backup.parallel.flushManifestFailed"),
+                                workerID + 1,
+                                monthKey.text,
+                                profile.userFacingStorageErrorMessage(dispatch.displayError)
+                            ),
+                            unless: dispatch.displayError
+                        )
+                    }
+                } else if shouldFinishMonth {
+                    let emitCompleted: () -> Void = {
+                        eventStream.emit(.monthChanged(MonthChangeEvent(
+                            year: monthKey.year,
+                            month: monthKey.month,
+                            action: .completed
+                        )))
+                    }
+                    if let onMonthUploaded {
+                        switch await onMonthUploaded(monthKey) {
+                        case .success:
+                            emitCompleted()
+                        case .incomplete(let summary):
+                            let message = BackupMonthIncompleteSummaryRenderer.message(for: summary, month: monthKey)
+                            eventStream.emitLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.finalizationFailed"),
+                                    workerID + 1,
+                                    monthKey.text,
+                                    message
+                                ),
+                                level: .warning
+                            )
+                            eventStream.emit(.monthChanged(MonthChangeEvent(
+                                year: monthKey.year,
+                                month: monthKey.month,
+                                action: .incomplete(summary)
+                            )))
+                        case .failed(let failure):
+                            eventStream.emitLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.finalizationFailed"),
+                                    workerID + 1,
+                                    monthKey.text,
+                                    failure.message
+                                ),
+                                level: .error
+                            )
+                            // Surface as fatal so Home and the worker agree the month failed.
+                            var userInfo: [String: Any] = [
+                                NSLocalizedDescriptionKey: "onMonthUploaded failed: \(failure.message)"
+                            ]
+                            if let underlyingError = failure.underlyingError {
+                                userInfo[NSUnderlyingErrorKey] = underlyingError
+                            }
+                            workUnit.markFatalKeepingClient(NSError(
+                                domain: "BackupParallelExecutor",
+                                code: -201,
+                                userInfo: userInfo
+                            ))
+                        case .cancelled:
+                            workUnit.markPaused()
+                            eventStream.emitLog(
+                                String.localizedStringWithFormat(
+                                    String(localized: "backup.parallel.finalizationCancelled"),
+                                    workerID + 1,
+                                    monthKey.text
+                                ),
+                                level: .info
+                            )
+                        }
+                        if workUnit.paused {
+                            return .breakMonthLoop
+                        }
+                    } else {
+                        emitCompleted()
+                    }
+                } else {
+                    if workUnit.hasFatal {
+                        eventStream.emitLog(
+                            String.localizedStringWithFormat(
+                                String(localized: "backup.parallel.monthFatalError"),
+                                workerID + 1,
+                                monthKey.text
+                            ),
+                            level: .error
+                        )
+                    } else {
+                        let pauseLog = hadDirtyManifestBeforeFinalize
+                            ? String.localizedStringWithFormat(
+                                String(localized: "backup.parallel.monthPausedFlushed"),
+                                workerID + 1,
+                                monthKey.text
+                            )
+                            : String.localizedStringWithFormat(
+                                String(localized: "backup.parallel.monthPaused"),
+                                workerID + 1,
+                                monthKey.text
+                            )
+                        eventStream.emitLog(pauseLog, level: .info)
+                    }
+                }
+            }
+            if shouldBreakMonthLoop { return .breakMonthLoop }
+        }
+        return .proceed
     }
 
     private func monthAlreadyFullyBackedUp(

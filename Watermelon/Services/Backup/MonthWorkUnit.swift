@@ -1,5 +1,14 @@
 import Foundation
 
+/// Arch-VII A-II B5b: control signal returned by month-loop phases extracted out of
+/// `runParallelMonthWorker`. Swift `break` cannot cross a function boundary, so an extracted region
+/// that previously `break`ed the month loop returns `.breakMonthLoop` and the caller (still inside
+/// the loop) reproduces the break verbatim. `throw` propagates unchanged via the helper's `throws`.
+enum MonthLoopFlow {
+    case proceed
+    case breakMonthLoop
+}
+
 /// Arch-VII A-II B5: explicit representation of the four cross-phase lifecycle flags that
 /// `runParallelMonthWorker` previously tracked as loose mutable `var`s. Each old flag maps to one
 /// field and each old assignment maps to one named transition, so the control flow stays byte-identical.
