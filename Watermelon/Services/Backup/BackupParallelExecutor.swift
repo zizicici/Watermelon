@@ -194,7 +194,7 @@ struct BackupParallelExecutor: Sendable {
         onMonthUploaded: BackupMonthFinalizer? = nil,
         v2Services: BackupV2RuntimeServices? = nil
     ) async throws -> WorkerRunState {
-        var workerState = WorkerRunState()
+        var workUnit = MonthWorkUnit()
         let client: any RemoteStorageClientProtocol
         do {
             client = try await clientPool.acquire()
@@ -209,11 +209,10 @@ struct BackupParallelExecutor: Sendable {
             )
             throw error
         }
-        var clientReusable = true
         do {
             while let monthPlan = await monthQueue.next() {
                 if Task.isCancelled {
-                    workerState.paused = true
+                    workUnit.markPaused()
                     break
                 }
 
@@ -248,7 +247,7 @@ struct BackupParallelExecutor: Sendable {
                     }
                 } catch {
                     if error is CancellationError {
-                        workerState.paused = true
+                        workUnit.markPaused()
                         break
                     }
                     eventStream.emitLog(
@@ -279,7 +278,7 @@ struct BackupParallelExecutor: Sendable {
                     action: .started
                 )))
 
-                var monthFatalError: Error?
+                workUnit.beginMonth()
                 let transaction = MonthCommitTransaction(
                     aggregator: aggregator,
                     assetProcessor: assetProcessor,
@@ -292,7 +291,6 @@ struct BackupParallelExecutor: Sendable {
                 var missingAssetCount = 0
                 var hasLoggedLocalHashCacheWarning = false
                 var flushCounter = AssetBatchFlushCounter(threshold: Self.flushInterval)
-                var shouldFlushAfterDataConnectionLoss = false
 
                 var skippedMonthShortCircuit = false
                 if monthAlreadyFullyBackedUp(
@@ -363,13 +361,13 @@ struct BackupParallelExecutor: Sendable {
 
                     for assetID in batchAssetIDs {
                         if Task.isCancelled {
-                            workerState.paused = true
+                            workUnit.markPaused()
                             break
                         }
 
                         await BackupThermalThrottle.shared.waitIfNeeded()
                         if Task.isCancelled {
-                            workerState.paused = true
+                            workUnit.markPaused()
                             break
                         }
 
@@ -484,15 +482,14 @@ struct BackupParallelExecutor: Sendable {
                                             // become durable. Reconciliation happens after EOM
                                             // (applyDurableBatchSideEffects + hasUncommittedV2Ops
                                             // branch, EOM catch, or EOM-skip branch below).
-                                            workerState.paused = true
+                                            workUnit.markPaused()
                                             shouldBreakAssetLoop = true
                                         case .abortMonthBreakAssetLoop:
                                             // U01 R03: see above — EOM-skip branch below rolls
                                             // back any remaining buffer/intents for the
                                             // connection-unavailable abort path that suppresses
                                             // the final flush.
-                                            clientReusable = false
-                                            monthFatalError = error
+                                            workUnit.markFatal(error)
                                             eventStream.emitLog(
                                                 String.localizedStringWithFormat(
                                                     String(localized: "backup.parallel.flushManifestFailed"),
@@ -543,10 +540,9 @@ struct BackupParallelExecutor: Sendable {
                                         )
                                         if let displayError,
                                            profile.isConnectionUnavailableErrorIncludingFlushUnderlying(displayError) {
-                                            clientReusable = false
-                                            monthFatalError = displayError
+                                            workUnit.markFatal(displayError)
                                         } else {
-                                            workerState.paused = true
+                                            workUnit.markPaused()
                                         }
                                         shouldBreakAssetLoop = true
                                     } else if let outcome = intervalOutcome,
@@ -556,11 +552,10 @@ struct BackupParallelExecutor: Sendable {
                                        ) {
                                         switch dispatch.action {
                                         case .pauseAndBreakAssetLoop:
-                                            workerState.paused = true
+                                            workUnit.markPaused()
                                             shouldBreakAssetLoop = true
                                         case .abortMonthBreakAssetLoop:
-                                            clientReusable = false
-                                            monthFatalError = dispatch.displayError
+                                            workUnit.markFatal(dispatch.displayError)
                                             eventStream.emitLog(
                                                 String.localizedStringWithFormat(
                                                     String(localized: "backup.parallel.flushManifestFailed"),
@@ -595,7 +590,7 @@ struct BackupParallelExecutor: Sendable {
                             var shouldBreakAssetLoop = false
                             switch assetDispatch.action {
                             case .pauseAndBreakAssetLoop:
-                                workerState.paused = true
+                                workUnit.markPaused()
                                 shouldBreakAssetLoop = true
                             case .abortMonthDataConnectionLossBreakAssetLoop:
                                 let displayName = BackupAssetResourcePlanner.assetDisplayName(
@@ -603,9 +598,7 @@ struct BackupParallelExecutor: Sendable {
                                     selectedResources: selectedResources
                                 )
                                 let errorMessage = profile.userFacingStorageErrorMessage(assetDispatch.error)
-                                clientReusable = false
-                                monthFatalError = assetDispatch.error
-                                shouldFlushAfterDataConnectionLoss = true
+                                workUnit.markDataConnectionLost(assetDispatch.error)
                                 eventStream.emitLog(
                                     String.localizedStringWithFormat(
                                         String(localized: "backup.parallel.connectionLostDuringAsset"),
@@ -651,7 +644,7 @@ struct BackupParallelExecutor: Sendable {
                         }
                     }
 
-                    if workerState.paused || monthFatalError != nil {
+                    if workUnit.paused || workUnit.hasFatal {
                         break
                     }
 
@@ -672,10 +665,10 @@ struct BackupParallelExecutor: Sendable {
                 }
                 }
 
-                let shouldFinishMonth = !workerState.paused && monthFatalError == nil
+                let shouldFinishMonth = !workUnit.paused && !workUnit.hasFatal
                 let hadDirtyManifestBeforeFinalize = monthStore.dirty
-                let skipFlushDueToUnavailable = monthFatalError.map(profile.isConnectionUnavailableErrorIncludingFlushUnderlying) ?? false
-                let canFlushV2AfterDataConnectionLoss = skipFlushDueToUnavailable && v2Services != nil && shouldFlushAfterDataConnectionLoss
+                let skipFlushDueToUnavailable = workUnit.fatalError.map(profile.isConnectionUnavailableErrorIncludingFlushUnderlying) ?? false
+                let canFlushV2AfterDataConnectionLoss = skipFlushDueToUnavailable && v2Services != nil && workUnit.shouldFlushAfterDataConnectionLoss
 
                 if skipFlushDueToUnavailable && !canFlushV2AfterDataConnectionLoss {
                     eventStream.emitLog(
@@ -702,7 +695,7 @@ struct BackupParallelExecutor: Sendable {
                             month: monthKey,
                             remoteIndexService: remoteIndexService,
                             ignoreCancellation: Self.foregroundFinalFlushIgnoresCancellation(
-                                paused: workerState.paused,
+                                paused: workUnit.paused,
                                 hasV2Services: monthStore.v2Services != nil
                             )
                         )
@@ -713,12 +706,11 @@ struct BackupParallelExecutor: Sendable {
                             break
                         case .pauseAndBreakMonthLoop:
                             await transaction.abort()
-                            workerState.paused = true
+                            workUnit.markPaused()
                             shouldBreakMonthLoop = true
                         case .abortMonthBreakMonthLoop:
                             await transaction.abort()
-                            clientReusable = false
-                            monthFatalError = error
+                            workUnit.markFatal(error)
                             eventStream.emitErrorLog(
                                 String.localizedStringWithFormat(
                                     String(localized: "backup.parallel.flushManifestFailed"),
@@ -766,10 +758,9 @@ struct BackupParallelExecutor: Sendable {
                             )
                             if let displayError,
                                profile.isConnectionUnavailableErrorIncludingFlushUnderlying(displayError) {
-                                clientReusable = false
-                                monthFatalError = displayError
+                                workUnit.markFatal(displayError)
                             } else {
-                                workerState.paused = true
+                                workUnit.markPaused()
                             }
                             shouldBreakMonthLoop = true
                         } else if let dispatch = BackupFlushFailureClassification.foregroundEndOfMonthPartialDispatch(
@@ -779,11 +770,10 @@ struct BackupParallelExecutor: Sendable {
                         ) {
                             switch dispatch.action {
                             case .pauseAndBreakMonthLoop:
-                                workerState.paused = true
+                                workUnit.markPaused()
                                 shouldBreakMonthLoop = true
                             case .abortMonthBreakMonthLoop:
-                                clientReusable = false
-                                monthFatalError = dispatch.displayError
+                                workUnit.markFatal(dispatch.displayError)
                                 eventStream.emitErrorLog(
                                     String.localizedStringWithFormat(
                                         String(localized: "backup.parallel.flushManifestFailed"),
@@ -865,13 +855,13 @@ struct BackupParallelExecutor: Sendable {
                                     if let underlyingError = failure.underlyingError {
                                         userInfo[NSUnderlyingErrorKey] = underlyingError
                                     }
-                                    monthFatalError = NSError(
+                                    workUnit.markFatalKeepingClient(NSError(
                                         domain: "BackupParallelExecutor",
                                         code: -201,
                                         userInfo: userInfo
-                                    )
+                                    ))
                                 case .cancelled:
-                                    workerState.paused = true
+                                    workUnit.markPaused()
                                     eventStream.emitLog(
                                         String.localizedStringWithFormat(
                                             String(localized: "backup.parallel.finalizationCancelled"),
@@ -881,14 +871,14 @@ struct BackupParallelExecutor: Sendable {
                                         level: .info
                                     )
                                 }
-                                if workerState.paused {
+                                if workUnit.paused {
                                     break
                                 }
                             } else {
                                 emitCompleted()
                             }
                         } else {
-                            if monthFatalError != nil {
+                            if workUnit.hasFatal {
                                 eventStream.emitLog(
                                     String.localizedStringWithFormat(
                                         String(localized: "backup.parallel.monthFatalError"),
@@ -916,22 +906,22 @@ struct BackupParallelExecutor: Sendable {
                     if shouldBreakMonthLoop { break }
                 }
 
-                if let monthFatalError {
+                if let monthFatalError = workUnit.fatalError {
                     throw monthFatalError
                 }
 
-                if workerState.paused {
+                if workUnit.paused {
                     break
                 }
             }
 
-            await clientPool.release(client, reusable: clientReusable)
-            return workerState
+            await clientPool.release(client, reusable: workUnit.clientReusable)
+            return workUnit.workerRunState
         } catch {
             if profile.isConnectionUnavailableErrorIncludingFlushUnderlying(error) {
-                clientReusable = false
+                workUnit.markClientNotReusable()
             }
-            await clientPool.release(client, reusable: clientReusable)
+            await clientPool.release(client, reusable: workUnit.clientReusable)
             throw error
         }
     }
