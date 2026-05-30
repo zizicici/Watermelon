@@ -266,11 +266,13 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
                 return metadataClient
             }
         )
-        guard case .failure(.builderOpen(let failure)) = result else {
+        guard case .failure(.builderOpen(let error)) = result else {
             XCTFail("expected .builderOpen, got \(result)")
             return
         }
-        XCTAssertEqual(failure.kind, .requiresForegroundMigration)
+        guard case BackupV2RuntimeBuildError.requiresForegroundMigration = error else {
+            return XCTFail("expected requiresForegroundMigration, got \(error)")
+        }
         let disconnects = await metadataClient.disconnectCount
         XCTAssertGreaterThanOrEqual(disconnects, 1, "BG builder failure must disconnect owned metadata client")
     }
@@ -299,11 +301,11 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
                 return metadataClient
             }
         )
-        guard case .failure(.builderOpen(let failure)) = result else {
+        guard case .failure(.builderOpen(let error)) = result else {
             XCTFail("expected .builderOpen, got \(result)")
             return
         }
-        XCTAssertEqual(failure.kind, .cancellation)
+        XCTAssertTrue(RemoteWriteClassifier.isCancellation(error), "expected cancellation, got \(error)")
         let disconnects = await metadataClient.disconnectCount
         XCTAssertGreaterThanOrEqual(disconnects, 1, "BG builder cancellation must disconnect owned metadata client")
     }
@@ -311,8 +313,8 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
     func testBackgroundRun_builderUnknownError_returnsBuilderOpenOther_andDisconnectsMetadata() async throws {
         // A raw metadata error injected at the version-file read path escapes
         // BackupV2RuntimeBuilder.build without being translated to a BuildError /
-        // BootstrapError / VersionConflict / BackupCompatibilityError, so the BG
-        // factory's classifyBuildFailure call falls through to .other.
+        // BootstrapError / VersionConflict / BackupCompatibilityError, so the runner's
+        // disposition mapping falls through to .skippedOther.
         struct ProbeError: Error {}
         let dataClient = InMemoryRemoteStorageClient()
         dataClient.setMoveIfAbsentGuarantee(.exclusive)
@@ -335,11 +337,15 @@ final class BackupV2RuntimeLeaseTests: XCTestCase {
                 return metadataClient
             }
         )
-        guard case .failure(.builderOpen(let failure)) = result else {
+        guard case .failure(.builderOpen(let error)) = result else {
             XCTFail("expected .builderOpen, got \(result)")
             return
         }
-        XCTAssertEqual(failure.kind, .other, "non-translated builder error must classify as .other")
+        XCTAssertEqual(
+            BackgroundBackupRunner.runtimeOpenFailureDisposition(error),
+            .skippedOther,
+            "non-translated builder error must map to .skippedOther"
+        )
         let disconnects = await metadataClient.disconnectCount
         XCTAssertGreaterThanOrEqual(disconnects, 1, "BG builder .other failure must disconnect owned metadata client")
     }

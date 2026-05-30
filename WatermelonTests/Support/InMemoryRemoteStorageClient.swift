@@ -44,6 +44,10 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol {
 
     init() {}
 
+    init(graceSeconds: TimeInterval) {
+        readAfterWriteGraceBox.withLock { $0 = graceSeconds }
+    }
+
 
     func setAtomicCreateMode(_ mode: AtomicCreateMode) {
         atomicCreateMode = mode

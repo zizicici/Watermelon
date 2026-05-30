@@ -130,28 +130,31 @@ final class BackgroundBackupRunner {
     }
 
     static func runtimeOpenFailureDisposition(
-        _ kind: BackupV2RuntimeOpenFailureKind
+        _ error: Error
     ) -> BackgroundRuntimeOpenFailureDisposition {
-        switch kind {
-        case .requiresForegroundMigration:
-            return .skippedForegroundMigration
-        case .unsupportedRemoteFormat(let minAppVersion):
-            return .failedUnsupportedRemoteFormat(minAppVersion: minAppVersion)
-        case .repoIdentityMismatch:
-            return .failedRepoIdentityMismatch
-        case .repoFormatRegression:
-            return .failedRepoFormatRegression
-        case .damagedV2Repo:
-            return .failedDamagedV2Repo
-        case .profileMissingID:
-            return .failedProfileMissingID
-        case .cancellation:
+        if RemoteWriteClassifier.isCancellation(error) {
             return .cancelled
-        case .transientRemoteFailure:
-            return .failedTransientRemoteFailure
-        case .other:
-            return .skippedOther
         }
+        if let buildError = error as? BackupV2RuntimeBuildError {
+            switch buildError {
+            case .requiresForegroundMigration:
+                return .skippedForegroundMigration
+            case .unsupportedRemoteFormat(let minAppVersion):
+                return .failedUnsupportedRemoteFormat(minAppVersion: minAppVersion)
+            case .repoIdentityMismatch:
+                return .failedRepoIdentityMismatch
+            case .repoFormatRegression:
+                return .failedRepoFormatRegression
+            case .damagedV2Repo:
+                return .failedDamagedV2Repo
+            case .profileMissingID:
+                return .failedProfileMissingID
+            }
+        }
+        if RemoteWriteClassifier.isTransientVerifyFailure(error) {
+            return .failedTransientRemoteFailure
+        }
+        return .skippedOther
     }
 
     private func backupProfile(
@@ -230,9 +233,9 @@ final class BackgroundBackupRunner {
             )
             await client.disconnectSafely()
             return .failed
-        case .failure(.builderOpen(let failure)):
+        case .failure(.builderOpen(let error)):
             await client.disconnectSafely()
-            return await handleRuntimeOpenFailure(failure, profile: profile, writer: writer)
+            return await handleRuntimeOpenFailure(error, profile: profile, writer: writer)
         }
         let v2Services = lease.services
 
@@ -303,11 +306,11 @@ final class BackgroundBackupRunner {
     }
 
     private func handleRuntimeOpenFailure(
-        _ failure: BackupV2RuntimeOpenFailure,
+        _ error: Error,
         profile: ServerProfileRecord,
         writer: ExecutionLogSessionWriter
     ) async -> ProfileRunResult {
-        switch Self.runtimeOpenFailureDisposition(failure.kind) {
+        switch Self.runtimeOpenFailureDisposition(error) {
         case .skippedForegroundMigration:
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.profileNeedsForegroundMigration"), profile.name),
@@ -339,7 +342,7 @@ final class BackgroundBackupRunner {
             )
             return .failed
         case .failedProfileMissingID:
-            let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: failure)
+            let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: error)
             await writer.appendLog(
                 String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, mapped.localizedDescription),
                 level: .error
@@ -349,13 +352,13 @@ final class BackgroundBackupRunner {
             return .cancelled
         case .failedTransientRemoteFailure:
             await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(failure.originalError)),
+                String(format: String(localized: "backup.auto.log.profileConnectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
                 level: .error
             )
             return .failed
         case .skippedOther:
             await writer.appendLog(
-                String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, profile.userFacingStorageErrorMessage(failure.originalError)),
+                String(format: String(localized: "backup.auto.log.profileFormatInspectFailed"), profile.name, profile.userFacingStorageErrorMessage(error)),
                 level: .warning
             )
             return .skipped

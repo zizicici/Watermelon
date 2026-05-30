@@ -111,32 +111,33 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
         await services.shutdown()
     }
     func testRuntimeOpenFailureClassificationTable() {
-        let cases: [(String, Error, BackupV2RuntimeOpenFailureKind)] = [
-            ("unsupported", BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: "9.9.9"), .unsupportedRemoteFormat(minAppVersion: "9.9.9")),
-            ("identity mismatch", BackupV2RuntimeBuildError.repoIdentityMismatch(stored: "stored", observed: "observed"), .repoIdentityMismatch),
-            ("foreground migration", BackupV2RuntimeBuildError.requiresForegroundMigration, .requiresForegroundMigration),
-            ("format regression", BackupV2RuntimeBuildError.repoFormatRegression(repoID: "repo"), .repoFormatRegression),
-            ("damaged v2", BackupV2RuntimeBuildError.damagedV2Repo, .damagedV2Repo),
-            ("missing profile id", BackupV2RuntimeBuildError.profileMissingID, .profileMissingID),
-            ("cancellation", CancellationError(), .cancellation),
+        // Classification is now observable only through the disposition mapping; assert each
+        // raw open error reproduces the disposition the deleted kind layer used to yield.
+        let cases: [(String, Error, BackgroundRuntimeOpenFailureDisposition)] = [
+            ("unsupported", BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: "9.9.9"), .failedUnsupportedRemoteFormat(minAppVersion: "9.9.9")),
+            ("identity mismatch", BackupV2RuntimeBuildError.repoIdentityMismatch(stored: "stored", observed: "observed"), .failedRepoIdentityMismatch),
+            ("foreground migration", BackupV2RuntimeBuildError.requiresForegroundMigration, .skippedForegroundMigration),
+            ("format regression", BackupV2RuntimeBuildError.repoFormatRegression(repoID: "repo"), .failedRepoFormatRegression),
+            ("damaged v2", BackupV2RuntimeBuildError.damagedV2Repo, .failedDamagedV2Repo),
+            ("missing profile id", BackupV2RuntimeBuildError.profileMissingID, .failedProfileMissingID),
+            ("cancellation", CancellationError(), .cancelled),
             (
                 "wrapped cancellation",
                 RemoteStorageClientError.underlying(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)),
-                .cancellation
+                .cancelled
             ),
-            ("transient", RemoteStorageClientError.notConnected, .transientRemoteFailure),
-            ("other", ProbeError.generic, .other)
+            ("transient", RemoteStorageClientError.notConnected, .failedTransientRemoteFailure),
+            ("other", ProbeError.generic, .skippedOther)
         ]
 
         for (name, error, expected) in cases {
-            let failure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(error)
-            XCTAssertEqual(failure.kind, expected, name)
+            XCTAssertEqual(BackgroundBackupRunner.runtimeOpenFailureDisposition(error), expected, name)
         }
 
         let identity = BackupV2RuntimeBuildError.repoIdentityMismatch(stored: "stored", observed: "observed")
-        let identityFailure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(identity)
-        guard case BackupV2RuntimeBuildError.repoIdentityMismatch(let stored, let observed) = identityFailure.originalError else {
-            return XCTFail("expected original identity mismatch to retain associated values")
+        let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: identity)
+        guard case BackupCompatibilityError.repoIdentityMismatch(let stored, let observed) = mapped else {
+            return XCTFail("expected compatibility identity mismatch to retain associated values")
         }
         XCTAssertEqual(stored, "stored")
         XCTAssertEqual(observed, "observed")
@@ -189,8 +190,7 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
         ]
 
         for (_, input, assert) in cases {
-            let failure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(input)
-            let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: failure)
+            let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: input)
             assert(mapped, #filePath, #line)
         }
     }
@@ -299,20 +299,20 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
     }
 
     func testBackgroundRuntimeOpenFailureDispositionTable() {
-        let cases: [(BackupV2RuntimeOpenFailureKind, BackgroundRuntimeOpenFailureDisposition)] = [
-            (.requiresForegroundMigration, .skippedForegroundMigration),
-            (.unsupportedRemoteFormat(minAppVersion: "9.9.9"), .failedUnsupportedRemoteFormat(minAppVersion: "9.9.9")),
-            (.repoIdentityMismatch, .failedRepoIdentityMismatch),
-            (.repoFormatRegression, .failedRepoFormatRegression),
-            (.damagedV2Repo, .failedDamagedV2Repo),
-            (.profileMissingID, .failedProfileMissingID),
-            (.cancellation, .cancelled),
-            (.transientRemoteFailure, .failedTransientRemoteFailure),
-            (.other, .skippedOther)
+        let cases: [(Error, BackgroundRuntimeOpenFailureDisposition)] = [
+            (BackupV2RuntimeBuildError.requiresForegroundMigration, .skippedForegroundMigration),
+            (BackupV2RuntimeBuildError.unsupportedRemoteFormat(minAppVersion: "9.9.9"), .failedUnsupportedRemoteFormat(minAppVersion: "9.9.9")),
+            (BackupV2RuntimeBuildError.repoIdentityMismatch(stored: "s", observed: "o"), .failedRepoIdentityMismatch),
+            (BackupV2RuntimeBuildError.repoFormatRegression(repoID: "repo"), .failedRepoFormatRegression),
+            (BackupV2RuntimeBuildError.damagedV2Repo, .failedDamagedV2Repo),
+            (BackupV2RuntimeBuildError.profileMissingID, .failedProfileMissingID),
+            (CancellationError(), .cancelled),
+            (RemoteStorageClientError.notConnected, .failedTransientRemoteFailure),
+            (ProbeError.generic, .skippedOther)
         ]
 
-        for (kind, expected) in cases {
-            XCTAssertEqual(BackgroundBackupRunner.runtimeOpenFailureDisposition(kind), expected)
+        for (error, expected) in cases {
+            XCTAssertEqual(BackgroundBackupRunner.runtimeOpenFailureDisposition(error), expected)
         }
     }
     func testProductionBackupV2RuntimeBuilderCallSitesDoNotDisableMaintenanceExceptVerifyMonth() throws {
@@ -387,8 +387,7 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
 
     func testCompatibilityErrorRoundTripsRepoIdentityMismatchPayload() {
         let build = BackupV2RuntimeBuildError.repoIdentityMismatch(stored: "X", observed: "Y")
-        let failure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(build)
-        let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: failure)
+        let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: build)
         guard case BackupCompatibilityError.repoIdentityMismatch(let stored, let observed) = mapped else {
             return XCTFail("expected repoIdentityMismatch, got \(mapped)")
         }
@@ -398,8 +397,7 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
 
     func testCompatibilityErrorRepoIdentityMismatchEmptyPayloadBecomesNil() {
         let build = BackupV2RuntimeBuildError.repoIdentityMismatch(stored: "", observed: "")
-        let failure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(build)
-        let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: failure)
+        let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: build)
         guard case BackupCompatibilityError.repoIdentityMismatch(let stored, let observed) = mapped else {
             return XCTFail("expected repoIdentityMismatch, got \(mapped)")
         }
@@ -409,8 +407,7 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
 
     func testCompatibilityErrorRoundTripsRepoFormatRegressionPayload() {
         let build = BackupV2RuntimeBuildError.repoFormatRegression(repoID: "repo-Z")
-        let failure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(build)
-        let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: failure)
+        let mapped = BackupV2RuntimeOpenErrorMapping.compatibilityError(for: build)
         guard case BackupCompatibilityError.repoFormatRegression(let repoID) = mapped else {
             return XCTFail("expected repoFormatRegression, got \(mapped)")
         }
@@ -609,16 +606,14 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
         // path is outside the lease scope (M15 territory) and uses a different
         // helper, so it is not banned here.
         XCTAssertFalse(preparation.contains("BackupV2RuntimeOpenErrorMapping.withCompatibilityMapping"))
-        XCTAssertFalse(preparation.contains("BackupV2RuntimeOpenErrorMapping.classifyBuildFailure"))
         XCTAssertFalse(preparation.contains("withBackupV2RuntimeBuildErrorMapping"))
         XCTAssertFalse(preparation.contains("catch BackupV2RuntimeBuildError"))
 
         XCTAssertFalse(background.contains("BackupV2RuntimeOpenErrorMapping.withCompatibilityMapping"))
-        XCTAssertFalse(background.contains("BackupV2RuntimeOpenErrorMapping.classifyBuildFailure"))
         XCTAssertFalse(background.contains("catch BackupV2RuntimeBuildError"))
 
         XCTAssertTrue(lease.contains("BackupV2RuntimeOpenErrorMapping.withCompatibilityMapping"))
-        XCTAssertTrue(lease.contains("BackupV2RuntimeOpenErrorMapping.classifyBuildFailure"))
+        XCTAssertTrue(lease.contains(".builderOpen(error)"))
 
         XCTAssertTrue(repoOpen.contains("BackupV2RuntimeOpenErrorMapping.withOpenErrorNormalization"))
         XCTAssertFalse(repoOpen.contains("withShapedRepoBootstrapErrorMapping"))

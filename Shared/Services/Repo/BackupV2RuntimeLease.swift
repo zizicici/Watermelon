@@ -23,8 +23,8 @@ enum BackgroundLeaseOpenFailure: Error, Sendable {
 
     /// `BackupV2RuntimeBuilder.build()` threw. Lease has already disconnected the
     /// metadata client it created. Caller still disconnects the data client and
-    /// dispatches via `BackgroundBackupRunner.handleRuntimeOpenFailure(failure, ...)`.
-    case builderOpen(BackupV2RuntimeOpenFailure)
+    /// dispatches the raw build error via `BackgroundBackupRunner.handleRuntimeOpenFailure(error, ...)`.
+    case builderOpen(Error)
 }
 
 extension BackupV2RuntimeLease {
@@ -106,8 +106,7 @@ extension BackupV2RuntimeLease {
             return .success(BackupV2RuntimeLease(services: services))
         } catch {
             await metadataClient.disconnectSafely()
-            let failure = BackupV2RuntimeOpenErrorMapping.classifyBuildFailure(error)
-            return .failure(.builderOpen(failure))
+            return .failure(.builderOpen(error))
         }
     }
 
@@ -144,7 +143,7 @@ extension BackupV2RuntimeLease {
         case compatibilityMappingDisconnectOnError
         /// withCompatibilityMapping(disconnectOnError: false) — verify
         case compatibilityMappingNoDisconnect
-        /// No wrapping — BG factory inspects the raw error and converts to BackupV2RuntimeOpenFailure
+        /// No wrapping — BG factory carries the raw build error to the runner for disposition mapping.
         case rawError
     }
 
