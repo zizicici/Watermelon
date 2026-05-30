@@ -98,9 +98,12 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         do {
             _ = try await session.flushToRemote(ignoreCancellation: false)
             XCTFail("expected invalid barrier to fail snapshot refresh")
-        } catch V2MonthSession.FlushError.snapshotWriteFailed(let assets, let tombstones, let underlying) {
-            XCTAssertTrue(assets.isEmpty)
-            XCTAssertTrue(tombstones.isEmpty)
+        } catch let deferred as V2MonthSession.MonthDurableSnapshotDeferred {
+            XCTAssertTrue(deferred.delta.committedAssetFingerprints.isEmpty)
+            XCTAssertTrue(deferred.delta.committedTombstoneFingerprints.isEmpty)
+            guard case .snapshotWriteFailed(let underlying) = deferred.flushError else {
+                return XCTFail("expected snapshotWriteFailed, got \(deferred.flushError)")
+            }
             guard case V2RetentionBarrierRefreshError.invalidBarrierSet(let invalid) = underlying else {
                 return XCTFail("expected invalidBarrierSet, got \(underlying)")
             }
@@ -139,9 +142,12 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         do {
             _ = try await session.flushToRemote(ignoreCancellation: false)
             XCTFail("expected snapshotWriteFailed")
-        } catch V2MonthSession.FlushError.snapshotWriteFailed(let assets, let tombstones, let underlying) {
-            XCTAssertEqual(assets, [rows.asset.assetFingerprint])
-            XCTAssertTrue(tombstones.isEmpty)
+        } catch let deferred as V2MonthSession.MonthDurableSnapshotDeferred {
+            XCTAssertEqual(deferred.delta.committedAssetFingerprints, [rows.asset.assetFingerprint])
+            XCTAssertTrue(deferred.delta.committedTombstoneFingerprints.isEmpty)
+            guard case .snapshotWriteFailed(let underlying) = deferred.flushError else {
+                return XCTFail("expected snapshotWriteFailed, got \(deferred.flushError)")
+            }
             guard case V2RetentionBarrierRefreshError.invalidBarrierSet(let invalid) = underlying else {
                 return XCTFail("expected invalidBarrierSet, got \(underlying)")
             }
@@ -336,8 +342,11 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         do {
             _ = try await session.flushToRemote(ignoreCancellation: false)
             XCTFail("expected freshCoverageMissingSessionWrites")
-        } catch V2MonthSession.FlushError.snapshotWriteFailed(let assets, _, let underlying) {
-            XCTAssertEqual(assets, [rows.asset.assetFingerprint])
+        } catch let deferred as V2MonthSession.MonthDurableSnapshotDeferred {
+            XCTAssertEqual(deferred.delta.committedAssetFingerprints, [rows.asset.assetFingerprint])
+            guard case .snapshotWriteFailed(let underlying) = deferred.flushError else {
+                return XCTFail("expected snapshotWriteFailed, got \(deferred.flushError)")
+            }
             guard case V2RetentionBarrierRefreshError.freshCoverageMissingSessionWrites(let month, _, let sessionWritten) = underlying else {
                 return XCTFail("expected freshCoverageMissingSessionWrites, got \(underlying)")
             }
@@ -366,7 +375,10 @@ final class V2BarrierAwareMonthSessionRefreshTests: XCTestCase {
         do {
             _ = try await session.flushToRemote(ignoreCancellation: false)
             XCTFail("expected freshCoverageMissingBarrier")
-        } catch V2MonthSession.FlushError.snapshotWriteFailed(_, _, let underlying) {
+        } catch let deferred as V2MonthSession.MonthDurableSnapshotDeferred {
+            guard case .snapshotWriteFailed(let underlying) = deferred.flushError else {
+                return XCTFail("expected snapshotWriteFailed, got \(deferred.flushError)")
+            }
             guard case V2RetentionBarrierRefreshError.freshCoverageMissingBarrier(let month, let fresh, let barrier) = underlying else {
                 return XCTFail("expected freshCoverageMissingBarrier, got \(underlying)")
             }

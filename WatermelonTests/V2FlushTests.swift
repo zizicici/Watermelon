@@ -237,7 +237,7 @@ final class V2FlushTests: XCTestCase {
         do {
             _ = try await store.flushToRemote(ignoreCancellation: false)
             XCTFail("expected occupied snapshot path to fail")
-        } catch V2MonthSession.FlushError.snapshotWriteFailed {
+        } catch is V2MonthSession.MonthDurableSnapshotDeferred {
         }
 
         let second = makeSingleAssetRows(assetByte: 0xD3, hashByte: 0xD4, name: "second.jpg")
@@ -320,8 +320,7 @@ final class V2FlushTests: XCTestCase {
             return
         }
         XCTAssertEqual(delta.committedAssetFingerprints, [rows.asset.assetFingerprint])
-        if case .snapshotWriteFailed(let committedAssets, _, _) = flushError {
-            XCTAssertEqual(committedAssets, [rows.asset.assetFingerprint])
+        if case .snapshotWriteFailed = flushError {
         } else {
             XCTFail("outcome.flushError must be FlushError.snapshotWriteFailed, got \(flushError)")
         }
@@ -1380,8 +1379,11 @@ final class V2FlushTests: XCTestCase {
         do {
             _ = try await store.flushToRemote()
             XCTFail("expected first snapshot write to fail on occupied path")
-        } catch V2MonthSession.FlushError.snapshotWriteFailed(let committedAssets, _, _) {
-            XCTAssertEqual(committedAssets, [asset.assetFingerprint])
+        } catch let deferred as V2MonthSession.MonthDurableSnapshotDeferred {
+            XCTAssertEqual(deferred.delta.committedAssetFingerprints, [asset.assetFingerprint])
+            guard case .snapshotWriteFailed = deferred.flushError else {
+                return XCTFail("expected snapshotWriteFailed, got \(deferred.flushError)")
+            }
         } catch {
             XCTFail("unexpected error: \(error)")
         }
@@ -1788,11 +1790,7 @@ final class V2FlushTests: XCTestCase {
             remotePath: "/snapshot.jsonl",
             underlying: CancellationError()
         )
-        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [],
-            committedTombstones: [],
-            underlying: SnapshotWriter.WriteError.finalizationFailed(gate)
-        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(underlying: SnapshotWriter.WriteError.finalizationFailed(gate))
         XCTAssertNotNil(wrapped.cancellationCause,
                         "cancellation BFS must unwrap FlushError → WriteError.finalizationFailed → MetadataCreateGate.Error.stagingVerificationFailed → CancellationError")
     }
@@ -1802,11 +1800,7 @@ final class V2FlushTests: XCTestCase {
             remotePath: "/commit.jsonl",
             underlying: CancellationError()
         )
-        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [TestFixtures.assetFingerprint(0xFF)],
-            committedTombstones: [],
-            underlying: SnapshotWriter.WriteError.ioFailure(gate)
-        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(underlying: SnapshotWriter.WriteError.ioFailure(gate))
         XCTAssertNotNil(wrapped.cancellationCause,
                         "cancellation BFS must unwrap FlushError → WriteError.ioFailure → MetadataCreateGate.Error.finalVerificationFailed → CancellationError")
     }
@@ -1816,22 +1810,14 @@ final class V2FlushTests: XCTestCase {
             remotePath: "/snapshot.jsonl",
             underlying: nil
         )
-        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [],
-            committedTombstones: [],
-            underlying: SnapshotWriter.WriteError.finalizationFailed(gate)
-        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(underlying: SnapshotWriter.WriteError.finalizationFailed(gate))
         XCTAssertNil(wrapped.cancellationCause,
                      "nil-underlying gate error (byte mismatch) must not be cancellation")
     }
 
     func testFlushErrorCancellationCause_nonExclusiveFinalizationIsNotCancellation() {
         let gate = MetadataCreateGate.Error.nonExclusiveFinalization(remotePath: "/snapshot.jsonl")
-        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [],
-            committedTombstones: [],
-            underlying: SnapshotWriter.WriteError.finalizationFailed(gate)
-        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(underlying: SnapshotWriter.WriteError.finalizationFailed(gate))
         XCTAssertNil(wrapped.cancellationCause,
                      "nonExclusiveFinalization must not be cancellation")
     }
@@ -1842,11 +1828,7 @@ final class V2FlushTests: XCTestCase {
             remotePath: "/snapshot.jsonl",
             underlying: urlCancel
         )
-        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [],
-            committedTombstones: [],
-            underlying: SnapshotWriter.WriteError.finalizationFailed(gate)
-        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(underlying: SnapshotWriter.WriteError.finalizationFailed(gate))
         XCTAssertNotNil(wrapped.cancellationCause,
                         "URLSession-level cancel (NSURLErrorDomain/-999) must be classified as cancellation so user-stop mid-flush doesn't surface as a non-cancel error")
     }
@@ -2493,15 +2475,11 @@ final class V2FlushTests: XCTestCase {
         // must still surface the external-storage-unavailable cause when buried under
         // FlushError → WriteError → CommitWriteError → RemoteStorageClientError chains.
         let externalProfile = TestFixtures.makeServerProfile(storageType: .externalVolume)
-        let cause = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [],
-            committedTombstones: [],
-            underlying: SnapshotWriter.WriteError.finalizationFailed(
+        let cause = V2MonthSession.FlushError.snapshotWriteFailed(underlying: SnapshotWriter.WriteError.finalizationFailed(
                 CommitLogWriter.WriteError.ioFailure(
                     RemoteStorageClientError.externalStorageUnavailable
                 )
-            )
-        )
+            ))
         XCTAssertTrue(
             externalProfile.isConnectionUnavailableErrorIncludingFlushUnderlying(cause),
             "external-volume profile must detect connection-unavailable through V2 flush wrappers"

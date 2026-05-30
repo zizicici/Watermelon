@@ -21,11 +21,7 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
     func testClassifiesNSURLErrorCancelledWrappedInSnapshotWriteFailed() {
         let profile = TestFixtures.makeServerProfile(storageType: .webdav)
         let inner = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
-        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [],
-            committedTombstones: [],
-            underlying: inner
-        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(underlying: inner)
         XCTAssertEqual(BackupFlushFailureClassification.classify(wrapped, on: profile),
                        .cancelled,
                        "FlushError.cancellationCause walks the underlying chain and matches NSURLErrorCancelled.")
@@ -33,11 +29,7 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
 
     func testClassifiesCancellationErrorWrappedInSnapshotWriteFailed() {
         let profile = TestFixtures.makeServerProfile(storageType: .webdav)
-        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [TestFixtures.assetFingerprint(0x01)],
-            committedTombstones: [],
-            underlying: CancellationError()
-        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(underlying: CancellationError())
         XCTAssertEqual(BackupFlushFailureClassification.classify(wrapped, on: profile),
                        .cancelled,
                        "Cancellation precedence wins over snapshot-write-failed even with non-empty committed sets.")
@@ -61,11 +53,7 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
     func testClassifiesConnectionUnavailable_BuriedInSnapshotWriteFailed() {
         let profile = TestFixtures.makeServerProfile(storageType: .webdav)
         let inner = NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost)
-        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [TestFixtures.assetFingerprint(0x02)],
-            committedTombstones: [],
-            underlying: inner
-        )
+        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(underlying: inner)
         XCTAssertEqual(BackupFlushFailureClassification.classify(wrapped, on: profile),
                        .connectionUnavailable,
                        "isConnectionUnavailableErrorIncludingFlushUnderlying walks BackupErrorChain into the underlying.")
@@ -169,11 +157,7 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
     ]
 
     private func makePartialOutcome(underlying: Error) -> V2MonthFlushOutcome {
-        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: Self.probeAssets,
-            committedTombstones: Self.probeTombstones,
-            underlying: underlying
-        )
+        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(underlying: underlying)
         let delta = BackupMonthFlushDelta(
             didFlush: true,
             committedAssetFingerprints: Self.probeAssets,
@@ -187,16 +171,26 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
         file: StaticString = #file,
         line: UInt = #line
     ) {
-        guard case .snapshotWriteFailed(let outAssets, let outTombstones, _) = flushError else {
+        // The committed delta no longer rides FlushError; the wrapper carries only `underlying`.
+        // The committed-payload round trip is asserted against the outcome value
+        // (see `assertOutcomeDeltaRoundTripsPayload`); here we pin the wrapper shape.
+        guard case .snapshotWriteFailed = flushError else {
             XCTFail("dispatch.displayError must be FlushError.snapshotWriteFailed (the wrapper)",
                     file: file, line: line)
             return
         }
-        XCTAssertEqual(outAssets, Self.probeAssets,
-                       "dispatch.displayError must round-trip the constructed committedAssets payload exactly — if this fails, production may be substituting a different value for the wrapper",
+    }
+
+    private func assertOutcomeDeltaRoundTripsPayload(
+        _ outcome: V2MonthFlushOutcome,
+        file: StaticString = #file,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(outcome.delta.committedAssetFingerprints, Self.probeAssets,
+                       "outcome.delta must round-trip the constructed committedAssets payload exactly — if this fails, production may be substituting a different value for the delta",
                        file: file, line: line)
-        XCTAssertEqual(outTombstones, Self.probeTombstones,
-                       "dispatch.displayError must round-trip the constructed committedTombstones payload exactly",
+        XCTAssertEqual(outcome.delta.committedTombstoneFingerprints, Self.probeTombstones,
+                       "outcome.delta must round-trip the constructed committedTombstones payload exactly",
                        file: file, line: line)
     }
 
@@ -207,7 +201,7 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
         file: StaticString = #file,
         line: UInt = #line
     ) {
-        guard case .snapshotWriteFailed(_, _, let underlying) = flushError else {
+        guard case .snapshotWriteFailed(let underlying) = flushError else {
             XCTFail("dispatch.displayError must be FlushError.snapshotWriteFailed (the wrapper)",
                     file: file, line: line)
             return

@@ -23,11 +23,7 @@ final class V2MonthFlushOutcomeTests: XCTestCase {
     func testPartialDelta() {
         let delta = makeDelta()
         let underlying = NSError(domain: "soft", code: 1)
-        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: assets,
-            committedTombstones: tombstones,
-            underlying: underlying
-        )
+        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(underlying: underlying)
         let outcome: V2MonthFlushOutcome = .commitDurableSnapshotDeferred(delta: delta, flushError: flushError)
         XCTAssertEqual(outcome.delta.committedAssetFingerprints, assets)
         XCTAssertEqual(outcome.delta.committedTombstoneFingerprints, tombstones)
@@ -46,19 +42,16 @@ final class V2MonthFlushOutcomeTests: XCTestCase {
     func testPartialDisplayErrorIsConstructedFlushError() {
         let delta = makeDelta()
         let underlying = NSError(domain: "soft", code: 1)
-        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: assets,
-            committedTombstones: tombstones,
-            underlying: underlying
-        )
+        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(underlying: underlying)
         let outcome: V2MonthFlushOutcome = .commitDurableSnapshotDeferred(delta: delta, flushError: flushError)
         guard let displayError = outcome.displayError else {
             XCTFail("displayError must be non-nil for commitDurableSnapshotDeferred")
             return
         }
-        if case .snapshotWriteFailed(let outAssets, let outTombstones, let outUnderlying) = displayError {
-            XCTAssertEqual(outAssets, assets, "displayError must round-trip the constructed committedAssets payload")
-            XCTAssertEqual(outTombstones, tombstones, "displayError must round-trip the constructed committedTombstones payload")
+        // Delta rides the outcome value; the error carries only `underlying`.
+        XCTAssertEqual(outcome.delta.committedAssetFingerprints, assets, "outcome value must carry the committedAssets delta")
+        XCTAssertEqual(outcome.delta.committedTombstoneFingerprints, tombstones, "outcome value must carry the committedTombstones delta")
+        if case .snapshotWriteFailed(let outUnderlying) = displayError {
             XCTAssertEqual((outUnderlying as NSError).domain, "soft")
             XCTAssertEqual((outUnderlying as NSError).code, 1)
         } else {
@@ -68,11 +61,7 @@ final class V2MonthFlushOutcomeTests: XCTestCase {
 
     func testPartialCancellationCauseDelegatesToFlushError() {
         let delta = makeDelta()
-        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: assets,
-            committedTombstones: tombstones,
-            underlying: CancellationError()
-        )
+        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(underlying: CancellationError())
         let outcome: V2MonthFlushOutcome = .commitDurableSnapshotDeferred(delta: delta, flushError: flushError)
         XCTAssertNotNil(outcome.cancellationCause, "outcome.cancellationCause must delegate to FlushError.cancellationCause and match CancellationError underlying")
         XCTAssertNotNil(flushError.cancellationCause, "FlushError.cancellationCause must match the same underlying — delegation pins this equivalence")
@@ -81,11 +70,7 @@ final class V2MonthFlushOutcomeTests: XCTestCase {
     func testPartialCancellationCauseWalksNSURLErrorCancelled() {
         let delta = makeDelta()
         let underlying = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
-        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: assets,
-            committedTombstones: tombstones,
-            underlying: underlying
-        )
+        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(underlying: underlying)
         let outcome: V2MonthFlushOutcome = .commitDurableSnapshotDeferred(delta: delta, flushError: flushError)
         XCTAssertNotNil(outcome.cancellationCause, "NSURLErrorCancelled in the underlying chain must surface as cancellationCause; unit-005 walker preserved")
     }

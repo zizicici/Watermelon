@@ -519,16 +519,18 @@ final class V2BatchCommitTests: XCTestCase {
         do {
             _ = try await store.flushToRemote(ignoreCancellation: false)
             XCTFail("flush must surface a snapshotWriteFailed once chunk 2 fails")
-        } catch let error as V2MonthSession.FlushError {
-            guard case .snapshotWriteFailed(let assets, let tombstones, _) = error else {
-                XCTFail("expected FlushError.snapshotWriteFailed, got \(error)")
+        } catch let deferred as V2MonthSession.MonthDurableSnapshotDeferred {
+            guard case .snapshotWriteFailed = deferred.flushError else {
+                XCTFail("expected FlushError.snapshotWriteFailed, got \(deferred.flushError)")
                 return
             }
+            let assets = deferred.delta.committedAssetFingerprints
+            let tombstones = deferred.delta.committedTombstoneFingerprints
             XCTAssertEqual(assets.count, cap,
-                           "snapshotWriteFailed must carry chunk 1's fingerprints (\(cap)) — \(assets.count) seen")
+                           "deferred delta must carry chunk 1's fingerprints (\(cap)) — \(assets.count) seen")
             XCTAssertTrue(tombstones.isEmpty, "no tombstones in this scenario")
         } catch {
-            XCTFail("expected V2MonthSession.FlushError, got \(type(of: error)): \(error)")
+            XCTFail("expected V2MonthSession.MonthDurableSnapshotDeferred, got \(type(of: error)): \(error)")
             return
         }
 

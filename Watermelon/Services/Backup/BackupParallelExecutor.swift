@@ -1041,24 +1041,14 @@ struct BackupParallelExecutor: Sendable {
                 delta: delta
             )
             return .completed(delta)
-        } catch let flushError as V2MonthSession.FlushError {
-            switch flushError {
-            case .concurrentFlushRejected:
-                throw flushError
-            case .snapshotWriteFailed(let assets, let tombstones, _):
-                let recovered = BackupMonthFlushDelta(
-                    didFlush: true,
-                    committedAssetFingerprints: assets,
-                    committedTombstoneFingerprints: tombstones
-                )
-                publishDefensiveFlushSnapshotIfNeeded(
-                    monthStore: monthStore,
-                    month: month,
-                    remoteIndexService: remoteIndexService,
-                    delta: recovered
-                )
-                return .commitDurableSnapshotDeferred(delta: recovered, flushError: flushError)
-            }
+        } catch let deferred as V2MonthSession.MonthDurableSnapshotDeferred {
+            publishDefensiveFlushSnapshotIfNeeded(
+                monthStore: monthStore,
+                month: month,
+                remoteIndexService: remoteIndexService,
+                delta: deferred.delta
+            )
+            return .commitDurableSnapshotDeferred(delta: deferred.delta, flushError: deferred.flushError)
         }
     }
 

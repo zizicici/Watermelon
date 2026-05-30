@@ -16,9 +16,11 @@ nonisolated enum BackupErrorChain {
                 switch flush {
                 case .concurrentFlushRejected:
                     break
-                case .snapshotWriteFailed(_, _, let underlying):
+                case .snapshotWriteFailed(let underlying):
                     pending.append(underlying)
                 }
+            case let deferred as V2MonthSession.MonthDurableSnapshotDeferred:
+                pending.append(deferred.flushError)
             case let write as SnapshotWriter.WriteError:
                 switch write {
                 case .ioFailure(let inner), .finalizationFailed(let inner):

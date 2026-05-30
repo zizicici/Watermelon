@@ -54,13 +54,9 @@ final class ExternalStorageUnavailableRunErrorTests: XCTestCase {
     func testNormalizeOpenErrorPreservesV2WrappedExternalCauseInsideBootstrapIOFailure() {
         // Defense-in-depth: a snapshot-write failure may itself surface through
         // BootstrapError.ioFailure if a future producer wraps it there.
-        let inner = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: [],
-            committedTombstones: [],
-            underlying: SnapshotWriter.WriteError.finalizationFailed(
+        let inner = V2MonthSession.FlushError.snapshotWriteFailed(underlying: SnapshotWriter.WriteError.finalizationFailed(
                 RemoteStorageClientError.externalStorageUnavailable
-            )
-        )
+            ))
         let bootstrap = RepoBootstrap.BootstrapError.ioFailure(inner)
         let normalized = BackupV2RuntimeOpenErrorMapping.normalizeOpenError(bootstrap)
         XCTAssertTrue(RemoteStorageClientError.isLikelyExternalStorageUnavailable(normalized))

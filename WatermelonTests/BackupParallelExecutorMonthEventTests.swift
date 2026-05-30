@@ -12,11 +12,7 @@ final class BackupParallelExecutorMonthEventTests: XCTestCase {
     ]
 
     private func makePartialOutcome(underlying: Error) -> V2MonthFlushOutcome {
-        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(
-            committedAssets: Self.probeAssets,
-            committedTombstones: Self.probeTombstones,
-            underlying: underlying
-        )
+        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(underlying: underlying)
         let delta = BackupMonthFlushDelta(
             didFlush: true,
             committedAssetFingerprints: Self.probeAssets,

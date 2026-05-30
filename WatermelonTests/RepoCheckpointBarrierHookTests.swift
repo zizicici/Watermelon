@@ -369,9 +369,12 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         do {
             _ = try await session.flushToRemote()
             XCTFail("expected snapshotWriteFailed")
-        } catch V2MonthSession.FlushError.snapshotWriteFailed(let assets, let tombstones, _) {
-            XCTAssertEqual(assets, [fingerprint])
-            XCTAssertTrue(tombstones.isEmpty)
+        } catch let deferred as V2MonthSession.MonthDurableSnapshotDeferred {
+            XCTAssertEqual(deferred.delta.committedAssetFingerprints, [fingerprint])
+            XCTAssertTrue(deferred.delta.committedTombstoneFingerprints.isEmpty)
+            guard case .snapshotWriteFailed = deferred.flushError else {
+                return XCTFail("expected snapshotWriteFailed, got \(deferred.flushError)")
+            }
         }
 
         let retentionCount = await retentionFiles(inner).count
@@ -422,15 +425,15 @@ final class RepoCheckpointBarrierHookTests: XCTestCase {
         // honored downstream.
         do {
             _ = try await cancelSession.flushToRemote()
-            XCTFail("expected FlushError.snapshotWriteFailed wrapping the barrier cancellation")
-        } catch let flushError as V2MonthSession.FlushError {
-            guard case .snapshotWriteFailed(_, _, let underlying) = flushError else {
-                XCTFail("expected snapshotWriteFailed, got \(flushError)")
+            XCTFail("expected MonthDurableSnapshotDeferred wrapping the barrier cancellation")
+        } catch let deferred as V2MonthSession.MonthDurableSnapshotDeferred {
+            guard case .snapshotWriteFailed(let underlying) = deferred.flushError else {
+                XCTFail("expected snapshotWriteFailed, got \(deferred.flushError)")
                 return
             }
             XCTAssertTrue(underlying is CancellationError,
                           "underlying of barrier cancellation must remain a CancellationError so downstream cancellationCause walker recognizes it")
-            XCTAssertNotNil(flushError.cancellationCause,
+            XCTAssertNotNil(deferred.flushError.cancellationCause,
                             "FlushError.cancellationCause must surface the cancellation via the underlying-chain walker")
         }
     }

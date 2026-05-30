@@ -6,8 +6,9 @@ private let v2SessionLog = Logger(subsystem: "com.zizicici.watermelon", category
 final class V2MonthSession: BackupMonthStore {
     enum FlushError: Error {
         case concurrentFlushRejected
-        /// Commit landed; caller must mark these fingerprints committed before rethrowing.
-        case snapshotWriteFailed(committedAssets: Set<AssetFingerprint>, committedTombstones: Set<AssetFingerprint>, underlying: Error)
+        /// Commit landed; the snapshot write failed. The committed delta is carried as a value
+        /// (see `MonthDurableSnapshotDeferred`), never on this error.
+        case snapshotWriteFailed(underlying: Error)
 
         /// SnapshotWriter can wrap CancellationError.
         var cancellationCause: CancellationError? {
@@ -18,6 +19,13 @@ final class V2MonthSession: BackupMonthStore {
             }
             return matched ? CancellationError() : nil
         }
+    }
+
+    /// Commit landed durably but the snapshot write failed. Carries the durable delta as a value
+    /// so callers keep their projection in sync without reading data off `FlushError`.
+    struct MonthDurableSnapshotDeferred: Error {
+        let delta: BackupMonthFlushDelta
+        let flushError: FlushError
     }
 
     let year: Int
@@ -358,10 +366,13 @@ final class V2MonthSession: BackupMonthStore {
             dirty = indexes.hasUncommittedOps || snapshotFlusher.hasPendingSnapshotWork
         } catch {
             dirty = true
-            throw FlushError.snapshotWriteFailed(
-                committedAssets: drainResult.committedAssets,
-                committedTombstones: drainResult.committedTombstones,
-                underlying: error
+            throw MonthDurableSnapshotDeferred(
+                delta: BackupMonthFlushDelta(
+                    didFlush: true,
+                    committedAssetFingerprints: drainResult.committedAssets,
+                    committedTombstoneFingerprints: drainResult.committedTombstones
+                ),
+                flushError: FlushError.snapshotWriteFailed(underlying: error)
             )
         }
 
@@ -381,10 +392,13 @@ final class V2MonthSession: BackupMonthStore {
                 // before the cancellation routes to pause/abort. Without this, a cancellation
                 // landing during the post-commit barrier window would orphan the local
                 // hash-index intents for a durable remote commit.
-                throw FlushError.snapshotWriteFailed(
-                    committedAssets: drainResult.committedAssets,
-                    committedTombstones: drainResult.committedTombstones,
-                    underlying: error
+                throw MonthDurableSnapshotDeferred(
+                    delta: BackupMonthFlushDelta(
+                        didFlush: true,
+                        committedAssetFingerprints: drainResult.committedAssets,
+                        committedTombstoneFingerprints: drainResult.committedTombstones
+                    ),
+                    flushError: FlushError.snapshotWriteFailed(underlying: error)
                 )
             }
         }
@@ -443,17 +457,20 @@ final class V2MonthSession: BackupMonthStore {
                 )
             } catch {
                 // Multi-chunk partial durability: if earlier chunks already landed, surface them
-                // via FlushError.snapshotWriteFailed so the downstream catches the partial as
-                // `commitDurableSnapshotDeferred`, drains the matching hash-index intents, and
+                // as a value via MonthDurableSnapshotDeferred so the downstream catches the partial
+                // as `commitDurableSnapshotDeferred`, drains the matching hash-index intents, and
                 // publishes the durable sweep before propagating the failure. Without this,
                 // already-durable fingerprints would be rolled back in the foreground catch path
                 // and their hash-index intents discarded — violating the "at most last batch is
                 // redone" goal for U01.
                 if !committedAssets.isEmpty || !committedTombstones.isEmpty {
-                    throw FlushError.snapshotWriteFailed(
-                        committedAssets: committedAssets,
-                        committedTombstones: committedTombstones,
-                        underlying: error
+                    throw MonthDurableSnapshotDeferred(
+                        delta: BackupMonthFlushDelta(
+                            didFlush: true,
+                            committedAssetFingerprints: committedAssets,
+                            committedTombstoneFingerprints: committedTombstones
+                        ),
+                        flushError: FlushError.snapshotWriteFailed(underlying: error)
                     )
                 }
                 throw error
