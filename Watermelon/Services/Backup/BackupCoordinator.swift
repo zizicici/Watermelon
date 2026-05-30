@@ -69,7 +69,7 @@ final class BackupCoordinator: Sendable {
         profile: ServerProfileRecord,
         password: String,
         month: LibraryMonthKey
-    ) async throws -> Bool {
+    ) async throws -> MonthVerifyOutcome {
         try await preparationService.verifyMonth(
             profile: profile,
             password: password,
@@ -77,11 +77,13 @@ final class BackupCoordinator: Sendable {
         )
     }
 
+    /// Aggregates per-month outcomes; any damaged month makes the whole run damaged.
+    @discardableResult
     func verifyAllMonths(
         profile: ServerProfileRecord,
         password: String,
         onProgress: @escaping @MainActor @Sendable (RemoteSyncProgress) -> Void
-    ) async throws {
+    ) async throws -> MonthVerifyOutcome {
         try await preparationService.withConnectedClient(profile: profile, password: password) { client in
             _ = try await self.preparationService.reloadRemoteIndex(client: client, profile: profile)
 
@@ -90,18 +92,21 @@ final class BackupCoordinator: Sendable {
             let total = uniqueMonths.count
             await MainActor.run { onProgress(RemoteSyncProgress(current: 0, total: total)) }
 
+            var aggregate: MonthVerifyOutcome = .clean
             for (index, month) in uniqueMonths.enumerated() {
                 try Task.checkCancellation()
-                try await self.preparationService.verifyMonth(
+                let outcome = try await self.preparationService.verifyMonth(
                     client: client,
                     basePath: profile.basePath,
                     month: month,
                     profile: profile,
                     password: password
                 )
+                aggregate = aggregate.combined(with: outcome)
                 let current = index + 1
                 await MainActor.run { onProgress(RemoteSyncProgress(current: current, total: total)) }
             }
+            return aggregate
         }
     }
 

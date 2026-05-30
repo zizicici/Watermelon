@@ -74,13 +74,13 @@ final class RemoteMaintenanceController {
         verifyTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.backupCoordinator.verifyAllMonths(
+                let outcome = try await self.backupCoordinator.verifyAllMonths(
                     profile: profile,
                     password: password
                 ) { [weak self] progress in
                     self?.handleProgress(profileID: profileID, progress: progress)
                 }
-                self.handleSuccess(profileID: profileID)
+                self.handleSuccess(profileID: profileID, outcome: outcome)
             } catch is CancellationError {
                 self.handleCancellation()
             } catch {
@@ -112,13 +112,32 @@ final class RemoteMaintenanceController {
         postThrottled()
     }
 
-    private func handleSuccess(profileID: Int64) {
+    /// Budget-incomplete and clean/mutated outcomes stamp; known unrepaired damage withholds the
+    /// "verified OK" timestamp so a damaged repo is never recorded as freshly verified.
+    nonisolated static func shouldStampVerifiedAt(for outcome: MonthVerifyOutcome) -> Bool {
+        !outcome.isDamaged
+    }
+
+    private func handleSuccess(profileID: Int64, outcome: MonthVerifyOutcome) {
+        if !Self.shouldStampVerifiedAt(for: outcome) {
+            verifyTask = nil
+            lastError = LastError(profileID: profileID, message: Self.damageMessage)
+            phase = .idle
+            appRuntimeFlags.setVerifying(false)
+            postNow()
+            return
+        }
         try? databaseManager.setRemoteVerifiedAt(Date(), profileID: profileID)
         verifyTask = nil
         phase = .idle
         appRuntimeFlags.setVerifying(false)
         postNow()
     }
+
+    private static let damageMessage = String(
+        localized: "home.maintenance.damageFound",
+        defaultValue: "Verification found damaged files in the backup."
+    )
 
     private func handleCancellation() {
         verifyTask = nil

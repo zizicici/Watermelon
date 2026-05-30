@@ -1310,7 +1310,7 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
             month: LibraryMonthKey(year: 2026, month: 5),
             profile: profile
         )
-        XCTAssertFalse(result, "fresh remote with no local binding should return false")
+        XCTAssertEqual(result, .clean, "fresh remote with no local binding is skipped → clean")
     }
 
     func testVerifyMonth_nilBinding_materializedRepoID_freshRemote_throwsDamagedV2Repo() async throws {
@@ -1395,9 +1395,9 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
         }
     }
 
-    // MARK: - verifyMonth V2 always signals refresh
+    // MARK: - verifyMonth V2 outcome
 
-    func testVerifyMonth_v2Repo_alwaysReturnsTrue() async throws {
+    func testVerifyMonth_v2Repo_healthyMonthIsClean() async throws {
         let repoID = "11111111-2222-3333-4444-555555555555"
         let client = InMemoryRemoteStorageClient()
         client.setMoveIfAbsentGuarantee(.exclusive)
@@ -1417,12 +1417,13 @@ final class BackupV2RuntimeBuilderTests: XCTestCase {
             databaseManager: databaseManager
         )
 
-        let needsRefresh = try await service.verifyMonth(
+        let outcome = try await service.verifyMonth(
             client: client, basePath: basePath,
             month: LibraryMonthKey(year: 2026, month: 5),
             profile: profile
         )
-        XCTAssertTrue(needsRefresh, "V2 verify must always signal refresh so Home re-projects the committed view")
+        // A clean V2 month with no damage and no applied cleanup classifies .clean.
+        XCTAssertEqual(outcome, .clean, "healthy V2 verify with no cleanup → clean")
     }
 
     // MARK: - createDirectory URL cancellation normalization

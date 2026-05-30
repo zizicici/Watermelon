@@ -17,6 +17,39 @@ struct VerifyMonthReportItem: Sendable, Hashable {
     var allowsCleanup: Bool { kind.allowsCleanup }
 }
 
+/// Verdict that distinguishes genuine unrepaired damage from routine budget-incomplete
+/// verification, so callers can withhold a "verified OK" timestamp only when damage was found.
+enum MonthVerifyOutcome: Equatable, Sendable {
+    case clean
+    case mutated
+    case damaged(kinds: Set<VerifyMonthReportKind>)
+
+    // Report-only kinds that represent genuine unrepaired damage. verificationIncomplete is
+    // routine content-trust budget exhaustion and is deliberately excluded.
+    static let damageKinds: Set<VerifyMonthReportKind> = [.partiallyMissing, .fingerprintMismatch]
+
+    var isDamaged: Bool {
+        if case .damaged = self { return true }
+        return false
+    }
+
+    /// Aggregation: damage dominates (kinds merge), mutated outranks clean, clean is identity.
+    func combined(with other: MonthVerifyOutcome) -> MonthVerifyOutcome {
+        switch (self, other) {
+        case let (.damaged(a), .damaged(b)):
+            return .damaged(kinds: a.union(b))
+        case (.damaged, _):
+            return self
+        case (_, .damaged):
+            return other
+        case (.mutated, _), (_, .mutated):
+            return .mutated
+        default:
+            return .clean
+        }
+    }
+}
+
 struct VerifyMonthReport: Sendable {
     let month: LibraryMonthKey
     let items: [VerifyMonthReportItem]
@@ -28,6 +61,12 @@ struct VerifyMonthReport: Sendable {
 
     var reportOnly: [VerifyMonthReportItem] {
         items.filter { !$0.allowsCleanup }
+    }
+
+    var outcome: MonthVerifyOutcome {
+        let damage = Set(items.map(\.kind)).intersection(MonthVerifyOutcome.damageKinds)
+        if !damage.isEmpty { return .damaged(kinds: damage) }
+        return didMutateRemote ? .mutated : .clean
     }
 }
 

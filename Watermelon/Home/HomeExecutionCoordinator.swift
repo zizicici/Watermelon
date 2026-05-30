@@ -769,11 +769,13 @@ final class HomeExecutionCoordinator {
 
         var verifyNeedsRemoteRefresh = false
         do {
-            verifyNeedsRemoteRefresh = try await dependencies.backupCoordinator.verifyMonth(
+            // Only a tombstone mutation changes the remote view; report-only damage needs no resync.
+            let outcome = try await dependencies.backupCoordinator.verifyMonth(
                 profile: context.profile,
                 password: context.password,
                 month: month
             )
+            verifyNeedsRemoteRefresh = outcome == .mutated
         } catch is CancellationError {
             return .cancelled
         } catch let compatError as BackupCompatibilityError {

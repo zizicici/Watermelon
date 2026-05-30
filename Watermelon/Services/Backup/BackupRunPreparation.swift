@@ -253,7 +253,7 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord,
         password: String,
         month: LibraryMonthKey
-    ) async throws -> Bool {
+    ) async throws -> MonthVerifyOutcome {
         try await withConnectedClient(profile: profile, password: password) { client in
             try await self.verifyMonth(client: client, basePath: profile.basePath, month: month, profile: profile, password: password)
         }
@@ -266,7 +266,7 @@ struct BackupRunPreparationService: Sendable {
         month: LibraryMonthKey,
         profile: ServerProfileRecord? = nil,
         password: String? = nil
-    ) async throws -> Bool {
+    ) async throws -> MonthVerifyOutcome {
         let inspection: RemoteFormatInspection
         if let profile {
             inspection = try await formatCompatibilityService
@@ -299,8 +299,8 @@ struct BackupRunPreparationService: Sendable {
             remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
             throw BackupCompatibilityError.remoteFormatUnsupported(minAppVersion: minAppVersion)
         case .verifyMonthV2:
-            _ = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
-            return true
+            let report = try await verifyMonthV2(client: client, basePath: basePath, month: month, profile: profile, password: password)
+            return report.outcome
         case .throwRequiresForegroundMigration:
             remoteIndexService.invalidateCommittedViewForCompatibilityFailure()
             throw BackupCompatibilityError.requiresForegroundMigration
@@ -310,10 +310,10 @@ struct BackupRunPreparationService: Sendable {
                 basePath: basePath,
                 month: month
             )
-            // V1 verify may flush manifest changes; treat as potentially mutating.
-            return true
+            // V1 verify may flush manifest changes but has no damage detection; treat as potentially mutating.
+            return .mutated
         case .skipFreshRepo:
-            return false
+            return .clean
         case .throwDamagedV2Repo:
             // Reached only with a prior binding (planner gate), from a successfully-read `.fresh`
             // inspection — deterministic proof the repo is gone, so drop the stale view.
