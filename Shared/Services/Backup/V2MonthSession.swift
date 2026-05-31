@@ -3,6 +3,10 @@ import os.log
 
 private let v2SessionLog = Logger(subsystem: "com.zizicici.watermelon", category: "V2MonthSession")
 
+enum V2MonthSessionError: Error {
+    case ambiguousMonth(LibraryMonthKey)
+}
+
 final class V2MonthSession: BackupMonthStore {
     enum FlushError: Error {
         case concurrentFlushRejected
@@ -113,6 +117,11 @@ final class V2MonthSession: BackupMonthStore {
         let monthKey = LibraryMonthKey(year: year, month: month)
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materializeMonth(monthKey, expectedRepoID: v2Services.repoID)
+        // Write/maintenance consumers must not construct a writable session for ambiguous months —
+        // incomparable trusted coverage means new commits/snapshots could diverge from reality.
+        if output.outcomeByMonth[monthKey] == .ambiguous {
+            throw V2MonthSessionError.ambiguousMonth(monthKey)
+        }
         let monthState = output.state.months[monthKey] ?? .empty
         let materializedCovered = output.coveredByMonth[monthKey] ?? .empty
         // Observe-before-send: subsequent tickRange must happen above any peer clock we just read.
@@ -497,16 +506,21 @@ final class V2MonthSession: BackupMonthStore {
                 sessionWrittenCovered: snapshotFlusher.sessionWrittenCovered,
                 localLamportBeforeBarrierObserve: localLamportBeforeBarrierObserve
             )
-            if let refresh = try await V2RetentionBarrierRefresh(
-                services: services,
-                monthKey: monthKey
-            ).commitRefresh(ignoreCancellation: ignoreCancellation) {
-                barrierAwareBasis = V2MonthCommitFlusher.Basis(
-                    clockFloor: refresh.clockFloor,
-                    tombstoneObservationBasis: tombstoneBasis
-                )
-            } else {
-                barrierAwareBasis = nil
+            do {
+                if let refresh = try await V2RetentionBarrierRefresh(
+                    services: services,
+                    monthKey: monthKey
+                ).commitRefresh(ignoreCancellation: ignoreCancellation) {
+                    barrierAwareBasis = V2MonthCommitFlusher.Basis(
+                        clockFloor: refresh.clockFloor,
+                        tombstoneObservationBasis: tombstoneBasis
+                    )
+                } else {
+                    barrierAwareBasis = nil
+                }
+            } catch let error as V2RetentionBarrierRefreshError {
+                if case .ambiguousMaterialization = error { return nil }
+                throw error
             }
         } else {
             barrierAwareBasis = nil

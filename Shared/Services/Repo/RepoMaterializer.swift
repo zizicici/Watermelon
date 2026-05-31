@@ -25,15 +25,29 @@ actor RepoMaterializer {
         let covered: CoveredRanges
     }
 
+    enum MonthOutcome: Sendable, Equatable {
+        /// Covered-max baseline accepted and commit replay applied.
+        case clean
+        /// No trusted baseline; state rebuilt from commit replay.
+        case corrupt
+        /// Trusted candidates exist but no single covered superset; read path uses best-effort
+        /// state, write/maintenance consumers must skip.
+        case ambiguous
+    }
+
     struct MaterializeOutput: Sendable {
         let state: RepoSnapshotState
         let observedSeqByWriter: [String: UInt64]
         /// Final fold coverage after accepted snapshot baseline plus replayed commits.
         let coveredByMonth: [LibraryMonthKey: CoveredRanges]
         let acceptedSnapshotBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaselineInfo]
+        /// Per-month materialization outcome: clean = covered-max baseline, corrupt = all
+        /// snapshots bad (commit replay rebuild), ambiguous = incomparable trusted coverage.
+        let outcomeByMonth: [LibraryMonthKey: MonthOutcome]
         /// Months where every snapshot candidate was corrupt — commit replay rebuilt state
         /// from empty. Caller can flip these months' next flush to emit a fresh baseline
         /// even when `dirty == false`, preventing O(commit log) replay every materialize.
+        /// Preserved for backward compatibility; equivalent to `outcomeByMonth[month] == .corrupt`.
         let corruptedSnapshotMonths: Set<LibraryMonthKey>
         let repoID: String?
     }
@@ -132,18 +146,10 @@ actor RepoMaterializer {
                 }
             }
         case .snapshotVanished(let filename, let month, let lamport, let writerID, let runIDPrefix):
-            // Unit 5 invariant: unreadable accepted snapshot candidates cannot downgrade.
-            let perMonthRecovers: Bool = output.acceptedSnapshotBaselinesByMonth[month].map { baseline in
-                Self.snapshotReferenceIsSameOrNewer(
-                    lamport: baseline.lamport,
-                    writerID: baseline.writerID,
-                    runIDPrefix: baseline.runIDPrefix,
-                    thanLamport: lamport,
-                    writerID: writerID,
-                    runIDPrefix: runIDPrefix
-                )
-            } ?? false
-            guard perMonthRecovers else {
+            // Under covered-max, recency by lamport/writer/run does not prove the vanished
+            // candidate's coverage was recovered — only rereading and trusting the exact file
+            // does. Fail closed unless the vanished filename appears as the accepted baseline.
+            guard output.acceptedSnapshotBaselinesByMonth[month]?.filename == filename else {
                 throw MetadataReadRaceError.snapshotVanishedWithoutRecovery(
                     filename: filename,
                     month: month,
@@ -155,18 +161,6 @@ actor RepoMaterializer {
         }
     }
 
-    private static func snapshotReferenceIsSameOrNewer(
-        lamport: UInt64,
-        writerID: String,
-        runIDPrefix: String,
-        thanLamport otherLamport: UInt64,
-        writerID otherWriterID: String,
-        runIDPrefix otherRunIDPrefix: String
-    ) -> Bool {
-        if lamport != otherLamport { return lamport > otherLamport }
-        if writerID != otherWriterID { return writerID > otherWriterID }
-        return runIDPrefix >= otherRunIDPrefix
-    }
 
     private func materializeOnce(filterMonth: LibraryMonthKey?, expectedRepoID: String) async throws -> MaterializeOutput {
         async let snapshotFilenames = snapshotReader.listSnapshotFilenames()
@@ -223,7 +217,7 @@ actor RepoMaterializer {
             baselinesByMonth: snapshotTrust.acceptedBaselinesByMonth,
             emptyBaselineMonths: snapshotTrust.emptyBaselineMonths,
             acceptedCommits: commitTrust.acceptedCommits,
-            acceptedSnapshotLamportByMonth: snapshotTrust.acceptedSnapshotLamportByMonth
+            maxTrustedLamportByMonth: snapshotTrust.maxTrustedLamportByMonth
         )
 
         var corruptedSnapshotMonths = snapshotTrust.corruptedSnapshotMonths
@@ -256,8 +250,28 @@ actor RepoMaterializer {
             }
         }
 
+        // Build per-month outcome. Every materialized month gets an entry so downstream
+        // write/maintenance consumers can reliably gate on clean vs ambiguous/corrupt.
+        var outcomeByMonth: [LibraryMonthKey: MonthOutcome] = [:]
+        let allMonths = Set(state.months.keys)
+            .union(commitTrust.coveredByMonth.keys)
+            .union(corruptedSnapshotMonths)
+            .union(snapshotTrust.ambiguousMonths)
+        for month in allMonths {
+            if snapshotTrust.ambiguousMonths.contains(month) {
+                outcomeByMonth[month] = .ambiguous
+            } else if corruptedSnapshotMonths.contains(month) {
+                outcomeByMonth[month] = .corrupt
+            } else {
+                outcomeByMonth[month] = .clean
+            }
+        }
+
         if !corruptedSnapshotMonths.isEmpty {
             materializerLog.warning("materialize: \(corruptedSnapshotMonths.count, privacy: .public) month(s) had all snapshots corrupt; commit replay rebuilt state — caller should force a fresh baseline on next flush")
+        }
+        if !snapshotTrust.ambiguousMonths.isEmpty {
+            materializerLog.warning("materialize: \(snapshotTrust.ambiguousMonths.count, privacy: .public) month(s) have ambiguous snapshot coverage")
         }
 
         return MaterializeOutput(
@@ -265,6 +279,7 @@ actor RepoMaterializer {
             observedSeqByWriter: observedSeqByWriter,
             coveredByMonth: commitTrust.coveredByMonth,
             acceptedSnapshotBaselinesByMonth: snapshotTrust.acceptedBaselinesByMonth.mapValues(\.info),
+            outcomeByMonth: outcomeByMonth,
             corruptedSnapshotMonths: corruptedSnapshotMonths,
             repoID: expectedRepoID
         )
@@ -303,6 +318,9 @@ private struct SnapshotTrustResult: Sendable {
     let acceptedBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaseline]
     let emptyBaselineMonths: Set<LibraryMonthKey>
     let corruptedSnapshotMonths: Set<LibraryMonthKey>
+    let ambiguousMonths: Set<LibraryMonthKey>
+    /// Max lamport across ALL trusted snapshot candidates (not just accepted), for observedClock.
+    let maxTrustedLamportByMonth: [LibraryMonthKey: UInt64]
     let acceptedSnapshotLamportByMonth: [LibraryMonthKey: UInt64]
 }
 
@@ -325,14 +343,20 @@ private struct SnapshotTrustPipeline {
             }
         }
 
-        return try await withThrowingTaskGroup(of: SnapshotTaskResult.self) { group in
+        return try await withThrowingTaskGroup(of: SnapshotMonthTaskResult.self) { group in
             for (month, candidates) in snapshotsByMonth {
                 let reader = self.reader
                 let expected = expectedRepoID
                 group.addTask {
+                    var trustedBaselines: [AcceptedSnapshotBaseline] = []
+                    var sawCandidate = false
                     for candidate in candidates {
                         do {
                             let file = try await reader.read(filename: candidate.filename)
+                            // Any successfully-read snapshot file counts as a candidate for corrupt
+                            // detection, even if subsequent validation rejects it — the month had
+                            // listed parseable snapshots but produced no trusted baseline.
+                            sawCandidate = true
                             guard Self.fileMatchesReference(file, reference: candidate) else {
                                 materializerLog.warning("skip snapshot whose filename disagrees with header: \(candidate.filename, privacy: .public)")
                                 continue
@@ -346,12 +370,13 @@ private struct SnapshotTrustPipeline {
                                 continue
                             }
                             if let baseline = Self.makeBaseline(file: file, reference: candidate) {
-                                return SnapshotTaskResult(month: month, baseline: baseline)
+                                trustedBaselines.append(baseline)
                             }
                         } catch let error as RepoJSONLReadError {
                             switch error {
                             case .integrityMismatch, .missingHeader, .missingEnd, .decodeFailure:
                                 materializerLog.warning("skip corrupt snapshot \(candidate.filename, privacy: .public): \(String(describing: error), privacy: .public)")
+                                sawCandidate = true
                                 continue
                             case .notFound:
                                 throw InternalMetadataReadRace.snapshotVanished(
@@ -364,37 +389,105 @@ private struct SnapshotTrustPipeline {
                             }
                         }
                     }
-                    return SnapshotTaskResult(month: month, baseline: nil)
+                    return SnapshotMonthTaskResult(
+                        month: month,
+                        trustedBaselines: trustedBaselines,
+                        sawCandidate: sawCandidate
+                    )
                 }
             }
 
             var acceptedBaselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaseline] = [:]
             var emptyBaselineMonths: Set<LibraryMonthKey> = []
             var corruptedSnapshotMonths: Set<LibraryMonthKey> = []
+            var ambiguousMonths: Set<LibraryMonthKey> = []
+            var maxTrustedLamportByMonth: [LibraryMonthKey: UInt64] = [:]
             var acceptedSnapshotLamportByMonth: [LibraryMonthKey: UInt64] = [:]
             for try await result in group {
-                guard let baseline = result.baseline else {
-                    if !(snapshotsByMonth[result.month]?.isEmpty ?? true) {
-                        corruptedSnapshotMonths.insert(result.month)
+                let month = result.month
+                let trusted = result.trustedBaselines
+                let maxLamport = trusted.map(\.lamport).max() ?? 0
+                if maxLamport > 0 {
+                    maxTrustedLamportByMonth[month] = maxLamport
+                }
+
+                if trusted.isEmpty {
+                    if result.sawCandidate {
+                        corruptedSnapshotMonths.insert(month)
                     }
-                    emptyBaselineMonths.insert(result.month)
+                    emptyBaselineMonths.insert(month)
                     continue
                 }
-                acceptedBaselinesByMonth[result.month] = baseline
-                acceptedSnapshotLamportByMonth[result.month] = baseline.lamport
+
+                let selected = Self.selectCoveredMaxBaseline(trusted, month: month)
+                if let selected {
+                    acceptedBaselinesByMonth[month] = selected
+                    acceptedSnapshotLamportByMonth[month] = selected.lamport
+                } else {
+                    // Incomparable trusted coverage — pick best-effort for reads, mark ambiguous.
+                    let bestEffort = trusted.max(by: { lhs, rhs in
+                        let lhsCount = lhs.covered.totalCoveredSeqs()
+                        let rhsCount = rhs.covered.totalCoveredSeqs()
+                        if lhsCount != rhsCount { return lhsCount < rhsCount }
+                        if lhs.lamport != rhs.lamport { return lhs.lamport < rhs.lamport }
+                        if lhs.info.writerID != rhs.info.writerID { return lhs.info.writerID < rhs.info.writerID }
+                        return lhs.info.runIDPrefix < rhs.info.runIDPrefix
+                    })
+                    if let bestEffort {
+                        acceptedBaselinesByMonth[month] = bestEffort
+                        acceptedSnapshotLamportByMonth[month] = bestEffort.lamport
+                    }
+                    ambiguousMonths.insert(month)
+                    materializerLog.warning("month \(month.text, privacy: .public) has \(trusted.count, privacy: .public) trusted snapshots with incomparable coverage; using best-effort baseline")
+                }
             }
             return SnapshotTrustResult(
                 acceptedBaselinesByMonth: acceptedBaselinesByMonth,
                 emptyBaselineMonths: emptyBaselineMonths,
                 corruptedSnapshotMonths: corruptedSnapshotMonths,
+                ambiguousMonths: ambiguousMonths,
+                maxTrustedLamportByMonth: maxTrustedLamportByMonth,
                 acceptedSnapshotLamportByMonth: acceptedSnapshotLamportByMonth
             )
         }
     }
 
-    private struct SnapshotTaskResult: Sendable {
+    /// Returns the trusted baseline whose `covered` is a superset of all other trusted
+    /// candidates' `covered`, or nil if no single candidate dominates.
+    private static func selectCoveredMaxBaseline(
+        _ trusted: [AcceptedSnapshotBaseline],
+        month: LibraryMonthKey
+    ) -> AcceptedSnapshotBaseline? {
+        guard !trusted.isEmpty else { return nil }
+        if trusted.count == 1 { return trusted[0] }
+
+        var coveredMax: AcceptedSnapshotBaseline?
+        for (i, candidate) in trusted.enumerated() {
+            let isSuperset = trusted.enumerated().allSatisfy { (j, other) in
+                i == j || candidate.covered.superset(of: other.covered)
+            }
+            if isSuperset {
+                if let existing = coveredMax {
+                    // Multiple covered-max candidates — tiebreak by lamport/writer/run
+                    if candidate.lamport != existing.lamport {
+                        coveredMax = candidate.lamport > existing.lamport ? candidate : existing
+                    } else if candidate.info.writerID != existing.info.writerID {
+                        coveredMax = candidate.info.writerID > existing.info.writerID ? candidate : existing
+                    } else {
+                        coveredMax = candidate.info.runIDPrefix >= existing.info.runIDPrefix ? candidate : existing
+                    }
+                } else {
+                    coveredMax = candidate
+                }
+            }
+        }
+        return coveredMax
+    }
+
+    private struct SnapshotMonthTaskResult: Sendable {
         let month: LibraryMonthKey
-        let baseline: AcceptedSnapshotBaseline?
+        let trustedBaselines: [AcceptedSnapshotBaseline]
+        let sawCandidate: Bool
     }
 
     private static func fileMatchesReference(_ file: SnapshotFile, reference: MaterializerSnapshotReference) -> Bool {
@@ -565,7 +658,7 @@ private struct MaterializerReplayProjector {
         baselinesByMonth: [LibraryMonthKey: AcceptedSnapshotBaseline],
         emptyBaselineMonths: Set<LibraryMonthKey>,
         acceptedCommits: [AcceptedCommit],
-        acceptedSnapshotLamportByMonth: [LibraryMonthKey: UInt64]
+        maxTrustedLamportByMonth: [LibraryMonthKey: UInt64]
     ) -> RepoSnapshotState {
         var monthStates = baselinesByMonth.mapValues(\.state)
         for month in emptyBaselineMonths where monthStates[month] == nil {
@@ -576,7 +669,9 @@ private struct MaterializerReplayProjector {
             baselineStampsByMonth[month] = baseline.baselineStamps
         }
 
-        var observedClock: UInt64 = acceptedSnapshotLamportByMonth.values.max() ?? 0
+        // observedClock incorporates max lamport of ALL trusted snapshot candidates, not just
+        // the accepted baseline, so subsequent lamport ticks stay above every trusted writer.
+        var observedClock: UInt64 = maxTrustedLamportByMonth.values.max() ?? 0
         var sortedOps: [ReplayOp] = []
         for commit in acceptedCommits {
             for op in commit.ops {

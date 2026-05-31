@@ -4,6 +4,7 @@ enum V2RetentionBarrierRefreshError: Error, Equatable {
     case invalidBarrierSet([InvalidRetentionManifestEntry])
     case freshCoverageMissingBarrier(month: LibraryMonthKey, fresh: CoveredRanges, barrier: CoveredRanges)
     case freshCoverageMissingSessionWrites(month: LibraryMonthKey, fresh: CoveredRanges, sessionWritten: CoveredRanges)
+    case ambiguousMaterialization(LibraryMonthKey)
 }
 
 struct BarrierAwareCommitRefreshResult: Sendable {
@@ -30,6 +31,9 @@ struct V2RetentionBarrierRefresh {
         guard !barrierSet.unionCovered.isEmpty else { return nil }
 
         let fresh = try await freshMaterialize()
+        guard fresh.outcomeByMonth[monthKey] != .ambiguous else {
+            throw V2RetentionBarrierRefreshError.ambiguousMaterialization(monthKey)
+        }
         let freshCovered = fresh.coveredByMonth[monthKey] ?? .empty
         guard freshCovered.superset(of: barrierSet.unionCovered) else {
             throw V2RetentionBarrierRefreshError.freshCoverageMissingBarrier(
@@ -60,6 +64,9 @@ struct V2RetentionBarrierRefresh {
         guard !barrierSet.unionCovered.isEmpty else { return nil }
 
         let fresh = try await freshMaterialize()
+        guard fresh.outcomeByMonth[monthKey] != .ambiguous else {
+            throw V2RetentionBarrierRefreshError.ambiguousMaterialization(monthKey)
+        }
         let freshCovered = fresh.coveredByMonth[monthKey] ?? .empty
         guard freshCovered.superset(of: barrierSet.unionCovered) else {
             throw V2RetentionBarrierRefreshError.freshCoverageMissingBarrier(

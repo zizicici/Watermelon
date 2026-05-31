@@ -42,13 +42,19 @@ final class V2MonthSnapshotFlusher {
 
     func flushSnapshotIfPending(ignoreCancellation: Bool) async throws -> Bool {
         guard hasPendingSnapshotWork else { return false }
-        let barrierSource = try await V2RetentionBarrierRefresh(
-            services: services,
-            monthKey: monthKey
-        ).snapshotRefresh(
-            sessionWrittenCovered: sessionWrittenCovered,
-            ignoreCancellation: ignoreCancellation
-        )
+        let barrierSource: BarrierAwareSnapshotRefreshResult?
+        do {
+            barrierSource = try await V2RetentionBarrierRefresh(
+                services: services,
+                monthKey: monthKey
+            ).snapshotRefresh(
+                sessionWrittenCovered: sessionWrittenCovered,
+                ignoreCancellation: ignoreCancellation
+            )
+        } catch let error as V2RetentionBarrierRefreshError {
+            if case .ambiguousMaterialization = error { return false }
+            throw error
+        }
         try await writeSnapshot(barrierSource: barrierSource, ignoreCancellation: ignoreCancellation)
         pendingSnapshotWork = false
         pendingRebaselineOnly = false

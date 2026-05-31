@@ -51,6 +51,16 @@ struct CoveredRanges: Equatable, Sendable {
         return true
     }
 
+    func totalCoveredSeqs() -> UInt64 {
+        rangesByWriter.values.reduce(into: UInt64(0)) { writerSum, ranges in
+            for range in ranges {
+                let len = range.high &- range.low &+ 1
+                let (sum, overflow) = writerSum.addingReportingOverflow(len)
+                writerSum = overflow ? .max : sum
+            }
+        }
+    }
+
     func encodedAsRangeArrayMap() -> [String: [[UInt64]]] {
         var result: [String: [[UInt64]]] = [:]
         for (writer, ranges) in rangesByWriter {
