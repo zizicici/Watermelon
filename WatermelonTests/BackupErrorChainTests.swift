@@ -17,7 +17,7 @@ final class BackupErrorChainTests: XCTestCase {
 
     func testWalkDescendsIntoV2MonthSessionFlushError() {
         let inner = CancellationError()
-        let root = V2MonthSession.FlushError.snapshotWriteFailed(underlying: inner)
+        let root = V2MonthSession.FlushError.postCommitFailed(underlying: inner)
         var kinds: [String] = []
         BackupErrorChain.walk(root) { node in
             kinds.append(describe(node))
@@ -171,7 +171,7 @@ final class BackupErrorChainTests: XCTestCase {
 
     func testWalkTerminatesOnExternalCallerStop() {
         let leaf = NSError(domain: "leaf", code: 1)
-        let root = V2MonthSession.FlushError.snapshotWriteFailed(underlying: SnapshotWriter.WriteError.ioFailure(leaf))
+        let root = V2MonthSession.FlushError.postCommitFailed(underlying: SnapshotWriter.WriteError.ioFailure(leaf))
         var visited: [String] = []
         BackupErrorChain.walk(root) { node in
             visited.append(describe(node))
@@ -183,13 +183,13 @@ final class BackupErrorChainTests: XCTestCase {
     // MARK: - Predicate convenience
 
     func testContainsMatchesNestedCancellationError() {
-        let root = V2MonthSession.FlushError.snapshotWriteFailed(underlying: CancellationError())
+        let root = V2MonthSession.FlushError.postCommitFailed(underlying: CancellationError())
         XCTAssertTrue(BackupErrorChain.contains(root) { $0 is CancellationError })
     }
 
     func testFirstSatisfyingReturnsTheMatchingNode() {
         let inner = CancellationError()
-        let root = V2MonthSession.FlushError.snapshotWriteFailed(underlying: inner)
+        let root = V2MonthSession.FlushError.postCommitFailed(underlying: inner)
         let match = BackupErrorChain.firstSatisfying(root) { $0 is CancellationError }
         XCTAssertNotNil(match)
         XCTAssertTrue(match is CancellationError)
@@ -200,7 +200,7 @@ final class BackupErrorChainTests: XCTestCase {
             remotePath: "/x",
             underlying: CancellationError()
         )
-        let root = V2MonthSession.FlushError.snapshotWriteFailed(underlying: SnapshotWriter.WriteError.finalizationFailed(gate))
+        let root = V2MonthSession.FlushError.postCommitFailed(underlying: SnapshotWriter.WriteError.finalizationFailed(gate))
         let match = BackupErrorChain.firstOfType(root, as: MetadataCreateGate.Error.self)
         XCTAssertNotNil(match)
         if case .stagingVerificationFailed(let path, _)? = match {

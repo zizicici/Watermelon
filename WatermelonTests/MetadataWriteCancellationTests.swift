@@ -520,7 +520,8 @@ final class MetadataWriteCancellationTests: XCTestCase {
             scope: CommitHeader.monthScope(month),
             writerID: writerID,
             repoID: repoID,
-            covered: CoveredRanges()
+            covered: CoveredRanges(),
+            createdAtMs: nil
         )
     }
 

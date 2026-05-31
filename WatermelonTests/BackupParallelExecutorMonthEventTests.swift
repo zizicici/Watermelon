@@ -12,13 +12,13 @@ final class BackupParallelExecutorMonthEventTests: XCTestCase {
     ]
 
     private func makePartialOutcome(underlying: Error) -> V2MonthFlushOutcome {
-        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(underlying: underlying)
+        let flushError = V2MonthSession.FlushError.postCommitFailed(underlying: underlying)
         let delta = BackupMonthFlushDelta(
             didFlush: true,
             committedAssetFingerprints: Self.probeAssets,
             committedTombstoneFingerprints: Self.probeTombstones
         )
-        return .commitDurableSnapshotDeferred(delta: delta, flushError: flushError)
+        return .commitDurablePartial(delta: delta, flushError: flushError)
     }
 
     func testForegroundEndOfMonthPartialDispatchEmitsDeferredEventForSoftPartialWithShouldFinishMonth() async {

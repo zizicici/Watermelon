@@ -30,7 +30,8 @@ final class RepoCompactionPlannerTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: covered
+                covered: covered,
+                createdAtMs: nil
             ),
             assets: [],
             resources: [],
@@ -212,6 +213,7 @@ final class RepoCompactionPlannerTests: XCTestCase {
             observedSeqByWriter: [:],
             coveredByMonth: [:],
             acceptedSnapshotBaselinesByMonth: [:],
+            outcomeByMonth: [:],
             corruptedSnapshotMonths: [],
             repoID: repoID
         )
@@ -261,7 +263,7 @@ final class RepoCompactionPlannerTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: coveredRanges(writerA: [(1, 3)])
+                covered: coveredRanges(writerA: [(1, 3)]), createdAtMs: nil
             ),
             assets: [],
             resources: [],
@@ -384,6 +386,7 @@ final class RepoCompactionPlannerTests: XCTestCase {
             observedSeqByWriter: [writerA: 0, writerB: 0],
             coveredByMonth: [month: finalCovered],
             acceptedSnapshotBaselinesByMonth: acceptedSnapshot.map { [month: $0] } ?? [:],
+            outcomeByMonth: [:],
             corruptedSnapshotMonths: [],
             repoID: repoID
         )

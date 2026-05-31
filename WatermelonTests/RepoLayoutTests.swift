@@ -58,35 +58,6 @@ final class RepoLayoutTests: XCTestCase {
         XCTAssertEqual(RepoLayout.runIDPrefix("ab"), "ab")
     }
 
-    func testCrossRepoIndexFilenameRoundTrip() {
-        let writer = "11112222-3333-4444-5555-666677778888"
-        let runID = "abc123def456"
-        let name = RepoLayout.crossRepoIndexFileName(lamport: 0x12ab, writerID: writer, runID: runID)
-        let parsed = RepoLayout.parseCrossRepoIndexFilename(name)
-        XCTAssertEqual(parsed?.lamport, 0x12ab)
-        XCTAssertEqual(parsed?.writerID, writer)
-        XCTAssertEqual(parsed?.runIDPrefix, "abc123")
-    }
-
-    func testCrossRepoIndexFilenameRejectsMalformed() {
-        let writer = "11112222-3333-4444-5555-666677778888"
-        // not three "--"-separated parts
-        XCTAssertNil(RepoLayout.parseCrossRepoIndexFilename("not-an-index.jsonl"))
-        // legacy four-part form with explicit "index--" prefix is now rejected; the dir
-        // already constrains the artifact, and accepted scope text is three parts.
-        XCTAssertNil(RepoLayout.parseCrossRepoIndexFilename("index--0000000000000001--\(writer)--abc123.jsonl"))
-        // bad lamport (non-hex)
-        XCTAssertNil(RepoLayout.parseCrossRepoIndexFilename("zzz--\(writer)--abc123.jsonl"))
-        // lamport zero
-        XCTAssertNil(RepoLayout.parseCrossRepoIndexFilename("0000000000000000--\(writer)--abc123.jsonl"))
-        // upper-case hex (canonical form is lowercase)
-        XCTAssertNil(RepoLayout.parseCrossRepoIndexFilename("00000000000000FF--\(writer)--abc123.jsonl"))
-        // missing .jsonl
-        XCTAssertNil(RepoLayout.parseCrossRepoIndexFilename("0000000000000001--\(writer)--abc123"))
-        // bad writerID
-        XCTAssertNil(RepoLayout.parseCrossRepoIndexFilename("0000000000000001--badwriter--abc123.jsonl"))
-    }
-
     func testCrossRepoIndexDirectoryPathStartsWithLeadingSlash() {
         XCTAssertTrue(RepoLayout.indexDirectoryPath(base: "/srv").hasPrefix("/"))
         XCTAssertTrue(RepoLayout.indexDirectoryPath(base: "srv").hasPrefix("/"))

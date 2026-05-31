@@ -298,6 +298,7 @@ final class RepoCommittedViewPresenceTests: XCTestCase {
             observedSeqByWriter: [:],
             coveredByMonth: [:],
             acceptedSnapshotBaselinesByMonth: [:],
+            outcomeByMonth: [:],
             corruptedSnapshotMonths: [],
             repoID: nil
         )
@@ -344,6 +345,7 @@ final class RepoCommittedViewPresenceTests: XCTestCase {
             observedSeqByWriter: [:],
             coveredByMonth: [:],
             acceptedSnapshotBaselinesByMonth: [:],
+            outcomeByMonth: [:],
             corruptedSnapshotMonths: [],
             repoID: nil
         )

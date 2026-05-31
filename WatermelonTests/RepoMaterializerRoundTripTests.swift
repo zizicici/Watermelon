@@ -296,7 +296,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: goodCovered
+                covered: goodCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: fp,
@@ -344,7 +344,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: "",
-                covered: .empty
+                covered: .empty, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: legacyFP,
@@ -386,7 +386,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: covered
+                covered: covered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: assetFP,
@@ -461,7 +461,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: goodCovered
+                covered: goodCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP,
@@ -485,7 +485,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerB,
                 repoID: repoID,
-                covered: .empty
+                covered: .empty, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: badFP,
@@ -530,7 +530,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: coveredA
+                covered: coveredA, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: olderFP,
@@ -568,7 +568,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerB,
                 repoID: repoID,
-                covered: coveredB
+                covered: coveredB, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: newerFP,
@@ -621,7 +621,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             scope: CommitHeader.monthScope(month),
             writerID: writerA,
             repoID: repoID,
-            covered: ourCovered
+            covered: ourCovered, createdAtMs: nil
         )
         _ = try await snapshotWriter.write(
             header: ourHeader,
@@ -649,7 +649,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             scope: CommitHeader.monthScope(month),
             writerID: writerB,
             repoID: "99999999-9999-9999-9999-999999999999",
-            covered: foreignCovered
+            covered: foreignCovered, createdAtMs: nil
         )
         _ = try await snapshotWriter.write(
             header: foreignHeader,
@@ -690,7 +690,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             scope: CommitHeader.monthScope(month),
             writerID: writerA,
             repoID: repoID,
-            covered: covered
+            covered: covered, createdAtMs: nil
         )
         _ = try await snapshotWriter.write(
             header: header,
@@ -769,7 +769,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerB,
                 repoID: "99999999-9999-9999-9999-999999999999",
-                covered: .empty
+                covered: .empty, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: foreignFP,
@@ -828,7 +828,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: covered
+                covered: covered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: baseFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1020,7 +1020,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             scope: CommitHeader.monthScope(month),
             writerID: writerA,
             repoID: repoID,
-            covered: covered
+            covered: covered, createdAtMs: nil
         )
         _ = try await writer.write(
             header: header,
@@ -1066,7 +1066,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: covered
+                covered: covered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1171,7 +1171,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: covered
+                covered: covered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1260,7 +1260,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: goodCovered
+                covered: goodCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1284,7 +1284,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerB,
                 repoID: repoID,
-                covered: poisonCovered
+                covered: poisonCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: poisonedFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1333,7 +1333,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: goodCovered
+                covered: goodCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1360,7 +1360,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerB,
                 repoID: repoID,
-                covered: poisonCovered
+                covered: poisonCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: poisonedFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1403,7 +1403,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: covered
+                covered: covered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1468,7 +1468,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: goodCovered
+                covered: goodCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1495,7 +1495,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerB,
                 repoID: repoID,
-                covered: poisonCovered
+                covered: poisonCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: poisonedFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1547,7 +1547,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: goodCovered
+                covered: goodCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1571,7 +1571,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerB,
                 repoID: "99999999-9999-9999-9999-999999999999",
-                covered: foreignCovered
+                covered: foreignCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: foreignFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1613,7 +1613,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: covered
+                covered: covered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1663,7 +1663,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: goodCovered
+                covered: goodCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1686,7 +1686,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerB,
                 repoID: repoID,
-                covered: boundaryCovered
+                covered: boundaryCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: boundaryFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1800,7 +1800,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: covered
+                covered: covered, createdAtMs: nil
             ),
             assets: [],
             resources: [],
@@ -1835,7 +1835,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: goodCovered
+                covered: goodCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: goodFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -1859,7 +1859,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerB,
                 repoID: repoID,
-                covered: boundaryCovered
+                covered: boundaryCovered, createdAtMs: nil
             ),
             assets: [SnapshotAssetRow(
                 assetFingerprint: boundaryFP, creationDateMs: nil, backedUpAtMs: 1,
@@ -2008,7 +2008,7 @@ final class RepoMaterializerRoundTripTests: XCTestCase {
             scope: CommitHeader.monthScope(month),
             writerID: writerA,
             repoID: repoID,
-            covered: covered
+            covered: covered, createdAtMs: nil
         )
         func row(_ path: String, _ hashByte: UInt8) -> SnapshotResourceRow {
             SnapshotResourceRow(

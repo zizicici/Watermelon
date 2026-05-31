@@ -5,7 +5,7 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
 
     // MARK: - Happy path
 
-    func testHappyPath_AllSevenGuardsPass_ReturnsPassedOutcome() {
+    func testHappyPath_AllGuardsPass_ReturnsPassedOutcome() {
         let evidence = makeEvidence()
         let contract = makeContract()
         let outcome = RetentionInvariantEvaluator.evaluatePostDeleteContract(
@@ -32,19 +32,7 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
         XCTAssertEqual(outcome, .failed(reason: .acceptedSnapshotCoverageRegression(filename: acceptedSnapshotFilename)))
     }
 
-    func testGuard2_AcceptedSnapshotMissingRetainedBarrierCoverage_ReturnsRetainedBarrierCoverageRegression() {
-        let evidence = makeEvidence()
-        let contract = makeContract(retainedBarrierUnionCovered: covered([(1, 9)]))
-        let outcome = RetentionInvariantEvaluator.evaluatePostDeleteContract(
-            evidence: evidence,
-            afterState: afterStateMatchingPreDelete(),
-            month: month,
-            contract: contract
-        )
-        XCTAssertEqual(outcome, .failed(reason: .retainedBarrierCoverageRegression(filename: acceptedSnapshotFilename)))
-    }
-
-    func testGuard3_AcceptedSnapshotMissingDeletePrefixCoverage_ReturnsDeletePrefixCoverageRegression() {
+    func testGuard2_AcceptedSnapshotMissingDeletePrefixCoverage_ReturnsDeletePrefixCoverageRegression() {
         let evidence = makeEvidence()
         // Delete-prefix 9 → covered range [1, 9], which the accepted snapshot ([1, 5]) does not cover.
         let contract = makeContract(expectedDeletePrefixByWriter: [writerA: 9])
@@ -57,7 +45,7 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
         XCTAssertEqual(outcome, .failed(reason: .deletePrefixCoverageRegression(filename: acceptedSnapshotFilename)))
     }
 
-    func testGuard4_StateNotRetentionSuperset_AssetRemovedAfter_ReturnsStateNotRetentionSuperset() {
+    func testGuard3_StateNotRetentionSuperset_AssetRemovedAfter_ReturnsStateNotRetentionSuperset() {
         let evidence = makeEvidence()
         let contract = makeContract()
         // After state has an empty asset dictionary while pre-delete contained `fp`.
@@ -72,7 +60,7 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
         XCTAssertEqual(outcome, .failed(reason: .stateNotRetentionSuperset))
     }
 
-    func testGuard4_StateNotRetentionSuperset_DeletedFingerprintsShrink_ReturnsStateNotRetentionSuperset() {
+    func testGuard3_StateNotRetentionSuperset_DeletedFingerprintsShrink_ReturnsStateNotRetentionSuperset() {
         let evidence = makeEvidence()
         let contract = makeContract()
         var afterMonth = monthStateWithAsset()
@@ -86,8 +74,8 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
         XCTAssertEqual(outcome, .failed(reason: .stateNotRetentionSuperset))
     }
 
-    func testGuard5_MaterializedCoveredShrunkFromPreDelete_ReturnsCoveredRangeRegression() {
-        // evidence.materializedCovered is [1, 4]; pre-delete is [1, 5] → guard 5 violation.
+    func testGuard4_MaterializedCoveredShrunkFromPreDelete_ReturnsCoveredRangeRegression() {
+        // evidence.materializedCovered is [1, 4]; pre-delete is [1, 5] → guard 4 violation.
         let evidence = makeEvidence(materializedCovered: covered([(1, 4)]))
         let contract = makeContract()
         let outcome = RetentionInvariantEvaluator.evaluatePostDeleteContract(
@@ -99,7 +87,7 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
         XCTAssertEqual(outcome, .failed(reason: .coveredRangeRegression))
     }
 
-    func testGuard6_ObservedSeqRegressionForFirstSortedWriter_ReturnsTypedPayload() {
+    func testGuard5_ObservedSeqRegressionForFirstSortedWriter_ReturnsTypedPayload() {
         // Two writers regress; sorted iteration must pick writerA first (alphabetic).
         let evidence = makeEvidence(observedSeqByWriter: [writerA: 3, writerB: 1])
         let contract = makeContract(requiredObservedSeqByWriter: [writerA: 5, writerB: 2])
@@ -112,9 +100,9 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
         XCTAssertEqual(outcome, .failed(reason: .observedSeqRegression(writerID: writerA, expectedAtLeast: 5, observed: 3)))
     }
 
-    func testGuard7_ObservedClockRegression_ReturnsTypedPayload() {
+    func testGuard6_ObservedClockRegression_ReturnsTypedPayload() {
         // afterState clock drops below pre-delete; evidence.observedClock mirrors afterState
-        // to make guards 1–6 pass before guard 7 fires.
+        // to make guards 1–5 pass before guard 6 fires.
         let evidence = makeEvidence(observedClock: preDeleteObservedClock - 1)
         let contract = makeContract()
         var afterMonth = monthStateWithAsset()
@@ -132,27 +120,11 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
         )))
     }
 
-    // MARK: - Check-order pins (4 tests covering 1v2, 1v3, 4v5, 6v7)
+    // MARK: - Check-order pins
 
-    func testCheckOrderPin_Guard1BeatsGuard2_BothAcceptedSnapshotCovered() {
+    func testCheckOrderPin_Guard1BeatsGuard2_AcceptedSnapshotCoverageBeatsDeletePrefix() {
         let evidence = makeEvidence()
-        // Both guard 1 and guard 2 are violated; guard 1 case must win.
-        let contract = makeContract(
-            acceptedSnapshotCovered: covered([(1, 9)]),
-            retainedBarrierUnionCovered: covered([(1, 9)])
-        )
-        let outcome = RetentionInvariantEvaluator.evaluatePostDeleteContract(
-            evidence: evidence,
-            afterState: afterStateMatchingPreDelete(),
-            month: month,
-            contract: contract
-        )
-        XCTAssertEqual(outcome, .failed(reason: .acceptedSnapshotCoverageRegression(filename: acceptedSnapshotFilename)))
-    }
-
-    func testCheckOrderPin_Guard1BeatsGuard3_AcceptedSnapshotCoverageBeatsDeletePrefix() {
-        let evidence = makeEvidence()
-        // Guards 1 and 3 both violated; guard 1 must win.
+        // Both guard 1 and guard 2 are violated; guard 1 must win.
         let contract = makeContract(
             acceptedSnapshotCovered: covered([(1, 9)]),
             expectedDeletePrefixByWriter: [writerA: 9]
@@ -166,9 +138,9 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
         XCTAssertEqual(outcome, .failed(reason: .acceptedSnapshotCoverageRegression(filename: acceptedSnapshotFilename)))
     }
 
-    func testCheckOrderPin_Guard4BeatsGuard5_StateBeatsCoveredRegression() {
-        // Guard 4 (state regression: empty assets) and guard 5 (materializedCovered shrunk).
-        // Guard 4 must win.
+    func testCheckOrderPin_Guard3BeatsGuard4_StateBeatsCoveredRegression() {
+        // Guard 3 (state regression: empty assets) and guard 4 (materializedCovered shrunk).
+        // Guard 3 must win.
         let evidence = makeEvidence(materializedCovered: covered([(1, 4)]))
         let contract = makeContract()
         var afterMonth = monthStateWithAsset()
@@ -182,8 +154,8 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
         XCTAssertEqual(outcome, .failed(reason: .stateNotRetentionSuperset))
     }
 
-    func testCheckOrderPin_Guard6BeatsGuard7_SeqBeatsClockRegression() {
-        // Guard 6 (seq regression) and guard 7 (clock regression). Guard 6 must win.
+    func testCheckOrderPin_Guard5BeatsGuard6_SeqBeatsClockRegression() {
+        // Guard 5 (seq regression) and guard 6 (clock regression). Guard 5 must win.
         let evidence = makeEvidence(
             observedSeqByWriter: [writerA: 3],
             observedClock: preDeleteObservedClock - 1
@@ -268,7 +240,6 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
 
     private func makeContract(
         acceptedSnapshotCovered: CoveredRanges? = nil,
-        retainedBarrierUnionCovered: CoveredRanges? = nil,
         expectedDeletePrefixByWriter: [String: UInt64]? = nil,
         requiredObservedSeqByWriter: [String: UInt64]? = nil,
         preDeleteCovered: CoveredRanges? = nil,
@@ -279,10 +250,8 @@ final class RetentionInvariantEvaluatorTests: XCTestCase {
             acceptedSnapshotFilename: acceptedSnapshotFilename,
             acceptedSnapshotSHA256Hex: "",
             acceptedSnapshotCovered: acceptedSnapshotCovered ?? covered([(1, 5)]),
-            retainedBarrierUnionCovered: retainedBarrierUnionCovered ?? covered([(1, 5)]),
             requiredObservedSeqByWriter: requiredObservedSeqByWriter ?? [writerA: 5],
             expectedDeletePrefixByWriter: expectedDeletePrefixByWriter ?? [writerA: 3],
-            retainedBarrierCheckpointSHA256ByFilename: [:],
             preDeleteCovered: preDeleteCovered ?? covered([(1, 5)]),
             preDeleteState: preDeleteState ?? RepoSnapshotState(
                 months: [month: monthStateWithAsset()],

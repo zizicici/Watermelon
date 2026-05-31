@@ -376,7 +376,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
         let lamport = PersistedLamportClock(database: scaffold.database, profileID: profileID, repoID: repoID, initial: 0)
         let commitWriter = CommitLogWriter(client: scaffold.client, basePath: basePath)
         let snapshotWriter = SnapshotWriter(client: scaffold.client, basePath: basePath)
-        let liveness = LivenessTracker(client: scaffold.client, basePath: basePath, writerID: writerA, isLocalVolume: true)
         return BackupV2RuntimeServices(
             writerID: writerA, repoID: repoID, runID: runID,
             basePath: basePath,
@@ -384,7 +383,6 @@ final class RepoVerifyMonthServiceTests: XCTestCase {
             database: scaffold.database, identity: identity,
             seqAllocator: allocator, lamport: lamport,
             commitWriter: commitWriter, snapshotWriter: snapshotWriter,
-            liveness: liveness,
             compactionPolicy: .default,
             isLocalVolume: true,
             metadataClient: scaffold.client,

@@ -42,14 +42,14 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
-                writerID: writerA, repoID: repoID, covered: covered
+                writerID: writerA, repoID: repoID, covered: covered, createdAtMs: nil
             ),
             state: output1.state.months[month] ?? .empty
         )
         let snapHeader = SnapshotHeader(
             version: SnapshotHeader.currentVersion,
             scope: CommitHeader.monthScope(month),
-            writerID: writerA, repoID: repoID, covered: covered
+            writerID: writerA, repoID: repoID, covered: covered, createdAtMs: nil
         )
         _ = try await snapshotWriter.write(
             header: snapHeader,
@@ -120,7 +120,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
-                writerID: writerB, repoID: repoID, covered: covered
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
             ),
             state: snapState
         )
@@ -128,7 +128,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
-                writerID: writerB, repoID: repoID, covered: covered
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
             ),
             assets: parts.assets, resources: parts.resources,
             assetResources: parts.assetResources, deletedKeys: parts.deletedKeys,
@@ -171,7 +171,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
-                writerID: writerB, repoID: repoID, covered: covered
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
             ),
             state: snapState
         )
@@ -179,7 +179,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
-                writerID: writerB, repoID: repoID, covered: covered
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
             ),
             assets: parts.assets, resources: parts.resources,
             assetResources: parts.assetResources, deletedKeys: parts.deletedKeys,
@@ -239,7 +239,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
-                writerID: writerB, repoID: repoID, covered: covered
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
             ),
             state: snapState
         )
@@ -247,7 +247,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
-                writerID: writerB, repoID: repoID, covered: covered
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
             ),
             assets: parts.assets, resources: parts.resources,
             assetResources: parts.assetResources, deletedKeys: parts.deletedKeys,
@@ -346,7 +346,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
-                writerID: writerB, repoID: repoID, covered: covered
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
             ),
             state: snapState
         )
@@ -354,7 +354,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
-                writerID: writerB, repoID: repoID, covered: covered
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
             ),
             assets: parts.assets, resources: parts.resources,
             assetResources: parts.assetResources, deletedKeys: parts.deletedKeys,
@@ -423,7 +423,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
-                writerID: writerB, repoID: repoID, covered: covered
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
             ),
             state: snapState
         )
@@ -431,7 +431,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
             header: SnapshotHeader(
                 version: SnapshotHeader.currentVersion,
                 scope: CommitHeader.monthScope(month),
-                writerID: writerB, repoID: repoID, covered: covered
+                writerID: writerB, repoID: repoID, covered: covered, createdAtMs: nil
             ),
             assets: parts.assets, resources: parts.resources,
             assetResources: parts.assetResources, deletedKeys: parts.deletedKeys,
@@ -466,7 +466,7 @@ final class SnapshotStampMaterializeTests: XCTestCase {
         let header = SnapshotHeader(
             version: SnapshotHeader.currentVersion,
             scope: CommitHeader.monthScope(month),
-            writerID: writerA, repoID: repoID, covered: .empty
+            writerID: writerA, repoID: repoID, covered: .empty, createdAtMs: nil
         )
         let parts = RepoSnapshotBuilder.build(header: header, state: snapState)
         _ = try await snapshotWriter.write(

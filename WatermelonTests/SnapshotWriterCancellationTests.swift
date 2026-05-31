@@ -128,7 +128,7 @@ final class SnapshotWriterCancellationTests: XCTestCase {
             scope: CommitHeader.monthScope(month),
             writerID: writerID,
             repoID: repoID,
-            covered: covered
+            covered: covered, createdAtMs: nil
         )
     }
 }

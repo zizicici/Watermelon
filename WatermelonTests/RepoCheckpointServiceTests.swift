@@ -181,7 +181,6 @@ final class RepoCheckpointServiceTests: XCTestCase {
             try await client.delete(path: path)
         }
         let after = try await RepoMaterializer(client: client, basePath: basePath).materializeMonth(month, expectedRepoID: repoID)
-        XCTAssertTrue(RepoRetentionEquivalence.matches(before, after, month: month, mode: .retentionSuperset))
         XCTAssertNotNil(after.state.months[month]?.resources[RemotePhysicalPathKey("2026/05/asset-61.jpg")])
         XCTAssertTrue(after.state.months[month]?.deletedAssetStamps.keys.contains(TestFixtures.assetFingerprint(0x62)) == true)
     }
@@ -258,11 +257,6 @@ final class RepoCheckpointServiceTests: XCTestCase {
             .filter { path in
                 !path.hasSuffix("RepoCheckpointService.swift")
                     && !path.hasSuffix("RepoCheckpointServiceTests.swift")
-                    && !path.hasSuffix("RepoCheckpointBarrierHook.swift")
-                    && !path.hasSuffix("RepoCheckpointBarrierHookTests.swift")
-                    && !path.hasSuffix("RetentionMaintenanceOrchestratorTests.swift")
-                    && !path.hasSuffix("RepoMaintenanceCoordinator.swift")
-                    && !path.hasSuffix("RepoMaintenanceCoordinatorTests.swift")
             }
         for path in sourceFiles {
             let text = try String(contentsOf: root.appendingPathComponent(path))
@@ -380,7 +374,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
             scope: CommitHeader.monthScope(month),
             writerID: writerID,
             repoID: repoID,
-            covered: covered
+            covered: covered, createdAtMs: nil
         )
         let parts = RepoSnapshotBuilder.build(header: header, state: state)
         _ = try await SnapshotWriter(client: client, basePath: basePath).write(
@@ -402,7 +396,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
             scope: CommitHeader.monthScope(month),
             writerID: writerID,
             repoID: repoID,
-            covered: covered
+            covered: covered, createdAtMs: nil
         )
         let parts = RepoSnapshotBuilder.build(header: header, state: monthState(assetBytes: assetBytes))
         var integrity = IntegrityAccumulator()

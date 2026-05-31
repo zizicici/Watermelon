@@ -222,27 +222,6 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         }
     }
 
-    func testRetentionManifestStoreFilenameRejectsZeroLamport() {
-        let validRef = RetentionManifestRef(
-            month: month, lamport: 1, writerID: writerA, runIDPrefix: "aabbcc"
-        )
-        XCTAssertNotNil(RetentionManifestStore.parseFilename(RetentionManifestStore.filename(for: validRef)))
-
-        let zeroRef = RetentionManifestRef(
-            month: month, lamport: 0, writerID: writerA, runIDPrefix: "aabbcc"
-        )
-        XCTAssertNil(RetentionManifestStore.parseFilename(RetentionManifestStore.filename(for: zeroRef)))
-    }
-
-    func testRetentionManifestDecodingRejectsZeroBarrierLamport() throws {
-        let json = retentionManifestBarrierLamportJSON(barrierLamport: "0000000000000000")
-        do {
-            _ = try RetentionManifestStore.decode(Data(json.utf8))
-            XCTFail("expected barrier_lamport 0 to be rejected")
-        } catch RetentionManifestError.malformed("barrier_lamport") {
-        }
-    }
-
     func testMaterializationIsIdempotentForUnchangedRemoteMetadata() async throws {
         let client = try await makeConnectedClient()
         try await writeCommit(client: client, writerID: writerA, seq: 1, clock: 1, fingerprintByte: 0x11)
@@ -263,7 +242,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: .empty
+                covered: .empty, createdAtMs: nil
             ),
             assets: [],
             resources: [],
@@ -337,7 +316,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: covered
+                covered: covered, createdAtMs: nil
             ),
             assets: [],
             resources: [],
@@ -391,7 +370,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
                 scope: CommitHeader.monthScope(month),
                 writerID: writerA,
                 repoID: repoID,
-                covered: covered
+                covered: covered, createdAtMs: nil
             ),
             assets: [
                 SnapshotAssetRow(
@@ -484,7 +463,7 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
                     scope: CommitHeader.monthScope(month),
                     writerID: writerA,
                     repoID: repoID,
-                    covered: .empty
+                    covered: .empty, createdAtMs: nil
                 ),
                 assets: [],
                 resources: [],
@@ -1023,24 +1002,6 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         return url
     }
 
-    private func retentionManifestBarrierLamportJSON(barrierLamport: String) -> String {
-        json([
-            "version": "1",
-            "repo_id": #""aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee""#,
-            "month": #""2026-05""#,
-            "created_by_writer_id": #""\#(writerA)""#,
-            "run_id": #""33333333-3333-3333-3333-333333333333""#,
-            "created_at_ms": "1000",
-            "barrier_lamport": #""\#(barrierLamport)""#,
-            "checkpoint_snapshot": #""placeholder""#,
-            "checkpoint_sha256": #""\#(String(repeating: "a", count: 64))""#,
-            "covered_ranges": #"{}"#,
-            "delete_prefix_by_writer": "{}",
-            "observed_seq_high_by_writer": "{}",
-            "policy": #"{"keep_uncovered_commits":true,"keep_corrupt_or_untrusted_commits":true,"keep_tombstones":true,"snapshot_keep_count":2}"#,
-            "liveness_gate": #"{"required_complete_view":true,"required_no_active_non_self_writers":true,"legacy_client_grace_ms":60000}"#
-        ])
-    }
 }
 
 private final class SerialOnlyOperationProbeClient: RemoteStorageClientProtocol, @unchecked Sendable {

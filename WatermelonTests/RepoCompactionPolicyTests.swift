@@ -10,13 +10,6 @@ final class RepoCompactionPolicyTests: XCTestCase {
         XCTAssertEqual(policy.snapshotFallbackKeepCount, 2)
     }
 
-    func testRetentionStalenessThresholdExceedsLivenessStaleThreshold() {
-        XCTAssertGreaterThan(
-            TimeInterval(RepoCompactionPolicy.default.retentionStalenessThresholdSeconds),
-            LivenessTracker.staleThreshold
-        )
-    }
-
     func testConservativePrefixEmptyInput() {
         XCTAssertEqual(CoveredRanges.empty.conservativeContiguousPrefixByWriter(), [:])
     }

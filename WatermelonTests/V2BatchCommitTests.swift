@@ -518,10 +518,10 @@ final class V2BatchCommitTests: XCTestCase {
 
         do {
             _ = try await store.flushToRemote(ignoreCancellation: false)
-            XCTFail("flush must surface a snapshotWriteFailed once chunk 2 fails")
-        } catch let deferred as V2MonthSession.MonthDurableSnapshotDeferred {
-            guard case .snapshotWriteFailed = deferred.flushError else {
-                XCTFail("expected FlushError.snapshotWriteFailed, got \(deferred.flushError)")
+            XCTFail("flush must surface a postCommitFailed once chunk 2 fails")
+        } catch let deferred as V2MonthSession.MonthDurableCommitPartial {
+            guard case .postCommitFailed = deferred.flushError else {
+                XCTFail("expected FlushError.postCommitFailed, got \(deferred.flushError)")
                 return
             }
             let assets = deferred.delta.committedAssetFingerprints
@@ -530,7 +530,7 @@ final class V2BatchCommitTests: XCTestCase {
                            "deferred delta must carry chunk 1's fingerprints (\(cap)) — \(assets.count) seen")
             XCTAssertTrue(tombstones.isEmpty, "no tombstones in this scenario")
         } catch {
-            XCTFail("expected V2MonthSession.MonthDurableSnapshotDeferred, got \(type(of: error)): \(error)")
+            XCTFail("expected V2MonthSession.MonthDurableCommitPartial, got \(type(of: error)): \(error)")
             return
         }
 
@@ -571,8 +571,8 @@ final class V2BatchCommitTests: XCTestCase {
             remoteIndexService: remoteIndex,
             ignoreCancellation: false
         )
-        guard case .commitDurableSnapshotDeferred(let delta, _) = outcome else {
-            XCTFail("expected commitDurableSnapshotDeferred outcome, got \(outcome)")
+        guard case .commitDurablePartial(let delta, _) = outcome else {
+            XCTFail("expected commitDurablePartial outcome, got \(outcome)")
             return
         }
         XCTAssertEqual(delta.committedAssetFingerprints.count, cap,
@@ -694,7 +694,7 @@ final class V2BatchCommitTests: XCTestCase {
     // the trailing forced final flush (paused → ignoreCancellation=true) to still commit pending
     // V2 ops. Pin the contract by simulating the executor's intent + provisional bookkeeping
     // around a partial multi-chunk failure followed by a recovering retry: chunk-2's intent and
-    // provisional record MUST survive the first flush's `snapshotWriteFailed` outcome and only
+    // provisional record MUST survive the first flush's `commitDurablePartial` outcome and only
     // be reconciled when the retry commits them durably.
     func testPartialMultiChunkOutcome_DoesNotDiscardChunk2Intent_RetryDrainsIt() async throws {
         let client = InMemoryRemoteStorageClient()
@@ -744,7 +744,7 @@ final class V2BatchCommitTests: XCTestCase {
         XCTAssertEqual(initialIntents, cap + 1, "intents primed for every asset")
 
         // First flush fails chunk 2 — `flushMonthStorePublishingDefensiveCommits` returns
-        // `commitDurableSnapshotDeferred` with chunk-1 delta. R03: this must NOT discard chunk-2's
+        // `commitDurablePartial` with chunk-1 delta. R03: this must NOT discard chunk-2's
         // intent or provisional record. The executor's `applyDurableBatchSideEffects` only drains
         // intents for the outcome.delta (chunk 1).
         let chunk2Path = RepoLayout.commitFilePath(
@@ -756,8 +756,8 @@ final class V2BatchCommitTests: XCTestCase {
         let firstOutcome = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
             monthStore: store, month: monthKey, remoteIndexService: remoteIndex, ignoreCancellation: false
         )
-        guard case .commitDurableSnapshotDeferred(let firstDelta, _) = firstOutcome else {
-            XCTFail("expected commitDurableSnapshotDeferred after chunk-2 upload error")
+        guard case .commitDurablePartial(let firstDelta, _) = firstOutcome else {
+            XCTFail("expected commitDurablePartial after chunk-2 upload error")
             return
         }
         await BackupParallelExecutor.applyDurableBatchSideEffects(
@@ -970,8 +970,8 @@ final class V2BatchCommitTests: XCTestCase {
         let outcome = try await BackupParallelExecutor.flushMonthStorePublishingDefensiveCommits(
             monthStore: store, month: monthKey, remoteIndexService: remoteIndex, ignoreCancellation: false
         )
-        guard case .commitDurableSnapshotDeferred(let delta, _) = outcome else {
-            XCTFail("expected commitDurableSnapshotDeferred after chunk-2 upload error")
+        guard case .commitDurablePartial(let delta, _) = outcome else {
+            XCTFail("expected commitDurablePartial after chunk-2 upload error")
             return
         }
         let transaction = MonthCommitTransaction(
@@ -1054,7 +1054,6 @@ final class V2BatchCommitTests: XCTestCase {
         let lamport = PersistedLamportClock(database: databaseManager, profileID: profileID, repoID: repoID, initial: 0)
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
-        let liveness = LivenessTracker(client: client, basePath: basePath, writerID: writerID, isLocalVolume: true)
         return BackupV2RuntimeServices(
             writerID: writerID,
             repoID: repoID,
@@ -1067,7 +1066,6 @@ final class V2BatchCommitTests: XCTestCase {
             lamport: lamport,
             commitWriter: commitWriter,
             snapshotWriter: snapshotWriter,
-            liveness: liveness,
             compactionPolicy: .default,
             isLocalVolume: true,
             metadataClient: client,

@@ -88,7 +88,7 @@ final class ExternalStorageUnavailableClassifierTests: XCTestCase {
         // boundary as FlushError → WriteError → RemoteStorageClientError.
         let cause = RemoteStorageClientError.externalStorageUnavailable
         let writeError = SnapshotWriter.WriteError.finalizationFailed(cause)
-        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(underlying: writeError)
+        let flushError = V2MonthSession.FlushError.postCommitFailed(underlying: writeError)
         XCTAssertTrue(RemoteStorageClientError.isLikelyExternalStorageUnavailable(flushError))
     }
 
@@ -128,7 +128,7 @@ final class ExternalStorageUnavailableClassifierTests: XCTestCase {
     func testNSErrorWrappingV2FlushErrorSurfacesExternalStorageUnavailable() {
         // BackupParallelExecutor's NSError wrap can carry a V2 flush wrapper
         // when an inline-complement finalizer rethrows the wrapper unchanged.
-        let cause = V2MonthSession.FlushError.snapshotWriteFailed(underlying: CommitLogWriter.WriteError.ioFailure(
+        let cause = V2MonthSession.FlushError.postCommitFailed(underlying: CommitLogWriter.WriteError.ioFailure(
                 RemoteStorageClientError.externalStorageUnavailable
             ))
         let wrapped = NSError(
@@ -140,7 +140,7 @@ final class ExternalStorageUnavailableClassifierTests: XCTestCase {
     }
 
     func testV2WrapperWithoutExternalStorageCauseIsNotMisclassified() {
-        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(underlying: SnapshotWriter.WriteError.ioFailure(
+        let flushError = V2MonthSession.FlushError.postCommitFailed(underlying: SnapshotWriter.WriteError.ioFailure(
                 NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
             ))
         XCTAssertFalse(RemoteStorageClientError.isLikelyExternalStorageUnavailable(flushError))

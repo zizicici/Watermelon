@@ -156,7 +156,7 @@ final class IdentityBoundaryTests: XCTestCase {
             scope: CommitHeader.monthScope(LibraryMonthKey(year: 2025, month: 1)),
             writerID: "writer-canary",
             repoID: "repo-canary",
-            covered: CoveredRanges(rangesByWriter: [:])
+            covered: CoveredRanges(rangesByWriter: [:]), createdAtMs: nil
         )
         let assetRow = SnapshotAssetRow(
             assetFingerprint: fingerprint,

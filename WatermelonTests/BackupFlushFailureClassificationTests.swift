@@ -21,7 +21,7 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
     func testClassifiesNSURLErrorCancelledWrappedInSnapshotWriteFailed() {
         let profile = TestFixtures.makeServerProfile(storageType: .webdav)
         let inner = NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
-        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(underlying: inner)
+        let wrapped = V2MonthSession.FlushError.postCommitFailed(underlying: inner)
         XCTAssertEqual(BackupFlushFailureClassification.classify(wrapped, on: profile),
                        .cancelled,
                        "FlushError.cancellationCause walks the underlying chain and matches NSURLErrorCancelled.")
@@ -29,7 +29,7 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
 
     func testClassifiesCancellationErrorWrappedInSnapshotWriteFailed() {
         let profile = TestFixtures.makeServerProfile(storageType: .webdav)
-        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(underlying: CancellationError())
+        let wrapped = V2MonthSession.FlushError.postCommitFailed(underlying: CancellationError())
         XCTAssertEqual(BackupFlushFailureClassification.classify(wrapped, on: profile),
                        .cancelled,
                        "Cancellation precedence wins over snapshot-write-failed even with non-empty committed sets.")
@@ -53,7 +53,7 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
     func testClassifiesConnectionUnavailable_BuriedInSnapshotWriteFailed() {
         let profile = TestFixtures.makeServerProfile(storageType: .webdav)
         let inner = NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost)
-        let wrapped = V2MonthSession.FlushError.snapshotWriteFailed(underlying: inner)
+        let wrapped = V2MonthSession.FlushError.postCommitFailed(underlying: inner)
         XCTAssertEqual(BackupFlushFailureClassification.classify(wrapped, on: profile),
                        .connectionUnavailable,
                        "isConnectionUnavailableErrorIncludingFlushUnderlying walks BackupErrorChain into the underlying.")
@@ -157,13 +157,13 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
     ]
 
     private func makePartialOutcome(underlying: Error) -> V2MonthFlushOutcome {
-        let flushError = V2MonthSession.FlushError.snapshotWriteFailed(underlying: underlying)
+        let flushError = V2MonthSession.FlushError.postCommitFailed(underlying: underlying)
         let delta = BackupMonthFlushDelta(
             didFlush: true,
             committedAssetFingerprints: Self.probeAssets,
             committedTombstoneFingerprints: Self.probeTombstones
         )
-        return .commitDurableSnapshotDeferred(delta: delta, flushError: flushError)
+        return .commitDurablePartial(delta: delta, flushError: flushError)
     }
 
     private func assertDisplayErrorRoundTripsPayload(
@@ -174,8 +174,8 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
         // The committed delta no longer rides FlushError; the wrapper carries only `underlying`.
         // The committed-payload round trip is asserted against the outcome value
         // (see `assertOutcomeDeltaRoundTripsPayload`); here we pin the wrapper shape.
-        guard case .snapshotWriteFailed = flushError else {
-            XCTFail("dispatch.displayError must be FlushError.snapshotWriteFailed (the wrapper)",
+        guard case .postCommitFailed = flushError else {
+            XCTFail("dispatch.displayError must be FlushError.postCommitFailed (the wrapper)",
                     file: file, line: line)
             return
         }
@@ -201,8 +201,8 @@ final class BackupFlushFailureClassificationTests: XCTestCase {
         file: StaticString = #file,
         line: UInt = #line
     ) {
-        guard case .snapshotWriteFailed(let underlying) = flushError else {
-            XCTFail("dispatch.displayError must be FlushError.snapshotWriteFailed (the wrapper)",
+        guard case .postCommitFailed(let underlying) = flushError else {
+            XCTFail("dispatch.displayError must be FlushError.postCommitFailed (the wrapper)",
                     file: file, line: line)
             return
         }

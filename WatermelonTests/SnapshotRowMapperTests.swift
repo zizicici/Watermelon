@@ -12,7 +12,7 @@ final class SnapshotRowMapperTests: XCTestCase {
             scope: "month:2026-05",
             writerID: "writer-A",
             repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-            covered: covered
+            covered: covered, createdAtMs: nil
         )
         let line = try SnapshotRowMapper.encodeHeaderLine(header)
         let decoded = try SnapshotRowMapper.decodeLine(line)

@@ -684,7 +684,6 @@ final class AssetProcessorRaceDetectionTests: XCTestCase {
             lamport: lamport,
             commitWriter: CommitLogWriter(client: client, basePath: basePath),
             snapshotWriter: SnapshotWriter(client: client, basePath: basePath),
-            liveness: LivenessTracker(client: client, basePath: basePath, writerID: writerID, isLocalVolume: true),
             compactionPolicy: .default,
             isLocalVolume: true,
             metadataClient: client,

@@ -649,6 +649,7 @@ final class BackupV2RuntimeBoundaryTests: XCTestCase {
             observedSeqByWriter: [:],
             coveredByMonth: [:],
             acceptedSnapshotBaselinesByMonth: [:],
+            outcomeByMonth: [:],
             corruptedSnapshotMonths: [],
             repoID: repoID
         )

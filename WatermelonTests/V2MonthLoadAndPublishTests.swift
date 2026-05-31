@@ -516,7 +516,6 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
         let lamport = PersistedLamportClock(database: databaseManager, profileID: profileID, repoID: repoID, initial: 0)
         let commitWriter = CommitLogWriter(client: client, basePath: basePath)
         let snapshotWriter = SnapshotWriter(client: client, basePath: basePath)
-        let liveness = LivenessTracker(client: client, basePath: basePath, writerID: writerID, isLocalVolume: true)
         return BackupV2RuntimeServices(
             writerID: writerID,
             repoID: repoID,
@@ -529,7 +528,6 @@ final class V2MonthLoadAndPublishTests: XCTestCase {
             lamport: lamport,
             commitWriter: commitWriter,
             snapshotWriter: snapshotWriter,
-            liveness: liveness,
             compactionPolicy: .default,
             isLocalVolume: true,
             metadataClient: client,
