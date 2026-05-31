@@ -43,7 +43,7 @@ ALTER TABLE server_profiles ADD COLUMN writerID TEXT;
 2. SMB 唯一性由 host/port/shareName/basePath/username/domain 决定
 3. WebDAV / S3 / SFTP / 外接存储的类型特定参数放在 `connectionParams`，结构化字段（host / port / shareName / basePath / username）尽量复用通用列
 4. SFTP 唯一性由调用方通过 `(host, port, basePath, username)` 在保存时校验（`AddSFTPStorageViewController.findExistingProfile`）；DB 层没有像 SMB 那样的部分唯一索引
-5. `writerID` 由 V2 repo 写入路径 lazy ensure；同一个 profile 跨 run 复用，作为 commit / snapshot / liveness / 迁移 marker 的 writer identity
+5. `writerID` 由 V2 repo 写入路径 lazy ensure；同一个 profile 跨 run 复用，作为 commit / snapshot / 迁移 marker 的 writer identity
 
 ### `repo_state`
 
@@ -336,62 +336,9 @@ V2 详细设计和残留项见 `docs/06-RepoV2.md`。数据模型层面只需要
 2. `.watermelon/identity/*.json` / `.watermelon/repo-identity.json` 决定 canonical `repoID`；`.watermelon/repo.json` 是 read-cache
 3. `.watermelon/commits/{YYYY-MM}--{writerID}--{seq16}.jsonl` 记录 asset/resource upsert 与 tombstone op
 4. `.watermelon/snapshots/{YYYY-MM}--{lamport16}--{writerID}--{runIDPrefix}.jsonl` 保存月级 materialized snapshot 和 covered commit ranges
-5. `.watermelon/liveness/{writerID}.json` 用于 active writer 判断与 orphan metadata cleanup gate
-6. `.watermelon/retention/{YYYY-MM}--{lamport16}--{writerID}--{runIDPrefix}.json` 保存 checkpoint barrier / delete prefix / liveness gate，用于保守删除已被 checkpoint 覆盖的 commit 前缀
-7. `.watermelon/migrations/*.json` 记录 V1→V2 迁移阶段；迁移完成后仅可能留下 cleanup residue，`RemoteFormatInspection.v2WithPendingMigrationCleanup` 会驱动前台清理
+5. `.watermelon/migrations/*.json` 记录 V1→V2 迁移阶段；迁移完成后仅可能留下 cleanup residue，`RemoteFormatInspection.v2WithPendingMigrationCleanup` 会驱动前台清理
 
-`V2MonthSession` 是 V2 worker 的月份状态容器：启动时按 repoID 过滤 materialize 单月，再叠加真实月份目录 listing；row-writing asset 返回前先写 per-asset commit，flush 时主要写 snapshot，并通过 `BackupMonthFlushDelta` 告诉 `RemoteIndexSyncService` 哪些 asset / tombstone commit 已 durable。干净 flush 后会尝试 checkpoint / retention barrier / commit 前缀删除维护。
-
-### Retention manifest wire schema
-
-文件名由 `RetentionManifestStore.filename(for:)` 生成：
-
-`{YYYY-MM}--{barrierLamport16}--{createdByWriterID}--{runIDPrefix6}.json`
-
-约束：
-
-1. `barrierLamport16` 是 16 位小写 hex，且 `0 < value < LamportClock.maxAdoptableValue`
-2. `createdByWriterID` 是完整小写 UUID，不是 `writerIDShort`
-3. `runIDPrefix6` 是去掉连字符后的 run UUID 前 6 位小写 hex
-4. 文件名里的 month / lamport / writer / run prefix 必须和 JSON body 对应字段一致；不一致会被 `RetentionManifestRemoteStore` 归为 invalid
-
-JSON body 由 `RetentionManifestStore.encode` 以 sorted keys 写出，当前版本只接受 `version == 1`。必填字段：
-
-| JSON key | Swift 字段 | 形状 / 约束 |
-|---|---|---|
-| `version` | `version` | 整数，当前为 `1` |
-| `repo_id` | `repoID` | UUID；编码为小写 |
-| `month` | `month` | `YYYY-MM` |
-| `created_by_writer_id` | `createdByWriterID` | 完整小写 UUID |
-| `run_id` | `runID` | UUID；编码为小写 |
-| `created_at_ms` | `createdAtMs` | 非负 Int64 毫秒时间戳 |
-| `barrier_lamport` | `barrierLamport` | 16 位小写 hex 字符串，不是 JSON number |
-| `checkpoint_snapshot` | `checkpointSnapshotName` | snapshot 文件名，必须和 `month / barrier_lamport / created_by_writer_id / run_id` prefix 匹配 |
-| `checkpoint_sha256` | `checkpointSHA256Hex` | 64 位小写 hex |
-| `covered_ranges` | `coveredRanges` | `[writerID: [[low, high], ...]]`；writerID 必须有效，每个 range 非空且 `low > 0 && high >= low` |
-| `delete_prefix_by_writer` | `deletePrefixByWriter` | `[writerID: UInt64]`；writer 必须存在于 `covered_ranges`，prefix 必须大于 0 且不超过保守连续 covered prefix |
-| `observed_seq_high_by_writer` | `observedSeqHighByWriter` | `[writerID: UInt64]`；只校验 writer key 形状 |
-| `policy` | `policy` | 见下表 |
-| `liveness_gate` | `livenessGate` | 见下表 |
-
-`policy` 子对象：
-
-| JSON key | Swift 字段 | 形状 / 约束 |
-|---|---|---|
-| `keep_uncovered_commits` | `keepUncoveredCommits` | Bool |
-| `keep_corrupt_or_untrusted_commits` | `keepCorruptOrUntrustedCommits` | Bool |
-| `keep_tombstones` | `keepTombstones` | Bool |
-| `snapshot_keep_count` | `snapshotKeepCount` | 非负 Int |
-
-`liveness_gate` 子对象：
-
-| JSON key | Swift 字段 | 形状 / 约束 |
-|---|---|---|
-| `required_complete_view` | `requiredCompleteView` | Bool |
-| `required_no_active_non_self_writers` | `requiredNoActiveNonSelfWriters` | Bool |
-| `legacy_client_grace_ms` | `legacyClientGraceMs` | 非负 Int64 |
-
-当前 `RepoRetentionBarrierService` 发布的 manifest 固定把 `policy.keep_*` 三个布尔值写为 `true`，`snapshot_keep_count` 来自 `RepoCompactionPolicy.snapshotFallbackKeepCount`，`liveness_gate.required_complete_view` 和 `required_no_active_non_self_writers` 写为 `true`，`legacy_client_grace_ms` 来自 `legacyClientGraceSeconds * 1000`。读取时未知字段会被忽略，但所有上表字段缺失或形状错误都会 fail-closed。
+`V2MonthSession` 是 V2 worker 的月份状态容器：启动时按 repoID 过滤 materialize 单月，再叠加真实月份目录 listing；row-writing asset 返回前先写 per-asset commit，flush drain append-only commit chunks 并返回 durable deltas。checkpoint、commit GC、snapshot GC 由独立的 `RepoCompactionService` 在 startup maintenance 时执行。
 
 ## 8. `assetFingerprint` 计算规则
 

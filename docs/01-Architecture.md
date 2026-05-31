@@ -220,11 +220,11 @@
 
 1. 创建 `StorageClientPool`，并用预连接 client 预热
 2. 用 `MonthWorkQueue`（定义在 `BackupMonthScheduler.swift` 中的 actor）动态分发月份
-3. 每个 worker 逐月打开月份状态：V2 用 `V2MonthSession.loadOrCreate(...)`，V1 用 `MonthManifestStore.loadOrCreate(...)`
+3. 每个 worker 逐月通过 `V2MonthSession.loadOrCreate(...)` 打开月份状态（当前 backup 写路径已 V2-only；V1 仓库在 runtime open 阶段被前台迁移或后台跳过）
 4. 分批读取 PHAsset（每批 500）
 5. 调 `AssetProcessor.process(...)` 执行单 asset 上传
-6. 每 10 个非 failed asset result 对当前 `BackupMonthStore` 做一次 batch flush；月末仍兜底 flush
-7. V2 asset result 返回前已写 durable commit；每 10 个非 failed asset 的 flush 主要写 snapshot，防御性 commit delta 会先 publish 月快照；干净 flush 后还会尝试 `RepoCheckpointBarrierHook`（按策略写 checkpoint / retention barrier / 删除被 barrier 保护的 commit 前缀）；最终 flush 后先执行 `onMonthUploaded` 月级收尾，再按结果进入 `completed` / `downloadIncomplete` / fatal failure
+6. 每 200 个非 failed asset result 对当前 `BackupMonthStore` 做一次 batch flush（`BackupV2Constants.batchFlushInterval`）；月末仍兜底 flush
+7. V2 asset result 返回前已写 durable commit；batch flush 是 commit-only（drain append-only commit chunks）；最终 flush 后先执行 `onMonthUploaded` 月级收尾，再按结果进入 `completed` / `downloadIncomplete` / fatal failure
 
 ### `AssetProcessor`（`AssetProcessor.swift` + `+Naming` + `+Upload`）
 
@@ -236,19 +236,18 @@
 4. 检查 hash 已存在 / 文件名碰撞
 5. 上传远端资源（最大重试 3 次）
 6. 写本地 hash 索引
-7. 写 `BackupMonthStore`（V2 session 或 V1 manifest store）
+7. 写 `BackupMonthStore`（V2 session）
 8. 增量更新共享远端快照缓存
 
-### `BackupMonthStore` / `V2MonthSession` / `MonthManifestStore`（`Shared/Services/Backup/`）
+### `BackupMonthStore` / `V2MonthSession`（`Shared/Services/Backup/`）
 
-文件：`BackupMonthStore.swift`、`V2MonthSession.swift`、`V2MonthIndexes.swift`、`V2MonthCommitFlusher.swift`、`V2MonthSnapshotFlusher.swift`、`V2RetentionBarrierRefresh.swift`、`MonthManifestStore.swift` + `+Loading.swift` + `+Schema.swift`
+文件：`BackupMonthStore.swift`、`V2MonthSession.swift`、`V2MonthIndexes.swift`、`V2MonthCommitFlusher.swift`
 
 职责：
 
-1. `BackupMonthStore` 是上传路径的统一协议，供 `AssetProcessor` 同时写 V2 session 与 V1 manifest store
-2. `V2MonthSession` 是当前 V2 写入路径：单月 materialize + 真实目录 listing → in-memory indexes → per-asset commit jsonl + snapshot jsonl flush；写 commit / snapshot 时会 refresh retention barrier 覆盖，避免删掉本 session 依赖的 commit
-3. `MonthManifestStore` 是 V1 兼容路径：管理月级 sqlite `resources / assets / asset_resources`，支持旧仓库读取、迁移与 V1 verify
-4. 两条路径都会把真实远端目录文件集合叠加进月份状态，避免“文件已上传但 metadata 未 flush”的 orphan 造成重名冲突
+1. `BackupMonthStore` 是上传路径的协议，供 `AssetProcessor` 写 V2 session
+2. `V2MonthSession` 是当前写入路径：单月 materialize + 真实目录 listing → in-memory indexes → per-asset commit jsonl flush（commit-only，不写 snapshot）；部分 durable commit 错误通过 `MonthDurableCommitPartial` 携带已落盘 delta
+3. `MonthManifestStore`（同目录，V1 兼容）仅用于旧仓库读取、前台迁移辅助、V1 verify / reconcile，不参与当前 backup worker 写入
 
 ### `RemoteIndexSyncService` / `RemoteLibrarySnapshotCache`（`Shared/Services/Backup/`）
 
@@ -290,16 +289,13 @@
 - `moveIfAbsentGuarantee` —— `moveIfAbsent` 默认能力。LocalVolume / SMB / S3-conditional 是 `.exclusive`；WebDAV / SFTP 是 `.overwritePossible`
 - `supportsExclusiveMoveIfAbsent(forDestinationPath:)` async —— runtime probe，覆盖静态 `moveIfAbsentGuarantee`。S3 forward 到 `conditionalCopyIfAbsentSupported()`（首次跑探测、actor 缓存）；WebDAV forward 到 `Overwrite: F` 探测；其它 backend 默认 `(moveIfAbsentGuarantee == .exclusive)`
 - `dataPathOverwriteRisk` —— `.perKey`（S3 / WebDAV / SMB）vs `.none`（LocalVolume / SFTP），上传路径决定是否强加 `~widN` 后缀
-- `supportsLivenessSafeOverwriteUpload` —— `client.upload` 到既有路径是否可作为 liveness 心跳续期（既不丢旧又不留空）。LocalVolume / S3 为 `true`；SMB / WebDAV / SFTP 为 `false`。默认保守为 `false`，不耦合 `dataPathOverwriteRisk`。它与 `supportsLivenessSafeOverwriteMove` 共同决定派生的 `supportsLivenessSafeRenewal`
-- `supportsLivenessSafeOverwriteMove` —— `client.move` 到既有路径是否在目的地做原子替换（同伴永不观察到路径缺失）。LocalVolume（POSIX `rename(2)`）/ S3（CopyObject + DeleteObject，目的地按对象原子替换）/ WebDAV（RFC 4918 `MOVE` + `Overwrite: T`，主流实现走 `rename(2)`）为 `true`；SMB（libsmb2 `smb2_rename_async` 硬编码 `replace_if_exist=0`）/ SFTP（v3 `rename` 拒绝既有目的地）为 `false`。无默认 —— 协议强制每个后端显式声明
-- `supportsLivenessSafeRenewal` —— 派生自 `supportsLivenessSafeOverwriteUpload || supportsLivenessSafeOverwriteMove`：至少一条续期路径安全则为 `true`。SMB 与 SFTP 两路均不安全，因此为 `false`；为 `false` 时 `RepoMaintenanceRuntimeBuilder` 仍可启动普通 heartbeat，但不公布 barrier-aware retention capability，也跳过 orphan metadata sweep
-- `readAfterWriteGraceSeconds` —— 共享 read-after-write 容忍预算，被 `MetadataCreateGate.metadataReadAfterWriteDeadline` 与 `LivenessTracker.snapshotPeerStatuses` 共同消费。S3 / WebDAV `30`（R2 / MinIO / B2 / CDN 反代场景）；其他后端 `0`
+- `readAfterWriteGraceSeconds` —— 共享 read-after-write 容忍预算，被 `MetadataCreateGate.metadataReadAfterWriteDeadline` 消费。S3 / WebDAV `30`（R2 / MinIO / B2 / CDN 反代场景）；其他后端 `0`
 - `backendNameCaseSensitivity` —— `.caseSensitive` / `.caseInsensitive` / `.unknown`，`presenceKey(for:)` exact for `.caseSensitive` / `.unknown`，folded for `.caseInsensitive`
 - `concurrencyMode` —— `.concurrent` vs `.serialOnly`（SMB / SFTP），`SerialOperationsClient` 包裹
 
 新增能力位必须按其实际承载的语义命名（原语 vs coordination 安全），避免出现"原语命名 + coordination 取值"的错位。
 
-`MetadataCreateGate.createWithStagingFallback` 消费 `atomicCreateGuarantee` / `moveIfAbsentGuarantee` / `dataPathOverwriteRisk` / `readAfterWriteGraceSeconds`：先看 `atomicCreateGuarantee`（`.exclusive` → 直接 atomicCreate；`.overwritePossible` → UUID staging + 验证 + move），再看 `moveIfAbsentGuarantee` + runtime probe 决定 finalization 路径（exclusive moveIfAbsent vs `bestEffortCopyIfAbsent` 兜底 vs 抛 `nonExclusiveFinalization`）。liveness 能力原子和派生 composite 不在 gate 路径上，由 `LivenessTracker` / `BackupV2RuntimeBuilder` 各自消费。
+`MetadataCreateGate.createWithStagingFallback` 消费 `atomicCreateGuarantee` / `moveIfAbsentGuarantee` / `dataPathOverwriteRisk` / `readAfterWriteGraceSeconds`：先看 `atomicCreateGuarantee`（`.exclusive` → 直接 atomicCreate；`.overwritePossible` → UUID staging + 验证 + move），再看 `moveIfAbsentGuarantee` + runtime probe 决定 finalization 路径（exclusive moveIfAbsent vs `bestEffortCopyIfAbsent` 兜底 vs 抛 `nonExclusiveFinalization`）。
 
 协议扩展默认提供 `shouldSetModificationDate / shouldLimitUploadRetries / directReadURL / disconnectSafely / supportsExclusiveMoveIfAbsent`（默认 `moveIfAbsentGuarantee == .exclusive`）。
 
@@ -344,7 +340,7 @@
 
 ### 远端持久化
 
-1. V2 主路径：`.watermelon/version.json`、identity / repo metadata、`commits/`、`snapshots/`、`liveness/`、`retention/`、`migrations/`
+1. V2 主路径：`.watermelon/version.json`、identity / repo metadata、`commits/`、`snapshots/`、`migrations/`
 2. V1 兼容路径：每个月一个 `.watermelon_manifest.sqlite`，`MonthManifestStore` 迁移名 `month_manifest_v1_initial`
 
 ### 会话态
@@ -398,9 +394,9 @@ MoreKit / 自定义段落顺序（`WatermelonMoreDataSource`）：
 11. `SFTPCredentialBlobTests` — `SFTPCredentialBlob` 与 `SFTPConnectionParams` 的 JSON round-trip
 12. `SFTPErrorClassifierTests` — `SFTPErrorClassifier.isConnectionUnavailable` 表驱动覆盖（Citadel / NIO 类型未链接到测试 target，POSIX domain 与本地错误类型为主）
 13. `RepoMaterializerRoundTripTests` / `RepoMaterializerReadRaceTests` / `V2FlushTests` / `BackupV2RuntimeBuilderTests` / `BackupV2RuntimeBoundaryTests` / `BackupV2RepoOpenPlannerTests` / `BackupV2RepoVerifyPlannerTests` / `BackupV2InspectionSharingTests` / `BootstrapStateMachineTests` — V2 repo materialize、flush、runtime 打开 / verify 边界、bootstrap / migration 状态机
-14. `RepoCheckpointServiceTests` / `RepoCheckpointBarrierHookTests` / `RepoCompactionPlannerTests` / `RepoCompactionPolicyTests` — checkpoint、compaction report 与 barrier hook
-15. `RetentionManifestTests` / `RetentionManifestRemoteStoreTests` / `RetentionDeletionSafetyGateTests` / `RetentionLivenessCapabilityTests` / `RepoRetentionBarrierServiceTests` / `RepoRetentionDeletePreflightTests` / `RepoRetentionDeleteExecutorTests` / `RepoRetentionCommitDeleteExecutorTests` / `RepoRetentionEquivalenceTests` / `RetentionMaintenanceOrchestratorTests` / `V2BarrierAwareMonthSessionRefreshTests` — retention manifest、liveness gate、commit 前缀删除与 barrier-aware session refresh
-16. `RepoVerifyMonthServiceTests` / `RemoteIndexSyncServiceTests` / `RemoteIndexV1SyncEngineTests` / `RemoteIndexV2SyncEngineTests` / `RemoteResourcePresenceTests` / `RemotePresenceSnapshotTests` / `RemoteIndexFormatRouteDecisionTests` / `StorageCapabilityMatrixTests` — verify、remote index、presence overlay / snapshot、format route、backend capability contract
+14. `RepoCheckpointServiceTests` / `RepoCompactionPlannerTests` / `RepoCompactionPolicyTests` — checkpoint 与 compaction report
+15. `RetentionInvariantEvaluatorTests` / `RepoSnapshotProtectionSetTests` — retention 不变量评估与 snapshot GC 保护集
+16. `RepoVerifyMonthServiceTests` / `RemoteIndexSyncServiceTests` / `RemoteIndexV1SyncEngineTests` / `RemoteIndexV2SyncEngineTests` / `RemoteResourcePresenceTests` / `RemotePresenceSnapshotTests` / `RemoteIndexFormatRouteDecisionTests` / `BackendCapabilityFailClosedTests` — verify、remote index、presence overlay / snapshot、format route、backend capability fail-closed
 17. `RestoreServiceFallbackTests` / `RestoredAssetFingerprintVerifierTests` / `RemoteAssetIntegrityClassifierTests` / `AssetResourceLinkSetPredicateTests` / `ExternalStorageUnavailableClassifierTests` / `ExternalStorageUnavailableRunErrorTests` — 下载 fallback、durable fingerprint 校验、远端资产完整性分类与外接存储不可用分类
 18. `RepoBootstrapVersionTests` / `RepoIdentityAuthorityTests` / `IdentityClaimStoreTests` / `VersionManifestStoreTests` / `MigrationMarkerStoreTests` / `OrphanMetadataCleanupTests` / `MetadataWriteVerifierTests` / `MetadataWriteCancellationTests` / `MetadataCreateOrchestratorTests` — version/bootstrap identity、migration marker、orphan metadata cleanup 与 metadata 写入边界
 19. `BackupResumePlannerTests` / `BackupParallelExecutorMonthEventTests` / `BackupSessionReducerTests` / `MonthPlanStateMachineTests` / `ContentHashIndexRepositoryDuplicateCandidateTests` / `DuplicatesCandidateComputationTests` — 恢复去重、月份事件、Home/backup 状态机与重复候选查询的纯逻辑

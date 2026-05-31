@@ -27,10 +27,10 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 6. `Watermelon/Home/HomeIncrementalDataManager.swift` + `HomeDataProcessingWorker.swift` + `HomeLocalIndexEngine.swift` + `HomeRemoteIndexEngine.swift`
 7. `Watermelon/Services/HashIndex/LocalHashIndexBuildService.swift`
 8. `Watermelon/Services/Backup/BackupSessionController.swift` + `BackupCoordinator.swift` + `BackupRunPreparation.swift` + `BackupParallelExecutor.swift` + `AssetProcessor.swift` + `BackgroundBackupRunner.swift`
-9. `Shared/Services/Backup/BackupMonthStore.swift` + `V2MonthSession.swift` + `V2MonthIndexes.swift` + `V2MonthCommitFlusher.swift` + `V2MonthSnapshotFlusher.swift` + `MonthManifestStore.swift`
+9. `Shared/Services/Backup/BackupMonthStore.swift` + `V2MonthSession.swift` + `V2MonthIndexes.swift` + `V2MonthCommitFlusher.swift` + `MonthManifestStore.swift`
 10. `Shared/Services/Repo/BackupV2RuntimeBuilder.swift` + `BackupV2RepoOpenService.swift` + `RemoteFormatCompatibilityService` in `Shared/Services/Backup/RemoteFormatCompatibility.swift`
 11. `Shared/Services/Repo/RepoBootstrap.swift` + `RepoMaterializer.swift` + `CommitLogWriter.swift` + `SnapshotWriter.swift` + `V1MigrationService.swift`
-12. `Shared/Services/Repo/RepoCheckpointBarrierHook.swift` + `RepoCheckpointService.swift` + `RepoRetentionBarrierService.swift` + `RepoRetentionDeletePreflightService.swift` + `RepoRetentionDeleteExecutor.swift`
+12. `Shared/Services/Repo/RepoCompactionService.swift` + `RepoCheckpointService.swift` + `RepoSnapshotDeletePreflightService.swift` + `RepoSnapshotDeleteExecutor.swift` + `RepoRetentionDeletePreflightService.swift` + `RepoRetentionDeleteExecutor.swift`
 13. `Shared/Services/Backup/RemoteIndexSyncService.swift` + `Shared/Services/Repo/RepoVerifyMonthService.swift`
 14. `Watermelon/Services/Backup/RemoteMaintenanceController.swift`
 15. `Watermelon/Services/Restore/RestoreService.swift`
@@ -43,7 +43,7 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 
 **Repo V2 is the current write format.** Fresh and migrated remotes use `.watermelon/` V2 metadata: per-asset commit jsonl plus materialized snapshots. V1 per-month sqlite manifests remain only for compatibility, migration, verify helpers, and old-repo reads. Runtime opening goes through format inspection and V2 open planners; foreground runs may migrate V1, background runs do not.
 
-**Remote maintenance is explicit and conservative.** `RemoteMaintenanceController` drives user-triggered month verification and blocks Home selection while active. V2 checkpoint / retention work is opportunistic maintenance after clean flushes or startup scans, guarded by barriers, liveness, grace windows, and post-delete verification.
+**Remote maintenance is explicit and conservative.** `RemoteMaintenanceController` drives user-triggered month verification and blocks Home selection while active. V2 compaction (checkpoint, commit GC, snapshot GC) runs via `RepoCompactionService` during startup maintenance, guarded by covered-max materialization, clean outcome gates, and post-delete verification.
 
 ## Invariants Worth Memorising
 
@@ -52,8 +52,8 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 - `assetFingerprint` = SHA-256 of sorted `role|slot|hashHex` tokens joined by `\n`. It is the dedup key everywhere.
 - V2 commit log + snapshot is the main write path. V1 `.watermelon_manifest.sqlite` is legacy compatibility / migration state, not the V2 month source of truth.
 - Remote format inspection is fail-closed for unsupported, damaged, or foreground-migration-required states; do not silently fall back to V1 behavior on V2 uncertainty.
-- V2 row-writing asset results commit before publish / local hash-index write. Batch flush cadence mainly writes snapshots; leftover defensive commits are published before errors propagate.
-- Checkpoint, retention barrier, and commit-prefix delete are conservative maintenance only. Missing capability, uncertain liveness, invalid barriers, migration markers, or failed verification should skip deletion rather than force cleanup.
+- V2 row-writing asset results commit before publish / local hash-index write. Batch flush is commit-only; partial durable commit errors surface via `MonthDurableCommitPartial`.
+- Checkpoint, commit GC, and snapshot GC are conservative maintenance only. Non-clean outcomes, migration markers, or failed verification should skip deletion rather than force cleanup.
 - `BackgroundBackupRunner` opens V2 runtime with migration disabled; V1 / V2-with-V1-residue profiles are skipped with logs until a foreground run migrates them.
 - Sync months reach `uploadDone` after upload flush, then `completed` only after `BackupParallelExecutor`'s `onMonthUploaded` finishes the inline download. **Don't treat `uploadDone` as "month done".**
 - Successful downloads write a hash-index entry immediately, so they survive stop / restart.
@@ -72,4 +72,4 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 - `docs/03-DataModel.md` — SQLite schemas, `connectionParams` payloads, in-memory snapshot types
 - `docs/04-UIFlow.md` — Home, menus, selection, execution states, More page
 - `docs/05-OpenIssues.md` — known gaps and ordering for follow-up work
-- `docs/06-RepoV2.md` — V2 remote format, migration, materialization, retention, and historical hardening notes
+- `docs/06-RepoV2.md` — V2 remote format, migration, materialization, compaction, and historical hardening notes

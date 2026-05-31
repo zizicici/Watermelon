@@ -119,15 +119,14 @@
 3. 用 `MonthWorkQueue`（actor，定义在 `Watermelon/Services/Backup/BackupMonthScheduler.swift`）动态分发月份
 4. 每个 worker：
    - 领取一个月份
-   - V2：`V2MonthSession.loadOrCreate(...)` materialize 单月、列真实月份目录，并构建 in-memory indexes
-   - V1：`MonthManifestStore.loadOrCreate(...)` 装载 legacy sqlite manifest
+   - 通过 `V2MonthSession.loadOrCreate(...)` materialize 单月、列真实月份目录，并构建 in-memory indexes（当前 backup 写路径已 V2-only；V1 仓库在 runtime open 阶段被前台迁移或后台跳过）
    - 以 `500` 个 asset 为一批处理
    - 批量读取本地 hash cache
    - 逐 asset 调 `AssetProcessor.process(...)`
-5. 每处理 10 个非 failed 结果，就对当前 `BackupMonthStore` 调一次 batch `flushToRemote(...)`；月末仍兜底 flush
-6. V2 asset row 写入后立刻通过 per-asset commit 落盘；批量 flush 主要写 snapshot，若防御性 commit 了遗留 pending ops，调用方会先 publish 月快照
+5. 每处理 200 个非 failed 结果，就对当前 `BackupMonthStore` 调一次 batch `flushToRemote(...)`（`BackupV2Constants.batchFlushInterval`）；月末仍兜底 flush
+6. V2 asset row 写入后立刻通过 per-asset commit 落盘；batch flush 是 commit-only（drain append-only commit chunks），不写 snapshot
 7. 最终 flush 成功后若提供了 `onMonthUploaded`，会先执行月级收尾；收尾 `.success` 才发出 `.monthChanged(.completed)`，`.incomplete` 只表示下载/收尾 incomplete，`.failed` 走 fatal failure
-8. V2 commit durable 但 snapshot 写失败时发出独立 `.uploadDurableSnapshotDeferred(message:)`；它关闭 upload work，但不伪装成通用 incomplete
+8. V2 commit durable 但 post-commit 失败时通过 `MonthDurableCommitPartial` 携带已落盘 delta；下游先 publish 再传播错误
 
 ## 6. 单 asset 处理
 
@@ -233,13 +232,13 @@ V2 当前主路径：
 
 1. `V2MonthSession` 在内存里维护当月 resources / assets / links / tombstones
 2. `commitPendingAssetToRemote(...)` 对 row-writing asset 写 commit jsonl，不写 snapshot
-3. `flushToRemote(...)` 防御性提交遗留 pending ops 后，通过 `V2MonthSnapshotFlusher` 写覆盖当前 durable commits 的 snapshot
-4. 每 10 个非 failed asset 触发一次 snapshot-cadence flush，月末或 pause/connection-loss 收束时再兜底 flush
-5. commit 已落盘但 snapshot 写失败时，错误会携带 `committedAssets / committedTombstones`；调用方先 publish 月快照再继续传播错误。只有非 paused、可关闭月份的最终 flush 会向 Home 发 `.uploadDurableSnapshotDeferred(message:)`
-6. `V2MonthSession.loadOrCreate(...)` 会列出真实月份目录，避免“文件已存在但 V2 metadata 未 flush”的 orphan 造成重名冲突
-7. 干净 flush 后会尝试 `RepoCheckpointBarrierHook`：按 `RepoCompactionPolicy` 判断是否需要写 checkpoint snapshot；checkpoint 被接受后发布 retention barrier，再由 `RepoRetentionCommitDeleteExecutor` 删除已被 barrier / liveness / post-delete verification 保护的 commit 前缀。低于 checkpoint 阈值时也会尝试删除已有 barrier 已覆盖的候选前缀。
+3. `flushToRemote(...)` drain append-only commit chunks 并返回 durable deltas；不写 snapshot、不做 checkpoint 或 GC
+4. 每 200 个非 failed asset 触发一次 commit-cadence flush（`BackupV2Constants.batchFlushInterval`），月末或 pause/connection-loss 收束时再兜底 flush
+5. commit 已落盘但 post-commit 失败时，通过 `MonthDurableCommitPartial` 携带 `delta` 与 `FlushError.postCommitFailed`；调用方先 publish 月快照再传播错误
+6. `V2MonthSession.loadOrCreate(...)` 会列出真实月份目录，避免”文件已存在但 V2 metadata 未 flush”的 orphan 造成重名冲突
+7. checkpoint、commit GC、snapshot GC 由独立的 `RepoCompactionService` 在 startup maintenance 时执行，不在 flush 热路径上
 
-V1 兼容路径仍由 `MonthManifestStore` 维护 sqlite manifest：本地 sqlite 改动先落临时文件，月末 `flushToRemote(...)` 上传 `.watermelon_manifest.sqlite`。`MonthManifestStore` 实现拆为三段：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。
+`MonthManifestStore` 是 V1 兼容组件，仅用于旧仓库读取、前台迁移辅助和 V1 verify / reconcile，不参与当前 backup worker 写入。它维护月级 sqlite `resources / assets / asset_resources`，实现拆为三段：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。
 
 ## 11.5 远端资源 presence 语义（统一类型）
 
@@ -276,9 +275,9 @@ V1 兼容路径仍由 `MonthManifestStore` 维护 sqlite manifest：本地 sqlit
 1. 本地索引离线预检查 worker：`2`
 2. iCloud recovery 预检查 worker：`1`
 3. Home 侧远端同步节流：`2s`
-4. V2 batch flush 间隔：`10` 个非 failed asset（`BackupV2Constants.batchFlushInterval`）
+4. V2 batch flush 间隔：`200` 个非 failed asset（`BackupV2Constants.batchFlushInterval`）
 5. 并行执行的 PHAsset 批大小：`500`
 6. 小文件碰撞校验阈值：`5 * 1024 * 1024`（`smallFileThresholdBytes`）
 7. 上传最大重试次数：`3`（`client.shouldLimitUploadRetries(for:)` 命中时降为 `2`）
-8. V2 checkpoint 当前建议阈值：`5000` 个 replay commit 或 `16 MiB` replay commit bytes；`RepoCompactionPolicy` 里保留 `minimumCheckpointIntervalSeconds = 6h` 字段，但当前 `RepoCompactionPlanner` 的推荐逻辑尚未消费它
-9. V2 retention barrier 进入删除候选的最小年龄：`24h`；legacy client grace：`7d`；snapshot fallback keep count：`2`
+8. V2 checkpoint 阈值：`5000` 个 replay commit 或 `16 MiB` replay commit bytes（`BackupV2Constants.checkpointCommitThreshold` / `checkpointByteThreshold`）
+9. V2 compaction commit GC 删除候选最小年龄：`24h`（`BackupV2Constants.retentionStalenessThresholdSeconds`）；unknown capability grace：`7d`（`unknownRetentionCapabilityGraceSeconds`）；snapshot GC fallback keep count：`2`（`snapshotFallbackKeepCount`）

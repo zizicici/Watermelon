@@ -21,14 +21,14 @@
 1. full backup 或其恢复流程，仍需要重新遍历图库并重新计算 pending 集。
 2. 大图库下，开始执行和恢复执行都会有明显前置耗时。
 
-## 4. 强杀窗口与 V2 metadata retention 的剩余边界
+## 4. 强杀窗口与 V2 metadata compaction 的剩余边界
 
-V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1→V2 migration 流程，详见 `docs/06-RepoV2.md`）。Unit 8 后，V2 row-writing asset 在 publish asset / 写本地 hash-index 前会先写 per-asset commit；每 10 个非 failed 结果的 flush cadence 仅用于 snapshot。
+V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1→V2 migration 流程，详见 `docs/06-RepoV2.md`）。V2 row-writing asset 在 publish asset / 写本地 hash-index 前会先写 per-asset commit；batch flush 是 commit-only。
 
 1. V1 路径（cutover 前）：manifest 在「月份完成」与「任务收尾」时 flush；强杀前一批未 flush 元数据丢失（月级窗口）。
-2. V2 路径（cutover 后）：row-writing asset 逐条写 commit；batch / final flush 写 snapshot cadence，不再有 deferred batch commit 窗口。
-3. 当前已有 per-month checkpoint / retention barrier / commit 前缀删除：干净 flush 后按 `RepoCompactionPolicy` 写 checkpoint，发布 retention manifest，再由 preflight + liveness gate + post-delete verification 保守删除候选 commit。
-4. 剩余边界不是“完全未设计”，而是 retention 仍是 best-effort 维护：遇到 barrier 不完整、liveness view 不完整、active non-self writer、legacy grace 未过、migration marker、post-delete verification 不确定等情况会跳过删除。SMB / SFTP 这类不支持安全 liveness renewal 的后端不会公布 barrier-aware retention capability，也不会跑 orphan metadata sweep；commit 前缀删除仍会经过 liveness gate 和 verification 保守判定。物理数据文件 GC、snapshot GC 和用户可见 repair UI 仍未实现。
+2. V2 路径（cutover 后）：row-writing asset 逐条写 commit；flush drain append-only commit chunks，不再有 deferred batch commit 窗口。
+3. 当前已有独立 compaction：`RepoCompactionService` 在 startup maintenance 时按月执行 checkpoint → commit GC → snapshot GC 三阶段。checkpoint 要求 clean outcome；commit GC 使用 covered-bound prefix + planner 推荐 + candidate revalidation + post-delete equivalence；snapshot GC 使用 covered-dominance + keepN + post-delete verification。
+4. 剩余边界不是”完全未设计”，而是 compaction 仍是 best-effort 维护：遇到 non-clean outcome、migration marker、post-delete verification 不确定等情况会跳过删除。物理数据文件 GC 和用户可见 repair UI 仍未实现。
 
 ## 5. 首页状态机复杂度依然不低
 
@@ -61,7 +61,7 @@ V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1
 2. 用户可手动覆盖到 `1...4`
 3. iCloud-only 资产存在时上传会被强制单 worker
 4. 目前没有根据带宽、远端 RTT、失败率动态调节 worker 数
-5. SFTP 多 worker = 多 SSH 会话；V2 cutover 后每个 profile 还会额外开一条专用的 metadata SSH 连接（`BackupV2RuntimeServices.metadataClient`，commit/snapshot/liveness 写入用），因此实际并发连接数 = `worker_count + 1`。遇 sshd `MaxStartups` / `MaxSessions` 紧配置需要回落到 1，目前没有自动探测
+5. SFTP 多 worker = 多 SSH 会话；V2 cutover 后每个 profile 还会额外开一条专用的 metadata SSH 连接（`BackupV2RuntimeServices.metadataClient`，commit/snapshot 写入用），因此实际并发连接数 = `worker_count + 1`。遇 sshd `MaxStartups` / `MaxSessions` 紧配置需要回落到 1，目前没有自动探测
 
 ## 8. 下载恢复进度仍未持久化到 resource 级
 
@@ -90,18 +90,18 @@ V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1
 2. `SFTPConnectionParams` / `SFTPCredentialBlob` / `RemotePathBuilder` 已加 `nonisolated`；遗留的 `ExternalVolumeConnectionParams` / `WebDAVConnectionParams` / `S3ConnectionParams` 还没加，目前是 warning（"main actor-isolated conformance ... cannot be used in nonisolated context; this is an error in the Swift 6 language mode"），未来打开 Swift 6 模式会变 error。
 3. 修法是给这三个类型也加 `nonisolated`，与 SFTP 的处理一致；本仓库未跟 SFTP 的改动一起做，避免扩大 PR 范围。
 
-## 12. V2 checkpoint / retention compaction 仍是保守维护
+## 12. V2 compaction 仍是保守维护
 
-当前 V2 row-writing asset 已是 per-asset commit：`AssetProcessor` 在 publish asset / 写本地 hash-index 前调用 `commitPendingAssetToRemote(ignoreCancellation: false)`。每 10 个非 failed 结果的 flush cadence 保留，但职责变为写 snapshot；旧 batch commit / optimistic subtraction 链已删除。
+当前 V2 row-writing asset 已是 per-asset commit：`AssetProcessor` 在 publish asset / 写本地 hash-index 前调用 `commitPendingAssetToRemote(ignoreCancellation: false)`。Batch flush 是 commit-only；旧 batch commit / optimistic subtraction 链已删除。
 
 当前实现已加入：
 
-1. `RepoCompactionPlanner` / `RepoCheckpointService`：按 replay commit 数或 bytes 判断是否写 per-month checkpoint snapshot。
-2. `RepoRetentionBarrierService` / `RetentionManifestRemoteStore`：为被接受的 checkpoint 发布 retention barrier。
-3. `RepoRetentionDeletePreflightService` / `RepoRetentionCommitDeleteExecutor`：只删除 barrier 覆盖、accepted snapshot 覆盖、liveness gate 允许、post-delete materialize 等价的 commit 前缀。
-4. `BackupV2RuntimeBuilder → RepoMaintenanceStartupRunner → RepoRetentionStartupMaintenance → RetentionMaintenanceOrchestrator`：启动时扫描足够老的 retention manifest 并尝试继续删除候选。
+1. `RepoCompactionPlanner` / `RepoCheckpointService`：按 replay commit 数或 bytes 判断是否写 per-month checkpoint snapshot；仅对 clean outcome 月份执行。
+2. `RepoCompactionService`：独立三阶段 compaction（checkpoint → commit GC → snapshot GC），由 `RepoMaintenanceStartupRunner.runStartupRetentionIfEnabled` 在 startup maintenance 时驱动。
+3. `RepoRetentionDeletePreflightService` / `RepoRetentionCommitDeleteExecutor`：commit GC 使用 covered-bound prefix + planner 推荐 + candidate revalidation + post-delete equivalence。
+4. `RepoSnapshotDeletePreflightService` / `RepoSnapshotDeleteExecutor`：snapshot GC 使用 accepted-covers-candidate covered dominance + keepN（含 accepted covered-max）+ post-delete verification。
 
-仍需关注的是实际运行中的跳过率和可观测性：SMB / SFTP 这类缺少安全 liveness renewal 的后端不会公布 barrier-aware retention capability，也不会跑 orphan metadata sweep；commit 前缀删除在没有阻塞 peer 时仍可尝试，但会保守受 liveness gate / legacy grace / verification 约束。删除失败、verification inconclusive、barrier set invalid 等目前主要停留在日志 / 测试覆盖层，没有面向用户的维护视图。
+仍需关注的是实际运行中的跳过率和可观测性：non-clean outcome、migration marker、post-delete verification 不确定等情况会跳过删除。删除失败、verification inconclusive 等目前主要停留在日志 / 测试覆盖层，没有面向用户的维护视图。
 
 ## 13. V2 元数据 atomic-create 在 `.overwritePossible` 后端的残留风险
 
@@ -121,4 +121,4 @@ V2 远端格式已落地基础设施（commit log + snapshot + materializer + V1
 5. 决定 macOS target 的最终定位（迁移工具 / 完整备份端 / 仅配置端）。
 6. 给遗留 `ExternalVolume / WebDAV / S3 ConnectionParams` 加 `nonisolated`，关掉 macOS build 的 isolation warning。
 7. 关注 Citadel 上游修复目录句柄泄漏，移除 `listReconnectThreshold` 重连。
-8. 给 V2 retention / checkpoint 维护补用户可见诊断，尤其是 barrier invalid、liveness blocked、verification inconclusive 和按后端能力跳过的原因。
+8. 给 V2 compaction 维护补用户可见诊断，尤其是 verification inconclusive、non-clean outcome 跳过、和 compaction 各阶段的跳过原因。
