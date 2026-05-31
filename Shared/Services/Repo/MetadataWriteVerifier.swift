@@ -33,10 +33,6 @@ enum MetadataWriteVerifiers {
     static func commitAware(expectedSha: String, expectedRowCount: Int) -> any MetadataWriteVerifier {
         CommitAwareVerifier(expectedSha: expectedSha, expectedRowCount: expectedRowCount)
     }
-
-    static func crossRepoIndexAware(expectedSha: String, expectedRowCount: Int) -> any MetadataWriteVerifier {
-        CrossRepoIndexAwareVerifier(expectedSha: expectedSha, expectedRowCount: expectedRowCount)
-    }
 }
 
 enum MetadataCreateOrchestrator {
@@ -228,55 +224,6 @@ private struct CommitAwareVerifier: MetadataWriteVerifier {
             return false
         }
         return true
-    }
-}
-
-private struct CrossRepoIndexAwareVerifier: MetadataWriteVerifier {
-    let expectedSha: String
-    let expectedRowCount: Int
-
-    func verify(
-        client: any RemoteStorageClientProtocol,
-        remotePath: String,
-        localURL: URL
-    ) async -> MetadataWriteVerifyOutcome {
-        let verifyURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("crossrepo-index-verify-\(UUID().uuidString).jsonl")
-        defer { try? FileManager.default.removeItem(at: verifyURL) }
-        do {
-            try await client.download(remotePath: remotePath, localURL: verifyURL)
-        } catch is CancellationError {
-            return .cancelled
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { return .cancelled }
-            switch RemoteWriteClassifier.classifyVerifyFailure(error) {
-            case .cancelled:
-                return .cancelled
-            case .transient:
-                return .transientFailure(underlying: error)
-            case .permanent:
-                return .permanentFailure(underlying: error)
-            }
-        }
-        let data: Data
-        do {
-            data = try Data(contentsOf: verifyURL)
-        } catch {
-            return .permanentFailure(underlying: error)
-        }
-        guard let raw = String(data: data, encoding: .utf8) else {
-            return .deterministicMismatch
-        }
-        let parsed: RepoCrossRepoIndexFile
-        do {
-            parsed = try RepoCrossRepoIndexReader.parse(text: raw)
-        } catch {
-            return .deterministicMismatch
-        }
-        if parsed.sha256Hex.lowercased() != expectedSha.lowercased() || parsed.rowCount != expectedRowCount {
-            return .deterministicMismatch
-        }
-        return .matched
     }
 }
 

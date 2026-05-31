@@ -201,16 +201,6 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
         try await lamport.observe(output.state.observedClock)
         try await lamport.repairPoisonedDBIfNeeded()
 
-        try await BackupV2RepoOpenService.tryPublishCrossRepoIndex(
-            output: output,
-            client: client,
-            basePath: basePath,
-            expectedRepoID: resolvedRepoID,
-            writerID: writerID,
-            runID: runID,
-            clock: lamport
-        )
-
         return OpenedBackupV2Repo(
             profileID: profileID,
             writerID: writerID,
@@ -226,69 +216,6 @@ struct BackupV2RepoOpenService: @unchecked Sendable {
             isLocalVolume: profile.resolvedStorageType == .externalVolume,
             postOpenSyncInspection: postOpenSyncInspection
         )
-    }
-
-    /// Best-effort publish of a cross-repo index after the open's materialize succeeded.
-    /// Publish failure (other than cancellation) is logged and swallowed so it cannot
-    /// fail the open(). Skips the publish entirely when the materialize observed an
-    /// empty zero-state repo (no state, no covered ranges, no observed seqs) — typical of
-    /// the .bootstrapFresh path before any writes have happened.
-    static func tryPublishCrossRepoIndex(
-        output: RepoMaterializer.MaterializeOutput,
-        client: any RemoteStorageClientProtocol,
-        basePath: String,
-        expectedRepoID: String,
-        writerID: String,
-        runID: String,
-        clock: PersistedLamportClock
-    ) async throws {
-        if output.state.months.isEmpty
-            && output.coveredByMonth.isEmpty
-            && output.observedSeqByWriter.isEmpty {
-            return
-        }
-        let writer = RepoCrossRepoIndexWriter(client: client, basePath: basePath)
-        let maxAttempts = 4
-        var lastError: (any Error)?
-        for attempt in 0..<maxAttempts {
-            let range: LamportClock.Range
-            do {
-                range = try await clock.tickRange(count: 1)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                openServiceLog.warning("cross-repo index publish skipped — lamport tickRange failed: \(String(describing: error), privacy: .public)")
-                return
-            }
-            let lamport = range.high
-            do {
-                _ = try await writer.write(
-                    materialized: output,
-                    expectedRepoID: expectedRepoID,
-                    writerID: writerID,
-                    runID: runID,
-                    lamport: lamport,
-                    respectTaskCancellation: false
-                )
-                return
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch RepoCrossRepoIndexWriter.WriteError.alreadyExists {
-                lastError = nil
-                if attempt + 1 < maxAttempts {
-                    openServiceLog.info("cross-repo index publish lamport=\(lamport, privacy: .public) was alreadyExists; reallocating")
-                    continue
-                }
-            } catch {
-                lastError = error
-                break
-            }
-        }
-        if let lastError {
-            openServiceLog.warning("cross-repo index publish skipped after retries: \(String(describing: lastError), privacy: .public)")
-        } else {
-            openServiceLog.warning("cross-repo index publish skipped — exhausted alreadyExists retries")
-        }
     }
 
     private func resolveAndPublishIdentityForShapedRepo(

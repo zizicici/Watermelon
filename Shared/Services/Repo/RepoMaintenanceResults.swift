@@ -28,6 +28,7 @@ enum RepoMaintenanceSnapshotGCSkipReason: Sendable, Equatable {
     case skippedAfterCommitCleanupVerificationFailed
     case skippedAfterCommitCleanupVerificationInconclusive
     case skippedCancellation
+    case skippedMaintenanceFrozen
 }
 
 enum RepoMaintenanceSnapshotGCDisposition: Sendable, Equatable {

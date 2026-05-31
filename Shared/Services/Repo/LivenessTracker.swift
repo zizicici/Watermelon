@@ -8,7 +8,6 @@ actor LivenessTracker {
     private let basePath: String
     private let writerID: String
     private let isLocalVolume: Bool
-    private let retentionCapability: RetentionPeerCapability?
     private var task: Task<Void, Never>?
 
     static let heartbeatInterval: TimeInterval = 30
@@ -52,14 +51,12 @@ actor LivenessTracker {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String,
-        isLocalVolume: Bool,
-        retentionCapability: RetentionPeerCapability? = nil
+        isLocalVolume: Bool
     ) {
         self.client = client
         self.basePath = basePath
         self.writerID = writerID
         self.isLocalVolume = isLocalVolume
-        self.retentionCapability = retentionCapability
     }
 
     func start() {
@@ -99,8 +96,7 @@ actor LivenessTracker {
         defer { try? FileManager.default.removeItem(at: temp) }
         func writeHeartbeat(timestampMs: Int64) throws {
             let data = try LivenessHeartbeat(
-                timestampMs: timestampMs,
-                retention: retentionCapability
+                timestampMs: timestampMs
             ).encode()
             try data.write(to: temp, options: .atomic)
         }
@@ -360,64 +356,12 @@ actor LivenessTracker {
         return ActiveWritersView(activePeerIDs: active, stalePeerIDs: stale, unknownPeerIDs: unknown)
     }
 
-    func snapshotRetentionPeerStatuses() async throws -> RetentionPeerStatusView {
-        guard !isLocalVolume else { return .empty }
-        let dir = RepoLayout.livenessDirectoryPath(base: basePath)
-        let entries = try await client.list(path: dir)
-        let now = Date()
-        let gracePeriodSec = client.readAfterWriteGraceSeconds
-        var peers: [RetentionPeerStatus] = []
-
-        for entry in entries {
-            if entry.isDirectory {
-                if let parsed = RepoLayout.parseLivenessFilename(entry.name), parsed != writerID {
-                    peers.append(RetentionPeerStatus(
-                        writerID: parsed,
-                        status: .unknown(reason: .readFailed),
-                        capability: nil
-                    ))
-                }
-                continue
-            }
-            guard let parsed = RepoLayout.parseLivenessFilename(entry.name),
-                  parsed != writerID else { continue }
-            let path = RepoLayout.normalize(joining: [
-                basePath, RepoLayout.watermelonDirectory, RepoLayout.livenessDirectory, entry.name
-            ])
-            guard let heartbeat = try await classifyPeerHeartbeatInfo(
-                path: path,
-                now: now,
-                gracePeriodSec: gracePeriodSec
-            ) else {
-                continue
-            }
-            peers.append(RetentionPeerStatus(
-                writerID: parsed,
-                status: heartbeat.status,
-                capability: heartbeat.capability
-            ))
-        }
-        return RetentionPeerStatusView(peers: peers, listComplete: true)
-    }
-
     /// Retries transient peer-read failures once so a blip cannot make sweep delete active staging.
     private func classifyPeerHeartbeat(
         path: String,
         now: Date,
         gracePeriodSec: TimeInterval
     ) async throws -> PeerStatus? {
-        try await classifyPeerHeartbeatInfo(
-            path: path,
-            now: now,
-            gracePeriodSec: gracePeriodSec
-        )?.status
-    }
-
-    private func classifyPeerHeartbeatInfo(
-        path: String,
-        now: Date,
-        gracePeriodSec: TimeInterval
-    ) async throws -> (status: PeerStatus, capability: RetentionPeerCapability?)? {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("liveness-fetch-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: temp) }
@@ -445,10 +389,9 @@ actor LivenessTracker {
             }
         }
         if heartbeatVanished {
-            // Under grace, 404 might mean "writer just renewed and we read pre-write state."
             if gracePeriodSec > 0 {
                 livenessLog.warning("[Liveness] peer heartbeat at \(path, privacy: .public) 404 within \(gracePeriodSec, privacy: .public)s grace; marking unknown")
-                return (.unknown(reason: .vanishedWithinGrace), nil)
+                return .unknown(reason: .vanishedWithinGrace)
             }
             return nil
         }
@@ -456,19 +399,19 @@ actor LivenessTracker {
             if let lastDownloadError {
                 livenessLog.warning("[Liveness] peer heartbeat at \(path, privacy: .public) marked unknown after retry: \(lastDownloadError.localizedDescription, privacy: .public)")
             }
-            return (.unknown(reason: .readFailed), nil)
+            return .unknown(reason: .readFailed)
         }
         let heartbeat: LivenessHeartbeat
         do {
             heartbeat = try readHeartbeat(from: temp, remotePath: path)
         } catch {
             livenessLog.warning("[Liveness] peer heartbeat at \(path, privacy: .public) marked unknown: parse failed (\(error.localizedDescription, privacy: .public))")
-            return (.unknown(reason: .readFailed), nil)
+            return .unknown(reason: .readFailed)
         }
         if LivenessTracker.isStale(timestampMs: heartbeat.timestampMs, now: now, gracePeriodSec: gracePeriodSec) {
-            return (.stale(lastSeenMs: heartbeat.timestampMs), heartbeat.retention)
+            return .stale(lastSeenMs: heartbeat.timestampMs)
         }
-        return (.active(lastSeenMs: heartbeat.timestampMs), heartbeat.retention)
+        return .active(lastSeenMs: heartbeat.timestampMs)
     }
 
     private func readHeartbeatTimestamp(from url: URL, remotePath: String) throws -> Int64 {

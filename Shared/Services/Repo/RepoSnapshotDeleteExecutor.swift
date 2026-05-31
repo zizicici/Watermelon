@@ -73,31 +73,25 @@ enum RepoSnapshotGCResult: Equatable, Sendable {
 
 /// Not safe for concurrent invocation on the same month; caller is responsible.
 struct RepoSnapshotDeleteExecutor: Sendable {
-    typealias PeerStatusProvider = RepoSnapshotDeletePreflightService.PeerStatusProvider
 
     let client: any RemoteStorageClientProtocol
     let basePath: String
     private let policy: RepoCompactionPolicy
     private let isLocalVolume: Bool
     private let barrierClockSkewToleranceMs: Int64
-    private let peerStatusProvider: PeerStatusProvider
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         policy: RepoCompactionPolicy = .default,
         isLocalVolume: Bool,
-        barrierClockSkewToleranceMs: Int64 = 5 * 60 * 1000,
-        peerStatusProvider: @escaping PeerStatusProvider = {
-            throw RepoRetentionDeletePreflightError.livenessSnapshotUnavailable
-        }
+        barrierClockSkewToleranceMs: Int64 = 5 * 60 * 1000
     ) {
         self.client = wrapIfSerial(client)
         self.basePath = basePath
         self.policy = policy
         self.isLocalVolume = isLocalVolume
         self.barrierClockSkewToleranceMs = barrierClockSkewToleranceMs
-        self.peerStatusProvider = peerStatusProvider
     }
 
     func execute(
@@ -113,8 +107,7 @@ struct RepoSnapshotDeleteExecutor: Sendable {
             basePath: basePath,
             policy: policy,
             isLocalVolume: isLocalVolume,
-            barrierClockSkewToleranceMs: barrierClockSkewToleranceMs,
-            peerStatusProvider: peerStatusProvider
+            barrierClockSkewToleranceMs: barrierClockSkewToleranceMs
         ).makePlan(month: month, expectedRepoID: repoID, nowMs: nowMs)
         switch preflightResult {
         case .blocked(let blockers, let report):

@@ -21,10 +21,7 @@ struct RetentionMaintenanceOrchestrator: Sendable {
             client: services.metadataClient,
             basePath: services.basePath,
             policy: services.compactionPolicy,
-            isLocalVolume: services.isLocalVolume,
-            peerStatusProvider: {
-                try await services.liveness.snapshotRetentionPeerStatuses()
-            }
+            isLocalVolume: services.isLocalVolume
         ).execute(
             month: month,
             expectedRepoID: services.repoID,
@@ -63,10 +60,7 @@ struct RetentionMaintenanceOrchestrator: Sendable {
                 client: services.metadataClient,
                 basePath: services.basePath,
                 policy: services.compactionPolicy,
-                isLocalVolume: services.isLocalVolume,
-                peerStatusProvider: {
-                    try await services.liveness.snapshotRetentionPeerStatuses()
-                }
+                isLocalVolume: services.isLocalVolume
             ).execute(
                 month: month,
                 expectedRepoID: services.repoID,

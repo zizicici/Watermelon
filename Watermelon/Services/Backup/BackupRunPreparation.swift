@@ -58,20 +58,20 @@ struct BackupRunPreparationService: Sendable {
             do {
                 let lease = try await prepareV2Runtime(client: client, profile: profile, password: password, eventStream: eventStream)
                 leaseForCleanup = lease
-                let v2Services = lease?.services
+                let v2Services = lease.services
 
                 do {
-                    let preMaterialized = await v2Services?.initialMaterializeOutput.peek()
+                    let preMaterialized = await v2Services.initialMaterializeOutput.peek()
                     let digest = try await remoteIndexService.syncIndex(
                         client: client,
                         profile: profile,
                         eventStream: eventStream,
                         preMaterialized: preMaterialized,
-                        preInspection: v2Services?.postOpenSyncInspection,
-                        expectV2: v2Services != nil,
-                        localRepoID: v2Services?.repoID
+                        preInspection: v2Services.postOpenSyncInspection,
+                        expectV2: true,
+                        localRepoID: v2Services.repoID
                     )
-                    _ = await v2Services?.initialMaterializeOutput.consume()
+                    _ = await v2Services.initialMaterializeOutput.consume()
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.log.remoteIndexSynced"),
@@ -89,22 +89,10 @@ struct BackupRunPreparationService: Sendable {
                     if error is BackupCompatibilityError {
                         throw error
                     }
-                    if v2Services != nil {
-                        throw error
-                    }
-                    eventStream.emitLog(
-                        String.localizedStringWithFormat(
-                            String(localized: "backup.log.remoteIndexScanWarning"),
-                            profile.userFacingStorageErrorMessage(error)
-                        ),
-                        level: .warning
-                    )
+                    throw error
                 }
 
-                // V2 runtime built ≡ V2 repo; pin isV2 so a non-fatal sync throw can't drop resume back to V1 dedup.
-                if v2Services != nil {
-                    await remoteIndexService.markIsV2()
-                }
+                await remoteIndexService.markIsV2()
 
                 let retryMode = onlyAssetLocalIdentifiers != nil
                 let assetsResult: PHFetchResult<PHAsset>? = retryMode
@@ -521,7 +509,7 @@ struct BackupRunPreparationService: Sendable {
         profile: ServerProfileRecord,
         password: String,
         eventStream: BackupEventStream
-    ) async throws -> BackupV2RuntimeLease? {
+    ) async throws -> BackupV2RuntimeLease {
         return try await BackupV2RuntimeLease.forForegroundRun(
             client: client,
             profile: profile,

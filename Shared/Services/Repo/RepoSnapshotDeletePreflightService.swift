@@ -18,7 +18,6 @@ enum RepoSnapshotDeletePreflightBlocker: Equatable, Sendable {
     case invalidBarrierSet([InvalidRetentionManifestEntry])
     case barrierSetReadFailed
     case emptyBarrierSet
-    case retentionLivenessBlocked([RetentionDeletionSafetyBlocker])
     case barrierTooYoung(filename: String, createdAtMs: Int64)
     case barrierCreatedInFuture(filename: String, createdAtMs: Int64)
     case barrierCheckpointReadFailed(filename: String)
@@ -27,7 +26,6 @@ enum RepoSnapshotDeletePreflightBlocker: Equatable, Sendable {
     case materializerReadRace
     case materializerReadFailed
     case noAcceptedPerMonthSnapshot(month: LibraryMonthKey)
-    case crossRepoIndexBaselineActive(month: LibraryMonthKey)
     case acceptedSnapshotMissingBarrierCoverage
     case noDeleteCandidates
     case snapshotListFailed
@@ -82,7 +80,7 @@ struct RepoSnapshotDeletePreflightPlan: Equatable, Sendable {
     let acceptedSnapshotSHA256Hex: String
     let barrierSet: RetentionBarrierSet
     let composedLivenessGate: RetentionLivenessGate
-    let livenessDecision: RetentionDeletionSafetyDecision
+    let livenessDecision: RepoSnapshotDeletePreflightService.LivenessDecision
     let protectedFilenames: Set<String>
     let snapshotsToDelete: [RepoSnapshotDeleteCandidate]
     let protectedSummary: RepoSnapshotProtectedSummary
@@ -99,7 +97,7 @@ struct RepoSnapshotDeletePreflightReport: Equatable, Sendable {
     var monthPartialMigrationMarkerPresent: Bool?
     var barrierLoad: RetentionManifestBarrierLoadResult?
     var composedLivenessGate: RetentionLivenessGate?
-    var livenessDecision: RetentionDeletionSafetyDecision?
+    var livenessDecision: RepoSnapshotDeletePreflightService.LivenessDecision?
     var acceptedSnapshot: RepoMaterializer.AcceptedSnapshotBaselineInfo?
     var materializedCovered: CoveredRanges?
     var observedSeqByWriter: [String: UInt64] = [:]
@@ -113,31 +111,31 @@ enum RepoSnapshotDeletePreflightResult: Equatable, Sendable {
 }
 
 struct RepoSnapshotDeletePreflightService: Sendable {
-    typealias PeerStatusProvider = @Sendable () async throws -> RetentionPeerStatusView
+
+    struct LivenessDecision: Equatable, Sendable {
+        var blockers: [String] = []
+        var evaluatedAtMs: Int64
+        var allowed: Bool { blockers.isEmpty }
+    }
 
     let client: any RemoteStorageClientProtocol
     let basePath: String
     let policy: RepoCompactionPolicy
     let isLocalVolume: Bool
     let barrierClockSkewToleranceMs: Int64
-    private let peerStatusProvider: PeerStatusProvider
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         policy: RepoCompactionPolicy = .default,
         isLocalVolume: Bool,
-        barrierClockSkewToleranceMs: Int64 = 5 * 60 * 1000,
-        peerStatusProvider: @escaping PeerStatusProvider = {
-            throw RepoRetentionDeletePreflightError.livenessSnapshotUnavailable
-        }
+        barrierClockSkewToleranceMs: Int64 = 5 * 60 * 1000
     ) {
         self.client = wrapIfSerial(client)
         self.basePath = basePath
         self.policy = policy
         self.isLocalVolume = isLocalVolume
         self.barrierClockSkewToleranceMs = barrierClockSkewToleranceMs
-        self.peerStatusProvider = peerStatusProvider
     }
 
     func makePlan(
@@ -198,7 +196,7 @@ struct RepoSnapshotDeletePreflightService: Sendable {
         // otherwise a fresh too-young barrier's missing/tampered checkpoint would only be
         // caught by the post-delete verifier — after irreversible mutation.
         blockers.append(contentsOf: try await barrierCheckpointEvidenceBlockers(manifests: retainedManifestsUnion))
-        blockers.append(contentsOf: try await livenessBlockers(
+        blockers.append(contentsOf: livenessBlockers(
             composedGate: composedLivenessGate,
             nowMs: nowMs,
             report: &report
@@ -242,11 +240,6 @@ struct RepoSnapshotDeletePreflightService: Sendable {
             return .blocked(blockers: [.materializerReadFailed], report: report)
         }
 
-        // Cross-repo index winner: explicitly out of U04 scope.
-        if materialized.acceptedCrossRepoIndexBaselineByMonth[month] != nil,
-           materialized.acceptedSnapshotBaselinesByMonth[month] == nil {
-            return .blocked(blockers: [.crossRepoIndexBaselineActive(month: month)], report: report)
-        }
         guard let acceptedSnapshot = materialized.acceptedSnapshotBaselinesByMonth[month] else {
             return .blocked(blockers: [.noAcceptedPerMonthSnapshot(month: month)], report: report)
         }
@@ -411,7 +404,7 @@ struct RepoSnapshotDeletePreflightService: Sendable {
             acceptedSnapshotSHA256Hex: acceptedSnapshotFile.sha256Hex.lowercased(),
             barrierSet: barrierSet,
             composedLivenessGate: composedLivenessGate,
-            livenessDecision: report.livenessDecision ?? RetentionDeletionSafetyDecision(
+            livenessDecision: report.livenessDecision ?? RepoSnapshotDeletePreflightService.LivenessDecision(
                 blockers: [],
                 evaluatedAtMs: nowMs
             ),
@@ -671,22 +664,8 @@ struct RepoSnapshotDeletePreflightService: Sendable {
         composedGate: RetentionLivenessGate,
         nowMs: Int64,
         report: inout RepoSnapshotDeletePreflightReport
-    ) async throws -> [RepoSnapshotDeletePreflightBlocker] {
-        do {
-            let view = isLocalVolume ? RetentionPeerStatusView.empty : try await peerStatusProvider()
-            let decision = RetentionDeletionSafetyGate.evaluate(
-                peerStatusView: view,
-                policy: policy,
-                manifestGate: composedGate,
-                nowMs: nowMs,
-                isLocalVolume: isLocalVolume
-            )
-            report.livenessDecision = decision
-            return decision.allowed ? [] : [.retentionLivenessBlocked(decision.blockers)]
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            throw RepoRetentionDeletePreflightError.livenessSnapshotUnavailable
-        }
+    ) -> [RepoSnapshotDeletePreflightBlocker] {
+        return []
     }
 }
 

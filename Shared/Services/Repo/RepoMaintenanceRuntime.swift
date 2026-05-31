@@ -30,10 +30,7 @@ struct RepoMaintenanceRuntimeBuilder: Sendable {
             client: metadataClient,
             basePath: opened.basePath,
             writerID: opened.writerID,
-            isLocalVolume: opened.isLocalVolume,
-            retentionCapability: metadataClient.supportsLivenessSafeRenewal
-                ? RepoRetentionRuntimeDefaults.peerCapability
-                : nil
+            isLocalVolume: opened.isLocalVolume
         )
         guard mode.isEnabled else {
             return RepoMaintenanceRuntime(liveness: liveness, sweepTask: nil)

@@ -333,32 +333,21 @@ struct BackupParallelExecutor: Sendable {
         eventStream: BackupEventStream,
         workUnit: inout MonthWorkUnit
     ) async throws -> (any BackupMonthStore)? {
+        guard let v2Services else {
+            throw BackupV2RuntimeBuildError.requiresForegroundMigration
+        }
         let monthStore: any BackupMonthStore
         do {
-            if let v2Services {
-                monthStore = try await V2MonthLoadAndPublish.loadAndPublishSnapshot(
-                    client: client,
-                    basePath: profile.basePath,
-                    month: monthKey,
-                    v2Services: v2Services,
-                    remoteIndexService: remoteIndexService,
-                    stepLogger: { message in
-                        eventStream.emitLog(message, level: .error)
-                    }
-                )
-            } else {
-                monthStore = try await MonthManifestStore.loadOrCreate(
-                    client: client,
-                    basePath: profile.basePath,
-                    year: monthKey.year,
-                    month: monthKey.month,
-                    stepLogger: { message in
-                        eventStream.emitLog(message, level: .error)
-                    }
-                )
-                // loadOrCreate may have cleaned manifest rows; sync to snapshotCache so consumers don't see stale state.
-                remoteIndexService.publishMonthSnapshot(of: monthStore, for: monthKey)
-            }
+            monthStore = try await V2MonthLoadAndPublish.loadAndPublishSnapshot(
+                client: client,
+                basePath: profile.basePath,
+                month: monthKey,
+                v2Services: v2Services,
+                remoteIndexService: remoteIndexService,
+                stepLogger: { message in
+                    eventStream.emitLog(message, level: .error)
+                }
+            )
         } catch {
             if error is CancellationError {
                 workUnit.markPaused()

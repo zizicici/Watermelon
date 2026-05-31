@@ -37,7 +37,6 @@ enum RepoRetentionDeletePreflightBlocker: Equatable, Sendable {
     case emptyBarrierSet
     case barrierCheckpointReadFailed(filename: String)
     case barrierCheckpointMismatch(filename: String, reason: RepoRetentionBarrierCheckpointMismatchReason)
-    case retentionLivenessBlocked([RetentionDeletionSafetyBlocker])
     case barrierTooYoung(filename: String, createdAtMs: Int64)
     case barrierCreatedInFuture(filename: String, createdAtMs: Int64)
     case materializerReadRace
@@ -131,7 +130,7 @@ struct RepoRetentionDeletePreflightPlan: Equatable, Sendable {
     let acceptedSnapshot: RepoMaterializer.AcceptedSnapshotBaselineInfo
     let barrierSet: RetentionBarrierSet
     let composedLivenessGate: RetentionLivenessGate
-    let livenessDecision: RetentionDeletionSafetyDecision
+    let livenessDecision: RepoRetentionDeletePreflightService.LivenessDecision
     let deletePrefixByWriter: [String: UInt64]
     let commitFiles: [RepoRetentionDeleteCandidate]
     let protectedSummary: RepoRetentionProtectedSummary
@@ -149,7 +148,7 @@ struct RepoRetentionDeletePreflightReport: Equatable, Sendable {
     var monthPartialMigrationMarkerPresent: Bool?
     var barrierLoad: RetentionManifestBarrierLoadResult?
     var composedLivenessGate: RetentionLivenessGate?
-    var livenessDecision: RetentionDeletionSafetyDecision?
+    var livenessDecision: RepoRetentionDeletePreflightService.LivenessDecision?
     var acceptedSnapshot: RepoMaterializer.AcceptedSnapshotBaselineInfo?
     var materializedCovered: CoveredRanges?
     var observedSeqByWriter: [String: UInt64] = [:]
@@ -164,31 +163,31 @@ enum RepoRetentionDeletePreflightResult: Equatable, Sendable {
 }
 
 struct RepoRetentionDeletePreflightService: Sendable {
-    typealias PeerStatusProvider = @Sendable () async throws -> RetentionPeerStatusView
+
+    struct LivenessDecision: Equatable, Sendable {
+        var blockers: [String] = []
+        var evaluatedAtMs: Int64
+        var allowed: Bool { blockers.isEmpty }
+    }
 
     let client: any RemoteStorageClientProtocol
     let basePath: String
     let policy: RepoCompactionPolicy
     let isLocalVolume: Bool
     let barrierClockSkewToleranceMs: Int64
-    private let peerStatusProvider: PeerStatusProvider
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         policy: RepoCompactionPolicy = .default,
         isLocalVolume: Bool,
-        barrierClockSkewToleranceMs: Int64 = 5 * 60 * 1000,
-        peerStatusProvider: @escaping PeerStatusProvider = {
-            throw RepoRetentionDeletePreflightError.livenessSnapshotUnavailable
-        }
+        barrierClockSkewToleranceMs: Int64 = 5 * 60 * 1000
     ) {
         self.client = wrapIfSerial(client)
         self.basePath = basePath
         self.policy = policy
         self.isLocalVolume = isLocalVolume
         self.barrierClockSkewToleranceMs = barrierClockSkewToleranceMs
-        self.peerStatusProvider = peerStatusProvider
     }
 
     func makePlan(
@@ -250,7 +249,7 @@ struct RepoRetentionDeletePreflightService: Sendable {
             allValid: allBarrierSet
         )
         blockers.append(contentsOf: try await barrierCheckpointEvidenceBlockers(manifests: retainedBarrierManifestsUnion))
-        blockers.append(contentsOf: try await livenessBlockers(
+        blockers.append(contentsOf: livenessBlockers(
             composedGate: composedLivenessGate,
             nowMs: nowMs,
             report: &report
@@ -402,7 +401,7 @@ struct RepoRetentionDeletePreflightService: Sendable {
             acceptedSnapshot: acceptedSnapshot,
             barrierSet: barrierSet,
             composedLivenessGate: composedLivenessGate,
-            livenessDecision: report.livenessDecision ?? RetentionDeletionSafetyDecision(blockers: [], evaluatedAtMs: nowMs),
+            livenessDecision: report.livenessDecision ?? RepoRetentionDeletePreflightService.LivenessDecision(blockers: [], evaluatedAtMs: nowMs),
             deletePrefixByWriter: deletePrefix,
             commitFiles: candidateScan.candidates,
             protectedSummary: candidateScan.protectedSummary,
@@ -610,22 +609,8 @@ struct RepoRetentionDeletePreflightService: Sendable {
         composedGate: RetentionLivenessGate,
         nowMs: Int64,
         report: inout RepoRetentionDeletePreflightReport
-    ) async throws -> [RepoRetentionDeletePreflightBlocker] {
-        do {
-            let view = isLocalVolume ? RetentionPeerStatusView.empty : try await peerStatusProvider()
-            let decision = RetentionDeletionSafetyGate.evaluate(
-                peerStatusView: view,
-                policy: policy,
-                manifestGate: composedGate,
-                nowMs: nowMs,
-                isLocalVolume: isLocalVolume
-            )
-            report.livenessDecision = decision
-            return decision.allowed ? [] : [.retentionLivenessBlocked(decision.blockers)]
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            throw RepoRetentionDeletePreflightError.livenessSnapshotUnavailable
-        }
+    ) -> [RepoRetentionDeletePreflightBlocker] {
+        return []
     }
 
     private func barrierObservedSeqHighByWriter(barrierSet: RetentionBarrierSet) -> [String: UInt64] {

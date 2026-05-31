@@ -26,7 +26,6 @@ enum RepoSnapshotPostDeleteVerificationFailure: Equatable, Sendable {
     case observedClockRegression(expectedAtLeast: UInt64, observed: UInt64)
     case acceptedSnapshotSupersedeUnsafe(expectedFilename: String, observedFilename: String, observedLamport: UInt64)
     case acceptedSnapshotContentMismatch(filename: String, expectedSHA: String, observedSHA: String)
-    case crossRepoIndexBaselineActivated(month: LibraryMonthKey)
     case protectedSnapshotMissingOrTampered(filename: String, expectedSHA: String, observedSHA: String?)
 }
 
@@ -105,10 +104,6 @@ struct RepoSnapshotPostDeleteVerifier: Sendable {
             return .inconclusive(reason: .materializerReadFailed)
         }
 
-        if output.acceptedCrossRepoIndexBaselineByMonth[month] != nil,
-           output.acceptedSnapshotBaselinesByMonth[month] == nil {
-            return .failed(reason: .crossRepoIndexBaselineActivated(month: month), evidence: nil)
-        }
         guard let acceptedSnapshot = output.acceptedSnapshotBaselinesByMonth[month] else {
             return .failed(reason: .missingAcceptedSnapshot(month: month), evidence: nil)
         }
