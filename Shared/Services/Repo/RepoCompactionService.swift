@@ -3,16 +3,6 @@ import os.log
 
 private let compactionLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoCompactionService")
 
-/// Independent compaction coordinator that owns checkpoint writing, commit GC, and
-/// snapshot GC. Entry points are explicit maintenance paths (startup, run-end,
-/// threshold), never the per-flush backup hot path.
-///
-/// Gating contract:
-/// - Materializes target month; outcome must be clean before any destructive work.
-/// - Commit count/bytes must meet threshold before checkpoint + GC proceeds.
-/// - Commit GC uses accepted covered-bound + planner prefix (no barrier dependency).
-/// - Snapshot GC uses covered-dominance candidate selection with keepN protection.
-/// - Ambiguous / post-verify inconclusive outcomes skip and report.
 struct RepoCompactionService: Sendable {
     let services: BackupV2RuntimeServices
     let nowMs: @Sendable () -> Int64
@@ -29,8 +19,6 @@ struct RepoCompactionService: Sendable {
 
     // MARK: - Public Entry Points
 
-    /// Compact a single month: materialize → clean check → threshold → checkpoint →
-    /// commit GC → snapshot GC.
     func compactMonth(_ month: LibraryMonthKey) async throws -> RepoMaintenanceMonthResult {
         try Task.checkCancellation()
 
@@ -65,7 +53,6 @@ struct RepoCompactionService: Sendable {
             return skippedResult(month: month)
         }
 
-        // Phase A — checkpoint
         let checkpointResult: RepoCheckpointResult
         do {
             checkpointResult = try await RepoCheckpointService(
@@ -86,7 +73,6 @@ struct RepoCompactionService: Sendable {
 
         let checkpointPhaseResult = mapCheckpointToPhaseResult(checkpointResult)
 
-        // Phase B — commit GC
         let commitCleanup: RepoRetentionCommitDeleteResult
         do {
             commitCleanup = try await runCommitGC(month: month, preMaterialized: materialized, monthReport: monthReport)
@@ -97,7 +83,6 @@ struct RepoCompactionService: Sendable {
             commitCleanup = .preflightBlocked(blockers: [], report: emptyCommitReport(month: month))
         }
 
-        // Phase C — snapshot GC, gated on commit GC outcome
         let snapshotGC: RepoMaintenanceSnapshotGCDisposition
         switch commitCleanup {
         case .preflightBlocked, .completed:
@@ -130,8 +115,6 @@ struct RepoCompactionService: Sendable {
         )
     }
 
-    /// Multi-month startup sweep. Scans for months meeting the compaction threshold
-    /// and compacts each one sequentially.
     func compactStartupMonths() async throws -> RepoMaintenanceStartupResult {
         let months = try await candidateStartupMonths()
         var results: [LibraryMonthKey: RepoMaintenanceMonthResult] = [:]
@@ -205,16 +188,13 @@ struct RepoCompactionService: Sendable {
             materializedCovered: covered,
             observedSeqByWriter: materialized.observedSeqByWriter,
             acceptedSnapshot: accepted,
-            retainedBarrierUnionCovered: .empty,
             postDeleteEquivalenceContract: RepoRetentionPostDeleteEquivalenceContract(
                 mode: .retentionSuperset,
                 acceptedSnapshotFilename: accepted.filename,
                 acceptedSnapshotSHA256Hex: acceptedFile.sha256Hex.lowercased(),
                 acceptedSnapshotCovered: accepted.covered,
-                retainedBarrierUnionCovered: .empty,
                 requiredObservedSeqByWriter: materialized.observedSeqByWriter,
                 expectedDeletePrefixByWriter: deletePrefix,
-                retainedBarrierCheckpointSHA256ByFilename: [:],
                 preDeleteCovered: covered,
                 preDeleteState: materialized.state
             )
@@ -224,15 +204,6 @@ struct RepoCompactionService: Sendable {
             month: month,
             repoID: services.repoID,
             acceptedSnapshot: accepted,
-            barrierSet: RetentionBarrierSet(unsuperseded: [], unionCovered: .empty),
-            composedLivenessGate: RetentionLivenessGate(
-                requiredCompleteView: false,
-                requiredNoActiveNonSelfWriters: false,
-                legacyClientGraceMs: 0
-            ),
-            livenessDecision: RepoRetentionDeletePreflightService.LivenessDecision(
-                blockers: [], evaluatedAtMs: nowMs()
-            ),
             deletePrefixByWriter: deletePrefix,
             commitFiles: scan.candidates,
             protectedSummary: scan.protectedSummary,
@@ -254,7 +225,7 @@ struct RepoCompactionService: Sendable {
             isLocalVolume: services.isLocalVolume
         ).execute(plan: plan, report: preflightReport)
 
-        if RetentionMaintenanceOrchestrator.containsCancellation(result) {
+        if containsCancellation(result) {
             throw CancellationError()
         }
         return result
@@ -282,8 +253,6 @@ struct RepoCompactionService: Sendable {
             )
         }
 
-        let barrierReferenced = await loadBarrierReferencedFilenames(month: month)
-
         let scan = try await SnapshotDeleteCandidateScanner(
             client: services.metadataClient,
             basePath: services.basePath,
@@ -292,7 +261,7 @@ struct RepoCompactionService: Sendable {
             month: month,
             expectedRepoID: services.repoID,
             acceptedBaseline: accepted,
-            barrierReferencedFilenames: barrierReferenced
+            barrierReferencedFilenames: []
         )
 
         if !scan.blockers.isEmpty {
@@ -311,7 +280,6 @@ struct RepoCompactionService: Sendable {
         let protection = RepoSnapshotProtectionSet.compute(.init(
             acceptedBaselineFilename: accepted.filename,
             acceptedBaselineCovered: accepted.covered,
-            barrierReferencedFilenames: barrierReferenced,
             parseableSnapshotsForMonth: scan.parseableSnapshots.map {
                 .init(filename: $0.filename, lamport: $0.lamport, writerID: $0.writerID, covered: $0.covered)
             },
@@ -339,7 +307,6 @@ struct RepoCompactionService: Sendable {
         let snapshotReader = SnapshotReader(client: services.metadataClient, basePath: services.basePath)
         for filename in protection.protectedFilenames.sorted() {
             if filename == accepted.filename { continue }
-            if barrierReferenced.contains(filename) { continue }
             if let sha = candidateSHAByFilename[filename] {
                 additionalProtectedSHAByFilename[filename] = sha
                 continue
@@ -359,8 +326,6 @@ struct RepoCompactionService: Sendable {
             acceptedSnapshotLamport: accepted.lamport,
             acceptedSnapshotSHA256Hex: acceptedFile.sha256Hex.lowercased(),
             acceptedSnapshotCovered: accepted.covered,
-            retainedBarrierUnionCovered: .empty,
-            retainedManifestCheckpointSHA256ByFilename: [:],
             additionalProtectedSnapshotSHA256ByFilename: additionalProtectedSHAByFilename,
             requiredObservedSeqByWriter: materialized.observedSeqByWriter,
             preDeleteCovered: covered,
@@ -373,15 +338,6 @@ struct RepoCompactionService: Sendable {
             repoID: services.repoID,
             acceptedSnapshot: accepted,
             acceptedSnapshotSHA256Hex: acceptedFile.sha256Hex.lowercased(),
-            barrierSet: RetentionBarrierSet(unsuperseded: [], unionCovered: .empty),
-            composedLivenessGate: RetentionLivenessGate(
-                requiredCompleteView: false,
-                requiredNoActiveNonSelfWriters: false,
-                legacyClientGraceMs: 0
-            ),
-            livenessDecision: RepoSnapshotDeletePreflightService.LivenessDecision(
-                blockers: [], evaluatedAtMs: nowMs()
-            ),
             protectedFilenames: protection.protectedFilenames,
             snapshotsToDelete: deleteCandidates,
             protectedSummary: scan.protectedSummary,
@@ -419,19 +375,6 @@ struct RepoCompactionService: Sendable {
         return report.months.filter(\.checkpointRecommended).map(\.month).sorted()
     }
 
-    private func loadBarrierReferencedFilenames(month: LibraryMonthKey) async -> Set<String> {
-        do {
-            let load = try await RetentionManifestRemoteStore(
-                client: services.metadataClient,
-                basePath: services.basePath
-            ).loadBarrierSet(expectedRepoID: services.repoID, month: month)
-            return Set(load.barrierSet.unsuperseded.map(\.checkpointSnapshotName))
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { return [] }
-            return []
-        }
-    }
-
     private static func computeDeletePrefix(
         acceptedPrefix: [String: UInt64],
         plannerPrefix: [String: UInt64]
@@ -463,8 +406,7 @@ struct RepoCompactionService: Sendable {
                     beforeReport: nil,
                     afterReport: nil,
                     acceptedSnapshot: nil
-                ),
-                barrier: nil
+                )
             ),
             commitCleanup: nil,
             snapshotGC: .skipped(.skippedMaintenanceFrozen)
@@ -475,13 +417,13 @@ struct RepoCompactionService: Sendable {
         let outcome: RepoCheckpointPhaseOutcome
         switch checkpoint.outcome {
         case .writtenAccepted:
-            outcome = .checkpointWrittenBarrierPublished
+            outcome = .checkpointWritten
         case .skippedEmptyFold:
             outcome = .skippedEmptyFold
         case .skippedBelowThreshold:
             outcome = .skippedBelowThreshold
         }
-        return RepoCheckpointPhaseResult(outcome: outcome, checkpoint: checkpoint, barrier: nil)
+        return RepoCheckpointPhaseResult(outcome: outcome, checkpoint: checkpoint)
     }
 
     private func emptyCommitReport(month: LibraryMonthKey) -> RepoRetentionDeletePreflightReport {
@@ -499,6 +441,43 @@ struct RepoCompactionService: Sendable {
             repoID: services.repoID,
             evaluatedAtMs: nowMs()
         )
+    }
+}
+
+private func containsCancellation(_ result: RepoRetentionCommitDeleteResult) -> Bool {
+    switch result {
+    case .preflightBlocked(_, _),
+         .completed(_, _, _):
+        return false
+    case .stopped(_, let reason, _, let verification):
+        return reason.containsCancellation || verification?.containsCancellation == true
+    case .verificationFailed(_, let stopReason, _, let verification):
+        return stopReason?.containsCancellation == true || verification.containsCancellation
+    case .verificationInconclusive(_, let stopReason, _, let verification):
+        return stopReason?.containsCancellation == true || verification.containsCancellation
+    }
+}
+
+private extension RepoRetentionCommitDeleteStopReason {
+    var containsCancellation: Bool {
+        switch self {
+        case .cancelled(_):
+            return true
+        case .deleteFailed(_, .cancelled):
+            return true
+        case .deleteFailed(_, _),
+             .preDeleteRevalidationFailed(_, _):
+            return false
+        }
+    }
+}
+
+private extension RepoRetentionPostDeleteVerificationResult {
+    var containsCancellation: Bool {
+        if case .inconclusive(reason: .cancelled) = self {
+            return true
+        }
+        return false
     }
 }
 

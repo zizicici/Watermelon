@@ -1,6 +1,5 @@
 import Foundation
 
-/// Cold-start materialize output is one-shot so stale snapshots cannot be reused mid-run.
 actor InitialMaterializeOutputBox {
     private var value: RepoMaterializer.MaterializeOutput?
     init(_ value: RepoMaterializer.MaterializeOutput?) {
@@ -21,10 +20,6 @@ struct BackupV2RuntimeServices: Sendable {
     let repoID: String
     let runID: String
     let basePath: String
-    /// Inspection result safe to forward to `RemoteIndexSyncService.syncIndex(preInspection:)`
-    /// when non-nil. See `OpenedBackupV2Repo.postOpenSyncInspection` for the contract.
-    /// Non-nil only on the `.openExistingV2` route; bootstrap / migration / cleanup
-    /// paths publish `nil` so sync re-inspects after open-side mutations.
     let postOpenSyncInspection: RemoteFormatInspection?
     let database: DatabaseManager
     let identity: RepoIdentity
@@ -32,30 +27,20 @@ struct BackupV2RuntimeServices: Sendable {
     let lamport: PersistedLamportClock
     let commitWriter: CommitLogWriter
     let snapshotWriter: SnapshotWriter
-    let liveness: LivenessTracker
     let compactionPolicy: RepoCompactionPolicy
     let isLocalVolume: Bool
-    /// Dedicated connection for V2 metadata writes — sharing with worker uploads would
-    /// serialize them at the wire, breaking the pool's "1 worker = 1 connection" invariant.
     let metadataClient: any RemoteStorageClientProtocol
-    /// false when metadataClient is borrowed; shutdown skips the disconnect.
     let ownsMetadataClient: Bool
-    /// Cold-start materialize output, consumed once by `prepareRun` to avoid running
-    /// materialize twice. Nil on the V1-migration path (phase1 already advanced state).
     let initialMaterializeOutput: InitialMaterializeOutputBox
-    /// Background orphan-metadata sweep started during bootstrap. shutdown awaits
-    /// it so we don't drop the metadata connection while it's still issuing deletes.
     let sweepTask: Task<Void, Never>?
 
     static let shutdownTimeoutSeconds: TimeInterval = 10
 
     func shutdown() async {
-        // Race clean shutdown vs deadline: SMB/SFTP socket hangs don't honor Swift cancellation.
         let latch = ShutdownLatch()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             var cleanupTask: Task<Void, Never>?
-            cleanupTask = Task { [liveness, sweepTask, metadataClient, ownsMetadataClient] in
-                await liveness.stopAndWait()
+            cleanupTask = Task { [sweepTask, metadataClient, ownsMetadataClient] in
                 sweepTask?.cancel()
                 _ = await sweepTask?.value
                 if ownsMetadataClient {

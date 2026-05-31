@@ -11,10 +11,6 @@ enum RetentionInvariantEvaluator {
         case failed(reason: RepoSnapshotPostDeleteVerificationFailure)
     }
 
-    /// Snapshot GC must not regress the materialized state, the accepted baseline
-    /// coverage, or any observed counters; it also must not delete protected snapshots.
-    /// Unlike commit-prefix delete, snapshot GC does not change `deletePrefixByWriter`,
-    /// so that arm of the equivalence contract is omitted.
     static func evaluateSnapshotPostDeleteContract(
         evidence: RepoSnapshotPostDeleteVerificationEvidence,
         afterState: RepoSnapshotState,
@@ -23,9 +19,6 @@ enum RetentionInvariantEvaluator {
     ) -> SnapshotPostDeleteOutcome {
         guard evidence.acceptedSnapshot.covered.superset(of: contract.acceptedSnapshotCovered) else {
             return .failed(reason: .acceptedSnapshotCoverageRegression(filename: evidence.acceptedSnapshot.filename))
-        }
-        guard evidence.acceptedSnapshot.covered.superset(of: contract.retainedBarrierUnionCovered) else {
-            return .failed(reason: .retainedBarrierCoverageRegression(filename: evidence.acceptedSnapshot.filename))
         }
         guard stateIsRetentionSuperset(before: contract.preDeleteState, after: afterState, month: month) else {
             return .failed(reason: .stateNotRetentionSuperset)
@@ -52,7 +45,6 @@ enum RetentionInvariantEvaluator {
         }
         if evidence.acceptedSnapshot.filename != contract.acceptedSnapshotFilename,
            !evidence.acceptedSnapshot.covered.superset(of: contract.acceptedSnapshotCovered) {
-            // Replacement baseline must cover at least what the pre-delete baseline covered.
             return .failed(reason: .acceptedSnapshotSupersedeUnsafe(
                 expectedFilename: contract.acceptedSnapshotFilename,
                 observedFilename: evidence.acceptedSnapshot.filename,
@@ -70,9 +62,6 @@ enum RetentionInvariantEvaluator {
     ) -> PostDeleteOutcome {
         guard evidence.acceptedSnapshot.covered.superset(of: contract.acceptedSnapshotCovered) else {
             return .failed(reason: .acceptedSnapshotCoverageRegression(filename: evidence.acceptedSnapshot.filename))
-        }
-        guard evidence.acceptedSnapshot.covered.superset(of: contract.retainedBarrierUnionCovered) else {
-            return .failed(reason: .retainedBarrierCoverageRegression(filename: evidence.acceptedSnapshot.filename))
         }
         guard evidence.acceptedSnapshot.covered.superset(of: coveredRangesFrom(prefixes: contract.expectedDeletePrefixByWriter)) else {
             return .failed(reason: .deletePrefixCoverageRegression(filename: evidence.acceptedSnapshot.filename))

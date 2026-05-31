@@ -16,7 +16,6 @@ enum RepoMaintenanceStartupMode: Sendable, Equatable {
 }
 
 struct RepoMaintenanceRuntime: Sendable {
-    let liveness: LivenessTracker
     let sweepTask: Task<Void, Never>?
 }
 
@@ -26,59 +25,27 @@ struct RepoMaintenanceRuntimeBuilder: Sendable {
         metadataClient: any RemoteStorageClientProtocol,
         mode: RepoMaintenanceStartupMode
     ) async throws -> RepoMaintenanceRuntime {
-        let liveness = LivenessTracker(
-            client: metadataClient,
-            basePath: opened.basePath,
-            writerID: opened.writerID,
-            isLocalVolume: opened.isLocalVolume
-        )
         guard mode.isEnabled else {
-            return RepoMaintenanceRuntime(liveness: liveness, sweepTask: nil)
+            return RepoMaintenanceRuntime(sweepTask: nil)
         }
 
-        _ = try await OrphanMetadataCleanup.sweepOwnLivenessStagings(
+        _ = try await OrphanMetadataCleanup.sweepOwnStagings(
             client: metadataClient,
             basePath: opened.basePath,
             writerID: opened.writerID
         )
         try Task.checkCancellation()
-        await liveness.start()
-        do {
-            try Task.checkCancellation()
-        } catch {
-            await liveness.stopAndWait()
-            throw CancellationError()
-        }
 
-        guard metadataClient.supportsLivenessSafeRenewal else {
-            return RepoMaintenanceRuntime(liveness: liveness, sweepTask: nil)
+        let sweepTask = Task(priority: .utility) { [metadataClient, basePath = opened.basePath] in
+            _ = await OrphanMetadataCleanup.sweep(
+                client: metadataClient,
+                directories: OrphanMetadataCleanup.standardSweepDirectories(basePath: basePath),
+                activeWriters: [opened.writerID],
+                ageThresholdSeconds: 3600,
+                now: Date()
+            )
         }
-
-        do {
-            let view = try await liveness.snapshotPeerStatuses()
-            try Task.checkCancellation()
-            guard view.isComplete else {
-                return RepoMaintenanceRuntime(liveness: liveness, sweepTask: nil)
-            }
-            var protectedWriters = view.sweepProtectionSet
-            protectedWriters.insert(opened.writerID)
-            let sweepTask = Task(priority: .utility) { [metadataClient, protectedWriters, basePath = opened.basePath] in
-                _ = await OrphanMetadataCleanup.sweep(
-                    client: metadataClient,
-                    directories: OrphanMetadataCleanup.standardSweepDirectories(basePath: basePath),
-                    activeWriters: protectedWriters,
-                    ageThresholdSeconds: 3600,
-                    now: Date()
-                )
-            }
-            return RepoMaintenanceRuntime(liveness: liveness, sweepTask: sweepTask)
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) {
-                await liveness.stopAndWait()
-                throw CancellationError()
-            }
-            return RepoMaintenanceRuntime(liveness: liveness, sweepTask: nil)
-        }
+        return RepoMaintenanceRuntime(sweepTask: sweepTask)
     }
 }
 
@@ -89,7 +56,7 @@ struct RepoMaintenanceStartupRunner: Sendable {
     ) async throws {
         guard mode.isEnabled else { return }
         do {
-            _ = try await RepoRetentionStartupMaintenance(services: services).run()
+            _ = try await RepoCompactionService(services: services).compactStartupMonths()
         } catch is CancellationError {
             await services.shutdown()
             throw CancellationError()

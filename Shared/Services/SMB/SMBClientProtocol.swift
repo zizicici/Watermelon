@@ -135,10 +135,6 @@ protocol RemoteStorageClientProtocol: Sendable {
     var moveIfAbsentGuarantee: CreateGuarantee { get }
     func supportsExclusiveMoveIfAbsent(forDestinationPath destinationPath: String) async throws -> Bool
     var dataPathOverwriteRisk: DataPathOverwriteRisk { get }
-    /// Existing-path upload is safe for heartbeat renewal only when peers never observe a missing file.
-    var supportsLivenessSafeOverwriteUpload: Bool { get }
-    /// Existing-destination move is safe for heartbeat renewal only when peers never observe a missing file.
-    var supportsLivenessSafeOverwriteMove: Bool { get }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { get }
     var concurrencyMode: ClientConcurrencyMode { get }
     /// Shared read-after-write staleness budget consumed by metadata-write
@@ -169,17 +165,7 @@ extension RemoteStorageClientProtocol {
 
     var isSerialized: Bool { false }
 
-    /// Fail-closed: treat uncustomized backends as overwrite-risky and exact-match.
     var dataPathOverwriteRisk: DataPathOverwriteRisk { .perKey }
-    /// Conservative default: backends must opt in explicitly after verifying the
-    /// renewal-safety contract end-to-end.
-    var supportsLivenessSafeOverwriteUpload: Bool { false }
-    /// Derived: a backend can renew the liveness path iff at least one of the two
-    /// renewal atoms is safe. Maintenance startup consumes this; when false the
-    /// orphan sweep MUST decline to run.
-    var supportsLivenessSafeRenewal: Bool {
-        supportsLivenessSafeOverwriteUpload || supportsLivenessSafeOverwriteMove
-    }
     var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
     var readAfterWriteGraceSeconds: TimeInterval { 0 }

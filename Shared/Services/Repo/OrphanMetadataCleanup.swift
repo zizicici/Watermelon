@@ -3,9 +3,7 @@ import os.log
 
 private let cleanupLog = Logger(subsystem: "com.zizicici.watermelon", category: "OrphanMetadataCleanup")
 
-/// Age gate assumes metadata staging writes stay KB-scale and short-lived.
 enum OrphanMetadataCleanup {
-    /// Writer extraction keeps active peers protected beyond mtime-only gating.
     struct SweepDirectory: Sendable {
         let path: String
         let parseWriter: @Sendable (String) -> String?
@@ -30,9 +28,6 @@ enum OrphanMetadataCleanup {
         )
     }
 
-    /// Standard set of directories whose staging orphans we sweep on bootstrap.
-    /// Liveness produces `.staging-<uuid>.tmp` from `tick`'s rename-on-fallback
-    /// path; without coverage here those orphans accumulate forever.
     static func standardSweepDirectories(basePath: String) -> [SweepDirectory] {
         [
             SweepDirectory(
@@ -48,28 +43,17 @@ enum OrphanMetadataCleanup {
                 parseWriter: { RepoLayout.parseSnapshotFilename($0)?.writerID }
             ),
             SweepDirectory(
-                path: RepoLayout.livenessDirectoryPath(base: basePath),
-                // Liveness file naming is `<writerID>.json`; the "original" before
-                // `.staging-...` is that same name.
-                parseWriter: { RepoLayout.parseLivenessFilename($0) }
-            ),
-            SweepDirectory(
                 path: RepoLayout.identityDirectoryPath(base: basePath),
                 parseWriter: { RepoLayout.parseLivenessFilename($0) }
             ),
             SweepDirectory(
                 path: RepoLayout.migrationsDirectoryPath(base: basePath),
                 parseWriter: { RepoLayout.parseMigrationMarkerFilename($0)?.writerID }
-            ),
-            SweepDirectory(
-                path: RepoLayout.retentionDirectoryPath(base: basePath),
-                parseWriter: { RetentionManifestStore.parseFilename($0)?.writerID }
             )
         ]
     }
 
-    /// Sweeps our writerID before liveness starts because the general sweep must treat us as active.
-    static func sweepOwnLivenessStagings(
+    static func sweepOwnStagings(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         writerID: String,
@@ -77,46 +61,40 @@ enum OrphanMetadataCleanup {
         now: Date = Date()
     ) async throws -> Int {
         try Task.checkCancellation()
-        let dir = RepoLayout.livenessDirectoryPath(base: basePath)
-        let entries: [RemoteStorageEntry]
-        do {
-            entries = try await client.list(path: dir)
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-            cleanupLog.warning("self-liveness sweep list failed: \(dir, privacy: .public) \(String(describing: error), privacy: .public)")
-            return 0
-        }
+        let directories = standardSweepDirectories(basePath: basePath)
         var deleted = 0
-        var stagingsSeen = 0
-        var stagingsWithoutMtime = 0
-        for entry in entries {
-            try Task.checkCancellation()
-            guard !entry.isDirectory else { continue }
-            guard let range = entry.name.range(of: ".staging-") else { continue }
-            let originalName = String(entry.name[..<range.lowerBound])
-            guard RepoLayout.parseLivenessFilename(originalName) == writerID else { continue }
-            stagingsSeen += 1
-            guard let mtime = entry.modificationDate else {
-                stagingsWithoutMtime += 1
-                continue
-            }
-            if now.timeIntervalSince(mtime) < ageThresholdSeconds { continue }
-            let path = RepoLayout.normalize(joining: [dir, entry.name])
+        for dir in directories {
+            let entries: [RemoteStorageEntry]
             do {
-                try await client.delete(path: path)
-                deleted += 1
+                entries = try await client.list(path: dir.path)
             } catch {
                 if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
-                cleanupLog.warning("self-liveness orphan delete failed: \(path, privacy: .public) \(String(describing: error), privacy: .public)")
+                continue
             }
-        }
-        if stagingsSeen > 0 && stagingsWithoutMtime == stagingsSeen {
-            cleanupLog.warning("own-liveness staging files in \(dir, privacy: .public) all lack mtime; sweep disabled until backend exposes modificationDate")
+            for entry in entries {
+                try Task.checkCancellation()
+                guard !entry.isDirectory else { continue }
+                guard let range = entry.name.range(of: ".staging-") else { continue }
+                let originalName = String(entry.name[..<range.lowerBound])
+                // Only clean staging attributed to this writer; skip non-self and unattributable
+                guard let parsedWriter = dir.parseWriter(originalName), parsedWriter == writerID else {
+                    continue
+                }
+                guard let mtime = entry.modificationDate else { continue }
+                if now.timeIntervalSince(mtime) < ageThresholdSeconds { continue }
+                let path = RepoLayout.normalize(joining: [dir.path, entry.name])
+                do {
+                    try await client.delete(path: path)
+                    deleted += 1
+                } catch {
+                    if RemoteWriteClassifier.isCancellation(error) { throw CancellationError() }
+                    cleanupLog.warning("own-staging orphan delete failed: \(path, privacy: .public) \(String(describing: error), privacy: .public)")
+                }
+            }
         }
         return deleted
     }
 
-    /// Per-directory parsers keep each staging filename shape under the active-writer gate.
     static func sweep(
         client: any RemoteStorageClientProtocol,
         directories: [SweepDirectory],
@@ -131,8 +109,6 @@ enum OrphanMetadataCleanup {
             do {
                 entries = try await client.list(path: dir.path)
             } catch {
-                // Persistent permission / transport errors used to be silently swallowed,
-                // leaving orphans accumulating across runs. Log so ops can spot it.
                 cleanupLog.warning("sweep list failed: \(dir.path, privacy: .public) \(String(describing: error), privacy: .public)")
                 continue
             }
@@ -142,12 +118,12 @@ enum OrphanMetadataCleanup {
                 if Task.isCancelled { return deleted }
                 guard !entry.isDirectory else { continue }
                 guard let range = entry.name.range(of: ".staging-") else { continue }
-                stagingsSeen += 1
                 let originalName = String(entry.name[..<range.lowerBound])
-                if let writerID = dir.parseWriter(originalName), activeWriters.contains(writerID) {
+                // Only clean staging attributed to known writers; skip non-active and unattributable
+                guard let writerID = dir.parseWriter(originalName), activeWriters.contains(writerID) else {
                     continue
                 }
-                // Fail-closed: nil mtime can't distinguish orphan from peer mid-write.
+                stagingsSeen += 1
                 guard let mtime = entry.modificationDate else {
                     stagingsWithoutMtime += 1
                     continue

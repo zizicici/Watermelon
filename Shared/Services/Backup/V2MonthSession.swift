@@ -243,10 +243,6 @@ final class V2MonthSession: BackupMonthStore {
         return result
     }
 
-    func requestSnapshotRebaseline() {
-        // Rebaseline/repair belongs to compaction, not per-flush snapshots.
-    }
-
 
     func containsAssetFingerprint(_ fingerprint: AssetFingerprint) -> Bool {
         indexes.containsAssetFingerprint(fingerprint)

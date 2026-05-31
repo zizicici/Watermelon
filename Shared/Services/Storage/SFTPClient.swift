@@ -7,12 +7,6 @@ import NIOSSH
 final actor SFTPClient: RemoteStorageClientProtocol {
     nonisolated var concurrencyMode: ClientConcurrencyMode { .serialOnly }
     nonisolated var dataPathOverwriteRisk: DataPathOverwriteRisk { .none }
-    // openFile(.truncate) destroys the original immediately, and the failure path
-    // calls remove(at:) — partial write loses the existing heartbeat.
-    nonisolated var supportsLivenessSafeOverwriteUpload: Bool { false }
-    // SFTP v3 rejects rename-overwrite without the posix-rename@openssh.com extension.
-    nonisolated var supportsLivenessSafeOverwriteMove: Bool { false }
-    // POSIX-style: case-sensitive on the wire; the server FS may differ but we can't probe that cheaply.
     nonisolated var backendNameCaseSensitivity: BackendNameCaseSensitivity { .caseSensitive }
     nonisolated var moveIfAbsentGuarantee: CreateGuarantee { .overwritePossible }
     private nonisolated static let chunkSize = 32 * 1024

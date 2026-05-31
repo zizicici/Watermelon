@@ -71,50 +71,23 @@ enum RepoSnapshotGCResult: Equatable, Sendable {
     )
 }
 
-/// Not safe for concurrent invocation on the same month; caller is responsible.
 struct RepoSnapshotDeleteExecutor: Sendable {
 
     let client: any RemoteStorageClientProtocol
     let basePath: String
     private let policy: RepoCompactionPolicy
     private let isLocalVolume: Bool
-    private let barrierClockSkewToleranceMs: Int64
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         policy: RepoCompactionPolicy = .default,
-        isLocalVolume: Bool,
-        barrierClockSkewToleranceMs: Int64 = 5 * 60 * 1000
+        isLocalVolume: Bool
     ) {
         self.client = wrapIfSerial(client)
         self.basePath = basePath
         self.policy = policy
         self.isLocalVolume = isLocalVolume
-        self.barrierClockSkewToleranceMs = barrierClockSkewToleranceMs
-    }
-
-    func execute(
-        month: LibraryMonthKey,
-        expectedRepoID: String,
-        nowMs: Int64
-    ) async throws -> RepoSnapshotGCResult {
-        try Task.checkCancellation()
-
-        let repoID = RepoCanonicalIdentity.normalizeLossy(expectedRepoID)
-        let preflightResult = try await RepoSnapshotDeletePreflightService(
-            client: client,
-            basePath: basePath,
-            policy: policy,
-            isLocalVolume: isLocalVolume,
-            barrierClockSkewToleranceMs: barrierClockSkewToleranceMs
-        ).makePlan(month: month, expectedRepoID: repoID, nowMs: nowMs)
-        switch preflightResult {
-        case .blocked(let blockers, let report):
-            return .preflightBlocked(blockers: blockers, report: report)
-        case .planned(let plan, let report):
-            return try await execute(plan: plan, report: report)
-        }
     }
 
     func execute(
@@ -138,8 +111,6 @@ struct RepoSnapshotDeleteExecutor: Sendable {
                 break
             }
 
-            // Defense-in-depth: refuse to touch any protected snapshot even if scanner
-            // produced it as a candidate.
             if plan.protectedFilenames.contains(candidate.filename) {
                 stopReason = .preDeleteRevalidationFailed(
                     candidate: candidate,
@@ -272,7 +243,6 @@ struct RepoSnapshotDeleteExecutor: Sendable {
         candidate: RepoSnapshotDeleteCandidate,
         expectedRepoID: String
     ) async throws -> CandidateRevalidation {
-        // Filename round-trip equality (catches any non-canonical form).
         guard let parsed = RepoLayout.parseSnapshotFilename(candidate.filename),
               parsed.month == candidate.month,
               parsed.writerID == candidate.writerID,

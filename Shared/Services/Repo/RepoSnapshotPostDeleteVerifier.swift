@@ -19,7 +19,6 @@ enum RepoSnapshotPostDeleteVerificationFailure: Equatable, Sendable {
     case repoIdentityMismatch(expected: String, observed: String)
     case missingAcceptedSnapshot(month: LibraryMonthKey)
     case acceptedSnapshotCoverageRegression(filename: String)
-    case retainedBarrierCoverageRegression(filename: String)
     case stateNotRetentionSuperset
     case coveredRangeRegression
     case observedSeqRegression(writerID: String, expectedAtLeast: UInt64, observed: UInt64)
@@ -43,11 +42,6 @@ struct RepoSnapshotPostDeleteEquivalenceContract: Equatable, Sendable {
     let acceptedSnapshotLamport: UInt64
     let acceptedSnapshotSHA256Hex: String
     let acceptedSnapshotCovered: CoveredRanges
-    let retainedBarrierUnionCovered: CoveredRanges
-    let retainedManifestCheckpointSHA256ByFilename: [String: String]
-    // Protection-set snapshots that are neither the accepted baseline nor a barrier checkpoint
-    // (e.g. fallback-protected by snapshotKeepCount). Verifier checks these too so a storage
-    // fault that deletes a non-target protected snapshot during GC fails closed.
     let additionalProtectedSnapshotSHA256ByFilename: [String: String]
     let requiredObservedSeqByWriter: [String: UInt64]
     let preDeleteCovered: CoveredRanges
@@ -108,17 +102,10 @@ struct RepoSnapshotPostDeleteVerifier: Sendable {
             return .failed(reason: .missingAcceptedSnapshot(month: month), evidence: nil)
         }
 
-        // Validate protected snapshots still parse and hash-match before signalling pass.
         let snapshotReader = SnapshotReader(client: client, basePath: basePath)
         var validatedFilenames: [String] = []
-        // Merge barrier-checkpoint and additional fallback-protected SHAs. Same filename in
-        // both must have the same SHA in practice; keep the barrier SHA on collision for
-        // diagnostic clarity.
-        var protectedSHAByFilename = contract.additionalProtectedSnapshotSHA256ByFilename
-        for (filename, sha) in contract.retainedManifestCheckpointSHA256ByFilename {
-            protectedSHAByFilename[filename] = sha
-        }
-        for (filename, expectedSHA) in protectedSHAByFilename
+
+        for (filename, expectedSHA) in contract.additionalProtectedSnapshotSHA256ByFilename
             .sorted(by: { $0.key < $1.key }) {
             let snapshotFile: SnapshotFile
             do {
@@ -163,10 +150,6 @@ struct RepoSnapshotPostDeleteVerifier: Sendable {
             validatedFilenames.append(filename)
         }
 
-        // Always re-read the pre-delete accepted baseline. It's in protectedFilenames but
-        // excluded from `additionalProtectedSnapshotSHA256ByFilename` (carried as its own
-        // field). When a newer post-delete baseline supersedes it, skipping this check
-        // would let the pre-delete baseline silently disappear during the delete window.
         do {
             let file = try await snapshotReader.read(filename: contract.acceptedSnapshotFilename)
             guard file.sha256Hex.lowercased() == contract.acceptedSnapshotSHA256Hex.lowercased() else {

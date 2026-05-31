@@ -42,7 +42,6 @@ actor RepoBootstrap {
         do {
             try await client.createDirectory(path: RepoLayout.commitsDirectoryPath(base: basePath))
             try await client.createDirectory(path: RepoLayout.snapshotsDirectoryPath(base: basePath))
-            try await client.createDirectory(path: RepoLayout.livenessDirectoryPath(base: basePath))
             try await client.createDirectory(path: RepoLayout.identityDirectoryPath(base: basePath))
             try await client.createDirectory(path: RepoLayout.migrationsDirectoryPath(base: basePath))
             try await client.createDirectory(path: RepoLayout.indexDirectoryPath(base: basePath))

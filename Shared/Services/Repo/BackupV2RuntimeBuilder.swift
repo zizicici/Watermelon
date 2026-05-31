@@ -52,7 +52,6 @@ enum BackupV2RuntimeBuilder {
             lamport: opened.lamport,
             commitWriter: opened.commitWriter,
             snapshotWriter: opened.snapshotWriter,
-            liveness: maintenance.liveness,
             compactionPolicy: compactionPolicy,
             isLocalVolume: opened.isLocalVolume,
             metadataClient: metadataClient,

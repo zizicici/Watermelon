@@ -68,56 +68,23 @@ enum RepoRetentionCommitDeleteFailure: Equatable, Sendable {
     case other(String)
 }
 
-/// Not safe for concurrent invocation on the same month; caller is responsible.
 struct RepoRetentionCommitDeleteExecutor: Sendable {
 
     let client: any RemoteStorageClientProtocol
     let basePath: String
     private let policy: RepoCompactionPolicy
     private let isLocalVolume: Bool
-    private let barrierClockSkewToleranceMs: Int64
 
     init(
         client: any RemoteStorageClientProtocol,
         basePath: String,
         policy: RepoCompactionPolicy = .default,
-        isLocalVolume: Bool,
-        barrierClockSkewToleranceMs: Int64 = 5 * 60 * 1000
+        isLocalVolume: Bool
     ) {
-        let effectiveClient = wrapIfSerial(client)
-        self.client = effectiveClient
+        self.client = wrapIfSerial(client)
         self.basePath = basePath
         self.policy = policy
         self.isLocalVolume = isLocalVolume
-        self.barrierClockSkewToleranceMs = barrierClockSkewToleranceMs
-    }
-
-    func execute(
-        month: LibraryMonthKey,
-        expectedRepoID: String,
-        nowMs: Int64
-    ) async throws -> RepoRetentionCommitDeleteResult {
-        try Task.checkCancellation()
-
-        let repoID = RepoCanonicalIdentity.normalizeLossy(expectedRepoID)
-        let preflightResult = try await RepoRetentionDeletePreflightService(
-            client: client,
-            basePath: basePath,
-            policy: policy,
-            isLocalVolume: isLocalVolume,
-            barrierClockSkewToleranceMs: barrierClockSkewToleranceMs
-        ).makePlan(
-            month: month,
-            expectedRepoID: repoID,
-            mode: .dryRun,
-            nowMs: nowMs
-        )
-        switch preflightResult {
-        case .blocked(let blockers, let report):
-            return .preflightBlocked(blockers: blockers, report: report)
-        case .planned(let plan, let report):
-            return try await execute(plan: plan, report: report)
-        }
     }
 
     func execute(
@@ -303,8 +270,6 @@ struct RepoRetentionCommitDeleteExecutor: Sendable {
         if let mismatch = headerMismatch(candidate: candidate, header: commit.header, expectedRepoID: expectedRepoID) {
             return .failed(.headerMismatch(mismatch))
         }
-        // Defense-in-depth against a body that became materializer-untrusted between preflight
-        // and revalidation; keeps retention deletion aligned with the materializer's op-trust ceiling.
         if commit.ops.contains(where: { $0.clock >= LamportClock.maxAdoptableValue }) {
             return .failed(.corruptOrUntrusted)
         }
