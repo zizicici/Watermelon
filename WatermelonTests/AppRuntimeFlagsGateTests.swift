@@ -251,7 +251,7 @@ final class AppRuntimeFlagsGateTests: XCTestCase {
         let runnerStarted = XCTestExpectation(description: "simulated bridge run entered cleanup")
         let bridgeRun = Task<Void, Never> {
             runnerStarted.fulfill()
-            // Mimic post-cancel cleanup: V2 runtime services shutdown + liveness drain + client
+            // Mimic post-cancel cleanup: V2 runtime services shutdown + client
             // disconnect, which takes non-zero time after the upload continuation has resumed.
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
@@ -723,7 +723,7 @@ final class AppRuntimeFlagsGateTests: XCTestCase {
     // MARK: - P01 R11 Claude A Finding 1: profile editors must preserve writerID across save
 
     /// `ServerProfileRecord.writerID` is the per-profile installation identity used by identity
-    /// claims, liveness heartbeats, migration markers, commit/snapshot filenames, and retention
+    /// finalization, migration markers, commit/snapshot filenames, and retention
     /// attribution. Each editor must pass `writerID: baseProfile?.writerID` to its
     /// `ServerProfileRecord` constructor so saving an edited row does NOT overwrite the column
     /// with nil (Swift memberwise init defaults Optional-without-explicit-default to nil; GRDB

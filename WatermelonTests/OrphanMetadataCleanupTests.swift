@@ -147,8 +147,8 @@ final class OrphanMetadataCleanupTests: XCTestCase {
     }
 
     /// Behavioral pin: peer-writer staging must be skipped across all standard directories.
-    /// After liveness removal (Phase 6), the cleanup path only reclaims current-writer
-    /// staging; peer staging must remain protected regardless of age.
+    /// The cleanup path only reclaims current-writer staging; peer staging
+    /// must remain protected regardless of age.
     func testStandardSweepDirectories_peerStaging_protectedAcrossAllDirs() async throws {
         let client = InMemoryRemoteStorageClient()
         try await client.connect()

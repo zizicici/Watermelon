@@ -102,15 +102,6 @@ final class MetadataWriteCancellationTests: XCTestCase {
     }
 
 
-    func testIdentityClaimStore_publicWriteSurfaceNormalizesCancellationShapes() async throws {
-        for error in cancellationShapes() {
-            let store = IdentityClaimStore(client: OperationFailureClient(error: error), basePath: basePath)
-            await assertThrowsCancellation {
-                try await store.writeOwnClaim(repoID: self.repoID, writerID: self.writerID, createdAtMs: 1)
-            }
-        }
-    }
-
     func testVersionManifestStore_preflightCancellationShapesNormalize() async throws {
         let versionPath = RepoLayout.versionFilePath(base: basePath)
         for error in cancellationShapes() {
@@ -134,32 +125,6 @@ final class MetadataWriteCancellationTests: XCTestCase {
                     ).encode()
                 )
                 try await VersionManifestStore(client: client, basePath: self.basePath).writeIfAbsent(writerID: self.writerID)
-            }
-        }
-    }
-
-    func testIdentityClaimStore_preflightCancellationShapesNormalize() async throws {
-        let claimPath = RepoLayout.identityClaimPath(base: basePath, writerID: writerID)
-        for error in cancellationShapes() {
-            await assertThrowsCancellation {
-                let client = OperationFailureClient(error: error, failingOperation: .metadata, failingRemotePath: claimPath)
-                try await IdentityClaimStore(client: client, basePath: self.basePath)
-                    .writeOwnClaim(repoID: self.repoID, writerID: self.writerID, createdAtMs: 1)
-            }
-            await assertThrowsCancellation {
-                let client = OperationFailureClient(error: error, failingOperation: .download, failingRemotePath: claimPath)
-                await client.injectFile(
-                    path: claimPath,
-                    data: try IdentityClaimWire(repoID: self.repoID, createdAtMs: 1, writerID: self.writerID).encode()
-                )
-                try await IdentityClaimStore(client: client, basePath: self.basePath)
-                    .writeOwnClaim(repoID: self.repoID, writerID: self.writerID, createdAtMs: 1)
-            }
-            await assertThrowsCancellation {
-                let client = OperationFailureClient(error: error, failingOperation: .delete, failingRemotePath: claimPath)
-                await client.injectFile(path: claimPath, data: Data("not-json".utf8))
-                try await IdentityClaimStore(client: client, basePath: self.basePath)
-                    .writeOwnClaim(repoID: self.repoID, writerID: self.writerID, createdAtMs: 1)
             }
         }
     }
@@ -288,49 +253,6 @@ final class MetadataWriteCancellationTests: XCTestCase {
             XCTFail("exclusive-path commit should fail under cancellation with respectTaskCancellation: true")
         case .failure(let error):
             XCTAssertTrue(error is CancellationError, "expected CancellationError, got \(error)")
-        }
-    }
-
-    func testIdentityClaimStore_writeOwnClaim_completesUnderCancellation() async throws {
-        let inner = InMemoryRemoteStorageClient()
-        try await inner.connect()
-        inner.setAtomicCreateGuarantee(.exclusive)
-        let client = TaskCancellationSimulatingClient(inner: inner)
-
-        let store = IdentityClaimStore(client: client, basePath: basePath)
-
-        let task = Task {
-            try? await Task.sleep(for: .milliseconds(1))
-            try await store.writeOwnClaim(repoID: self.repoID, writerID: self.writerID, createdAtMs: 1)
-        }
-        task.cancel()
-        switch await task.result {
-        case .success:
-            break
-        case .failure(let error):
-            XCTFail("identity claim write should complete under cancellation, got \(error)")
-        }
-    }
-
-    func testIdentityClaimStore_postCreateVerification_completesUnderCancellation() async throws {
-        let inner = InMemoryRemoteStorageClient()
-        try await inner.connect()
-        inner.setAtomicCreateGuarantee(.exclusive)
-        let client = PostCreateReadCancellationClient(inner: inner, atomicResult: .bestEffortRetry)
-
-        let store = IdentityClaimStore(client: client, basePath: basePath)
-
-        let task = Task {
-            try? await Task.sleep(for: .milliseconds(1))
-            try await store.writeOwnClaim(repoID: self.repoID, writerID: self.writerID, createdAtMs: 1)
-        }
-        task.cancel()
-        switch await task.result {
-        case .success:
-            let verifiedDownloads = await client.downloadCount()
-            XCTAssertEqual(verifiedDownloads, 1)
-        case .failure(let error):
-            XCTFail("identity claim readback verification should complete under cancellation, got \(error)")
         }
     }
 

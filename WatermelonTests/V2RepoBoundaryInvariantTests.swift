@@ -99,46 +99,6 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         }
     }
 
-    func testIdentityClaimCreatedAtMsRequiredAcrossAuthorityPaths() async throws {
-        let malformedCreatedAtValues: [String?] = [nil, "true", "1.5", "-1", "9223372036854775808"]
-        for value in malformedCreatedAtValues {
-            let client = try await makeConnectedClient()
-            let store = IdentityClaimStore(client: client, basePath: basePath)
-            await injectIdentityClaim(client, writerID: writerB, repoID: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee", createdAtMsJSON: value)
-            do {
-                _ = try await store.canonicalElection(ignoringCorruptSelfClaimFor: writerA)
-                XCTFail("expected corrupt foreign claim for \(String(describing: value))")
-            } catch RepoBootstrap.BootstrapError.ioFailure {
-            }
-        }
-
-        for value in malformedCreatedAtValues {
-            let client = try await makeConnectedClient()
-            let store = IdentityClaimStore(client: client, basePath: basePath)
-            await injectIdentityClaim(client, writerID: writerA, repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", createdAtMsJSON: value)
-            try await store.writeOwnClaim(repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: writerA, createdAtMs: 123)
-        }
-
-        for value in malformedCreatedAtValues {
-            let client = try await makeConnectedClient()
-            await client.setAtomicCreateMode(.bestEffort)
-            let store = IdentityClaimStore(client: client, basePath: basePath)
-            let path = RepoLayout.identityClaimPath(base: basePath, writerID: writerA)
-            var fields: [String: String] = [
-                "v": "1",
-                "repo_id": #""aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee""#,
-                "writer_id": #""\#(writerA)""#
-            ]
-            if let value { fields["created_at_ms"] = value }
-            await client.stageBestEffortRace(at: path, with: Data(json(fields).utf8))
-            do {
-                try await store.writeOwnClaim(repoID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", writerID: writerA, createdAtMs: 123)
-                XCTFail("expected malformed ambiguous write readback for \(String(describing: value))")
-            } catch RepoBootstrap.BootstrapError.ioFailure {
-            }
-        }
-    }
-
     func testCommitWireRequiredNumericsRejectMalformedValues() {
         let headerInvalids: [String: [String?]] = [
             "v": [nil, "true", "1.5", "-1", "9223372036854775808"],
@@ -472,15 +432,6 @@ final class V2RepoBoundaryInvariantTests: XCTestCase {
         do {
             _ = try await versionStore.load()
             XCTFail("expected version metadata uncertainty to throw")
-        } catch {
-            assertInjectedTransportError(error)
-        }
-
-        let claimStore = IdentityClaimStore(client: client, basePath: basePath)
-        await client.injectListError(.transport, for: RepoLayout.identityDirectoryPath(base: basePath))
-        do {
-            _ = try await claimStore.canonicalElection(ignoringCorruptSelfClaimFor: writerA)
-            XCTFail("expected identity list uncertainty to throw")
         } catch {
             assertInjectedTransportError(error)
         }
