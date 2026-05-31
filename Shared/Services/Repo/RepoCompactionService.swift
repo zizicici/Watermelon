@@ -3,6 +3,12 @@ import os.log
 
 private let compactionLog = Logger(subsystem: "com.zizicici.watermelon", category: "RepoCompactionService")
 
+enum RepoCompactionSnapshotGCMode: Sendable, Equatable {
+    case disabled
+    case reportOnly
+    case always
+}
+
 struct RepoCompactionMonthContext: Sendable {
     let month: LibraryMonthKey
     let materialized: RepoMaterializer.MaterializeOutput
@@ -25,7 +31,10 @@ struct RepoCompactionService: Sendable {
 
     // MARK: - Public Entry Points
 
-    func compactMonth(_ month: LibraryMonthKey) async throws -> RepoMaintenanceMonthResult {
+    func compactMonth(
+        _ month: LibraryMonthKey,
+        snapshotGCMode: RepoCompactionSnapshotGCMode = .disabled
+    ) async throws -> RepoMaintenanceMonthResult {
         try Task.checkCancellation()
 
         let materialized = try await RepoMaterializer(
@@ -84,38 +93,44 @@ struct RepoCompactionService: Sendable {
 
         let checkpointPhaseResult = mapCheckpointToPhaseResult(checkpointResult)
 
+        let postCheckpointAccepted = checkpointResult.acceptedSnapshot
         let commitCleanup: RepoRetentionCommitDeleteResult
-        do {
-            commitCleanup = try await runCommitGC(month: month, preMaterialized: materialized, monthReport: monthReport)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            compactionLog.error("compaction commit GC failed for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
-            commitCleanup = .preflightBlocked(blockers: [], report: emptyCommitReport(month: month))
+        if let postCheckpointAccepted {
+            do {
+                commitCleanup = try await runCommitGC(
+                    month: month,
+                    postCheckpointAccepted: postCheckpointAccepted,
+                    monthReport: monthReport
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                compactionLog.error("compaction commit GC failed for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
+                commitCleanup = .preflightBlocked(blockers: [], report: emptyCommitReport(month: month))
+            }
+        } else {
+            compactionLog.info("compaction commit GC skip \(month.text, privacy: .public): no post-checkpoint accepted snapshot")
+            commitCleanup = .preflightBlocked(blockers: [.noAcceptedSnapshot(month: month)], report: emptyCommitReport(month: month))
         }
 
         let snapshotGC: RepoMaintenanceSnapshotGCDisposition
-        switch commitCleanup {
-        case .preflightBlocked, .completed:
-            if Task.isCancelled {
+        if let resolved = resolveSnapshotGC(
+            month: month,
+            monthReport: monthReport,
+            snapshotGCMode: snapshotGCMode,
+            commitCleanup: commitCleanup
+        ) {
+            snapshotGC = resolved
+        } else {
+            do {
+                let gcResult = try await runSnapshotGC(month: month)
+                snapshotGC = .ran(gcResult)
+            } catch is CancellationError {
                 snapshotGC = .skipped(.skippedCancellation)
-            } else {
-                do {
-                    let gcResult = try await runSnapshotGC(month: month)
-                    snapshotGC = .ran(gcResult)
-                } catch is CancellationError {
-                    snapshotGC = .skipped(.skippedCancellation)
-                } catch {
-                    compactionLog.error("compaction snapshot GC failed for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
-                    snapshotGC = .skipped(.skippedAfterCommitCleanupStopped)
-                }
+            } catch {
+                compactionLog.error("compaction snapshot GC failed for \(month.text, privacy: .public): \(String(describing: error), privacy: .public)")
+                snapshotGC = .skipped(.skippedAfterCommitCleanupStopped)
             }
-        case .stopped:
-            snapshotGC = .skipped(.skippedAfterCommitCleanupStopped)
-        case .verificationFailed:
-            snapshotGC = .skipped(.skippedAfterCommitCleanupVerificationFailed)
-        case .verificationInconclusive:
-            snapshotGC = .skipped(.skippedAfterCommitCleanupVerificationInconclusive)
         }
 
         return RepoMaintenanceMonthResult(
@@ -132,7 +147,7 @@ struct RepoCompactionService: Sendable {
         for month in months {
             try Task.checkCancellation()
             do {
-                results[month] = try await compactMonth(month)
+                results[month] = try await compactMonth(month, snapshotGCMode: .disabled)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -142,11 +157,31 @@ struct RepoCompactionService: Sendable {
         return RepoMaintenanceStartupResult(monthResults: results)
     }
 
-    // MARK: - Phase B — Commit GC
+    func compactMonthForUserMaintenance(_ month: LibraryMonthKey) async throws -> RepoMaintenanceMonthResult {
+        try await compactMonth(month, snapshotGCMode: .always)
+    }
+
+    func reportSnapshotGC() async throws -> RepoMaintenanceStartupResult {
+        let months = try await candidateStartupMonths()
+        var results: [LibraryMonthKey: RepoMaintenanceMonthResult] = [:]
+        for month in months {
+            try Task.checkCancellation()
+            do {
+                results[month] = try await compactMonth(month, snapshotGCMode: .reportOnly)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                compactionLog.error("compaction report month \(month.text, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+        return RepoMaintenanceStartupResult(monthResults: results)
+    }
+
+    // MARK: - Commit GC
 
     private func runCommitGC(
         month: LibraryMonthKey,
-        preMaterialized: RepoMaterializer.MaterializeOutput,
+        postCheckpointAccepted: RepoMaterializer.AcceptedSnapshotBaselineInfo,
         monthReport: RepoCompactionMonthReport
     ) async throws -> RepoRetentionCommitDeleteResult {
         try Task.checkCancellation()
@@ -163,6 +198,11 @@ struct RepoCompactionService: Sendable {
 
         guard let accepted = materialized.acceptedSnapshotBaselinesByMonth[month] else {
             return .preflightBlocked(blockers: [.noAcceptedSnapshot(month: month)], report: emptyCommitReport(month: month))
+        }
+
+        guard accepted.covered.superset(of: postCheckpointAccepted.covered) else {
+            compactionLog.info("compaction commit GC skip \(month.text, privacy: .public): post-materialize accepted covered regressed below checkpoint accepted")
+            return .preflightBlocked(blockers: [], report: emptyCommitReport(month: month))
         }
 
         let coveredPrefix = services.compactionPolicy.conservativeDeletePrefixByWriter(covered: accepted.covered)
@@ -242,7 +282,40 @@ struct RepoCompactionService: Sendable {
         return result
     }
 
-    // MARK: - Phase C — Snapshot GC
+    // MARK: - Snapshot GC dispatch
+
+    private func resolveSnapshotGC(
+        month: LibraryMonthKey,
+        monthReport: RepoCompactionMonthReport,
+        snapshotGCMode: RepoCompactionSnapshotGCMode,
+        commitCleanup: RepoRetentionCommitDeleteResult
+    ) -> RepoMaintenanceSnapshotGCDisposition? {
+        switch snapshotGCMode {
+        case .disabled:
+            compactionLog.info("compaction snapshot GC skip \(month.text, privacy: .public): disabled for this run (snapshots=\(monthReport.snapshotFileCount, privacy: .public), snapshotBytes=\(monthReport.snapshotBytes, privacy: .public))")
+            return .skipped(.skippedDisabled)
+        case .reportOnly:
+            compactionLog.info("compaction snapshot GC report \(month.text, privacy: .public): snapshots=\(monthReport.snapshotFileCount, privacy: .public), parseable=\(monthReport.parseableSnapshotFileCount, privacy: .public), unparseable=\(monthReport.unparseableSnapshotFileCount, privacy: .public), snapshotBytes=\(monthReport.snapshotBytes, privacy: .public)")
+            return .skipped(.skippedReportOnly)
+        case .always:
+            break
+        }
+        switch commitCleanup {
+        case .preflightBlocked, .completed:
+            if Task.isCancelled {
+                return .skipped(.skippedCancellation)
+            }
+            return nil
+        case .stopped:
+            return .skipped(.skippedAfterCommitCleanupStopped)
+        case .verificationFailed:
+            return .skipped(.skippedAfterCommitCleanupVerificationFailed)
+        case .verificationInconclusive:
+            return .skipped(.skippedAfterCommitCleanupVerificationInconclusive)
+        }
+    }
+
+    // MARK: - Snapshot GC
 
     private func runSnapshotGC(month: LibraryMonthKey) async throws -> RepoSnapshotGCResult {
         try Task.checkCancellation()

@@ -122,6 +122,7 @@ struct RepoCompactionPlanner: Sendable {
             snapshotFileCount: snapshotStats.fileCountByMonth[month] ?? 0,
             parseableSnapshotFileCount: snapshotStats.parseableCountByMonth[month] ?? 0,
             unparseableSnapshotFileCount: snapshotStats.unparseableCountByMonth[month] ?? 0,
+            snapshotBytes: snapshotStats.bytesByMonth[month] ?? 0,
             acceptedSnapshot: acceptedSnapshot,
             acceptedSnapshotCovered: acceptedSnapshotCovered,
             finalCovered: finalCovered,
@@ -153,6 +154,7 @@ struct RepoCompactionMonthReport: Equatable, Sendable {
     let snapshotFileCount: Int
     let parseableSnapshotFileCount: Int
     let unparseableSnapshotFileCount: Int
+    let snapshotBytes: Int64
     let acceptedSnapshot: RepoMaterializer.AcceptedSnapshotBaselineInfo?
     let acceptedSnapshotCovered: CoveredRanges
     let finalCovered: CoveredRanges
@@ -175,6 +177,7 @@ struct RepoCompactionTotals: Equatable, Sendable {
     let snapshotFileCount: Int
     let parseableSnapshotFileCount: Int
     let unparseableSnapshotFileCount: Int
+    let snapshotBytes: Int64
     let replayedSinceCheckpointCommitCount: Int
     let replayedSinceCheckpointBytes: Int64
     let checkpointRecommendedMonthCount: Int
@@ -193,6 +196,7 @@ struct RepoCompactionTotals: Equatable, Sendable {
         snapshotFileCount = months.reduce(0) { $0 + $1.snapshotFileCount }
         parseableSnapshotFileCount = months.reduce(0) { $0 + $1.parseableSnapshotFileCount }
         unparseableSnapshotFileCount = months.reduce(0) { $0 + $1.unparseableSnapshotFileCount }
+        snapshotBytes = months.reduce(0) { $0 + $1.snapshotBytes }
         replayedSinceCheckpointCommitCount = months.reduce(0) { $0 + $1.replayedSinceCheckpointCommitCount }
         replayedSinceCheckpointBytes = months.reduce(0) { $0 + $1.replayedSinceCheckpointBytes }
         checkpointRecommendedMonthCount = months.filter(\.checkpointRecommended).count
@@ -240,6 +244,7 @@ private struct SnapshotMetadataStats {
     var fileCountByMonth: [LibraryMonthKey: Int] = [:]
     var parseableCountByMonth: [LibraryMonthKey: Int] = [:]
     var unparseableCountByMonth: [LibraryMonthKey: Int] = [:]
+    var bytesByMonth: [LibraryMonthKey: Int64] = [:]
     var byMonth: [LibraryMonthKey: Bool] = [:]
 
     init(entries: [RemoteStorageEntry]) {
@@ -248,9 +253,11 @@ private struct SnapshotMetadataStats {
                 byMonth[parsed.month] = true
                 fileCountByMonth[parsed.month, default: 0] += 1
                 parseableCountByMonth[parsed.month, default: 0] += 1
+                bytesByMonth[parsed.month, default: 0] += entry.size
             } else if let month = monthPrefix(from: entry.name) {
                 fileCountByMonth[month, default: 0] += 1
                 unparseableCountByMonth[month, default: 0] += 1
+                bytesByMonth[month, default: 0] += entry.size
             }
         }
     }

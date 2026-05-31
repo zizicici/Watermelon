@@ -21,7 +21,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         let accepted = try XCTUnwrap(result.acceptedSnapshot)
         XCTAssertEqual(accepted.filename, name)
         XCTAssertEqual(accepted.covered, covered([(1, 2)]))
-        XCTAssertEqual(result.afterReport?.replayedSinceCheckpointCommitCount, 0)
+        XCTAssertNil(result.afterReport)
         let afterCommits = await commitFiles(client)
         let afterRetention = await retentionFiles(client)
         XCTAssertEqual(afterCommits, beforeFiles.filter { $0.key.contains("/.watermelon/commits/") })
@@ -40,7 +40,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         XCTAssertEqual(result.lamport, 11)
         XCTAssertEqual(result.covered, covered([(1, 6)]))
         XCTAssertEqual(result.acceptedSnapshot?.covered, covered([(1, 6)]))
-        XCTAssertEqual(result.afterReport?.replayedSinceCheckpointCommitCount, 0)
+        XCTAssertNil(result.afterReport)
     }
 
     func testClockObservesMaterializedClockBeforeTicking() async throws {
@@ -79,34 +79,39 @@ final class RepoCheckpointServiceTests: XCTestCase {
         XCTAssertNotNil(output.state.months[month]?.assets[TestFixtures.assetFingerprint(0xD1)])
     }
 
-    func testPostWriteHigherSnapshotCausesNotAcceptedAfterWrite() async throws {
+    func testPostWritePeerCoveredSupersetIsAccepted() async throws {
         let inner = try await makeClient()
         try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0xE1)
         let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
         let peerName = RepoLayout.snapshotFileName(month: month, lamport: 999, writerID: writerB, runID: peerRunID)
         let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 999, writerID: writerB, runID: peerRunID)
+        let fp = TestFixtures.assetFingerprint(0xE1)
+        var peerState = RepoMonthState.empty
+        peerState.assets[fp] = SnapshotAssetRow(
+            assetFingerprint: fp,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resourceCount: 0,
+            totalFileSizeBytes: 0,
+            stamp: OpStamp(writerID: writerID, seq: 1, clock: 1)
+        )
         let peerBytes = makeSnapshotBytes(
             writerID: writerB,
             covered: covered([(1, UInt64(0xE1))]),
-            assetBytes: [0xE1]
+            state: peerState
         )
         let client = CheckpointHookClient(inner: inner)
         client.afterFinalSnapshotReadback(path: finalPath, afterSuccessfulDownloads: 0) {
             await inner.injectFile(path: peerPath, data: peerBytes)
         }
 
-        do {
-            _ = try await service(client: client, clock: LamportClock(initial: 0))
-                .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
-            XCTFail("expected notAcceptedAfterWrite")
-        } catch RepoCheckpointError.notAcceptedAfterWrite(let name) {
-            XCTAssertEqual(name, RepoLayout.snapshotFileName(month: month, lamport: 2, writerID: writerID, runID: runID))
-        }
+        let result = try await service(client: client, clock: LamportClock(initial: 0))
+            .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
 
-        let output = try await RepoMaterializer(client: inner, basePath: basePath).materializeMonth(month, expectedRepoID: repoID)
-        XCTAssertEqual(output.acceptedSnapshotBaselinesByMonth[month]?.filename, peerName)
-        let retention = await retentionFiles(inner)
-        XCTAssertEqual(retention.count, 0)
+        XCTAssertEqual(result.outcome, .writtenAccepted)
+        let accepted = try XCTUnwrap(result.acceptedSnapshot)
+        XCTAssertEqual(accepted.filename, peerName)
+        XCTAssertTrue(accepted.covered.superset(of: covered([(1, 1)])))
     }
 
     func testStaleSnapshotListingWithinGraceEventuallyAccepts() async throws {
@@ -238,8 +243,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
             .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
 
         XCTAssertEqual(result.covered, covered([(1, 1)]))
-        XCTAssertEqual(result.afterReport?.notCheckpointCoveredCommitCount, 2)
-        XCTAssertEqual(result.afterReport?.protectedUnparseableFilenameCount, 0)
+        XCTAssertNil(result.afterReport)
     }
 
     func testPreMaterializedContextAvoidsRedundantMaterialize() async throws {
@@ -277,7 +281,7 @@ final class RepoCheckpointServiceTests: XCTestCase {
         // Context path must list snapshots fewer times than bare path (skips pre-write materialize).
         XCTAssertLessThan(ctxSnapshotLists, bareSnapshotLists)
         XCTAssertLessThan(ctxCommitLists, bareCommitLists)
-        // Context path still does post-write acceptance materialize.
+        // Context path still does post-write lightweight acceptance (LIST snapshots).
         XCTAssertGreaterThan(ctxSnapshotLists, 0)
     }
 
@@ -313,11 +317,339 @@ final class RepoCheckpointServiceTests: XCTestCase {
             .filter { path in
                 !path.hasSuffix("RepoCheckpointService.swift")
                     && !path.hasSuffix("RepoCheckpointServiceTests.swift")
+                    && !path.hasSuffix("RepoCompactionService.swift")
             }
         for path in sourceFiles {
             let text = try String(contentsOf: root.appendingPathComponent(path))
             XCTAssertFalse(text.contains("RepoCheckpointService"), "unexpected runtime reference in \(path)")
         }
+    }
+
+    // MARK: - Phase 4B: Lightweight acceptance
+
+    func testLightweightAcceptanceAcceptsOwnSnapshotAsCoveredMax() async throws {
+        let client = try await makeClient()
+        try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xA1)
+
+        let result = try await service(client: client, clock: LamportClock(initial: 0))
+            .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+
+        XCTAssertEqual(result.outcome, .writtenAccepted)
+        let accepted = try XCTUnwrap(result.acceptedSnapshot)
+        XCTAssertEqual(accepted.filename, result.snapshotName)
+        XCTAssertEqual(accepted.writerID, writerID)
+    }
+
+    func testLightweightAcceptanceSkipsCorruptPeerAndAcceptsOwn() async throws {
+        let inner = try await makeClient()
+        try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0xA1)
+        let corruptPeerPath = RepoLayout.snapshotFilePath(
+            base: basePath, month: month, lamport: 500, writerID: writerB, runID: peerRunID
+        )
+        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let client = CheckpointHookClient(inner: inner)
+        client.afterFinalSnapshotReadback(path: finalPath, afterSuccessfulDownloads: 0) {
+            await inner.injectFile(path: corruptPeerPath, data: Data("not-jsonl\n".utf8))
+        }
+
+        let result = try await service(client: client, clock: LamportClock(initial: 0))
+            .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+
+        XCTAssertEqual(result.outcome, .writtenAccepted)
+        let accepted = try XCTUnwrap(result.acceptedSnapshot)
+        XCTAssertEqual(accepted.filename, result.snapshotName)
+    }
+
+    func testLightweightAcceptanceRejectsAmbiguousPeers() async throws {
+        let inner = try await makeClient()
+        try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0xA1)
+        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let peerAPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 100, writerID: writerB, runID: peerRunID)
+        let peerBPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 200, writerID: writerB, runID: peerRunID)
+        let peerABytes = makeSnapshotBytes(
+            writerID: writerB,
+            covered: CoveredRanges(rangesByWriter: [writerB: [ClosedSeqRange(low: 1, high: 10)]]),
+            assetBytes: []
+        )
+        let peerBBytes = makeSnapshotBytes(
+            writerID: writerB,
+            covered: CoveredRanges(rangesByWriter: [writerB: [ClosedSeqRange(low: 5, high: 15)]]),
+            assetBytes: []
+        )
+        let client = CheckpointHookClient(inner: inner)
+        client.afterFinalSnapshotReadback(path: finalPath, afterSuccessfulDownloads: 0) {
+            await inner.injectFile(path: peerAPath, data: peerABytes)
+            await inner.injectFile(path: peerBPath, data: peerBBytes)
+        }
+
+        do {
+            _ = try await service(client: client, clock: LamportClock(initial: 0))
+                .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+            XCTFail("expected notAcceptedAfterWrite for ambiguous peers")
+        } catch RepoCheckpointError.notAcceptedAfterWrite {
+            // Two incomparable peer snapshots + our own → no covered-max → skip
+        }
+    }
+
+    func testLightweightAcceptanceAdoptsPeerSupersetWithRealBody() async throws {
+        let inner = try await makeClient()
+        try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x0A)
+        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
+        let peerCovered = CoveredRanges(rangesByWriter: [
+            writerID: [ClosedSeqRange(low: 1, high: 200)],
+            writerB: [ClosedSeqRange(low: 1, high: 200)]
+        ])
+        // Peer body must have identical rows to the verified checkpoint for value-equivalence.
+        let fp = TestFixtures.assetFingerprint(0x0A)
+        var peerState = RepoMonthState.empty
+        peerState.assets[fp] = SnapshotAssetRow(
+            assetFingerprint: fp,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resourceCount: 0,
+            totalFileSizeBytes: 0,
+            stamp: OpStamp(writerID: writerID, seq: 1, clock: 1)
+        )
+        let peerBytes = makeSnapshotBytes(writerID: writerB, covered: peerCovered, state: peerState)
+        let client = CheckpointHookClient(inner: inner)
+        client.afterFinalSnapshotReadback(path: finalPath, afterSuccessfulDownloads: 0) {
+            await inner.injectFile(path: peerPath, data: peerBytes)
+        }
+
+        let result = try await service(client: client, clock: LamportClock(initial: 0))
+            .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+
+        XCTAssertEqual(result.outcome, .writtenAccepted)
+        let accepted = try XCTUnwrap(result.acceptedSnapshot)
+        XCTAssertEqual(accepted.writerID, writerB)
+        XCTAssertTrue(accepted.covered.superset(of: covered([(1, 1)])))
+    }
+
+    func testLightweightAcceptanceRejectsPeerSupersetWithMissingRows() async throws {
+        let inner = try await makeClient()
+        try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0xA1)
+        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
+        let peerCovered = CoveredRanges(rangesByWriter: [
+            writerID: [ClosedSeqRange(low: 1, high: 100)],
+            writerB: [ClosedSeqRange(low: 1, high: 100)]
+        ])
+        // Peer body is empty — covered superset but no actual rows.
+        let peerBytes = makeSnapshotBytes(writerID: writerB, covered: peerCovered, assetBytes: [])
+        let client = CheckpointHookClient(inner: inner)
+        client.afterFinalSnapshotReadback(path: finalPath, afterSuccessfulDownloads: 0) {
+            await inner.injectFile(path: peerPath, data: peerBytes)
+        }
+
+        do {
+            _ = try await service(client: client, clock: LamportClock(initial: 0))
+                .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+            XCTFail("expected notAcceptedAfterWrite for peer with empty body")
+        } catch RepoCheckpointError.notAcceptedAfterWrite {
+            // Peer covered superset but body missing our asset → not a valid replacement
+        }
+    }
+
+    // MARK: - Phase 4B: Peer body value-equivalence
+
+    func testPeerSupersetWithChangedAssetRowIsRejected() async throws {
+        let inner = try await makeClient()
+        try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x0A)
+        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
+        let peerCovered = CoveredRanges(rangesByWriter: [
+            writerID: [ClosedSeqRange(low: 1, high: 200)],
+            writerB: [ClosedSeqRange(low: 1, high: 200)]
+        ])
+        // Same fingerprint but different backedUpAtMs (99 vs 1 from the commit).
+        let fp = TestFixtures.assetFingerprint(0x0A)
+        var changedState = RepoMonthState.empty
+        changedState.assets[fp] = SnapshotAssetRow(
+            assetFingerprint: fp,
+            creationDateMs: nil,
+            backedUpAtMs: 99,
+            resourceCount: 0,
+            totalFileSizeBytes: 0,
+            stamp: OpStamp(writerID: writerID, seq: 1, clock: 1)
+        )
+        let peerBytes = makeSnapshotBytes(writerID: writerB, covered: peerCovered, state: changedState)
+        let client = CheckpointHookClient(inner: inner)
+        client.afterFinalSnapshotReadback(path: finalPath, afterSuccessfulDownloads: 0) {
+            await inner.injectFile(path: peerPath, data: peerBytes)
+        }
+
+        do {
+            _ = try await service(client: client, clock: LamportClock(initial: 0))
+                .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+            XCTFail("expected rejection for peer with changed asset row")
+        } catch RepoCheckpointError.notAcceptedAfterWrite {
+            // Same key, different value → peer is not a valid replacement
+        }
+    }
+
+    func testPeerSupersetWithChangedResourceRowIsRejected() async throws {
+        let inner = try await makeClient()
+        try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x0A, includeResource: true)
+        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
+        let peerCovered = CoveredRanges(rangesByWriter: [
+            writerID: [ClosedSeqRange(low: 1, high: 200)],
+            writerB: [ClosedSeqRange(low: 1, high: 200)]
+        ])
+        // Asset and assetResource match verified, but resource has different contentHash.
+        let fp = TestFixtures.assetFingerprint(0x0A)
+        let correctHash = TestFixtures.fingerprint(0x0B)
+        let wrongHash = TestFixtures.fingerprint(0xFF)
+        var changedState = RepoMonthState.empty
+        changedState.assets[fp] = SnapshotAssetRow(
+            assetFingerprint: fp,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resourceCount: 1,
+            totalFileSizeBytes: 100,
+            stamp: OpStamp(writerID: writerID, seq: 1, clock: 1)
+        )
+        changedState.resources[RemotePhysicalPathKey("2026/05/asset-0a.jpg")] = SnapshotResourceRow(
+            physicalRemotePath: "2026/05/asset-0a.jpg",
+            contentHash: wrongHash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            crypto: nil,
+            stamp: OpStamp(writerID: writerID, seq: 1, clock: 1)
+        )
+        changedState.assetResources[AssetResourceKey(assetFingerprint: fp, role: ResourceTypeCode.photo, slot: 0)] = SnapshotAssetResourceRow(
+            assetFingerprint: fp,
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            resourceHash: correctHash,
+            logicalName: "asset.jpg"
+        )
+        let peerBytes = makeSnapshotBytes(writerID: writerB, covered: peerCovered, state: changedState)
+        let client = CheckpointHookClient(inner: inner)
+        client.afterFinalSnapshotReadback(path: finalPath, afterSuccessfulDownloads: 0) {
+            await inner.injectFile(path: peerPath, data: peerBytes)
+        }
+
+        do {
+            _ = try await service(client: client, clock: LamportClock(initial: 0))
+                .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+            XCTFail("expected rejection for peer with changed resource row")
+        } catch RepoCheckpointError.notAcceptedAfterWrite {
+            // Same resource path, different content hash → not a valid replacement
+        }
+    }
+
+    func testPeerSupersetWithChangedAssetResourceRowIsRejected() async throws {
+        let inner = try await makeClient()
+        try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x0A, includeResource: true)
+        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
+        let peerCovered = CoveredRanges(rangesByWriter: [
+            writerID: [ClosedSeqRange(low: 1, high: 200)],
+            writerB: [ClosedSeqRange(low: 1, high: 200)]
+        ])
+        // Asset and resource match verified, but assetResource has different logicalName.
+        let fp = TestFixtures.assetFingerprint(0x0A)
+        let hash = TestFixtures.fingerprint(0x0B)
+        var changedState = RepoMonthState.empty
+        changedState.assets[fp] = SnapshotAssetRow(
+            assetFingerprint: fp,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            resourceCount: 1,
+            totalFileSizeBytes: 100,
+            stamp: OpStamp(writerID: writerID, seq: 1, clock: 1)
+        )
+        changedState.resources[RemotePhysicalPathKey("2026/05/asset-0a.jpg")] = SnapshotResourceRow(
+            physicalRemotePath: "2026/05/asset-0a.jpg",
+            contentHash: hash,
+            fileSize: 100,
+            resourceType: ResourceTypeCode.photo,
+            creationDateMs: nil,
+            backedUpAtMs: 1,
+            crypto: nil,
+            stamp: OpStamp(writerID: writerID, seq: 1, clock: 1)
+        )
+        changedState.assetResources[AssetResourceKey(assetFingerprint: fp, role: ResourceTypeCode.photo, slot: 0)] = SnapshotAssetResourceRow(
+            assetFingerprint: fp,
+            role: ResourceTypeCode.photo,
+            slot: 0,
+            resourceHash: hash,
+            logicalName: "changed-name.jpg"
+        )
+        let peerBytes = makeSnapshotBytes(writerID: writerB, covered: peerCovered, state: changedState)
+        let client = CheckpointHookClient(inner: inner)
+        client.afterFinalSnapshotReadback(path: finalPath, afterSuccessfulDownloads: 0) {
+            await inner.injectFile(path: peerPath, data: peerBytes)
+        }
+
+        do {
+            _ = try await service(client: client, clock: LamportClock(initial: 0))
+                .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+            XCTFail("expected rejection for peer with changed assetResource row")
+        } catch RepoCheckpointError.notAcceptedAfterWrite {
+            // Same key, different logicalName → not a valid replacement
+        }
+    }
+
+    func testPeerSupersetReplacingAssetWithTombstoneIsRejected() async throws {
+        let inner = try await makeClient()
+        try await writeAddCommit(client: inner, seq: 1, clock: 1, assetByte: 0x0A)
+        let finalPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 2, writerID: writerID, runID: runID)
+        let peerPath = RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 50, writerID: writerB, runID: peerRunID)
+        let peerCovered = CoveredRanges(rangesByWriter: [
+            writerID: [ClosedSeqRange(low: 1, high: 200)],
+            writerB: [ClosedSeqRange(low: 1, high: 200)]
+        ])
+        // Peer has a deletedKey tombstone for the asset instead of the asset row itself.
+        var tombstoneState = RepoMonthState.empty
+        tombstoneState.deletedAssetStamps[TestFixtures.assetFingerprint(0x0A)] = OpStamp(
+            writerID: writerID, seq: 1, clock: 1
+        )
+        let peerBytes = makeSnapshotBytes(writerID: writerB, covered: peerCovered, state: tombstoneState)
+        let client = CheckpointHookClient(inner: inner)
+        client.afterFinalSnapshotReadback(path: finalPath, afterSuccessfulDownloads: 0) {
+            await inner.injectFile(path: peerPath, data: peerBytes)
+        }
+
+        do {
+            _ = try await service(client: client, clock: LamportClock(initial: 0))
+                .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+            XCTFail("expected rejection for peer replacing asset with tombstone")
+        } catch RepoCheckpointError.notAcceptedAfterWrite {
+            // Tombstone cannot replace verified asset in lightweight path
+        }
+    }
+
+    // MARK: - Phase 4B: Corrupt outcome gate
+
+    func testForceModeSkipsCorruptBaseline() async throws {
+        let client = try await makeClient()
+        await client.injectFile(
+            path: RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 5, writerID: writerB, runID: peerRunID),
+            data: Data("not-jsonl\n".utf8)
+        )
+        try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xC1)
+
+        let result = try await service(client: client, clock: LamportClock(initial: 0))
+            .checkpointMonth(month, mode: .force, respectTaskCancellation: true)
+        XCTAssertEqual(result.outcome, .skippedBelowThreshold)
+    }
+
+    func testRepairModeAllowsCorruptBaseline() async throws {
+        let client = try await makeClient()
+        await client.injectFile(
+            path: RepoLayout.snapshotFilePath(base: basePath, month: month, lamport: 5, writerID: writerB, runID: peerRunID),
+            data: Data("not-jsonl\n".utf8)
+        )
+        try await writeAddCommit(client: client, seq: 1, clock: 1, assetByte: 0xC2)
+
+        let result = try await service(client: client, clock: LamportClock(initial: 0))
+            .checkpointMonth(month, mode: .repairCorruptBaseline, respectTaskCancellation: true)
+        XCTAssertEqual(result.outcome, .writtenAccepted)
     }
 
     private func service(
@@ -454,6 +786,50 @@ final class RepoCheckpointServiceTests: XCTestCase {
             covered: covered, createdAtMs: nil
         )
         let parts = RepoSnapshotBuilder.build(header: header, state: monthState(assetBytes: assetBytes))
+        var integrity = IntegrityAccumulator()
+        var lines: [String] = []
+        let headerLine = try! SnapshotRowMapper.encodeHeaderLine(header)
+        lines.append(headerLine)
+        integrity.absorbLine(headerLine)
+        for row in parts.assets.sorted(by: { $0.assetFingerprint.rawValue.lexicographicallyPrecedes($1.assetFingerprint.rawValue) }) {
+            let line = try! SnapshotRowMapper.encodeAssetLine(row)
+            lines.append(line)
+            integrity.absorbLine(line)
+        }
+        for row in parts.resources.sorted(by: { $0.physicalRemotePath < $1.physicalRemotePath }) {
+            let line = try! SnapshotRowMapper.encodeResourceLine(row)
+            lines.append(line)
+            integrity.absorbLine(line)
+        }
+        for row in parts.assetResources.sorted(by: { lhs, rhs in
+            if lhs.assetFingerprint != rhs.assetFingerprint {
+                return lhs.assetFingerprint.rawValue.lexicographicallyPrecedes(rhs.assetFingerprint.rawValue)
+            }
+            if lhs.role != rhs.role { return lhs.role < rhs.role }
+            return lhs.slot < rhs.slot
+        }) {
+            let line = try! SnapshotRowMapper.encodeAssetResourceLine(row)
+            lines.append(line)
+            integrity.absorbLine(line)
+        }
+        for row in parts.deletedKeys.sorted(by: { $0.keyValue < $1.keyValue }) {
+            let line = try! SnapshotRowMapper.encodeDeletedKeyLine(row)
+            lines.append(line)
+            integrity.absorbLine(line)
+        }
+        lines.append(try! SnapshotRowMapper.encodeEndLine(sha256Hex: integrity.finalize(), rowCount: integrity.rowCount))
+        return Data((lines.joined(separator: "\n") + "\n").utf8)
+    }
+
+    private func makeSnapshotBytes(writerID: String, covered: CoveredRanges, state: RepoMonthState) -> Data {
+        let header = SnapshotHeader(
+            version: SnapshotHeader.currentVersion,
+            scope: CommitHeader.monthScope(month),
+            writerID: writerID,
+            repoID: repoID,
+            covered: covered, createdAtMs: nil
+        )
+        let parts = RepoSnapshotBuilder.build(header: header, state: state)
         var integrity = IntegrityAccumulator()
         var lines: [String] = []
         let headerLine = try! SnapshotRowMapper.encodeHeaderLine(header)
