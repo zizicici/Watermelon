@@ -5,16 +5,17 @@ private let v2SessionLog = Logger(subsystem: "com.zizicici.watermelon", category
 
 enum V2MonthSessionError: Error {
     case ambiguousMonth(LibraryMonthKey)
+    case corruptMonth(LibraryMonthKey)
 }
 
 final class V2MonthSession: BackupMonthStore {
     enum FlushError: Error {
         case concurrentFlushRejected
-        /// Commit landed; the snapshot write failed. The committed delta is carried as a value
-        /// (see `MonthDurableSnapshotDeferred`), never on this error.
-        case snapshotWriteFailed(underlying: Error)
+        /// Post-commit side-effects failed after the commit landed durably. The committed delta is
+        /// carried as a value (see `MonthDurableCommitPartial`), never on this error.
+        case postCommitFailed(underlying: Error)
 
-        /// SnapshotWriter can wrap CancellationError.
+        /// SnapshotWriter/commit errors can wrap CancellationError.
         var cancellationCause: CancellationError? {
             let matched = BackupErrorChain.contains(self) { node in
                 if node is CancellationError { return true }
@@ -25,9 +26,9 @@ final class V2MonthSession: BackupMonthStore {
         }
     }
 
-    /// Commit landed durably but the snapshot write failed. Carries the durable delta as a value
+    /// Commit landed durably but a subsequent operation failed. Carries the durable delta as a value
     /// so callers keep their projection in sync without reading data off `FlushError`.
-    struct MonthDurableSnapshotDeferred: Error {
+    struct MonthDurableCommitPartial: Error {
         let delta: BackupMonthFlushDelta
         let flushError: FlushError
     }
@@ -39,7 +40,7 @@ final class V2MonthSession: BackupMonthStore {
     private let client: any RemoteStorageClientProtocol
     private let stepLogger: MonthManifestStepLogger?
     private let indexes: V2MonthIndexes
-    private let snapshotFlusher: V2MonthSnapshotFlusher
+    private let commitTracker: V2SessionCommitTracker
 
     var monthRelativePath: String {
         String(format: "%04d/%02d", year, month)
@@ -97,12 +98,7 @@ final class V2MonthSession: BackupMonthStore {
             nameCase: client.backendNameCaseSensitivity
         )
         self.indexes = indexes
-        self.snapshotFlusher = V2MonthSnapshotFlusher(
-            services: v2Services,
-            monthKey: LibraryMonthKey(year: year, month: month),
-            materializedCovered: materializedCovered,
-            indexes: indexes
-        )
+        self.commitTracker = V2SessionCommitTracker(writerID: v2Services.writerID)
     }
 
     static func loadOrCreate(
@@ -117,10 +113,15 @@ final class V2MonthSession: BackupMonthStore {
         let monthKey = LibraryMonthKey(year: year, month: month)
         let materializer = RepoMaterializer(client: client, basePath: basePath)
         let output = try await materializer.materializeMonth(monthKey, expectedRepoID: v2Services.repoID)
-        // Write/maintenance consumers must not construct a writable session for ambiguous months —
-        // incomparable trusted coverage means new commits/snapshots could diverge from reality.
-        if output.outcomeByMonth[monthKey] == .ambiguous {
+        // Write/maintenance consumers must not construct a writable session for non-clean months.
+        // Ambiguous months have incomparable trusted coverage; corrupt months have no trusted baseline.
+        // Hot-path snapshot rebaseline was removed in Phase 5 — repair belongs to compaction.
+        let outcome = output.outcomeByMonth[monthKey] ?? .clean
+        if outcome == .ambiguous {
             throw V2MonthSessionError.ambiguousMonth(monthKey)
+        }
+        if outcome == .corrupt {
+            throw V2MonthSessionError.corruptMonth(monthKey)
         }
         let monthState = output.state.months[monthKey] ?? .empty
         let materializedCovered = output.coveredByMonth[monthKey] ?? .empty
@@ -173,7 +174,7 @@ final class V2MonthSession: BackupMonthStore {
             )
         }
 
-        let session = V2MonthSession(
+        return V2MonthSession(
             client: client,
             basePath: basePath,
             year: year,
@@ -186,11 +187,6 @@ final class V2MonthSession: BackupMonthStore {
             presence: presence,
             stepLogger: stepLogger
         )
-        if output.corruptedSnapshotMonths.contains(monthKey),
-           materializedCovered.rangesByWriter.values.contains(where: { !$0.isEmpty }) {
-            session.requestSnapshotRebaseline()
-        }
-        return session
     }
 
     private static let listReconcileMaxVerifiedFiles = 64
@@ -248,8 +244,7 @@ final class V2MonthSession: BackupMonthStore {
     }
 
     func requestSnapshotRebaseline() {
-        snapshotFlusher.requestRebaseline()
-        dirty = true
+        // Rebaseline/repair belongs to compaction, not per-flush snapshots.
     }
 
 
@@ -369,79 +364,20 @@ final class V2MonthSession: BackupMonthStore {
             throw error
         }
 
-        let wroteSnapshot: Bool
-        do {
-            wroteSnapshot = try await snapshotFlusher.flushSnapshotIfPending(ignoreCancellation: ignoreCancellation)
-            dirty = indexes.hasUncommittedOps || snapshotFlusher.hasPendingSnapshotWork
-        } catch {
-            dirty = true
-            throw MonthDurableSnapshotDeferred(
-                delta: BackupMonthFlushDelta(
-                    didFlush: true,
-                    committedAssetFingerprints: drainResult.committedAssets,
-                    committedTombstoneFingerprints: drainResult.committedTombstones
-                ),
-                flushError: FlushError.snapshotWriteFailed(underlying: error)
-            )
-        }
-
-        let didFlush = drainResult.lastSeq != nil || wroteSnapshot
-        if !ignoreCancellation,
-           didFlush,
-           !dirty {
-            do {
-                try await runCheckpointBarrierHook(services: services)
-            } catch {
-                // U01 R04: the checkpoint-barrier hook propagates `CancellationError` (and any
-                // other unexpected throws) AFTER the commit + snapshot are already durable.
-                // Surface the durable delta through the same channel used for snapshot-write
-                // failures so `flushMonthStorePublishingDefensiveCommits` returns
-                // `.commitDurableSnapshotDeferred` and the executor still runs
-                // `applyDurableBatchSideEffects` (intent drain + provisional mark-durable)
-                // before the cancellation routes to pause/abort. Without this, a cancellation
-                // landing during the post-commit barrier window would orphan the local
-                // hash-index intents for a durable remote commit.
-                throw MonthDurableSnapshotDeferred(
-                    delta: BackupMonthFlushDelta(
-                        didFlush: true,
-                        committedAssetFingerprints: drainResult.committedAssets,
-                        committedTombstoneFingerprints: drainResult.committedTombstones
-                    ),
-                    flushError: FlushError.snapshotWriteFailed(underlying: error)
-                )
-            }
-        }
+        dirty = indexes.hasUncommittedOps
 
         return BackupMonthFlushDelta(
-            didFlush: didFlush,
+            didFlush: drainResult.lastSeq != nil,
             committedAssetFingerprints: drainResult.committedAssets,
             committedTombstoneFingerprints: drainResult.committedTombstones
         )
     }
 
-    private func runCheckpointBarrierHook(services: BackupV2RuntimeServices) async throws {
-        do {
-            _ = try await RepoCheckpointBarrierHook(
-                services: services,
-                month: LibraryMonthKey(year: year, month: month)
-            ).run()
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            if RemoteWriteClassifier.isCancellation(error) {
-                throw CancellationError()
-            }
-            let message = "V2 checkpoint barrier maintenance failed for \(monthRelativePath): \(String(describing: error))"
-            stepLogger?(message)
-            v2SessionLog.notice("\(message, privacy: .public)")
-        }
-    }
-
     /// Drain pending V2 ops in commit-file chunks bounded by `BackupV2Constants.batchFlushInterval`.
     /// `force == true` drains until pending is empty; `force == false` only commits when pending
     /// already meets the threshold and stops once it drops below. Per-chunk `recordCommitted(seq:)`
-    /// makes every committed seq reach `snapshotFlusher.sessionWrittenCovered` before the trailing
-    /// snapshot is built (U01 hard-cap + multi-commit covered-range correctness).
+    /// makes every committed seq reach `commitTracker.sessionWrittenCovered` before the next chunk
+    /// builds its tombstone basis (multi-commit covered-range correctness).
     private func commitPendingAssetDrainLocked(
         force: Bool,
         ignoreCancellation: Bool
@@ -466,20 +402,20 @@ final class V2MonthSession: BackupMonthStore {
                 )
             } catch {
                 // Multi-chunk partial durability: if earlier chunks already landed, surface them
-                // as a value via MonthDurableSnapshotDeferred so the downstream catches the partial
-                // as `commitDurableSnapshotDeferred`, drains the matching hash-index intents, and
+                // as a value via MonthDurableCommitPartial so the downstream catches the partial
+                // as `commitDurablePartial`, drains the matching hash-index intents, and
                 // publishes the durable sweep before propagating the failure. Without this,
                 // already-durable fingerprints would be rolled back in the foreground catch path
                 // and their hash-index intents discarded — violating the "at most last batch is
-                // redone" goal for U01.
+                // redone" goal.
                 if !committedAssets.isEmpty || !committedTombstones.isEmpty {
-                    throw MonthDurableSnapshotDeferred(
+                    throw MonthDurableCommitPartial(
                         delta: BackupMonthFlushDelta(
                             didFlush: true,
                             committedAssetFingerprints: committedAssets,
                             committedTombstoneFingerprints: committedTombstones
                         ),
-                        flushError: FlushError.snapshotWriteFailed(underlying: error)
+                        flushError: FlushError.postCommitFailed(underlying: error)
                     )
                 }
                 throw error
@@ -501,27 +437,15 @@ final class V2MonthSession: BackupMonthStore {
         let monthKey = LibraryMonthKey(year: year, month: month)
         let barrierAwareBasis: V2MonthCommitFlusher.Basis?
         if indexes.hasUncommittedOps {
-            let localLamportBeforeBarrierObserve = await services.lamport.value()
+            let localLamport = await services.lamport.value()
             let tombstoneBasis = makeTombstoneObservationBasis(
-                sessionWrittenCovered: snapshotFlusher.sessionWrittenCovered,
-                localLamportBeforeBarrierObserve: localLamportBeforeBarrierObserve
+                sessionWrittenCovered: commitTracker.sessionWrittenCovered,
+                localLamportBeforeBarrierObserve: localLamport
             )
-            do {
-                if let refresh = try await V2RetentionBarrierRefresh(
-                    services: services,
-                    monthKey: monthKey
-                ).commitRefresh(ignoreCancellation: ignoreCancellation) {
-                    barrierAwareBasis = V2MonthCommitFlusher.Basis(
-                        clockFloor: refresh.clockFloor,
-                        tombstoneObservationBasis: tombstoneBasis
-                    )
-                } else {
-                    barrierAwareBasis = nil
-                }
-            } catch let error as V2RetentionBarrierRefreshError {
-                if case .ambiguousMaterialization = error { return nil }
-                throw error
-            }
+            barrierAwareBasis = V2MonthCommitFlusher.Basis(
+                clockFloor: max(observedClockAtLoad, localLamport),
+                tombstoneObservationBasis: tombstoneBasis
+            )
         } else {
             barrierAwareBasis = nil
         }
@@ -533,14 +457,14 @@ final class V2MonthSession: BackupMonthStore {
             indexes: indexes
         )
         guard let result = try await commitFlusher.flushPending(
-            sessionWrittenCovered: snapshotFlusher.sessionWrittenCovered,
+            sessionWrittenCovered: commitTracker.sessionWrittenCovered,
             barrierAwareBasis: barrierAwareBasis,
             limit: limit,
             ignoreCancellation: ignoreCancellation
         ) else {
             return nil
         }
-        snapshotFlusher.recordCommitted(seq: result.lastSeq)
+        commitTracker.recordCommitted(seq: result.lastSeq)
         dirty = true
         return result
     }
@@ -572,6 +496,21 @@ final class V2MonthSession: BackupMonthStore {
         flushStateLock.withLock {
             isFlushing = false
         }
+    }
+}
+
+/// Tracks session-local covered ranges from committed writes, replacing the snapshot-flusher-based
+/// tracker so the hot path no longer depends on snapshot state.
+final class V2SessionCommitTracker {
+    private let writerID: String
+    private(set) var sessionWrittenCovered: CoveredRanges = .empty
+
+    init(writerID: String) {
+        self.writerID = writerID
+    }
+
+    func recordCommitted(seq: UInt64) {
+        sessionWrittenCovered.add(writerID: writerID, seq: seq)
     }
 }
 

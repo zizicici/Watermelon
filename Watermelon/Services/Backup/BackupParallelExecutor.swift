@@ -738,14 +738,14 @@ struct BackupParallelExecutor: Sendable {
                 delta: delta
             )
             return .completed(delta)
-        } catch let deferred as V2MonthSession.MonthDurableSnapshotDeferred {
+        } catch let deferred as V2MonthSession.MonthDurableCommitPartial {
             publishDefensiveFlushSnapshotIfNeeded(
                 monthStore: monthStore,
                 month: month,
                 remoteIndexService: remoteIndexService,
                 delta: deferred.delta
             )
-            return .commitDurableSnapshotDeferred(delta: deferred.delta, flushError: deferred.flushError)
+            return .commitDurablePartial(delta: deferred.delta, flushError: deferred.flushError)
         }
     }
 
@@ -788,7 +788,7 @@ struct BackupParallelExecutor: Sendable {
     }
 
     /// Foreground post-flush reconciliation for both `.completed` and
-    /// `.commitDurableSnapshotDeferred` — drain intents, clear matching provisional progress
+    /// `.commitDurablePartial` — drain intents, clear matching provisional progress
     /// entries on the aggregator, and emit a warning log on partial drain.
     static func applyDurableBatchSideEffects(
         aggregator: ParallelBackupProgressAggregator,

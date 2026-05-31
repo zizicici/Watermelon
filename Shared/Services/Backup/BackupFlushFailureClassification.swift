@@ -116,7 +116,7 @@ extension BackupFlushFailureClassification {
         _ outcome: V2MonthFlushOutcome,
         on profile: ServerProfileRecord
     ) -> PartialOutcomeClassification? {
-        guard case .commitDurableSnapshotDeferred(_, let flushError) = outcome else { return nil }
+        guard case .commitDurablePartial(_, let flushError) = outcome else { return nil }
         let category: PartialOutcomeCategory
         if outcome.cancellationCause != nil {
             category = .cancelled
